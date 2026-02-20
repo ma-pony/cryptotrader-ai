@@ -26,7 +26,14 @@ def make_verdict(
     else:
         action = "hold"
 
-    confidence = abs(score) / max(len(analyses), 1)
+    # Confidence = average confidence of agents agreeing with majority direction
+    if action != "hold":
+        target_dir = "bullish" if action == "long" else "bearish"
+        agreeing = [a["confidence"] for a in analyses.values()
+                    if a["direction"] == target_dir]
+        confidence = sum(agreeing) / len(agreeing) if agreeing else 0.0
+    else:
+        confidence = 0.0
 
     return TradeVerdict(
         action=action,

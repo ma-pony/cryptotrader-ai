@@ -5,6 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from datetime import datetime, UTC
 import pandas as pd
 from cryptotrader.backtest.cache import fetch_historical
+from cryptotrader.backtest.historical_data import fetch_fear_greed, derive_news_sentiment
 from cryptotrader.graph import build_lite_graph
 from cryptotrader.models import DataSnapshot, MarketData, OnchainData, NewsSentiment, MacroData
 
@@ -15,6 +16,7 @@ INTERVAL = "1d"
 CAPITAL = 10000
 LOOKBACK = 100
 MODEL = "openai/deepseek-chat"
+MIN_HOLD_DAYS = 5  # Minimum days to hold before allowing direction change
 
 async def main():
     start_ms = int(datetime.fromisoformat(START).replace(tzinfo=UTC).timestamp() * 1000)
@@ -25,6 +27,10 @@ async def main():
     total_steps = len(candles) - LOOKBACK
     print(f"Got {len(candles)} candles, {total_steps} tradeable steps", flush=True)
 
+    print("Fetching Fear & Greed history...", flush=True)
+    fng = await fetch_fear_greed(START, END)
+    print(f"Got {len(fng)} days of Fear & Greed data", flush=True)
+
     graph = build_lite_graph()
     equity = CAPITAL
     position = 0.0
@@ -32,6 +38,7 @@ async def main():
     trades = []
     equity_curve = [equity]
     t_total = time.time()
+    last_direction_change = -MIN_HOLD_DAYS  # Allow first trade immediately
 
     for i in range(LOOKBACK, len(candles)):
         step = i - LOOKBACK + 1
@@ -42,12 +49,23 @@ async def main():
 
         t0 = time.time()
         df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
+
+        # Inject historical macro data
+        date_str = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
+        fng_val = fng.get(date_str, 50)
+
+        # Derive proxy news sentiment from price action
+        sentiment, events = derive_news_sentiment(candles, i)
+
         snapshot = DataSnapshot(
             timestamp=datetime.fromtimestamp(ts / 1000, tz=UTC), pair=PAIR,
             market=MarketData(pair=PAIR, ohlcv=df, ticker={"last": c, "baseVolume": v},
                 funding_rate=0.0, orderbook_imbalance=0.0,
                 volatility=df["close"].pct_change().std() or 0.0),
-            onchain=OnchainData(), news=NewsSentiment(), macro=MacroData())
+            onchain=OnchainData(),
+            news=NewsSentiment(sentiment_score=sentiment, key_events=events,
+                headlines=[f"BTC at ${c:,.0f}, Fear&Greed={fng_val}"]),
+            macro=MacroData(fear_greed_index=fng_val))
 
         state = {
             "messages": [], "data": {"snapshot": snapshot},
@@ -59,27 +77,42 @@ async def main():
         result = await graph.ainvoke(state)
         verdict = result.get("data", {}).get("verdict", {})
         action = verdict.get("action", "hold")
+        confidence = verdict.get("confidence", 0.5)
         elapsed = time.time() - t0
 
-        # Execute
-        if action == "long" and position <= 0:
+        # Dynamic position sizing based on confidence
+        # Low confidence (< 0.4) = 5%, medium = 10%, high (> 0.7) = 20%
+        if confidence >= 0.7:
+            size_pct = 0.20
+        elif confidence >= 0.4:
+            size_pct = 0.10
+        else:
+            size_pct = 0.05
+
+        # Execute with cooldown: don't flip direction within MIN_HOLD_DAYS
+        days_since_flip = step - last_direction_change
+        can_flip = days_since_flip >= MIN_HOLD_DAYS
+
+        if action == "long" and position <= 0 and (position == 0 or can_flip):
             if position < 0:
                 pnl = (entry_price - c) * abs(position)
                 equity += pnl
                 trades.append({"side": "close_short", "price": c, "pnl": pnl, "date": date})
-            size = equity * 0.1 / c
+            size = equity * size_pct / c
             position = size
             entry_price = c
-            trades.append({"side": "buy", "price": c, "date": date})
-        elif action == "short" and position >= 0:
+            last_direction_change = step
+            trades.append({"side": "buy", "price": c, "amount": size, "size_pct": size_pct, "date": date})
+        elif action == "short" and position >= 0 and (position == 0 or can_flip):
             if position > 0:
                 pnl = (c - entry_price) * position
                 equity += pnl
                 trades.append({"side": "close_long", "price": c, "pnl": pnl, "date": date})
-            size = equity * 0.1 / c
+            size = equity * size_pct / c
             position = -size
             entry_price = c
-            trades.append({"side": "sell", "price": c, "date": date})
+            last_direction_change = step
+            trades.append({"side": "sell", "price": c, "amount": size, "size_pct": size_pct, "date": date})
 
         # MTM
         if position > 0:
@@ -90,7 +123,7 @@ async def main():
             mtm = equity
         equity_curve.append(mtm)
 
-        print(f"[{step:3d}/{total_steps}] {date} ${c:,.0f} -> {action:5s} eq=${mtm:,.2f} ({elapsed:.0f}s)", flush=True)
+        print(f"[{step:3d}/{total_steps}] {date} ${c:,.0f} -> {action:5s} conf={confidence:.0%} sz={size_pct:.0%} eq=${mtm:,.2f} fng={fng_val} ({elapsed:.0f}s)", flush=True)
 
     # Close open position
     if position != 0:
