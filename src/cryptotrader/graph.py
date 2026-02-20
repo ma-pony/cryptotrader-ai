@@ -120,7 +120,7 @@ async def debate_round(state: ArenaState) -> dict:
             resp = await litellm.acompletion(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"},
+                max_tokens=1024,
             )
             import json
             data = json.loads(resp.choices[0].message.content)

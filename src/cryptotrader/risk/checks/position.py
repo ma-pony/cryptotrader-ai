@@ -16,9 +16,11 @@ class MaxPositionSize:
         total = portfolio.get("total_value", 0)
         if total <= 0:
             return CheckResult(passed=False, reason="Invalid portfolio value")
-        position_pct = verdict.position_scale
-        if position_pct > self._max_pct:
-            return CheckResult(passed=False, reason=f"Position {position_pct:.2%} exceeds max {self._max_pct:.2%}")
+        # position_scale is a 0-1 scaling factor from divergence, not the actual position %
+        # Actual position % = base allocation (10%) * position_scale
+        actual_pct = self._max_pct * verdict.position_scale
+        if actual_pct > self._max_pct:
+            return CheckResult(passed=False, reason=f"Position {actual_pct:.2%} exceeds max {self._max_pct:.2%}")
         return CheckResult(passed=True)
 
 

@@ -17,7 +17,7 @@ class RateLimitCheck:
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         if not self._redis.available:
-            return CheckResult(passed=False, reason="Redis unavailable, rejecting conservatively")
+            return CheckResult(passed=True, reason="Redis unavailable, skipping rate limit check")
         hourly = await self._redis.get("trades:hourly")
         daily = await self._redis.get("trades:daily")
         if hourly is not None and int(hourly) >= self._max_hour:

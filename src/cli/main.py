@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Optional
 
 import typer
@@ -35,6 +36,8 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
             "messages": [], "data": {}, "metadata": {
                 "pair": pair, "engine": mode, "exchange_id": exchange_id,
                 "timeframe": "1h", "ohlcv_limit": 100,
+                "analysis_model": os.environ.get("ARENA_ANALYSIS_MODEL", "openai/glm-4.5-air"),
+                "debate_model": os.environ.get("ARENA_DEBATE_MODEL", "openai/glm-4.5-air"),
             },
             "debate_round": 0, "max_debate_rounds": 3, "divergence_scores": [],
         }

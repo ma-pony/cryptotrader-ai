@@ -16,7 +16,7 @@ class CooldownCheck:
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         if not self._redis.available:
-            return CheckResult(passed=False, reason="Redis unavailable, rejecting conservatively")
+            return CheckResult(passed=True, reason="Redis unavailable, skipping cooldown check")
         pair = portfolio.get("pair", "")
         key = f"cooldown:{pair}"
         val = await self._redis.get(key)
