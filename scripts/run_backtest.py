@@ -17,6 +17,36 @@ CAPITAL = 10000
 LOOKBACK = 100
 MODEL = "openai/deepseek-chat"
 MIN_HOLD_DAYS = 5  # Minimum days to hold before allowing direction change
+ADX_THRESHOLD = 25  # Below this = ranging market, force hold
+
+
+def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
+    """Calculate ADX from OHLCV candles ending at idx."""
+    if idx < period * 2:
+        return 0.0
+    window = candles[idx - period * 2:idx + 1]
+    plus_dm, minus_dm, tr_list = [], [], []
+    for i in range(1, len(window)):
+        h, l, pc = window[i][2], window[i][3], window[i - 1][4]
+        up = h - window[i - 1][2]
+        down = window[i - 1][3] - l
+        plus_dm.append(up if up > down and up > 0 else 0)
+        minus_dm.append(down if down > up and down > 0 else 0)
+        tr_list.append(max(h - l, abs(h - pc), abs(l - pc)))
+    # Smoothed averages (Wilder's method)
+    atr = sum(tr_list[:period]) / period
+    plus_di_s = sum(plus_dm[:period]) / period
+    minus_di_s = sum(minus_dm[:period]) / period
+    for i in range(period, len(tr_list)):
+        atr = (atr * (period - 1) + tr_list[i]) / period
+        plus_di_s = (plus_di_s * (period - 1) + plus_dm[i]) / period
+        minus_di_s = (minus_di_s * (period - 1) + minus_dm[i]) / period
+    if atr == 0:
+        return 0.0
+    plus_di = 100 * plus_di_s / atr
+    minus_di = 100 * minus_di_s / atr
+    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) > 0 else 0
+    return dx  # Simplified: single DX value (approximates ADX for our purpose)
 
 async def main():
     start_ms = int(datetime.fromisoformat(START).replace(tzinfo=UTC).timestamp() * 1000)
@@ -74,20 +104,28 @@ async def main():
                 "debate_model": MODEL},
             "debate_round": 0, "max_debate_rounds": 0, "divergence_scores": [],
         }
-        result = await graph.ainvoke(state)
-        verdict = result.get("data", {}).get("verdict", {})
-        action = verdict.get("action", "hold")
-        confidence = verdict.get("confidence", 0.5)
-        elapsed = time.time() - t0
-
-        # Dynamic position sizing based on confidence
-        # Low confidence (< 0.4) = 5%, medium = 10%, high (> 0.7) = 20%
-        if confidence >= 0.7:
-            size_pct = 0.20
-        elif confidence >= 0.4:
-            size_pct = 0.10
-        else:
+        # ADX trend filter: skip LLM in ranging markets
+        adx = calc_adx(candles, i)
+        if adx < ADX_THRESHOLD:
+            action = "hold"  # Override: no trading in ranging market
+            elapsed = time.time() - t0
+            # Still need confidence/size_pct for display
+            confidence = 0.0
             size_pct = 0.05
+        else:
+            result = await graph.ainvoke(state)
+            verdict = result.get("data", {}).get("verdict", {})
+            action = verdict.get("action", "hold")
+            confidence = verdict.get("confidence", 0.5)
+            elapsed = time.time() - t0
+
+            # Dynamic position sizing based on confidence
+            if confidence >= 0.7:
+                size_pct = 0.20
+            elif confidence >= 0.4:
+                size_pct = 0.10
+            else:
+                size_pct = 0.05
 
         # Execute with cooldown: don't flip direction within MIN_HOLD_DAYS
         days_since_flip = step - last_direction_change
@@ -123,7 +161,7 @@ async def main():
             mtm = equity
         equity_curve.append(mtm)
 
-        print(f"[{step:3d}/{total_steps}] {date} ${c:,.0f} -> {action:5s} conf={confidence:.0%} sz={size_pct:.0%} eq=${mtm:,.2f} fng={fng_val} ({elapsed:.0f}s)", flush=True)
+        print(f"[{step:3d}/{total_steps}] {date} ${c:,.0f} -> {action:5s} conf={confidence:.0%} sz={size_pct:.0%} eq=${mtm:,.2f} fng={fng_val} adx={adx:.0f} ({elapsed:.0f}s)", flush=True)
 
     # Close open position
     if position != 0:
