@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from datetime import datetime, UTC
 import pandas as pd
 from cryptotrader.backtest.cache import fetch_historical
-from cryptotrader.backtest.historical_data import fetch_fear_greed, derive_news_sentiment
+from cryptotrader.backtest.historical_data import fetch_fear_greed, fetch_funding_rate, fetch_btc_dominance, derive_news_sentiment
 from cryptotrader.graph import build_lite_graph
 from cryptotrader.models import DataSnapshot, MarketData, OnchainData, NewsSentiment, MacroData
 
@@ -16,8 +16,8 @@ INTERVAL = "1d"
 CAPITAL = 10000
 LOOKBACK = 100
 MODEL = "openai/deepseek-chat"
-MIN_HOLD_DAYS = 5  # Minimum days to hold before allowing direction change
-ADX_THRESHOLD = 25  # Below this = ranging market, force hold
+MIN_HOLD_DAYS = 0  # Disabled for v6 baseline
+ADX_THRESHOLD = 0  # Disabled for v6 baseline
 
 
 def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
@@ -61,6 +61,14 @@ async def main():
     fng = await fetch_fear_greed(START, END)
     print(f"Got {len(fng)} days of Fear & Greed data", flush=True)
 
+    print("Fetching funding rate history...", flush=True)
+    funding = await fetch_funding_rate("BTC", START, END)
+    print(f"Got {len(funding)} days of funding rate data", flush=True)
+
+    print("Fetching BTC dominance history...", flush=True)
+    btc_dom = await fetch_btc_dominance(START, END)
+    print(f"Got {len(btc_dom)} days of BTC dominance data", flush=True)
+
     graph = build_lite_graph()
     equity = CAPITAL
     position = 0.0
@@ -80,9 +88,11 @@ async def main():
         t0 = time.time()
         df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
 
-        # Inject historical macro data
+        # Inject historical data
         date_str = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
         fng_val = fng.get(date_str, 50)
+        fr_val = funding.get(date_str, 0.0)
+        dom_val = btc_dom.get(date_str, 0.0)
 
         # Derive proxy news sentiment from price action
         sentiment, events = derive_news_sentiment(candles, i)
@@ -90,12 +100,12 @@ async def main():
         snapshot = DataSnapshot(
             timestamp=datetime.fromtimestamp(ts / 1000, tz=UTC), pair=PAIR,
             market=MarketData(pair=PAIR, ohlcv=df, ticker={"last": c, "baseVolume": v},
-                funding_rate=0.0, orderbook_imbalance=0.0,
+                funding_rate=fr_val, orderbook_imbalance=0.0,
                 volatility=df["close"].pct_change().std() or 0.0),
             onchain=OnchainData(),
             news=NewsSentiment(sentiment_score=sentiment, key_events=events,
                 headlines=[f"BTC at ${c:,.0f}, Fear&Greed={fng_val}"]),
-            macro=MacroData(fear_greed_index=fng_val))
+            macro=MacroData(fear_greed_index=fng_val, btc_dominance=dom_val))
 
         state = {
             "messages": [], "data": {"snapshot": snapshot},
@@ -119,13 +129,8 @@ async def main():
             confidence = verdict.get("confidence", 0.5)
             elapsed = time.time() - t0
 
-            # Dynamic position sizing based on confidence
-            if confidence >= 0.7:
-                size_pct = 0.20
-            elif confidence >= 0.4:
-                size_pct = 0.10
-            else:
-                size_pct = 0.05
+            # Fixed 10% position size (v6: test data quality, not sizing)
+            size_pct = 0.10
 
         # Execute with cooldown: don't flip direction within MIN_HOLD_DAYS
         days_since_flip = step - last_direction_change

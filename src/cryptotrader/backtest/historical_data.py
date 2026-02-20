@@ -19,6 +19,14 @@ def _ensure_tables():
         "CREATE TABLE IF NOT EXISTS fear_greed "
         "(date TEXT PRIMARY KEY, value INTEGER, classification TEXT)"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS funding_rate "
+        "(date TEXT PRIMARY KEY, rate REAL, count INTEGER)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS btc_dominance "
+        "(date TEXT PRIMARY KEY, dominance REAL)"
+    )
     conn.commit()
     conn.close()
 
@@ -56,6 +64,123 @@ async def fetch_fear_greed(start_date: str, end_date: str) -> dict[str, int]:
             (date_str, val, d.get("value_classification", "")),
         )
         cached[date_str] = val
+    conn.commit()
+    conn.close()
+    return {k: v for k, v in cached.items() if start_date <= k <= end_date}
+
+
+async def fetch_funding_rate(symbol: str, start_date: str, end_date: str) -> dict[str, float]:
+    """Fetch daily avg funding rate from Binance. Returns {date_str: avg_rate}."""
+    _ensure_tables()
+    conn = sqlite3.connect(str(CACHE_DB))
+    cached = dict(conn.execute(
+        "SELECT date, rate FROM funding_rate WHERE date >= ? AND date <= ?",
+        (start_date, end_date),
+    ).fetchall())
+    conn.close()
+
+    start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
+    end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
+    expected = (end_dt - start_dt).days
+    if len(cached) >= expected * 0.9:
+        return cached
+
+    # Paginate: Binance returns max 1000 records, 3 per day (8h intervals)
+    pair = symbol.replace("/", "") + "T" if "/" in symbol else symbol + "USDT"
+    all_records: list[dict] = []
+    cursor_ms = int(start_dt.timestamp() * 1000)
+    end_ms = int(end_dt.timestamp() * 1000) + 86400000
+
+    async with httpx.AsyncClient() as client:
+        while cursor_ms < end_ms:
+            r = await client.get(
+                "https://fapi.binance.com/fapi/v1/fundingRate",
+                params={"symbol": pair, "startTime": cursor_ms, "limit": 1000},
+                timeout=30,
+            )
+            r.raise_for_status()
+            batch = r.json()
+            if not batch:
+                break
+            all_records.extend(batch)
+            cursor_ms = batch[-1]["fundingTime"] + 1
+
+    # Aggregate to daily average
+    daily: dict[str, list[float]] = {}
+    for rec in all_records:
+        dt = datetime.fromtimestamp(rec["fundingTime"] / 1000, UTC)
+        d = dt.strftime("%Y-%m-%d")
+        daily.setdefault(d, []).append(float(rec["fundingRate"]))
+
+    conn = sqlite3.connect(str(CACHE_DB))
+    for d, rates in daily.items():
+        avg = sum(rates) / len(rates)
+        conn.execute(
+            "INSERT OR REPLACE INTO funding_rate (date, rate, count) VALUES (?,?,?)",
+            (d, avg, len(rates)),
+        )
+        cached[d] = avg
+    conn.commit()
+    conn.close()
+    return {k: v for k, v in cached.items() if start_date <= k <= end_date}
+
+
+async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float]:
+    """Fetch BTC dominance from CoinGecko. Estimates total mcap from BTC+ETH."""
+    _ensure_tables()
+    conn = sqlite3.connect(str(CACHE_DB))
+    cached = dict(conn.execute(
+        "SELECT date, dominance FROM btc_dominance WHERE date >= ? AND date <= ?",
+        (start_date, end_date),
+    ).fetchall())
+    conn.close()
+
+    start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
+    expected = (datetime.fromisoformat(end_date).replace(tzinfo=UTC) - start_dt).days
+    if len(cached) >= expected * 0.9:
+        return cached
+
+    days = (datetime.now(UTC) - start_dt).days + 1
+
+    async with httpx.AsyncClient() as client:
+        btc_r = await client.get(
+            "https://api.coingecko.com/api/v3/coins/bitcoin/market_chart",
+            params={"vs_currency": "usd", "days": days, "interval": "daily"},
+            timeout=30,
+        )
+        btc_r.raise_for_status()
+        btc_caps = {
+            datetime.fromtimestamp(p[0] / 1000, UTC).strftime("%Y-%m-%d"): p[1]
+            for p in btc_r.json().get("market_caps", []) if p[1]
+        }
+
+        eth_r = await client.get(
+            "https://api.coingecko.com/api/v3/coins/ethereum/market_chart",
+            params={"vs_currency": "usd", "days": days, "interval": "daily"},
+            timeout=30,
+        )
+        eth_r.raise_for_status()
+        eth_caps = {
+            datetime.fromtimestamp(p[0] / 1000, UTC).strftime("%Y-%m-%d"): p[1]
+            for p in eth_r.json().get("market_caps", []) if p[1]
+        }
+
+    # BTC+ETH ≈ 66.4% of total market (stable ratio). Estimate total, then compute dominance.
+    BTC_ETH_SHARE = 0.664
+    conn = sqlite3.connect(str(CACHE_DB))
+    for d, btc_cap in btc_caps.items():
+        if start_date <= d <= end_date:
+            eth_cap = eth_caps.get(d, 0)
+            if eth_cap > 0:
+                est_total = (btc_cap + eth_cap) / BTC_ETH_SHARE
+                dom = round(btc_cap / est_total * 100, 2)
+            else:
+                dom = 56.0  # fallback
+            conn.execute(
+                "INSERT OR REPLACE INTO btc_dominance (date, dominance) VALUES (?,?)",
+                (d, dom),
+            )
+            cached[d] = dom
     conn.commit()
     conn.close()
     return {k: v for k, v in cached.items() if start_date <= k <= end_date}
