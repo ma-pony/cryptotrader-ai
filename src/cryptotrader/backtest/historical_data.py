@@ -13,6 +13,9 @@ from cryptotrader.backtest.cache import CACHE_DB
 UTC = timezone.utc
 
 
+FRED_API_KEY = "f2a21b61924b9ede4c094dd27acecf39"
+
+
 def _ensure_tables():
     conn = sqlite3.connect(str(CACHE_DB))
     conn.execute(
@@ -26,6 +29,10 @@ def _ensure_tables():
     conn.execute(
         "CREATE TABLE IF NOT EXISTS btc_dominance "
         "(date TEXT PRIMARY KEY, dominance REAL)"
+    )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS fred_series "
+        "(series_id TEXT, date TEXT, value REAL, PRIMARY KEY (series_id, date))"
     )
     conn.commit()
     conn.close()
@@ -184,6 +191,62 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
     conn.commit()
     conn.close()
     return {k: v for k, v in cached.items() if start_date <= k <= end_date}
+
+
+async def fetch_fred_series(series_id: str, start_date: str, end_date: str) -> dict[str, float]:
+    """Fetch a FRED time series. Returns {date_str: value}. Fills weekends/holidays forward."""
+    _ensure_tables()
+    conn = sqlite3.connect(str(CACHE_DB))
+    cached = dict(conn.execute(
+        "SELECT date, value FROM fred_series WHERE series_id=? AND date>=? AND date<=?",
+        (series_id, start_date, end_date),
+    ).fetchall())
+    conn.close()
+
+    start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
+    expected = (datetime.fromisoformat(end_date).replace(tzinfo=UTC) - start_dt).days
+    if len(cached) >= expected * 0.6:  # FRED has no weekends, so ~60% coverage is full
+        return cached
+
+    async with httpx.AsyncClient() as client:
+        r = await client.get(
+            "https://api.stlouisfed.org/fred/series/observations",
+            params={"series_id": series_id, "api_key": FRED_API_KEY,
+                    "file_type": "json", "observation_start": start_date,
+                    "observation_end": end_date},
+            timeout=30,
+        )
+        r.raise_for_status()
+        obs = r.json().get("observations", [])
+
+    conn = sqlite3.connect(str(CACHE_DB))
+    for o in obs:
+        if o["value"] != ".":  # FRED uses "." for missing
+            val = float(o["value"])
+            conn.execute(
+                "INSERT OR REPLACE INTO fred_series (series_id, date, value) VALUES (?,?,?)",
+                (series_id, o["date"], val),
+            )
+            cached[o["date"]] = val
+    conn.commit()
+    conn.close()
+
+    # Forward-fill weekends/holidays
+    if cached:
+        all_dates = sorted(cached.keys())
+        last_val = cached[all_dates[0]]
+        from datetime import timedelta
+        cur = start_dt
+        end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
+        filled = {}
+        while cur <= end_dt:
+            d = cur.strftime("%Y-%m-%d")
+            if d in cached:
+                last_val = cached[d]
+            filled[d] = last_val
+            cur += timedelta(days=1)
+        return filled
+    return cached
 
 
 def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[str]]:

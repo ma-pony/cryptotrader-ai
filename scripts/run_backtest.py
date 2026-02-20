@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 from datetime import datetime, UTC
 import pandas as pd
 from cryptotrader.backtest.cache import fetch_historical
-from cryptotrader.backtest.historical_data import fetch_fear_greed, fetch_funding_rate, fetch_btc_dominance, derive_news_sentiment
+from cryptotrader.backtest.historical_data import fetch_fear_greed, fetch_funding_rate, fetch_btc_dominance, fetch_fred_series, derive_news_sentiment
 from cryptotrader.graph import build_lite_graph
 from cryptotrader.models import DataSnapshot, MarketData, OnchainData, NewsSentiment, MacroData
 
@@ -69,6 +69,14 @@ async def main():
     btc_dom = await fetch_btc_dominance(START, END)
     print(f"Got {len(btc_dom)} days of BTC dominance data", flush=True)
 
+    print("Fetching Fed Rate history...", flush=True)
+    fed_rate = await fetch_fred_series("DFF", START, END)
+    print(f"Got {len(fed_rate)} days of Fed Rate data", flush=True)
+
+    print("Fetching DXY history...", flush=True)
+    dxy = await fetch_fred_series("DTWEXBGS", START, END)
+    print(f"Got {len(dxy)} days of DXY data", flush=True)
+
     graph = build_lite_graph()
     equity = CAPITAL
     position = 0.0
@@ -93,6 +101,8 @@ async def main():
         fng_val = fng.get(date_str, 50)
         fr_val = funding.get(date_str, 0.0)
         dom_val = btc_dom.get(date_str, 0.0)
+        fed_val = fed_rate.get(date_str, 0.0)
+        dxy_val = dxy.get(date_str, 0.0)
 
         # Derive proxy news sentiment from price action
         sentiment, events = derive_news_sentiment(candles, i)
@@ -105,7 +115,8 @@ async def main():
             onchain=OnchainData(),
             news=NewsSentiment(sentiment_score=sentiment, key_events=events,
                 headlines=[f"BTC at ${c:,.0f}, Fear&Greed={fng_val}"]),
-            macro=MacroData(fear_greed_index=fng_val, btc_dominance=dom_val))
+            macro=MacroData(fear_greed_index=fng_val, btc_dominance=dom_val,
+                fed_rate=fed_val, dxy=dxy_val))
 
         state = {
             "messages": [], "data": {"snapshot": snapshot},
