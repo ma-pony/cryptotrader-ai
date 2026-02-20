@@ -43,9 +43,9 @@ class BacktestEngine:
         trades: list[dict] = []
         peak = equity
 
-        from cryptotrader.graph import build_trading_graph, ArenaState
+        from cryptotrader.graph import build_lite_graph, ArenaState
 
-        graph = build_trading_graph() if self.use_llm else None
+        graph = build_lite_graph() if self.use_llm else None
 
         step_ms = _TF_MS.get(self.interval, 3_600_000)
         lookback = 100
@@ -135,7 +135,16 @@ class BacktestEngine:
     async def _run_graph(self, graph, snapshot: DataSnapshot) -> dict:
         initial: dict[str, Any] = {
             "messages": [], "data": {"snapshot": snapshot},
-            "metadata": {"pair": self.pair, "engine": "paper"},
+            "metadata": {
+                "pair": self.pair, "engine": "paper",
+                "models": {
+                    "tech_agent": "openai/deepseek-chat",
+                    "chain_agent": "openai/deepseek-chat",
+                    "news_agent": "openai/deepseek-chat",
+                    "macro_agent": "openai/deepseek-chat",
+                },
+                "debate_model": "openai/deepseek-chat",
+            },
             "debate_round": 0, "max_debate_rounds": 2, "divergence_scores": [],
         }
         return await graph.ainvoke(initial)

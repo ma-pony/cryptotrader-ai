@@ -34,6 +34,18 @@ class ArenaState(TypedDict):
 # ── Node functions ──
 
 async def collect_snapshot(state: ArenaState) -> dict:
+    # Skip collection if snapshot already provided (e.g. backtest)
+    if state.get("data", {}).get("snapshot"):
+        snapshot = state["data"]["snapshot"]
+        summary = {
+            "pair": snapshot.pair,
+            "price": snapshot.market.ticker.get("last", 0),
+            "funding_rate": snapshot.market.funding_rate,
+            "volatility": snapshot.market.volatility,
+            "orderbook_imbalance": snapshot.market.orderbook_imbalance,
+        }
+        return {"data": {"snapshot_summary": summary}}
+
     from cryptotrader.data.snapshot import SnapshotAggregator
 
     pair = state["metadata"]["pair"]
@@ -281,6 +293,37 @@ async def journal_rejection(state: ArenaState) -> dict:
 # ── Graph builder ──
 
 def build_trading_graph(config: dict | None = None) -> Any:
+    return _build_full_graph(config)
+
+
+def build_lite_graph(config: dict | None = None) -> Any:
+    """Lightweight graph for backtesting: skip debate, go straight to verdict."""
+    graph = StateGraph(ArenaState)
+
+    graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tech_agent", tech_analyze)
+    graph.add_node("chain_agent", chain_analyze)
+    graph.add_node("news_agent", news_analyze)
+    graph.add_node("macro_agent", macro_analyze)
+    graph.add_node("verdict", make_verdict)
+
+    graph.add_edge(START, "collect_data")
+    graph.add_edge("collect_data", "inject_experience")
+    graph.add_edge("inject_experience", "tech_agent")
+    graph.add_edge("inject_experience", "chain_agent")
+    graph.add_edge("inject_experience", "news_agent")
+    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("tech_agent", "verdict")
+    graph.add_edge("chain_agent", "verdict")
+    graph.add_edge("news_agent", "verdict")
+    graph.add_edge("macro_agent", "verdict")
+    graph.add_edge("verdict", END)
+
+    return graph.compile()
+
+
+def _build_full_graph(config: dict | None = None) -> Any:
     graph = StateGraph(ArenaState)
 
     graph.add_node("collect_data", collect_snapshot)

@@ -45,7 +45,8 @@ def store_ohlcv(pair: str, timeframe: str, candles: list[list]) -> None:
 async def fetch_historical(pair: str, timeframe: str, since_ms: int, until_ms: int) -> list[list]:
     """Fetch OHLCV with cache. Uses ccxt pagination for large ranges."""
     cached = get_cached(pair, timeframe, since_ms, until_ms)
-    if cached:
+    # Only use cache if it covers the full range (first candle near start)
+    if cached and cached[0][0] <= since_ms + 86_400_000:
         return cached
 
     try:
