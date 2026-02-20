@@ -16,8 +16,8 @@ INTERVAL = "1d"
 CAPITAL = 10000
 LOOKBACK = 100
 MODEL = "openai/deepseek-chat"
-MIN_HOLD_DAYS = 0  # Disabled for v6 baseline
-ADX_THRESHOLD = 0  # Disabled for v6 baseline
+MIN_HOLD_DAYS = 3  # Prevent frequent flips during trend reversals
+ADX_THRESHOLD = 0  # Disabled — Tech Agent handles regime detection
 
 
 def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
