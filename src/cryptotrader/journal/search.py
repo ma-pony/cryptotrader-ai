@@ -27,7 +27,6 @@ async def search_similar(
 
 
 def _within_range(a: float, b: float) -> bool:
-    """Check if a is within 50% of b."""
     if b == 0:
         return abs(a) < 0.001
     return abs(a - b) / abs(b) <= 0.5

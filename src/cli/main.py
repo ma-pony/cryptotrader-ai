@@ -32,18 +32,11 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
         console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green]")
 
         initial: ArenaState = {
-            "messages": [],
-            "data": {},
-            "metadata": {
-                "pair": pair,
-                "engine": mode,
-                "exchange_id": exchange_id,
-                "timeframe": "1h",
-                "ohlcv_limit": 100,
+            "messages": [], "data": {}, "metadata": {
+                "pair": pair, "engine": mode, "exchange_id": exchange_id,
+                "timeframe": "1h", "ohlcv_limit": 100,
             },
-            "debate_round": 0,
-            "max_debate_rounds": 3,
-            "divergence_scores": [],
+            "debate_round": 0, "max_debate_rounds": 3, "divergence_scores": [],
         }
 
         result = await graph.ainvoke(initial)
@@ -80,7 +73,6 @@ def journal_log(limit: int = typer.Option(10, "--limit", "-n")):
 
 async def _journal_log(limit: int):
     from cryptotrader.journal.store import JournalStore
-
     store = JournalStore(None)
     commits = await store.log(limit=limit)
     if not commits:
@@ -105,21 +97,86 @@ def journal_show(hash: str = typer.Argument(...)):
 
 async def _journal_show(hash: str):
     from cryptotrader.journal.store import JournalStore
-
     store = JournalStore(None)
     commit = await store.show(hash)
     if not commit:
         console.print(f"[red]Commit {hash} not found[/red]")
         return
     console.print_json(data={
-        "hash": commit.hash,
-        "pair": commit.pair,
+        "hash": commit.hash, "pair": commit.pair,
         "timestamp": str(commit.timestamp),
         "debate_rounds": commit.debate_rounds,
         "divergence": commit.divergence,
         "verdict": commit.verdict.action if commit.verdict else None,
         "risk_gate": commit.risk_gate.passed if commit.risk_gate else None,
     })
+
+
+# ── Backtest command ──
+
+@app.command()
+def backtest(
+    pair: str = typer.Option("BTC/USDT", "--pair", "-p"),
+    start: str = typer.Option(..., "--start", "-s"),
+    end: str = typer.Option(..., "--end", "-e"),
+    interval: str = typer.Option("4h", "--interval", "-i"),
+    capital: float = typer.Option(10000, "--capital"),
+):
+    """Run backtest on historical data."""
+    asyncio.run(_backtest(pair, start, end, interval, capital))
+
+
+async def _backtest(pair: str, start: str, end: str, interval: str, capital: float):
+    from cryptotrader.backtest.engine import BacktestEngine
+    console.print(f"[bold]Backtest[/bold] {pair} from {start} to {end} ({interval})")
+    engine = BacktestEngine(pair, start, end, interval, capital)
+    result = await engine.run()
+    table = Table(title="Backtest Results")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    for k, v in result.summary().items():
+        table.add_row(k, str(v))
+    console.print(table)
+
+
+# ── Scheduler commands ──
+
+scheduler_app = typer.Typer(help="Scheduler commands")
+app.add_typer(scheduler_app, name="scheduler")
+
+
+@scheduler_app.command("start")
+def scheduler_start():
+    """Start the trading scheduler."""
+    asyncio.run(_scheduler_start())
+
+
+async def _scheduler_start():
+    from cryptotrader.scheduler import Scheduler
+    from cryptotrader.config import load_config
+    config = load_config()
+    pairs = getattr(config, 'scheduler_pairs', ["BTC/USDT", "ETH/USDT"])
+    interval = getattr(config, 'scheduler_interval', 240)
+    console.print(f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m")
+    s = Scheduler(pairs, interval)
+    await s.start()
+
+
+@scheduler_app.command("status")
+def scheduler_status():
+    """Show scheduler status."""
+    console.print("[dim]Scheduler not running (use 'arena scheduler start')[/dim]")
+
+
+# ── Dashboard command ──
+
+@app.command()
+def dashboard():
+    """Launch Streamlit dashboard."""
+    import subprocess, sys
+    from pathlib import Path
+    app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
+    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)])
 
 
 @app.command()

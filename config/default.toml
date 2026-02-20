@@ -30,3 +30,13 @@ whale_alert_enabled = true
 fred_enabled = true
 defillama_enabled = true
 coingecko_enabled = true
+
+[scheduler]
+enabled = false
+pairs = ["BTC/USDT", "ETH/USDT"]
+interval_minutes = 240
+
+[notifications]
+webhook_url = ""
+enabled = true
+events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]

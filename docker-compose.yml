@@ -14,6 +14,30 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/cryptotrader
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+
+  dashboard:
+    build: .
+    command: python -m streamlit run src/dashboard/app.py --server.port 8501
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/cryptotrader
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "8501:8501"
+    depends_on:
+      - postgres
+      - redis
 
 volumes:
   pgdata:
+  redisdata:

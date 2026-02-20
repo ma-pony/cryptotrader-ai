@@ -1,9 +1,14 @@
-"""Redis state manager for risk checks."""
+"""Redis state manager for risk checks — real connection with TTL support."""
 
 from __future__ import annotations
 
+import logging
+from datetime import datetime
+
 import redis.asyncio as redis
 from redis.exceptions import RedisError
+
+logger = logging.getLogger(__name__)
 
 
 class RedisStateManager:
@@ -21,7 +26,8 @@ class RedisStateManager:
 
     async def get(self, key: str) -> str | None:
         try:
-            return await self._redis.get(key)
+            val = await self._redis.get(key)
+            return val.decode() if isinstance(val, bytes) else val
         except (RedisError, AttributeError):
             return None
 
@@ -36,3 +42,40 @@ class RedisStateManager:
             return await self._redis.incr(key)
         except (RedisError, AttributeError):
             return None
+
+    async def expire(self, key: str, seconds: int) -> None:
+        try:
+            await self._redis.expire(key, seconds)
+        except (RedisError, AttributeError):
+            pass
+
+    async def set_cooldown(self, pair: str, minutes: int) -> None:
+        await self.set(f"cooldown:{pair}", "1", ex=minutes * 60)
+
+    async def incr_trade_count(self) -> None:
+        now = datetime.utcnow()
+        hourly_key = f"trades:hourly:{now.strftime('%Y%m%d%H')}"
+        daily_key = f"trades:daily:{now.strftime('%Y%m%d')}"
+        await self.incr(hourly_key)
+        await self.expire(hourly_key, 3600)
+        await self.incr(daily_key)
+        await self.expire(daily_key, 86400)
+
+    async def get_trade_counts(self) -> tuple[int, int]:
+        now = datetime.utcnow()
+        hourly = await self.get(f"trades:hourly:{now.strftime('%Y%m%d%H')}")
+        daily = await self.get(f"trades:daily:{now.strftime('%Y%m%d')}")
+        return int(hourly or 0), int(daily or 0)
+
+    async def set_circuit_breaker(self) -> None:
+        await self.set("circuit_breaker:active", "1")
+
+    async def is_circuit_breaker_active(self) -> bool:
+        val = await self.get("circuit_breaker:active")
+        return val is not None
+
+    async def reset_circuit_breaker(self) -> None:
+        try:
+            await self._redis.delete("circuit_breaker:active")
+        except (RedisError, AttributeError):
+            pass

@@ -28,6 +28,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn>=0.30",
     "numpy>=1.26",
+    "streamlit>=1.30",
 ]
 
 [project.optional-dependencies]
