@@ -5,9 +5,14 @@ mode = "standalone"  # standalone | api | external
 engine = "paper"  # paper | live
 
 [models]
-analysis = "openai/claude-haiku-4-5"
-debate = "openai/claude-haiku-4-5"
-verdict = "openai/claude-sonnet-4-6"
+analysis = "openai/deepseek-chat"
+debate = "openai/claude-sonnet-4-6"
+
+[models.agents]
+tech_agent = "openai/deepseek-chat"
+chain_agent = "openai/deepseek-chat"
+news_agent = "openai/deepseek-chat"
+macro_agent = "openai/claude-sonnet-4-6"
 
 [debate]
 max_rounds = 3

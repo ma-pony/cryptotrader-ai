@@ -1,0 +1,484 @@
+[
+  {
+    "model": "glm-5",
+    "agent": "tech",
+    "direction": "bullish",
+    "confidence": 0.82,
+    "reasoning": "Strong bullish momentum is evident as price breaks above the upper Bollinger Band with significant MACD histogram expansion (163.88), indicating accelerating upward momentum. The RSI at 69.94 approaches overbought territory but still has room to run. Price is trading well above both SMAs (20/60) whi",
+    "key_factors": [
+      "MACD histogram surging at 163.88 with MACD line (280.98) well above signal line (117.10) - strong momentum expansion",
+      "Price breaking above upper Bollinger Band (68,140.21) indicating strong volatility to the upside",
+      "RSI at 69.94 with room before reaching overbought exhaustion at 70+",
+      "Price trading +1.64% with solid volume (15,831 BTC) confirming the move",
+      "Bullish orderbook imbalance (0.20) showing bid-side dominance"
+    ],
+    "risk_flags": [
+      "RSI near 70 - approaching overbought territory, potential for short-term pullback",
+      "Price significantly above VWAP (66,877) - mean reversion risk",
+      "Price at upper Bollinger Band extreme - often signals temporary exhaustion",
+      "Low volatility reading (0.005) may not reflect current rapid price expansion",
+      "Neutral funding rate (0.0) unusual for such strong rally - watch for funding increases"
+    ],
+    "latency_s": 16.0,
+    "parse_ok": true
+  },
+  {
+    "model": "glm-5",
+    "agent": "chain",
+    "direction": "bullish",
+    "confidence": 0.72,
+    "reasoning": "Price action shows a strong recovery with BTC gaining 1.64% to trade at $68,106, bouncing off the daily low of $65,631. The price is currently trading well above the VWAP ($66,877) and the daily open ($67,008), indicating sustained buying pressure throughout the session. Orderbook imbalance is posit",
+    "key_factors": [
+      "Price rejected from daily low ($65,631) to trade near daily high ($68,230), indicating strong demand zone.",
+      "Price > VWAP ($66,877) confirms buyers are in control of the session's average valuation.",
+      "Positive orderbook imbalance (0.20) indicates thick bid-side liquidity.",
+      "High 24h volume ($1.05B) validates the price move."
+    ],
+    "risk_flags": [
+      "Derivatives data (Funding/OI) is null, obscuring leverage sentiment and potential squeeze setups.",
+      "Price is approaching the daily high ($68,230); resistance rejection could trigger a pullback.",
+      "Exchange netflow is 0, offering no insight into whale accumulation or distribution."
+    ],
+    "latency_s": 13.1,
+    "parse_ok": true
+  },
+  {
+    "model": "glm-5",
+    "agent": "news",
+    "direction": "bullish",
+    "confidence": 0.72,
+    "reasoning": "Despite bearish headlines citing 'record monthly losses' and industry shutdowns (Parsec), the market structure is flashing strong short-term bullish signals. Price has bounced firmly from the daily low ($65,631) to trade near the daily high ($68,230), representing a 1.6% gain. This upward momentum i",
+    "key_factors": [
+      "Price reclaimed opening price and pushed +1.6% to daily highs.",
+      "Orderbook imbalance is positive (0.20), showing aggressive bidding.",
+      "Headlines suggest historical turnaround potential after record losses.",
+      "Lightning Network volume exceeds $1B, indicating fundamental network growth."
+    ],
+    "risk_flags": [
+      "Fed's Kashkari anti-crypto stance could indicate regulatory friction.",
+      "Bitdeer tanks 17%, signaling distress in the mining sector.",
+      "Headlines reference 'record monthly losses', confirming recent severe downtrend.",
+      "Tightening Bollinger Bands forecast volatility, which could break down if support fails."
+    ],
+    "latency_s": 20.3,
+    "parse_ok": true
+  },
+  {
+    "model": "glm-5",
+    "agent": "macro",
+    "direction": "bullish",
+    "confidence": 0.78,
+    "reasoning": "This scenario presents a classic high-probability contrarian buying opportunity driven by macro liquidity and extreme sentiment dislocation. The combination of zero interest rates and a collapsed DXY implies abundant global liquidity, which is the primary fuel for risk assets like Bitcoin. Despite t",
+    "key_factors": [
+      "Zero Interest Rate Environment: Removes the cost of capital pressure, historically the strongest bullish signal for crypto asset appreciation.",
+      "Extreme Fear Capitulation (7/100): Sentiment is washed out; historically, readings below 10 often mark local bottoms or the start of sustained rallies.",
+      "Liquidity Flight to Quality: 56.6% Dominance suggests that while the broader market may be weak, capital is consolidating into BTC as a safe haven.",
+      "Orderbook Support: Positive imbalance of 0.20 indicates thick bid walls preventing price from dropping to daily lows.",
+      "Price Action: BTC successfully defended the $65,600 daily low and is currently trading near the daily high ($68,230), signaling buyer aggression."
+    ],
+    "risk_flags": [
+      "Macro Data Anomaly: The reported 0.0% Fed Funds Rate and 0.0 DXY are statistically improbable for a $68k BTC price point (which usually implies a tighter market). This suggests either a data feed error or a hyper-deflationary shock event that could alter risk models.",
+      "Zero Funding Rate: Lack of speculative premium in the derivatives market implies spot-driven price action, which is healthy but lacks the 'jet fuel' of leveraged longs for a rapid breakout.",
+      "Low Volatility (0.5%): Compressed volatility often precedes a violent expansion; while the bias is bullish, the breakout direction is not 100% confirmed until volatility spikes."
+    ],
+    "latency_s": 24.0,
+    "parse_ok": true
+  },
+  {
+    "model": "kimi-k2.5",
+    "agent": "tech",
+    "direction": "bullish",
+    "confidence": 0.72,
+    "reasoning": "BTC/USDT exhibits strong bullish momentum with price trading at $68,106, near the daily high of $68,230. The MACD shows a powerful bullish crossover with histogram at 163.88, indicating accelerating upward momentum. Price has broken above both SMA 20 and SMA 60, with the 20-period SMA crossing above",
+    "key_factors": [
+      "MACD bullish crossover with strong histogram expansion (163.88)",
+      "Golden cross: SMA 20 (67168.93) > SMA 60 (67123.89)",
+      "Price breakout above both SMAs with +1.64% daily gain",
+      "High volume confirmation ($1.06B quote volume, 15.8K BTC)",
+      "Price near daily high, showing sustained buying pressure"
+    ],
+    "risk_flags": [
+      "RSI at 69.94 approaching overbought threshold (70+)",
+      "Price at upper Bollinger Band (68140.21) - potential resistance",
+      "Zero funding rate suggests lack of strong directional conviction in derivatives",
+      "ATR of 400.75 indicates elevated volatility - risk of sharp reversals",
+      "VWAP at 66877.79 is below current price - potential mean reversion risk"
+    ],
+    "latency_s": 19.5,
+    "parse_ok": true
+  },
+  {
+    "model": "kimi-k2.5",
+    "agent": "chain",
+    "direction": "bullish",
+    "confidence": 0.62,
+    "reasoning": "Despite zeroed on-chain/derivatives data (likely API/data feed issues), the spot market structure shows clear bullish momentum. BTC/USDT has rallied 1.64% with strong volume (~$1.06B quote volume), breaking above the VWAP ($66,877) and posting a higher high at $68,230. The tight bid-ask spread ($0.0",
+    "key_factors": [
+      "Spot price up 1.64% with strong volume confirmation",
+      "Breakout above VWAP and prior range high",
+      "Positive orderbook imbalance (+0.20) indicating bid-side dominance",
+      "Low volatility environment (0.51%) suggesting controlled, sustainable move",
+      "Absence of leverage-driven froth (funding at 0, though possibly data error)"
+    ],
+    "risk_flags": [
+      "Zeroed derivatives data prevents full market structure assessment",
+      "No liquidation data to assess trapped positions",
+      "No whale flow visibility",
+      "Low volatility can precede expansion in either direction",
+      "Need confirmation of funding rate legitimacy—if truly 0%, move may be spot-driven and sustainable; if data error, risk of hidden leverage"
+    ],
+    "latency_s": 15.3,
+    "parse_ok": true
+  },
+  {
+    "model": "kimi-k2.5",
+    "agent": "news",
+    "direction": "neutral",
+    "confidence": 0.52,
+    "reasoning": "The market presents a mixed picture with offsetting bullish and bearish signals. On the bullish side, BTC is up 1.64% to $68,106 with tightening Bollinger Bands suggesting an imminent volatility expansion, historical patterns indicating potential turnaround after record monthly losses, and strong Li",
+    "key_factors": [
+      "Tightening Bollinger Bands forecast explosive price move",
+      "BTC up 1.64% with mild orderbook buying imbalance (0.20)",
+      "Historical pattern: record monthly losses followed by turnaround",
+      "Parsec shutdown signals market infrastructure stress",
+      "Fed official Kashkari negative on crypto, positive on AI"
+    ],
+    "risk_flags": [
+      "Miner stress: Bitdeer -17% after $300M debt offering",
+      "Regulatory rhetoric from Fed officials remains hostile",
+      "Market infrastructure failure (Parsec shutdown)",
+      "Zero funding rate indicates lack of strong directional conviction",
+      "Quantum fear narrative persists despite developer dismissal"
+    ],
+    "latency_s": 18.9,
+    "parse_ok": true
+  },
+  {
+    "model": "kimi-k2.5",
+    "agent": "macro",
+    "direction": "bullish",
+    "confidence": 0.68,
+    "reasoning": "Extreme fear (7/100) combined with strong BTC dominance (56.6%) and positive price action (+1.64%) suggests a potential local bottom formation. The market is showing classic contrarian bullish signals: maximum pessimism priced in while BTC maintains market leadership. Orderbook imbalance (0.20) indi",
+    "key_factors": [
+      "Extreme Fear index (7/100) - strong contrarian bullish signal",
+      "BTC dominance elevated at 56.6% - flight to quality within crypto",
+      "Positive daily close (+1.64%) despite extreme fear suggests absorption",
+      "Orderbook imbalance favoring bids (0.20) - mild buying pressure",
+      "Low volatility (0.51%) - compression often precedes expansion"
+    ],
+    "risk_flags": [
+      "Fed funds rate and DXY reported as 0.0 - possible data feed issues",
+      "Funding rate at 0.0 - unusual, verify exchange data integrity",
+      "Extreme fear can persist; macro breakdown could extend downside",
+      "No rate hike cycle clarity limits medium-term conviction"
+    ],
+    "latency_s": 5.8,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "agent": "tech",
+    "direction": "bullish",
+    "confidence": 0.72,
+    "reasoning": "BTC/USDT shows strong bullish momentum with price trading above all key SMAs and near the upper Bollinger Band. MACD histogram is strongly positive (163.88), confirming upward momentum. RSI at 69.94 is approaching overbought but hasn't crossed 70 yet. Price is up 1.64% on the day with high volume (~",
+    "key_factors": [
+      "Price (68106) above SMA20 (67168) and SMA60 (67123) — bullish alignment",
+      "MACD histogram strongly positive at 163.88, signal crossover confirmed",
+      "RSI at 69.94 — strong momentum, not yet overbought",
+      "Price near upper Bollinger Band (68140) — momentum breakout potential",
+      "Orderbook imbalance 0.20 — moderate buy-side pressure"
+    ],
+    "risk_flags": [
+      "RSI approaching overbought (70) — pullback risk increasing",
+      "Price within $134 of upper BB — potential resistance/mean reversion",
+      "Daily high at 68230 is near resistance; current price 68106 is close to that level",
+      "Funding rate at 0.0 — neutral, but watch for spike if longs pile in",
+      "ATR of 400.75 suggests ~0.59% average range — moderate volatility, stop placement critical"
+    ],
+    "latency_s": 9.6,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "agent": "chain",
+    "direction": "bullish",
+    "confidence": 0.52,
+    "reasoning": "BTC/USDT is trading at $68,106 with a +1.64% gain on the day, bouncing off a $65,631 low and approaching the $68,230 high. Price is near the top of the daily range, suggesting bullish momentum. Orderbook imbalance of ~0.20 indicates more bid-side pressure than ask-side, supporting upward price actio",
+    "key_factors": [
+      "Price up +1.64% on the day, trading near daily high",
+      "Positive orderbook imbalance (0.202) — bids outweigh asks",
+      "Price closed above open ($68,106 vs $67,008), bullish candle structure",
+      "VWAP at $66,877 — price trading above VWAP, bullish signal",
+      "Low volatility (0.51%) suggests steady accumulation rather than a fakeout"
+    ],
+    "risk_flags": [
+      "All derivatives data is zero/null — funding rate, OI, liquidations, whale transfers unavailable; analysis is spot-only",
+      "Price near daily high ($68,230) — potential resistance and short-term rejection risk",
+      "Missing on-chain flow data limits ability to confirm institutional conviction",
+      "Low volume context unknown — $1.06B quote volume needs historical baseline to assess significance"
+    ],
+    "latency_s": 9.8,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "agent": "news",
+    "direction": "neutral",
+    "confidence": 0.52,
+    "reasoning": "Mixed signals dominate. Price is up 1.64% on the day and trading near the high of range (~$68,106 vs high $68,230), suggesting short-term bullish momentum. However, sentiment score is flat (0.0), social buzz is zero, and headlines are predominantly negative (Fed criticism, miner debt stress, Parsec ",
+    "key_factors": [
+      "Price up 1.64% intraday, trading near daily high — short-term bullish momentum",
+      "Orderbook imbalance +0.20 favors buyers",
+      "Tightening Bollinger Bands signal imminent explosive move, direction unclear",
+      "Flat funding rate (0.0) — no crowded long/short positioning",
+      "Sentiment score 0.0 and zero social buzz — no crowd conviction"
+    ],
+    "risk_flags": [
+      "Options market structure leans toward $60K retest in February — significant downside target",
+      "Fed's Kashkari hostile toward crypto/stablecoins — regulatory headwind",
+      "Bitdeer -17% on $300M debt offering — miner financial stress signal",
+      "Parsec shutdown reflects ongoing market fragility",
+      "Bollinger Band squeeze could resolve violently to the downside"
+    ],
+    "latency_s": 11.9,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-sonnet-4-6",
+    "agent": "macro",
+    "direction": "neutral",
+    "confidence": 0.38,
+    "reasoning": "Conflicting signals make a high-confidence call difficult. Price is up 1.64% on the day and sitting near the high of range (68106 vs high 68230), with positive orderbook imbalance (0.20) favoring buyers. However, the Fear & Greed index at 7/100 (Extreme Fear) is a major headwind — historically this ",
+    "key_factors": [
+      "Price near daily high (68106 / 68230) — intraday bullish momentum",
+      "Orderbook imbalance +0.20 — buy-side pressure",
+      "Fear & Greed 7/100 (Extreme Fear) — sentiment deeply negative, contrarian buy signal or continued selling pressure",
+      "BTC dominance 56.6% — capital consolidating in BTC, not fleeing crypto",
+      "Funding rate 0.0% — neutral leverage positioning, no squeeze risk"
+    ],
+    "risk_flags": [
+      "Extreme Fear index (7/100) — high probability of continued retail panic selling",
+      "DXY and Fed funds rate data are 0.0 — macro inputs invalid/missing, analysis is incomplete",
+      "Daily range wide (65631–68230, ~2600 pts) — elevated intraday risk",
+      "No funding rate data may indicate perpetual market anomaly or data feed issue",
+      "Contrarian bottom signals can fail — extreme fear can persist or deepen"
+    ],
+    "latency_s": 13.4,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-opus-4-6",
+    "agent": "tech",
+    "direction": "bullish",
+    "confidence": 0.72,
+    "reasoning": "BTC is showing strong bullish momentum with price up +1.64% on the day, trading near the session high. MACD is decisively bullish with a large positive histogram (163.88), confirming accelerating upward momentum. Price at 68,106 sits above both SMA_20 (67,169) and SMA_60 (67,124), confirming the sho",
+    "key_factors": [
+      "MACD strongly bullish — histogram at 163.88 with macd (280.98) well above signal (117.10)",
+      "Price above both SMA_20 and SMA_60, confirming uptrend alignment",
+      "Price trading at upper Bollinger Band — strong directional move",
+      "+1.64% daily gain with price near session high (68,230), buyers in control",
+      "Positive orderbook imbalance (0.20) favoring bids"
+    ],
+    "risk_flags": [
+      "RSI at 69.94 — essentially at overbought threshold, pullback risk elevated",
+      "Price compressed against upper Bollinger Band with narrow band width (500 spread) — potential for mean reversion",
+      "Wide daily range (65,632–68,230) with ATR of 400 suggests elevated intraday volatility",
+      "Neutral funding rate (0.0) means no directional conviction from derivatives market",
+      "Low volatility metric (0.005) relative to the daily range may indicate a regime shift incoming"
+    ],
+    "latency_s": 15.3,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-opus-4-6",
+    "agent": "chain",
+    "direction": "bullish",
+    "confidence": 0.62,
+    "reasoning": "BTC/USDT is showing moderate bullish momentum with a +1.64% gain on the session, trading near the 24h high of $68,230. The orderbook imbalance of ~0.20 indicates bid-side dominance, supporting near-term upward pressure. However, confidence is capped because all on-chain/derivatives data points (fund",
+    "key_factors": [
+      "Price up +1.64% ($1,097.62), trading at $68,106 near the 24h high of $68,230",
+      "Orderbook imbalance of +0.20 favoring bids — moderate buy-side pressure",
+      "Tight bid-ask spread ($68,106.00 / $68,106.01) indicating high liquidity and conviction at current levels",
+      "Strong 24h volume (~15,832 BTC / ~$1.06B quote volume)",
+      "Low realized volatility (0.51%) suggesting an orderly grind up, not a spike"
+    ],
+    "risk_flags": [
+      "All derivatives data (funding, OI, liquidations) returning zero — data feed likely broken or unavailable; derivatives confirmation is completely absent",
+      "Zero whale transfer data — no visibility into large holder behavior",
+      "Zero exchange netflow — cannot assess accumulation vs distribution",
+      "Price near 24h high ($68,230) — potential for short-term resistance and mean reversion",
+      "Without funding rate data, hidden leverage buildup cannot be assessed — risk of sudden liquidation cascades is unknown"
+    ],
+    "latency_s": 19.6,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-opus-4-6",
+    "agent": "news",
+    "direction": "neutral",
+    "confidence": 0.45,
+    "reasoning": "Mixed signals across all dimensions. Price is up +1.64% intraday to $68,106 with decent volume, but the broader sentiment is dead neutral (0.0 score, 0.0 social buzz). Headlines split evenly between bearish catalysts (Parsec shutdown, Bitdeer -17%, Fed's Kashkari anti-crypto, options leaning toward ",
+    "key_factors": [
+      "Sentiment score exactly 0.0 — perfectly split market opinion",
+      "Price +1.64% intraday with strong bounce off $65,631 low",
+      "Tightening Bollinger Bands signal imminent volatility expansion — direction unknown",
+      "Bitcoin options market structure leans toward $60K retest (bearish skew)",
+      "Lightning Network $1B monthly volume — positive adoption signal"
+    ],
+    "risk_flags": [
+      "Options market pricing in potential $60K retest — ~12% downside risk",
+      "Fed's Kashkari openly anti-crypto — regulatory headwind",
+      "Parsec shutdown signals ongoing stress in crypto ecosystem",
+      "Bollinger Band squeeze could resolve to the downside",
+      "Zero social buzz suggests lack of retail conviction to sustain rally"
+    ],
+    "latency_s": 15.3,
+    "parse_ok": true
+  },
+  {
+    "model": "claude-opus-4-6",
+    "agent": "macro",
+    "direction": "bullish",
+    "confidence": 0.62,
+    "reasoning": "Conflicting signals create a cautiously bullish outlook. The extreme fear reading (7/100) is historically a strong contrarian buy signal — markets tend to reverse when sentiment is this depressed. Zero fed funds rate provides maximum monetary stimulus, which is structurally bullish for risk assets. ",
+    "key_factors": [
+      "Extreme Fear (7/100) — strongest contrarian bullish signal in this dataset",
+      "Zero interest rates — maximally accommodative monetary policy favors risk-on assets",
+      "Price trading near 24h high with +1.64% gain, above VWAP — intraday momentum is bullish",
+      "Positive orderbook imbalance (0.20) — bid pressure exceeds ask pressure",
+      "BTC dominance at 56.6% — capital concentrating in BTC over alts, typical of early recovery phases"
+    ],
+    "risk_flags": [
+      "DXY reading of 0.0 is clearly invalid/missing — cannot assess USD strength headwinds",
+      "Funding rate of 0.0 is suspicious — may indicate data feed issue rather than neutral positioning",
+      "Extreme fear can persist and deepen before reversal — timing risk is high",
+      "BTC at $68K is below prior cycle highs — macro downtrend may still be intact",
+      "Volume (~15.8K BTC) needs context of recent averages to confirm conviction behind the move"
+    ],
+    "latency_s": 19.7,
+    "parse_ok": true
+  },
+  {
+    "model": "deepseek-reasoner",
+    "agent": "tech",
+    "direction": "neutral",
+    "confidence": 0.5,
+    "reasoning": "",
+    "key_factors": [],
+    "risk_flags": [],
+    "latency_s": 19.5,
+    "parse_ok": false
+  },
+  {
+    "model": "deepseek-reasoner",
+    "agent": "chain",
+    "direction": "bullish",
+    "confidence": 0.45,
+    "reasoning": "The spot market shows clear bullish momentum with BTC/USDT up 1.64% over the period, trading near daily highs at $68,106, and strong quote volume exceeding $1B. The 20% orderbook imbalance toward bids indicates immediate buying pressure. However, the complete absence of derivatives data (0 funding r",
+    "key_factors": [
+      "Spot price appreciation of 1.64% to $68,106",
+      "Strong bid-side orderbook imbalance (20%)",
+      "High quote volume ($1.06B) supporting move",
+      "Trading near session highs ($68,230)",
+      "Complete absence of derivatives activity (data gap or market anomaly)"
+    ],
+    "risk_flags": [
+      "Zero derivatives data - extreme abnormality",
+      "No funding rate or open interest data reduces conviction",
+      "Missing liquidation data hides leverage positioning",
+      "Potential data feed failure or synthetic environment",
+      "Bullish thesis relies solely on spot metrics without derivatives confirmation"
+    ],
+    "latency_s": 12.4,
+    "parse_ok": true
+  },
+  {
+    "model": "deepseek-reasoner",
+    "agent": "news",
+    "direction": "bullish",
+    "confidence": 0.72,
+    "reasoning": "The market is exhibiting classic signs of 'bad news priced in' with bullish technical structure. Despite overwhelmingly negative headlines (Parsec shutdown, regulatory criticism, miner struggles), Bitcoin has rallied 1.64% to $68,106 with strong volume. Key bullish signals include: 1) Tightening Bol",
+    "key_factors": [
+      "Technical consolidation with tightening Bollinger Bands at high price levels",
+      "Strong price recovery (+1.64%) despite negative news flow",
+      "Options market structure positioning for upside",
+      "Historical pattern of turnaround after record monthly losses",
+      "Orderbook imbalance favoring buyers (20% more bids than asks)"
+    ],
+    "risk_flags": [
+      "Regulatory uncertainty (White House meetings, Fed criticism)",
+      "Infrastructure fragility (Parsec shutdown shows volatility impact)",
+      "Mining sector stress (Bitdeer's 17% drop post-debt offering)",
+      "Lack of clear social sentiment catalyst (0.0 social buzz)",
+      "Potential for false breakout if Bollinger squeeze resolves downward"
+    ],
+    "latency_s": 15.2,
+    "parse_ok": true
+  },
+  {
+    "model": "deepseek-reasoner",
+    "agent": "macro",
+    "direction": "bullish",
+    "confidence": 0.75,
+    "reasoning": "The combination of extreme fear (7/100), zero Fed funds rate, and BTC's strong intraday recovery (+1.64% from open, trading near daily highs) suggests a contrarian bullish setup. Extreme fear often signals capitulation and potential reversal points, especially when coupled with loose monetary policy",
+    "key_factors": [
+      "Extreme Fear index (7/100) historically signals buying opportunities",
+      "Zero interest rates maintain favorable liquidity conditions for risk assets",
+      "BTC dominance >56% shows relative strength vs. altcoins",
+      "Price recovering from daily lows to test highs with above-average volume",
+      "Positive funding rate (0.01%) indicates neutral-to-bullish derivatives sentiment"
+    ],
+    "risk_flags": [
+      "DXY reading of 0.0 appears anomalous/erroneous - cannot assess USD strength",
+      "Extreme fear could persist if macro conditions deteriorate",
+      "High dominance may limit overall crypto market upside",
+      "BTC remains volatile and subject to sudden sentiment shifts"
+    ],
+    "latency_s": 12.6,
+    "parse_ok": true
+  },
+  {
+    "model": "gpt-5.2",
+    "agent": "tech",
+    "direction": "neutral",
+    "confidence": 0.5,
+    "reasoning": "LLM unavailable - mock analysis",
+    "key_factors": [],
+    "risk_flags": [],
+    "latency_s": 52.2,
+    "parse_ok": false
+  },
+  {
+    "model": "gpt-5.2",
+    "agent": "chain",
+    "direction": "neutral",
+    "confidence": 0.5,
+    "reasoning": "LLM unavailable - mock analysis",
+    "key_factors": [],
+    "risk_flags": [],
+    "latency_s": 48.7,
+    "parse_ok": false
+  },
+  {
+    "model": "gpt-5.2",
+    "agent": "news",
+    "direction": "neutral",
+    "confidence": 0.5,
+    "reasoning": "LLM unavailable - mock analysis",
+    "key_factors": [],
+    "risk_flags": [],
+    "latency_s": 56.2,
+    "parse_ok": false
+  },
+  {
+    "model": "gpt-5.2",
+    "agent": "macro",
+    "direction": "neutral",
+    "confidence": 0.5,
+    "reasoning": "LLM unavailable - mock analysis",
+    "key_factors": [],
+    "risk_flags": [],
+    "latency_s": 56.2,
+    "parse_ok": false
+  }
+]

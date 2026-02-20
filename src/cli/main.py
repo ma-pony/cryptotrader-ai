@@ -36,8 +36,14 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
             "messages": [], "data": {}, "metadata": {
                 "pair": pair, "engine": mode, "exchange_id": exchange_id,
                 "timeframe": "1h", "ohlcv_limit": 100,
-                "analysis_model": os.environ.get("ARENA_ANALYSIS_MODEL", "openai/glm-4.5-air"),
-                "debate_model": os.environ.get("ARENA_DEBATE_MODEL", "openai/glm-4.5-air"),
+                "analysis_model": os.environ.get("ARENA_ANALYSIS_MODEL", "openai/deepseek-chat"),
+                "debate_model": os.environ.get("ARENA_DEBATE_MODEL", "openai/claude-sonnet-4-6"),
+                "models": {
+                    "tech_agent": os.environ.get("ARENA_MODEL_TECH", "openai/deepseek-chat"),
+                    "chain_agent": os.environ.get("ARENA_MODEL_CHAIN", "openai/deepseek-chat"),
+                    "news_agent": os.environ.get("ARENA_MODEL_NEWS", "openai/deepseek-chat"),
+                    "macro_agent": os.environ.get("ARENA_MODEL_MACRO", "openai/claude-sonnet-4-6"),
+                },
             },
             "debate_round": 0, "max_debate_rounds": 3, "divergence_scores": [],
         }

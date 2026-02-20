@@ -76,7 +76,9 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         "news_agent": lambda m: NewsAgent(model=m),
         "macro_agent": lambda m: MacroAgent(model=m),
     }
-    model = state["metadata"].get("analysis_model", "gpt-4o-mini")
+    # Per-agent model: metadata.models.tech_agent, fallback to analysis_model
+    models_cfg = state["metadata"].get("models", {})
+    model = models_cfg.get(agent_type, state["metadata"].get("analysis_model", "gpt-4o-mini"))
     agent = agents[agent_type](model)
     snapshot = state["data"]["snapshot"]
     experience = state["data"].get("experience", "")

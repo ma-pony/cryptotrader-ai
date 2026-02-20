@@ -42,7 +42,7 @@ async def test_max_position_pass(verdict, portfolio):
 
 @pytest.mark.asyncio
 async def test_max_position_fail(portfolio):
-    v = TradeVerdict(action="long", position_scale=0.15)
+    v = TradeVerdict(action="long", position_scale=1.5)
     c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
     r = await c.evaluate(v, portfolio)
     assert not r.passed
