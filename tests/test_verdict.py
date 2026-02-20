@@ -1,7 +1,7 @@
 """Tests for verdict generation and divergence calculation."""
 
 from cryptotrader.debate.convergence import compute_divergence, check_convergence
-from cryptotrader.debate.verdict import make_verdict
+from cryptotrader.debate.verdict import make_verdict_weighted as make_verdict
 
 
 def test_divergence_unanimous_bullish():

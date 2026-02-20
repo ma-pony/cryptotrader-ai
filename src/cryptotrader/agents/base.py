@@ -76,6 +76,13 @@ class BaseAgent(ABC):
                 confidence=0.5,
                 reasoning=response_text[:500],
             )
+        # Standard fields
+        standard = {"direction", "confidence", "reasoning", "key_factors", "risk_flags", "data_points"}
+        # Everything else goes into data_points for downstream rules engine
+        extra = {k: v for k, v in data.items() if k not in standard}
+        dp = data.get("data_points", {})
+        dp.update(extra)
+
         return AgentAnalysis(
             agent_id=self.agent_id,
             pair=pair,
@@ -84,5 +91,5 @@ class BaseAgent(ABC):
             reasoning=data.get("reasoning", ""),
             key_factors=data.get("key_factors", []),
             risk_flags=data.get("risk_flags", []),
-            data_points=data.get("data_points", {}),
+            data_points=dp,
         )

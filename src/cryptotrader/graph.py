@@ -95,15 +95,16 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
     snapshot = state["data"]["snapshot"]
     experience = state["data"].get("experience", "")
     analysis = await agent.analyze(snapshot, experience)
-    return {
-        "data": {"analyses": {agent_type: {
-            "direction": analysis.direction,
-            "confidence": analysis.confidence,
-            "reasoning": analysis.reasoning,
-            "key_factors": analysis.key_factors,
-            "risk_flags": analysis.risk_flags,
-        }}}
+    result = {
+        "direction": analysis.direction,
+        "confidence": analysis.confidence,
+        "reasoning": analysis.reasoning,
+        "key_factors": analysis.key_factors,
+        "risk_flags": analysis.risk_flags,
     }
+    # Pass through all extra fields from data_points (regime, strength, crowding, etc.)
+    result.update(analysis.data_points)
+    return {"data": {"analyses": {agent_type: result}}}
 
 
 async def tech_analyze(state: ArenaState) -> dict:
@@ -176,12 +177,20 @@ def convergence_router(state: ArenaState) -> str:
 
 
 async def make_verdict(state: ArenaState) -> dict:
-    from cryptotrader.debate.verdict import make_verdict as _make_verdict
+    from cryptotrader.debate.verdict import make_verdict_llm, make_verdict_weighted
 
     analyses = state["data"].get("analyses", {})
-    scores = state.get("divergence_scores") or [0.0]
-    threshold = state["metadata"].get("divergence_hold_threshold", 0.7)
-    verdict = _make_verdict(analyses, scores[-1], threshold)
+    use_llm_verdict = state["metadata"].get("llm_verdict", True)
+
+    if use_llm_verdict:
+        model = state["metadata"].get("verdict_model",
+                    state["metadata"].get("debate_model", "gpt-4o-mini"))
+        verdict = await make_verdict_llm(analyses, model=model)
+    else:
+        scores = state.get("divergence_scores") or [0.0]
+        threshold = state["metadata"].get("divergence_hold_threshold", 0.7)
+        verdict = make_verdict_weighted(analyses, scores[-1], threshold)
+
     return {"data": {"verdict": {
         "action": verdict.action,
         "confidence": verdict.confidence,

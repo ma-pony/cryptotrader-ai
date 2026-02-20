@@ -122,7 +122,7 @@ async def main():
             "messages": [], "data": {"snapshot": snapshot},
             "metadata": {"pair": PAIR, "engine": "paper",
                 "models": {k: MODEL for k in ["tech_agent", "chain_agent", "news_agent", "macro_agent"]},
-                "debate_model": MODEL},
+                "debate_model": MODEL, "verdict_model": MODEL, "llm_verdict": True},
             "debate_round": 0, "max_debate_rounds": 0, "divergence_scores": [],
         }
         # ADX trend filter: skip LLM in ranging markets
