@@ -18,10 +18,12 @@ class MacroAgent(BaseAgent):
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
         base = super()._build_prompt(snapshot, experience)
+        m = snapshot.macro
+        fg_label = "Extreme Fear" if m.fear_greed_index < 25 else "Fear" if m.fear_greed_index < 45 else "Neutral" if m.fear_greed_index < 55 else "Greed" if m.fear_greed_index < 75 else "Extreme Greed"
         macro = (
-            f"Fed rate: {snapshot.macro.fed_rate}\n"
-            f"DXY: {snapshot.macro.dxy}\n"
-            f"BTC dominance: {snapshot.macro.btc_dominance}\n"
-            f"Fear & Greed index: {snapshot.macro.fear_greed_index}"
+            f"Fed funds rate: {m.fed_rate}%\n"
+            f"DXY (USD index): {m.dxy}\n"
+            f"BTC dominance: {m.btc_dominance:.1f}%\n"
+            f"Fear & Greed index: {m.fear_greed_index}/100 ({fg_label})"
         )
         return f"Macro Data:\n{macro}\n\n{base}"

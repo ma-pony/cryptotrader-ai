@@ -17,3 +17,16 @@ divergence_hold_threshold = 0.7
 [data]
 default_timeframe = "1h"
 ohlcv_limit = 100
+
+[providers]
+coinglass_api_key = ""
+cryptoquant_api_key = ""
+whale_alert_api_key = ""
+fred_api_key = ""
+# Set to false to skip a provider even if key is set
+coinglass_enabled = true
+cryptoquant_enabled = true
+whale_alert_enabled = true
+fred_enabled = true
+defillama_enabled = true
+coingecko_enabled = true

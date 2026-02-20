@@ -15,53 +15,55 @@ console = Console()
 
 @app.command()
 def run(
-    pair: str = typer.Option("BTC/USDT", "--pair", "-p"),
+    pair: list[str] = typer.Option(["BTC/USDT"], "--pair", "-p", help="One or more pairs"),
     mode: str = typer.Option("paper", "--mode", "-m", help="paper or live"),
     exchange: str = typer.Option("binance", "--exchange", "-e"),
 ):
-    """Run one analysis cycle."""
+    """Run one analysis cycle for each pair sequentially."""
     asyncio.run(_run(pair, mode, exchange))
 
 
-async def _run(pair: str, mode: str, exchange_id: str):
+async def _run(pairs: list[str], mode: str, exchange_id: str):
     from cryptotrader.graph import build_trading_graph, ArenaState
 
-    console.print(f"[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green]")
-
     graph = build_trading_graph()
-    initial: ArenaState = {
-        "messages": [],
-        "data": {},
-        "metadata": {
-            "pair": pair,
-            "engine": mode,
-            "exchange_id": exchange_id,
-            "timeframe": "1h",
-            "ohlcv_limit": 100,
-        },
-        "debate_round": 0,
-        "max_debate_rounds": 3,
-        "divergence_scores": [],
-    }
 
-    result = await graph.ainvoke(initial)
+    for pair in pairs:
+        console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green]")
 
-    verdict = result.get("data", {}).get("verdict", {})
-    risk = result.get("data", {}).get("risk_gate", {})
-    order = result.get("data", {}).get("order")
+        initial: ArenaState = {
+            "messages": [],
+            "data": {},
+            "metadata": {
+                "pair": pair,
+                "engine": mode,
+                "exchange_id": exchange_id,
+                "timeframe": "1h",
+                "ohlcv_limit": 100,
+            },
+            "debate_round": 0,
+            "max_debate_rounds": 3,
+            "divergence_scores": [],
+        }
 
-    table = Table(title="Decision Summary")
-    table.add_column("Field", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_row("Pair", pair)
-    table.add_row("Action", verdict.get("action", "N/A"))
-    table.add_row("Confidence", f"{verdict.get('confidence', 0):.2%}")
-    table.add_row("Divergence", f"{verdict.get('divergence', 0):.2%}")
-    table.add_row("Position Scale", f"{verdict.get('position_scale', 0):.2%}")
-    table.add_row("Risk Gate", "PASS" if risk.get("passed") else f"REJECT: {risk.get('reason', '')}")
-    if order:
-        table.add_row("Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}")
-    console.print(table)
+        result = await graph.ainvoke(initial)
+
+        verdict = result.get("data", {}).get("verdict", {})
+        risk = result.get("data", {}).get("risk_gate", {})
+        order = result.get("data", {}).get("order")
+
+        table = Table(title=f"Decision Summary — {pair}")
+        table.add_column("Field", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_row("Pair", pair)
+        table.add_row("Action", verdict.get("action", "N/A"))
+        table.add_row("Confidence", f"{verdict.get('confidence', 0):.2%}")
+        table.add_row("Divergence", f"{verdict.get('divergence', 0):.2%}")
+        table.add_row("Position Scale", f"{verdict.get('position_scale', 0):.2%}")
+        table.add_row("Risk Gate", "PASS" if risk.get("passed") else f"REJECT: {risk.get('reason', '')}")
+        if order:
+            table.add_row("Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}")
+        console.print(table)
 
 
 # ── Journal subcommands ──
