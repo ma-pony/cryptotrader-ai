@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "AI-powered crypto trading system using LangGraph multi-agent debate"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "langgraph>=0.2",
     "langchain-core>=0.3",
@@ -47,3 +47,9 @@ packages = ["src/cryptotrader", "src/api", "src/cli"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+]
