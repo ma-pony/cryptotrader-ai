@@ -1,0 +1,19 @@
+[mode]
+mode = "standalone"  # standalone | api | external
+
+[execution]
+engine = "paper"  # paper | live
+
+[models]
+analysis = "gpt-4o-mini"
+debate = "gpt-4o-mini"
+verdict = "gpt-4o"
+
+[debate]
+max_rounds = 3
+convergence_threshold = 0.1
+divergence_hold_threshold = 0.7
+
+[data]
+default_timeframe = "1h"
+ohlcv_limit = 100

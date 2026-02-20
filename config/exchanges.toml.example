@@ -1,0 +1,10 @@
+[binance]
+api_key = "YOUR_BINANCE_API_KEY"
+secret = "YOUR_BINANCE_SECRET"
+sandbox = true
+
+[okx]
+api_key = "YOUR_OKX_API_KEY"
+secret = "YOUR_OKX_SECRET"
+password = "YOUR_OKX_PASSPHRASE"
+sandbox = true

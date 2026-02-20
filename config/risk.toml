@@ -1,0 +1,24 @@
+[position]
+max_single_pct = 0.10
+max_total_exposure_pct = 0.50
+
+[loss]
+max_daily_loss_pct = 0.03
+max_drawdown_pct = 0.10
+max_cvar_95 = 0.05
+
+[cooldown]
+same_pair_minutes = 60
+post_loss_minutes = 120
+
+[volatility]
+flash_crash_threshold = 0.05
+funding_rate_threshold = 0.001
+
+[exchange]
+max_api_latency_ms = 2000
+health_check_interval_s = 30
+
+[rate_limit]
+max_trades_per_hour = 6
+max_trades_per_day = 20
