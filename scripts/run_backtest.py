@@ -6,7 +6,7 @@ from datetime import datetime, UTC
 import pandas as pd
 from cryptotrader.backtest.cache import fetch_historical
 from cryptotrader.backtest.historical_data import fetch_fear_greed, fetch_funding_rate, fetch_btc_dominance, fetch_fred_series, derive_news_sentiment
-from cryptotrader.graph import build_lite_graph
+from cryptotrader.graph import build_lite_graph, build_debate_graph
 from cryptotrader.models import DataSnapshot, MarketData, OnchainData, NewsSentiment, MacroData
 
 import argparse
@@ -21,6 +21,8 @@ _p.add_argument("--reversal-days", type=int, default=3, help="Consecutive opposi
 _p.add_argument("--drawdown-pause", type=float, default=0.10, help="Account drawdown pct to pause trading (default 10%)")
 _p.add_argument("--atr-sizing", action="store_true", help="Use ATR-based position sizing")
 _p.add_argument("--version", default="v13", help="Version label for output")
+_p.add_argument("--debate", action="store_true", help="Use bull/bear adversarial debate graph")
+_p.add_argument("--debate-rounds", type=int, default=2, help="Number of debate rounds (default 2)")
 _args = _p.parse_args()
 
 PAIR = _args.pair
@@ -105,7 +107,7 @@ async def main():
     fut_vol = await fetch_futures_volume(PAIR.split("/")[0], START, END)
     print(f"Got {len(fut_vol)} days of futures volume data", flush=True)
 
-    graph = build_lite_graph()
+    graph = build_debate_graph() if _args.debate else build_lite_graph()
     equity = CAPITAL
     position = 0.0
     entry_price = 0.0
@@ -169,7 +171,8 @@ async def main():
             "messages": [], "data": {"snapshot": snapshot},
             "metadata": {"pair": PAIR, "engine": "paper",
                 "models": {k: MODEL for k in ["tech_agent", "chain_agent", "news_agent", "macro_agent"]},
-                "debate_model": MODEL, "verdict_model": MODEL, "llm_verdict": True},
+                "debate_model": MODEL, "verdict_model": MODEL, "llm_verdict": True,
+                "debate_rounds": _args.debate_rounds},
             "debate_round": 0, "max_debate_rounds": 0, "divergence_scores": [],
         }
         # ADX trend filter: skip LLM in ranging markets

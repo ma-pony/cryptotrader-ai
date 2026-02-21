@@ -332,6 +332,62 @@ def build_lite_graph(config: dict | None = None) -> Any:
     return graph.compile()
 
 
+# ── Bull/Bear debate nodes ──
+
+async def bull_bear_debate(state: ArenaState) -> dict:
+    from cryptotrader.debate.researchers import run_debate
+    analyses = state["data"].get("analyses", {})
+    model = state["metadata"].get("debate_model", "gpt-4o-mini")
+    rounds = state["metadata"].get("debate_rounds", 2)
+    debate = await run_debate(analyses, rounds=rounds, model=model)
+    return {"data": {"debate": debate}}
+
+
+async def judge_verdict(state: ArenaState) -> dict:
+    from cryptotrader.debate.researchers import judge_debate
+    debate = state["data"]["debate"]
+    pair = state["metadata"]["pair"]
+    model = state["metadata"].get("verdict_model",
+                state["metadata"].get("debate_model", "gpt-4o-mini"))
+    result = await judge_debate(debate, pair, model=model)
+    return {"data": {"verdict": {
+        "action": result["action"],
+        "confidence": result["confidence"],
+        "position_scale": result["confidence"],
+        "divergence": 0.0,
+        "reasoning": result["reasoning"],
+    }}}
+
+
+def build_debate_graph(config: dict | None = None) -> Any:
+    """Lite graph + bull/bear adversarial debate before verdict."""
+    graph = StateGraph(ArenaState)
+
+    graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tech_agent", tech_analyze)
+    graph.add_node("chain_agent", chain_analyze)
+    graph.add_node("news_agent", news_analyze)
+    graph.add_node("macro_agent", macro_analyze)
+    graph.add_node("debate", bull_bear_debate)
+    graph.add_node("verdict", judge_verdict)
+
+    graph.add_edge(START, "collect_data")
+    graph.add_edge("collect_data", "inject_experience")
+    graph.add_edge("inject_experience", "tech_agent")
+    graph.add_edge("inject_experience", "chain_agent")
+    graph.add_edge("inject_experience", "news_agent")
+    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("tech_agent", "debate")
+    graph.add_edge("chain_agent", "debate")
+    graph.add_edge("news_agent", "debate")
+    graph.add_edge("macro_agent", "debate")
+    graph.add_edge("debate", "verdict")
+    graph.add_edge("verdict", END)
+
+    return graph.compile()
+
+
 def _build_full_graph(config: dict | None = None) -> Any:
     graph = StateGraph(ArenaState)
 
