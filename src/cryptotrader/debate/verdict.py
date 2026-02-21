@@ -22,68 +22,24 @@ def _extract_field(analysis: dict, field: str, default=None):
 
 
 def make_verdict_rules(analyses: dict[str, dict]) -> TradeVerdict | None:
-    """Deterministic rules engine. Returns None if no rule matches (ambiguous)."""
-    tech = analyses.get("tech_agent", {})
-    chain = analyses.get("chain_agent", {})
-    macro = analyses.get("macro_agent", {})
+    """Simple weighted average (v1 style). Always returns a verdict."""
+    score = 0.0
+    for a in analyses.values():
+        d = _DIR_MAP.get(a.get("direction", "neutral"), 0.0)
+        c = float(a.get("confidence", 0.0))
+        score += d * c
 
-    # Extract structured fields
-    regime = _extract_field(tech, "regime", "unknown")
-    tech_dir = tech.get("direction", "neutral")
-    tech_conf = float(tech.get("confidence", 0.0))
-
-    chain_dq = _extract_field(chain, "data_quality", "none")
-    crowding = _extract_field(chain, "crowding", "no_data")
-    funding_signal = _extract_field(chain, "funding_signal", "neutral")
-
-    macro_env = _extract_field(macro, "environment", "neutral")
-    macro_dir = macro.get("direction", "neutral")
-
-    # Rule 1: True ranging (regime=ranging AND direction=neutral) → HOLD
-    if regime == "ranging" and tech_dir == "neutral":
-        return TradeVerdict(action="hold", confidence=0.3, reasoning=f"Ranging + neutral direction")
-
-    # Rule 2: Determine action from tech direction (regime is secondary)
-    if tech_dir == "bearish" and tech_conf >= 0.55:
-        action = "short"
-        base_conf = min(tech_conf + 0.05, 0.85)  # Slight boost for rule-based
-    elif tech_dir == "bullish" and tech_conf >= 0.55:
-        action = "long"
-        base_conf = min(tech_conf + 0.05, 0.85)
-    elif tech_dir == "neutral":
-        return TradeVerdict(action="hold", confidence=0.3, reasoning="Tech neutral")
+    action = "long" if score > 0 else "short" if score < 0 else "hold"
+    if action != "hold":
+        target = "bullish" if action == "long" else "bearish"
+        agreeing = [float(a["confidence"]) for a in analyses.values() if a.get("direction") == target]
+        confidence = sum(agreeing) / len(agreeing) if agreeing else 0.0
     else:
-        return None  # Low confidence, let LLM decide
-
-    # Ranging regime penalty (has direction but weak trend)
-    if regime == "ranging":
-        base_conf -= 0.1
-
-    # Chain adjustment (only with real data)
-    if chain_dq == "full":
-        same_dir_crowded = (action == "short" and crowding == "shorts_crowded") or \
-                           (action == "long" and crowding == "longs_crowded")
-        if same_dir_crowded:
-            base_conf -= 0.15
-
-    if (action == "long" and funding_signal == "contrarian_bearish") or \
-       (action == "short" and funding_signal == "contrarian_bullish"):
-        base_conf -= 0.1
-
-    # Macro adjustment
-    if action == "long" and (macro_env == "risk_off" or macro_dir == "bearish"):
-        base_conf -= 0.1
-    elif action == "short" and (macro_env == "risk_on" or macro_dir == "bullish"):
-        base_conf -= 0.1
-
-    base_conf = max(0.1, min(0.9, base_conf))
-
-    if base_conf < 0.35:
-        return TradeVerdict(action="hold", confidence=base_conf, reasoning="Low confidence after adjustments")
+        confidence = 0.0
 
     return TradeVerdict(
-        action=action, confidence=base_conf, position_scale=base_conf,
-        reasoning=f"Rule: regime={regime}, tech={tech_dir}@{tech_conf:.0%}, chain={crowding}, macro={macro_env}",
+        action=action, confidence=confidence, position_scale=max(0.0, confidence),
+        reasoning=f"Weighted score={score:.3f}",
     )
 
 

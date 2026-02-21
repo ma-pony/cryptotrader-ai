@@ -16,7 +16,7 @@ INTERVAL = "1d"
 CAPITAL = 10000
 LOOKBACK = 100
 MODEL = "openai/deepseek-chat"
-MIN_HOLD_DAYS = 3  # Prevent frequent flips during trend reversals
+MIN_HOLD_DAYS = 5  # Prevent frequent flips in transition zones
 ADX_THRESHOLD = 0  # Disabled — Tech Agent handles regime detection
 
 
@@ -140,8 +140,13 @@ async def main():
             confidence = verdict.get("confidence", 0.5)
             elapsed = time.time() - t0
 
-            # Fixed 10% position size (v6: test data quality, not sizing)
-            size_pct = 0.10
+            # Dynamic position sizing based on confidence
+            if confidence >= 0.8:
+                size_pct = 0.15
+            elif confidence >= 0.6:
+                size_pct = 0.10
+            else:
+                size_pct = 0.05
 
         # Execute with cooldown: don't flip direction within MIN_HOLD_DAYS
         days_since_flip = step - last_direction_change
@@ -168,6 +173,14 @@ async def main():
             last_direction_change = step
             trades.append({"side": "sell", "price": c, "amount": size, "size_pct": size_pct, "date": date})
 
+        # Track actual position state for display
+        if position > 0:
+            pos_str = "LONG"
+        elif position < 0:
+            pos_str = "SHORT"
+        else:
+            pos_str = "FLAT"
+
         # MTM
         if position > 0:
             mtm = equity + (c - entry_price) * position
@@ -177,7 +190,7 @@ async def main():
             mtm = equity
         equity_curve.append(mtm)
 
-        print(f"[{step:3d}/{total_steps}] {date} ${c:,.0f} -> {action:5s} conf={confidence:.0%} sz={size_pct:.0%} eq=${mtm:,.2f} fng={fng_val} adx={adx:.0f} ({elapsed:.0f}s)", flush=True)
+        print(f"[{step:3d}/{total_steps}] {date} ${c:,.0f} -> {action:5s} conf={confidence:.0%} sz={size_pct:.0%} eq=${mtm:,.2f} pos={pos_str} fng={fng_val} adx={adx:.0f} ({elapsed:.0f}s)", flush=True)
 
     # Close open position
     if position != 0:
