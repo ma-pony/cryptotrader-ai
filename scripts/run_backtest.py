@@ -17,6 +17,12 @@ _p.add_argument("--start", default="2025-06-01")
 _p.add_argument("--end", default="2025-12-31")
 _args = _p.parse_args()
 
+_p.add_argument("--stop-loss", type=float, default=0.05, help="Fixed stop loss pct (default 5%)")
+_p.add_argument("--trailing-stop", type=float, default=0.03, help="Trailing stop pct from peak (default 3%)")
+_p.add_argument("--atr-sizing", action="store_true", help="Use ATR-based position sizing")
+_p.add_argument("--version", default="v13", help="Version label for output")
+_args = _p.parse_args()
+
 PAIR = _args.pair
 START = _args.start
 END = _args.end
@@ -26,6 +32,9 @@ LOOKBACK = 100
 MODEL = _args.model
 MIN_HOLD_DAYS = 5
 ADX_THRESHOLD = 0
+STOP_LOSS = _args.stop_loss
+TRAILING_STOP = _args.trailing_stop
+ATR_SIZING = _args.atr_sizing
 
 
 def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
@@ -94,10 +103,11 @@ async def main():
     equity = CAPITAL
     position = 0.0
     entry_price = 0.0
+    peak_price = 0.0  # For trailing stop
     trades = []
     equity_curve = [equity]
     t_total = time.time()
-    last_direction_change = -MIN_HOLD_DAYS  # Allow first trade immediately
+    last_direction_change = -MIN_HOLD_DAYS
 
     for i in range(LOOKBACK, len(candles)):
         step = i - LOOKBACK + 1
@@ -176,11 +186,54 @@ async def main():
             else:
                 size_pct = 0.05
 
+        # --- Stop loss / trailing stop check (before LLM action) ---
+        stopped = False
+        if position > 0:
+            peak_price = max(peak_price, c)
+            drawdown = (peak_price - c) / peak_price
+            loss = (entry_price - c) / entry_price
+            if loss >= STOP_LOSS:
+                pnl = (c - entry_price) * position
+                equity += pnl
+                trades.append({"side": "stop_loss_long", "price": c, "pnl": pnl, "date": date})
+                position = 0.0; stopped = True
+            elif TRAILING_STOP > 0 and drawdown >= TRAILING_STOP and c > entry_price:
+                pnl = (c - entry_price) * position
+                equity += pnl
+                trades.append({"side": "trail_stop_long", "price": c, "pnl": pnl, "date": date})
+                position = 0.0; stopped = True
+        elif position < 0:
+            peak_price = min(peak_price, c) if peak_price > 0 else c
+            drawdown = (c - peak_price) / peak_price if peak_price > 0 else 0
+            loss = (c - entry_price) / entry_price
+            if loss >= STOP_LOSS:
+                pnl = (entry_price - c) * abs(position)
+                equity += pnl
+                trades.append({"side": "stop_loss_short", "price": c, "pnl": pnl, "date": date})
+                position = 0.0; stopped = True
+            elif TRAILING_STOP > 0 and drawdown >= TRAILING_STOP and c < entry_price:
+                pnl = (entry_price - c) * abs(position)
+                equity += pnl
+                trades.append({"side": "trail_stop_short", "price": c, "pnl": pnl, "date": date})
+                position = 0.0; stopped = True
+        if stopped:
+            last_direction_change = step  # Reset cooldown after stop
+
+        # --- ATR-based position sizing ---
+        if ATR_SIZING:
+            atr_val = 0.0
+            if len(window) >= 15:
+                atr_sum = sum(max(window[j][2]-window[j][3], abs(window[j][2]-window[j-1][4]), abs(window[j][3]-window[j-1][4])) for j in range(len(window)-14, len(window)))
+                atr_val = atr_sum / 14
+            if atr_val > 0:
+                # Risk 1% of equity per ATR unit
+                size_pct = min(0.20, max(0.03, (equity * 0.01 / atr_val) * c / equity))
+
         # Execute with cooldown: don't flip direction within MIN_HOLD_DAYS
         days_since_flip = step - last_direction_change
         can_flip = days_since_flip >= MIN_HOLD_DAYS
 
-        if action == "long" and position <= 0 and (position == 0 or can_flip):
+        if action == "long" and position <= 0 and (position == 0 or can_flip) and not stopped:
             if position < 0:
                 pnl = (entry_price - c) * abs(position)
                 equity += pnl
@@ -188,9 +241,10 @@ async def main():
             size = equity * size_pct / c
             position = size
             entry_price = c
+            peak_price = c
             last_direction_change = step
             trades.append({"side": "buy", "price": c, "amount": size, "size_pct": size_pct, "date": date})
-        elif action == "short" and position >= 0 and (position == 0 or can_flip):
+        elif action == "short" and position >= 0 and (position == 0 or can_flip) and not stopped:
             if position > 0:
                 pnl = (c - entry_price) * position
                 equity += pnl
@@ -198,6 +252,7 @@ async def main():
             size = equity * size_pct / c
             position = -size
             entry_price = c
+            peak_price = c
             last_direction_change = step
             trades.append({"side": "sell", "price": c, "amount": size, "size_pct": size_pct, "date": date})
 

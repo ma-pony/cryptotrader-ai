@@ -68,9 +68,16 @@ class BaseAgent(ABC):
         if experience:
             parts.append(f"Past experience:\n{experience}")
         parts.append(
-            "Respond with JSON: {\"direction\": \"bullish|bearish|neutral\", "
+            "\nDecision framework:"
+            "\n1. What is the dominant trend (up/down/sideways)?"
+            "\n2. Are there signals CONTRADICTING the trend (reversal risk)?"
+            "\n3. If you're wrong, what's the max downside vs upside if right?"
+            "\n4. Confidence calibration: 0.5=coin flip, 0.6=slight edge, 0.7=clear signal, 0.8+=multiple strong signals aligned, 0.9+=extreme conviction (rare)"
+            "\n\nRespond with JSON: {\"direction\": \"bullish|bearish|neutral\", "
             "\"confidence\": 0.0-1.0, \"reasoning\": \"...\", "
-            "\"key_factors\": [...], \"risk_flags\": [...], \"data_points\": {...}}"
+            "\"key_factors\": [...], \"risk_flags\": [...], "
+            "\"upside_pct\": estimated upside %, \"downside_pct\": estimated downside %, "
+            "\"data_points\": {...}}"
         )
         return "\n".join(parts)
 
