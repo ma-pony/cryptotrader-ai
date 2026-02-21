@@ -9,15 +9,23 @@ from cryptotrader.backtest.historical_data import fetch_fear_greed, fetch_fundin
 from cryptotrader.graph import build_lite_graph
 from cryptotrader.models import DataSnapshot, MarketData, OnchainData, NewsSentiment, MacroData
 
-PAIR = "BTC/USDT"
-START = "2025-06-01"
-END = "2025-12-31"
+import argparse
+_p = argparse.ArgumentParser()
+_p.add_argument("--pair", default="BTC/USDT")
+_p.add_argument("--model", default="openai/glm-5")
+_p.add_argument("--start", default="2025-06-01")
+_p.add_argument("--end", default="2025-12-31")
+_args = _p.parse_args()
+
+PAIR = _args.pair
+START = _args.start
+END = _args.end
 INTERVAL = "1d"
 CAPITAL = 10000
 LOOKBACK = 100
-MODEL = "openai/deepseek-chat"
-MIN_HOLD_DAYS = 5  # Prevent frequent flips in transition zones
-ADX_THRESHOLD = 0  # Disabled — Tech Agent handles regime detection
+MODEL = _args.model
+MIN_HOLD_DAYS = 5
+ADX_THRESHOLD = 0
 
 
 def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
@@ -62,7 +70,7 @@ async def main():
     print(f"Got {len(fng)} days of Fear & Greed data", flush=True)
 
     print("Fetching funding rate history...", flush=True)
-    funding = await fetch_funding_rate("BTC", START, END)
+    funding = await fetch_funding_rate(PAIR.split("/")[0], START, END)
     print(f"Got {len(funding)} days of funding rate data", flush=True)
 
     print("Fetching BTC dominance history...", flush=True)
@@ -79,7 +87,7 @@ async def main():
 
     print("Fetching futures volume history...", flush=True)
     from cryptotrader.backtest.historical_data import fetch_futures_volume
-    fut_vol = await fetch_futures_volume("BTC", START, END)
+    fut_vol = await fetch_futures_volume(PAIR.split("/")[0], START, END)
     print(f"Got {len(fut_vol)} days of futures volume data", flush=True)
 
     graph = build_lite_graph()

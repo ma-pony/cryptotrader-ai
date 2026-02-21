@@ -29,6 +29,7 @@ dependencies = [
     "uvicorn>=0.30",
     "numpy>=1.26",
     "streamlit>=1.30",
+    "feedparser>=6.0.12",
 ]
 
 [project.optional-dependencies]

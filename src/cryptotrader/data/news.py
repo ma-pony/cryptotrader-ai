@@ -1,11 +1,10 @@
-"""News sentiment collector — RSS scraping + keyword sentiment."""
+"""News sentiment collector — RSS feeds + keyword sentiment."""
 
 from __future__ import annotations
 
 import logging
-import xml.etree.ElementTree as ET
 
-import httpx
+import feedparser
 
 from cryptotrader.models import NewsSentiment
 
@@ -14,6 +13,7 @@ logger = logging.getLogger(__name__)
 RSS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
+    "https://decrypt.co/feed",
 ]
 
 POSITIVE = {"bullish", "surge", "rally", "soar", "gain", "rise", "jump", "breakout",
@@ -27,21 +27,7 @@ def _score_text(text: str) -> float:
     pos = len(words & POSITIVE)
     neg = len(words & NEGATIVE)
     total = pos + neg
-    if total == 0:
-        return 0.0
-    return (pos - neg) / total
-
-
-async def _fetch_rss(url: str) -> list[str]:
-    try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(url)
-            r.raise_for_status()
-            root = ET.fromstring(r.text)
-            return [item.findtext("title", "") for item in root.iter("item")][:15]
-    except Exception:
-        logger.warning("RSS fetch failed: %s", url, exc_info=True)
-        return []
+    return (pos - neg) / total if total else 0.0
 
 
 class NewsCollector:
@@ -49,7 +35,11 @@ class NewsCollector:
     async def collect(self, pair: str) -> NewsSentiment:
         all_headlines: list[str] = []
         for url in RSS_FEEDS:
-            all_headlines.extend(await _fetch_rss(url))
+            try:
+                feed = feedparser.parse(url)
+                all_headlines.extend(e.get("title", "") for e in feed.entries[:15])
+            except Exception:
+                logger.warning("RSS fetch failed: %s", url, exc_info=True)
 
         if not all_headlines:
             return NewsSentiment()
@@ -59,9 +49,7 @@ class NewsCollector:
         if not relevant:
             relevant = all_headlines[:10]
 
-        combined = " ".join(relevant)
-        score = _score_text(combined)
-
+        score = _score_text(" ".join(relevant))
         key_events = [h for h in relevant if any(w in h.lower() for w in ("sec", "etf", "hack", "ban", "approval", "record"))]
 
         return NewsSentiment(

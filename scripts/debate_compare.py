@@ -9,11 +9,11 @@ from cryptotrader.backtest.historical_data import *
 from cryptotrader.models import *
 from cryptotrader.graph import build_lite_graph, build_trading_graph
 
-MODEL = "openai/deepseek-chat"
+MODEL = "openai/kimi-k2.5"
 START, END = "2025-06-01", "2025-12-31"
 LOOKBACK = 100
 # Key dates: trend start, trend reversal, deep bear
-TEST_DATES = ["2025-10-05", "2025-10-10", "2025-11-14", "2025-09-25"]
+TEST_DATES = ["2025-10-10", "2025-09-25"]
 
 
 async def build_snapshot(candles, fng, funding, btc_dom, fed, dxy, target_date):
