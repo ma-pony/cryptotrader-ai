@@ -85,7 +85,11 @@ async def main():
     print(f"Got {len(funding)} days of funding rate data", flush=True)
 
     print("Fetching BTC dominance history...", flush=True)
-    btc_dom = await fetch_btc_dominance(START, END)
+    try:
+        btc_dom = await fetch_btc_dominance(START, END)
+    except Exception as e:
+        print(f"  Warning: BTC dominance fetch failed ({e}), using empty", flush=True)
+        btc_dom = {}
     print(f"Got {len(btc_dom)} days of BTC dominance data", flush=True)
 
     print("Fetching Fed Rate history...", flush=True)
