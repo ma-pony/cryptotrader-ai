@@ -77,6 +77,11 @@ async def main():
     dxy = await fetch_fred_series("DTWEXBGS", START, END)
     print(f"Got {len(dxy)} days of DXY data", flush=True)
 
+    print("Fetching futures volume history...", flush=True)
+    from cryptotrader.backtest.historical_data import fetch_futures_volume
+    fut_vol = await fetch_futures_volume("BTC", START, END)
+    print(f"Got {len(fut_vol)} days of futures volume data", flush=True)
+
     graph = build_lite_graph()
     equity = CAPITAL
     position = 0.0
@@ -107,12 +112,27 @@ async def main():
         # Derive proxy news sentiment from price action
         sentiment, events = derive_news_sentiment(candles, i)
 
+        # Compute futures volume anomaly (vs 20-day avg)
+        fv = fut_vol.get(date_str, {})
+        fut_volume = fv.get("volume", 0.0)
+        vol_20d = []
+        for j in range(max(0, i - 20), i):
+            d_j = datetime.fromtimestamp(candles[j][0] / 1000, UTC).strftime("%Y-%m-%d")
+            vj = fut_vol.get(d_j, {}).get("volume", 0)
+            if vj > 0:
+                vol_20d.append(vj)
+        avg_vol = sum(vol_20d) / len(vol_20d) if vol_20d else fut_volume or 1
+        vol_ratio = fut_volume / avg_vol if avg_vol > 0 else 1.0
+
         snapshot = DataSnapshot(
             timestamp=datetime.fromtimestamp(ts / 1000, tz=UTC), pair=PAIR,
             market=MarketData(pair=PAIR, ohlcv=df, ticker={"last": c, "baseVolume": v},
                 funding_rate=fr_val, orderbook_imbalance=0.0,
                 volatility=df["close"].pct_change().std() or 0.0),
-            onchain=OnchainData(),
+            onchain=OnchainData(
+                open_interest=fut_volume,  # Use futures volume as OI proxy
+                liquidations_24h={"volume_ratio": vol_ratio, "futures_volume": fut_volume},
+            ),
             news=NewsSentiment(sentiment_score=sentiment, key_events=events,
                 headlines=[f"BTC at ${c:,.0f}, Fear&Greed={fng_val}"]),
             macro=MacroData(fear_greed_index=fng_val, btc_dominance=dom_val,

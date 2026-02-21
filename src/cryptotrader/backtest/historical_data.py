@@ -34,6 +34,10 @@ def _ensure_tables():
         "CREATE TABLE IF NOT EXISTS fred_series "
         "(series_id TEXT, date TEXT, value REAL, PRIMARY KEY (series_id, date))"
     )
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS futures_volume "
+        "(date TEXT PRIMARY KEY, volume REAL, quote_volume REAL)"
+    )
     conn.commit()
     conn.close()
 
@@ -276,3 +280,51 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
     # Clamp sentiment to [-1, 1]
     sentiment = max(-1.0, min(1.0, ret_7d * 5))
     return sentiment, events
+
+
+async def fetch_futures_volume(symbol: str, start_date: str, end_date: str) -> dict[str, dict]:
+    """Fetch daily futures volume from Binance. Returns {date: {volume, quote_volume}}."""
+    _ensure_tables()
+    conn = sqlite3.connect(str(CACHE_DB))
+    cached = {r[0]: {"volume": r[1], "quote_volume": r[2]} for r in conn.execute(
+        "SELECT date, volume, quote_volume FROM futures_volume WHERE date >= ? AND date <= ?",
+        (start_date, end_date),
+    ).fetchall()}
+    conn.close()
+
+    start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
+    end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
+    if len(cached) >= (end_dt - start_dt).days * 0.9:
+        return cached
+
+    import ccxt.async_support as ccxt_async
+    exchange = ccxt_async.binance({"options": {"defaultType": "future"}})
+    try:
+        pair = f"{symbol}/USDT"
+        all_candles = []
+        cursor = int(start_dt.timestamp() * 1000)
+        end_ms = int(end_dt.timestamp() * 1000) + 86400000
+        while cursor < end_ms:
+            batch = await exchange.fetch_ohlcv(pair, "1d", since=cursor, limit=500)
+            if not batch:
+                break
+            all_candles.extend(batch)
+            cursor = batch[-1][0] + 86400000
+            if len(batch) < 500:
+                break
+
+        result = {}
+        conn = sqlite3.connect(str(CACHE_DB))
+        for c in all_candles:
+            d = datetime.fromtimestamp(c[0] / 1000, UTC).strftime("%Y-%m-%d")
+            if start_date <= d <= end_date:
+                result[d] = {"volume": c[5], "quote_volume": c[5] * c[4]}
+                conn.execute(
+                    "INSERT OR REPLACE INTO futures_volume VALUES (?, ?, ?)",
+                    (d, c[5], c[5] * c[4]),
+                )
+        conn.commit()
+        conn.close()
+        return result
+    finally:
+        await exchange.close()

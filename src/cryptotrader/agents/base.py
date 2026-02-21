@@ -45,14 +45,26 @@ class BaseAgent(ABC):
             )
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
+        fr = snapshot.market.funding_rate
+        liq = snapshot.onchain.liquidations_24h
+        vol_ratio = liq.get("volume_ratio", 0)
+        fut_vol = liq.get("futures_volume", 0)
+
         parts = [
             f"Pair: {snapshot.pair}",
             f"Timestamp: {snapshot.timestamp}",
             f"Ticker: {snapshot.market.ticker}",
-            f"Funding rate: {snapshot.market.funding_rate}",
-            f"Orderbook imbalance: {snapshot.market.orderbook_imbalance}",
-            f"Volatility: {snapshot.market.volatility}",
+            f"Volatility: {snapshot.market.volatility:.4f}",
+            f"Funding rate: {fr:.6f}" + (
+                " (ELEVATED — crowded long)" if fr > 0.0003
+                else " (NEGATIVE — crowded short)" if fr < -0.0001
+                else ""),
         ]
+        if fut_vol > 0:
+            parts.append(f"Futures volume: {fut_vol:,.0f} BTC, vs 20d avg: {vol_ratio:.2f}x" + (
+                " (SPIKE)" if vol_ratio > 1.5 else " (LOW)" if vol_ratio < 0.7 else ""))
+        if snapshot.onchain.open_interest > 0:
+            parts.append(f"Open interest: {snapshot.onchain.open_interest:,.0f}")
         if experience:
             parts.append(f"Past experience:\n{experience}")
         parts.append(
