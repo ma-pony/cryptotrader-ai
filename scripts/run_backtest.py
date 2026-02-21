@@ -15,10 +15,8 @@ _p.add_argument("--pair", default="BTC/USDT")
 _p.add_argument("--model", default="openai/glm-5")
 _p.add_argument("--start", default="2025-06-01")
 _p.add_argument("--end", default="2025-12-31")
-_args = _p.parse_args()
-
-_p.add_argument("--stop-loss", type=float, default=0.05, help="Fixed stop loss pct (default 5%)")
-_p.add_argument("--trailing-stop", type=float, default=0.03, help="Trailing stop pct from peak (default 3%)")
+_p.add_argument("--stop-loss", type=float, default=0.08, help="Fixed stop loss pct (default 8%)")
+_p.add_argument("--trailing-stop", type=float, default=0.05, help="Trailing stop pct from peak (default 5%)")
 _p.add_argument("--atr-sizing", action="store_true", help="Use ATR-based position sizing")
 _p.add_argument("--version", default="v13", help="Version label for output")
 _args = _p.parse_args()
@@ -227,7 +225,7 @@ async def main():
                 atr_val = atr_sum / 14
             if atr_val > 0:
                 # Risk 1% of equity per ATR unit
-                size_pct = min(0.20, max(0.03, (equity * 0.01 / atr_val) * c / equity))
+                size_pct = min(0.15, max(0.03, (equity * 0.01 / atr_val) * c / equity))
 
         # Execute with cooldown: don't flip direction within MIN_HOLD_DAYS
         days_since_flip = step - last_direction_change
