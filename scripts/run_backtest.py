@@ -15,8 +15,10 @@ _p.add_argument("--pair", default="BTC/USDT")
 _p.add_argument("--model", default="openai/glm-5")
 _p.add_argument("--start", default="2025-06-01")
 _p.add_argument("--end", default="2025-12-31")
-_p.add_argument("--stop-loss", type=float, default=0.08, help="Fixed stop loss pct (default 8%)")
-_p.add_argument("--trailing-stop", type=float, default=0.05, help="Trailing stop pct from peak (default 5%)")
+_p.add_argument("--stop-loss", type=float, default=0.15, help="Catastrophic stop loss pct (default 15%, safety net only)")
+_p.add_argument("--trailing-stop", type=float, default=0.0, help="Trailing stop pct (default 0 = disabled)")
+_p.add_argument("--reversal-days", type=int, default=3, help="Consecutive opposite-signal days to trigger exit (default 3)")
+_p.add_argument("--drawdown-pause", type=float, default=0.10, help="Account drawdown pct to pause trading (default 10%)")
 _p.add_argument("--atr-sizing", action="store_true", help="Use ATR-based position sizing")
 _p.add_argument("--version", default="v13", help="Version label for output")
 _args = _p.parse_args()
@@ -33,6 +35,8 @@ ADX_THRESHOLD = 0
 STOP_LOSS = _args.stop_loss
 TRAILING_STOP = _args.trailing_stop
 ATR_SIZING = _args.atr_sizing
+REVERSAL_DAYS = _args.reversal_days
+DRAWDOWN_PAUSE = _args.drawdown_pause
 
 
 def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
@@ -101,11 +105,14 @@ async def main():
     equity = CAPITAL
     position = 0.0
     entry_price = 0.0
-    peak_price = 0.0  # For trailing stop
+    peak_price = 0.0
+    peak_equity = CAPITAL  # For drawdown pause
     trades = []
     equity_curve = [equity]
     t_total = time.time()
     last_direction_change = -MIN_HOLD_DAYS
+    reversal_count = 0  # Consecutive days signal opposes position
+    paused_until = -1  # Step until which trading is paused
 
     for i in range(LOOKBACK, len(candles)):
         step = i - LOOKBACK + 1
@@ -184,38 +191,65 @@ async def main():
             else:
                 size_pct = 0.05
 
-        # --- Stop loss / trailing stop check (before LLM action) ---
+        # --- Signal reversal stop + catastrophic stop (replaces fixed stop-loss) ---
         stopped = False
-        if position > 0:
-            peak_price = max(peak_price, c)
-            drawdown = (peak_price - c) / peak_price
-            loss = (entry_price - c) / entry_price
-            if loss >= STOP_LOSS:
+        # 1. Track signal reversal count
+        if position > 0 and action == "short":
+            reversal_count += 1
+        elif position < 0 and action == "long":
+            reversal_count += 1
+        else:
+            reversal_count = 0  # Reset if signal agrees or hold
+
+        # 2. Signal reversal exit: N consecutive opposite signals
+        if REVERSAL_DAYS > 0 and reversal_count >= REVERSAL_DAYS and position != 0:
+            if position > 0:
                 pnl = (c - entry_price) * position
                 equity += pnl
-                trades.append({"side": "stop_loss_long", "price": c, "pnl": pnl, "date": date})
-                position = 0.0; stopped = True
-            elif TRAILING_STOP > 0 and drawdown >= TRAILING_STOP and c > entry_price:
-                pnl = (c - entry_price) * position
+                trades.append({"side": "reversal_exit_long", "price": c, "pnl": pnl, "date": date})
+            else:
+                pnl = (entry_price - c) * abs(position)
                 equity += pnl
-                trades.append({"side": "trail_stop_long", "price": c, "pnl": pnl, "date": date})
-                position = 0.0; stopped = True
-        elif position < 0:
-            peak_price = min(peak_price, c) if peak_price > 0 else c
-            drawdown = (c - peak_price) / peak_price if peak_price > 0 else 0
-            loss = (c - entry_price) / entry_price
+                trades.append({"side": "reversal_exit_short", "price": c, "pnl": pnl, "date": date})
+            position = 0.0; stopped = True; reversal_count = 0
+
+        # 3. Catastrophic stop: single-trade loss > STOP_LOSS (safety net, should rarely trigger)
+        if not stopped and position != 0:
+            if position > 0:
+                loss = (entry_price - c) / entry_price
+            else:
+                loss = (c - entry_price) / entry_price
             if loss >= STOP_LOSS:
-                pnl = (entry_price - c) * abs(position)
+                pnl = (c - entry_price) * position if position > 0 else (entry_price - c) * abs(position)
                 equity += pnl
-                trades.append({"side": "stop_loss_short", "price": c, "pnl": pnl, "date": date})
-                position = 0.0; stopped = True
-            elif TRAILING_STOP > 0 and drawdown >= TRAILING_STOP and c < entry_price:
-                pnl = (entry_price - c) * abs(position)
-                equity += pnl
-                trades.append({"side": "trail_stop_short", "price": c, "pnl": pnl, "date": date})
-                position = 0.0; stopped = True
+                trades.append({"side": "catastrophic_stop", "price": c, "pnl": pnl, "date": date})
+                position = 0.0; stopped = True; reversal_count = 0
+
+        # 4. Trailing stop (optional, disabled by default)
+        if not stopped and TRAILING_STOP > 0 and position != 0:
+            if position > 0:
+                peak_price = max(peak_price, c)
+                if c > entry_price and (peak_price - c) / peak_price >= TRAILING_STOP:
+                    pnl = (c - entry_price) * position
+                    equity += pnl
+                    trades.append({"side": "trail_stop_long", "price": c, "pnl": pnl, "date": date})
+                    position = 0.0; stopped = True
+            else:
+                peak_price = min(peak_price, c) if peak_price > 0 else c
+                if c < entry_price and (c - peak_price) / peak_price >= TRAILING_STOP:
+                    pnl = (entry_price - c) * abs(position)
+                    equity += pnl
+                    trades.append({"side": "trail_stop_short", "price": c, "pnl": pnl, "date": date})
+                    position = 0.0; stopped = True
+
         if stopped:
-            last_direction_change = step  # Reset cooldown after stop
+            last_direction_change = step
+
+        # 5. Drawdown pause: if account drops > DRAWDOWN_PAUSE from peak, pause 1 day
+        mtm_now = equity + ((c - entry_price) * position if position > 0 else (entry_price - c) * abs(position) if position < 0 else 0)
+        peak_equity = max(peak_equity, mtm_now)
+        if DRAWDOWN_PAUSE > 0 and (peak_equity - mtm_now) / peak_equity >= DRAWDOWN_PAUSE:
+            paused_until = step + 1  # Skip next step's new entries
 
         # --- ATR-based position sizing ---
         if ATR_SIZING:
@@ -231,7 +265,7 @@ async def main():
         days_since_flip = step - last_direction_change
         can_flip = days_since_flip >= MIN_HOLD_DAYS
 
-        if action == "long" and position <= 0 and (position == 0 or can_flip) and not stopped:
+        if action == "long" and position <= 0 and (position == 0 or can_flip) and not stopped and step > paused_until:
             if position < 0:
                 pnl = (entry_price - c) * abs(position)
                 equity += pnl
@@ -242,7 +276,7 @@ async def main():
             peak_price = c
             last_direction_change = step
             trades.append({"side": "buy", "price": c, "amount": size, "size_pct": size_pct, "date": date})
-        elif action == "short" and position >= 0 and (position == 0 or can_flip) and not stopped:
+        elif action == "short" and position >= 0 and (position == 0 or can_flip) and not stopped and step > paused_until:
             if position > 0:
                 pnl = (c - entry_price) * position
                 equity += pnl
