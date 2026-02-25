@@ -23,6 +23,9 @@ class BacktestEngine:
         self, pair: str, start: str, end: str,
         interval: str = "4h", initial_capital: float = 10000,
         use_llm: bool = False,
+        slippage_bps: float = 5.0,
+        fee_bps: float = 10.0,
+        position_pct: float = 0.1,
     ):
         self.pair = pair
         self.start_ms = int(datetime.fromisoformat(start).replace(tzinfo=UTC).timestamp() * 1000)
@@ -30,6 +33,26 @@ class BacktestEngine:
         self.interval = interval
         self.capital = initial_capital
         self.use_llm = use_llm
+        self.slippage_bps = slippage_bps  # basis points
+        self.fee_bps = fee_bps  # basis points
+        self.position_pct = position_pct
+        # Cache config once to avoid re-parsing TOML per candle
+        self._config = None
+
+    @property
+    def _cached_config(self):
+        if self._config is None:
+            from cryptotrader.config import load_config
+            self._config = load_config()
+        return self._config
+
+    def _apply_costs(self, price: float, side: str) -> float:
+        """Apply slippage and fees to get realistic fill price."""
+        slip = price * self.slippage_bps / 10000
+        fee = price * self.fee_bps / 10000
+        if side == "buy":
+            return price + slip + fee
+        return price - slip - fee
 
     async def run(self) -> BacktestResult:
         candles = await fetch_historical(self.pair, self.interval, self.start_ms, self.end_ms)
@@ -43,18 +66,55 @@ class BacktestEngine:
         trades: list[dict] = []
         peak = equity
 
-        from cryptotrader.graph import build_lite_graph, ArenaState
+        from cryptotrader.graph import build_lite_graph
 
         graph = build_lite_graph() if self.use_llm else None
 
-        step_ms = _TF_MS.get(self.interval, 3_600_000)
         lookback = 100
+
+        pending_action: str | None = None
 
         for i in range(lookback, len(candles)):
             window = candles[max(0, i - lookback):i + 1]
             cur = candles[i]
-            ts, o, h, l, c, v = cur[0], cur[1], cur[2], cur[3], cur[4], cur[5]
+            ts, o, c = cur[0], cur[1], cur[4]
 
+            # Skip candles with invalid data
+            if c is None or c <= 0:
+                continue
+
+            # Execute pending action from PREVIOUS bar's signal at current bar's open
+            # This eliminates look-ahead bias: signal on bar[i-1], fill on bar[i] open
+            if pending_action is not None:
+                exec_price = o if (o is not None and o > 0) else c
+
+                if pending_action == "long" and position <= 0:
+                    if position < 0:  # close short
+                        fill = self._apply_costs(exec_price, "buy")
+                        pnl = (entry_price - fill) * abs(position)
+                        equity += pnl
+                        trades.append({"side": "close_short", "price": fill, "pnl": pnl, "ts": ts})
+                    fill = self._apply_costs(exec_price, "buy")
+                    size = equity * self.position_pct / fill
+                    position = size
+                    entry_price = fill
+                    trades.append({"side": "buy", "price": fill, "amount": size, "ts": ts})
+
+                elif pending_action == "short" and position >= 0:
+                    if position > 0:  # close long
+                        fill = self._apply_costs(exec_price, "sell")
+                        pnl = (fill - entry_price) * position
+                        equity += pnl
+                        trades.append({"side": "close_long", "price": fill, "pnl": pnl, "ts": ts})
+                    fill = self._apply_costs(exec_price, "sell")
+                    size = equity * self.position_pct / fill
+                    position = -size
+                    entry_price = fill
+                    trades.append({"side": "sell", "price": fill, "amount": size, "ts": ts})
+
+                pending_action = None
+
+            # Generate signal on current bar (will be executed on NEXT bar)
             if graph and self.use_llm:
                 snapshot = self._build_snapshot(window, ts)
                 result = await self._run_graph(graph, snapshot)
@@ -62,28 +122,10 @@ class BacktestEngine:
             else:
                 action = self._simple_signal(window)
 
-            # Execute trades
-            if action == "long" and position <= 0:
-                if position < 0:  # close short
-                    pnl = (entry_price - c) * abs(position)
-                    equity += pnl
-                    trades.append({"side": "close_short", "price": c, "pnl": pnl, "ts": ts})
-                size = equity * 0.1 / c
-                position = size
-                entry_price = c
-                trades.append({"side": "buy", "price": c, "amount": size, "ts": ts})
+            if action != "hold":
+                pending_action = action
 
-            elif action == "short" and position >= 0:
-                if position > 0:  # close long
-                    pnl = (c - entry_price) * position
-                    equity += pnl
-                    trades.append({"side": "close_long", "price": c, "pnl": pnl, "ts": ts})
-                size = equity * 0.1 / c
-                position = -size
-                entry_price = c
-                trades.append({"side": "sell", "price": c, "amount": size, "ts": ts})
-
-            # Mark to market
+            # Mark to market at close
             if position > 0:
                 mtm = equity + (c - entry_price) * position
             elif position < 0:
@@ -96,12 +138,15 @@ class BacktestEngine:
         # Close any open position at end
         if position != 0:
             final_price = candles[-1][4]
-            if position > 0:
-                pnl = (final_price - entry_price) * position
-            else:
-                pnl = (entry_price - final_price) * abs(position)
-            equity += pnl
-            trades.append({"side": "close", "price": final_price, "pnl": pnl, "ts": candles[-1][0]})
+            if final_price and final_price > 0:
+                if position > 0:
+                    fill = self._apply_costs(final_price, "sell")
+                    pnl = (fill - entry_price) * position
+                else:
+                    fill = self._apply_costs(final_price, "buy")
+                    pnl = (entry_price - fill) * abs(position)
+                equity += pnl
+                trades.append({"side": "close", "price": fill, "pnl": pnl, "ts": candles[-1][0]})
 
         return self._compute_result(equity, equity_curve, trades)
 
@@ -127,23 +172,21 @@ class BacktestEngine:
                 pair=self.pair, ohlcv=df,
                 ticker={"last": cur[4], "baseVolume": cur[5]},
                 funding_rate=0.0, orderbook_imbalance=0.0,
-                volatility=df["close"].pct_change().std() or 0.0,
+                volatility=float(vol) if not pd.isna(vol := df["close"].pct_change().std()) else 0.0,
             ),
             onchain=OnchainData(), news=NewsSentiment(), macro=MacroData(),
         )
 
     async def _run_graph(self, graph, snapshot: DataSnapshot) -> dict:
+        config = self._cached_config
         initial: dict[str, Any] = {
             "messages": [], "data": {"snapshot": snapshot},
             "metadata": {
                 "pair": self.pair, "engine": "paper",
-                "models": {
-                    "tech_agent": "openai/deepseek-chat",
-                    "chain_agent": "openai/deepseek-chat",
-                    "news_agent": "openai/deepseek-chat",
-                    "macro_agent": "openai/deepseek-chat",
-                },
-                "debate_model": "openai/deepseek-chat",
+                "models": config.models.agents,
+                "analysis_model": config.models.analysis,
+                "debate_model": config.models.debate,
+                "verdict_model": config.models.verdict,
             },
             "debate_round": 0, "max_debate_rounds": 2, "divergence_scores": [],
         }
@@ -157,7 +200,10 @@ class BacktestEngine:
             if returns:
                 avg = sum(returns) / len(returns)
                 std = (sum((r - avg) ** 2 for r in returns) / len(returns)) ** 0.5
-                sharpe = (avg / std * math.sqrt(252)) if std > 0 else 0.0
+                # Crypto trades 365 days/year; annualize based on interval
+                periods_per_day = 86_400_000 / _TF_MS.get(self.interval, 3_600_000)
+                annualization = math.sqrt(365 * periods_per_day)
+                sharpe = (avg / std * annualization) if std > 0 else 0.0
             else:
                 sharpe = 0.0
         else:

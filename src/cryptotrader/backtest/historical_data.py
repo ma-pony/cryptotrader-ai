@@ -1,19 +1,20 @@
 """Fetch and cache historical macro/news data for backtesting."""
 from __future__ import annotations
 
-import json
 import sqlite3
-from datetime import datetime, timezone
-from pathlib import Path
+from datetime import UTC, datetime
 
 import httpx
 
 from cryptotrader.backtest.cache import CACHE_DB
 
-UTC = timezone.utc
 
 
-FRED_API_KEY = "f2a21b61924b9ede4c094dd27acecf39"
+import os
+
+
+def _get_fred_api_key() -> str:
+    return os.environ.get("FRED_API_KEY", "")
 
 
 def _ensure_tables():
@@ -97,7 +98,7 @@ async def fetch_funding_rate(symbol: str, start_date: str, end_date: str) -> dic
         return cached
 
     # Paginate: Binance returns max 1000 records, 3 per day (8h intervals)
-    pair = symbol.replace("/", "") + "T" if "/" in symbol else symbol + "USDT"
+    pair = symbol.replace("/", "") if "/" in symbol else symbol + "USDT"
     all_records: list[dict] = []
     cursor_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000) + 86400000
@@ -215,7 +216,7 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str) -> d
     async with httpx.AsyncClient() as client:
         r = await client.get(
             "https://api.stlouisfed.org/fred/series/observations",
-            params={"series_id": series_id, "api_key": FRED_API_KEY,
+            params={"series_id": series_id, "api_key": _get_fred_api_key(),
                     "file_type": "json", "observation_start": start_date,
                     "observation_end": end_date},
             timeout=30,

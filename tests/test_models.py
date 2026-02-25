@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pandas as pd
 
 from cryptotrader.models import (
-    AgentAnalysis, CheckResult, DataSnapshot, DecisionCommit,
+    AgentAnalysis, DataSnapshot, DecisionCommit,
     GateResult, MacroData, MarketData, NewsSentiment, OnchainData,
     Order, OrderStatus, TradeVerdict, VALID_TRANSITIONS,
 )

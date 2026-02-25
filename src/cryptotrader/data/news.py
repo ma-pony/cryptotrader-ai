@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import feedparser
@@ -36,7 +37,7 @@ class NewsCollector:
         all_headlines: list[str] = []
         for url in RSS_FEEDS:
             try:
-                feed = feedparser.parse(url)
+                feed = await asyncio.to_thread(feedparser.parse, url)
                 all_headlines.extend(e.get("title", "") for e in feed.entries[:15])
             except Exception:
                 logger.warning("RSS fetch failed: %s", url, exc_info=True)

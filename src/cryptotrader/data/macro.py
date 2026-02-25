@@ -55,12 +55,29 @@ async def _fetch_btc_dominance() -> float:
 
 class MacroCollector:
 
+    def __init__(self, providers_config=None):
+        self._cfg = providers_config
+
     async def collect(self) -> MacroData:
-        fred_key = os.environ.get("FRED_API_KEY", "")
-        fed_rate = await _fetch_fred("DFF", fred_key) if fred_key else 0.0
-        dxy = await _fetch_fred("DTWEXBGS", fred_key) if fred_key else 0.0
-        fear_greed = await _fetch_fear_greed()
-        btc_dom = await _fetch_btc_dominance()
+        cfg = self._cfg
+        fred_on = getattr(cfg, "fred_enabled", True) if cfg else True
+        coingecko_on = getattr(cfg, "coingecko_enabled", True) if cfg else True
+
+        fred_key = (cfg.fred_api_key if cfg else None) or os.environ.get("FRED_API_KEY", "")
+
+        import asyncio
+
+        async def _noop_float():
+            return 0.0
+
+        fed_task = _fetch_fred("DFF", fred_key) if (fred_on and fred_key) else _noop_float()
+        dxy_task = _fetch_fred("DTWEXBGS", fred_key) if (fred_on and fred_key) else _noop_float()
+        fg_task = _fetch_fear_greed()
+        dom_task = _fetch_btc_dominance() if coingecko_on else _noop_float()
+
+        fed_rate, dxy, fear_greed, btc_dom = await asyncio.gather(
+            fed_task, dxy_task, fg_task, dom_task,
+        )
 
         return MacroData(
             fed_rate=fed_rate,

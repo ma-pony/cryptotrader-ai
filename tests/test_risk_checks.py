@@ -1,7 +1,7 @@
 """Tests for risk checks with edge cases."""
 
 import pytest
-from cryptotrader.models import TradeVerdict, CheckResult
+from cryptotrader.models import TradeVerdict
 from cryptotrader.config import (
     PositionConfig, LossConfig, VolatilityConfig,
     CooldownConfig, ExchangeCheckConfig, RateLimitConfig,
@@ -11,6 +11,9 @@ from cryptotrader.risk.checks.loss import DailyLossLimit, DrawdownLimit
 from cryptotrader.risk.checks.cvar import CVaRCheck
 from cryptotrader.risk.checks.volatility import VolatilityGate, FundingRateGate
 from cryptotrader.risk.checks.exchange import ExchangeHealthCheck
+from cryptotrader.risk.checks.cooldown import CooldownCheck
+from cryptotrader.risk.checks.rate_limit import RateLimitCheck
+from cryptotrader.risk.state import RedisStateManager
 
 
 @pytest.fixture
@@ -160,4 +163,70 @@ async def test_exchange_health_pass(verdict, portfolio):
 async def test_exchange_health_fail(verdict):
     c = ExchangeHealthCheck(ExchangeCheckConfig(max_api_latency_ms=2000))
     r = await c.evaluate(verdict, {"api_latency_ms": 3000})
+    assert not r.passed
+
+
+# ── Cooldown checks (in-memory fallback) ──
+
+@pytest.mark.asyncio
+async def test_cooldown_pass_no_active(verdict):
+    """No cooldown set — should pass."""
+    rsm = RedisStateManager(None)  # No Redis, uses memory fallback
+    c = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), rsm)
+    r = await c.evaluate(verdict, {"pair": "BTC/USDT"})
+    assert r.passed
+
+@pytest.mark.asyncio
+async def test_cooldown_fail_pair_active(verdict):
+    """Per-pair cooldown active — should block."""
+    rsm = RedisStateManager(None)
+    await rsm.set_cooldown("BTC/USDT", 5)
+    c = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), rsm)
+    r = await c.evaluate(verdict, {"pair": "BTC/USDT"})
+    assert not r.passed
+    assert "Cooldown active" in r.reason
+
+@pytest.mark.asyncio
+async def test_cooldown_fail_post_loss(verdict):
+    """Post-loss cooldown active — should block."""
+    rsm = RedisStateManager(None)
+    await rsm.set_post_loss_cooldown(10)
+    c = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), rsm)
+    r = await c.evaluate(verdict, {"pair": "ETH/USDT"})
+    assert not r.passed
+    assert "Post-loss" in r.reason
+
+
+# ── Rate limit checks (in-memory fallback) ──
+
+@pytest.mark.asyncio
+async def test_rate_limit_pass(verdict):
+    rsm = RedisStateManager(None)
+    c = RateLimitCheck(RateLimitConfig(max_trades_per_hour=10, max_trades_per_day=50), rsm)
+    r = await c.evaluate(verdict, {})
+    assert r.passed
+
+@pytest.mark.asyncio
+async def test_rate_limit_fail_hourly(verdict):
+    rsm = RedisStateManager(None)
+    for _ in range(10):
+        await rsm.incr_trade_count()
+    c = RateLimitCheck(RateLimitConfig(max_trades_per_hour=10, max_trades_per_day=50), rsm)
+    r = await c.evaluate(verdict, {})
+    assert not r.passed
+    assert "Hourly" in r.reason
+
+
+# ── MaxPositionSize with dict-format positions ──
+
+@pytest.mark.asyncio
+async def test_max_position_dict_format(verdict):
+    c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
+    portfolio = {
+        "total_value": 10000,
+        "positions": {"BTC/USDT": {"amount": 0.02, "avg_price": 50000}},
+        "pair": "BTC/USDT",
+    }
+    r = await c.evaluate(verdict, portfolio)
+    # existing = 0.02 * 50000 = 1000 (10%), new = 0.5% → combined 10.5% > 10%
     assert not r.passed

@@ -12,22 +12,32 @@ from cryptotrader.models import TradeVerdict
 logger = logging.getLogger(__name__)
 
 _DIR_MAP = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
+_VALID_ACTIONS = {"long", "short", "hold"}
 
 
-def _extract_field(analysis: dict, field: str, default=None):
-    """Extract structured field from agent analysis (may be in data_points or top-level)."""
-    if field in analysis:
-        return analysis[field]
-    return analysis.get("data_points", {}).get(field, default)
+def _normalize_action(raw: str) -> str:
+    """Map LLM action strings to valid actions."""
+    raw = raw.strip().lower()
+    if raw in _VALID_ACTIONS:
+        return raw
+    if raw in ("buy", "bullish"):
+        return "long"
+    if raw in ("sell", "bearish"):
+        return "short"
+    return "hold"
 
 
 def make_verdict_rules(analyses: dict[str, dict]) -> TradeVerdict | None:
-    """Simple weighted average (v1 style). Always returns a verdict."""
+    """Simple weighted average. Returns None when the signal is ambiguous (abs(score) < 0.1)."""
     score = 0.0
     for a in analyses.values():
         d = _DIR_MAP.get(a.get("direction", "neutral"), 0.0)
         c = float(a.get("confidence", 0.0))
         score += d * c
+
+    # Ambiguous — let LLM tiebreak decide
+    if abs(score) < 0.1:
+        return None
 
     action = "long" if score > 0 else "short" if score < 0 else "hold"
     if action != "hold":
@@ -43,8 +53,18 @@ def make_verdict_rules(analyses: dict[str, dict]) -> TradeVerdict | None:
     )
 
 
-TIEBREAK_PROMPT = """Four agents analyzed a crypto market. Their analyses are below.
-Tech and other signals are ambiguous. Make a final call.
+TIEBREAK_PROMPT = """Four specialist agents analyzed a crypto market. Their analyses are below, but the weighted signal is ambiguous.
+
+Your job: break the tie by evaluating argument quality across all four agents.
+
+Consider:
+- Which agents cited the most specific, verifiable data points?
+- Are any agents flagging risks that others missed?
+- Do the higher-confidence agents have stronger evidence, or just more assertive language?
+
+Rules:
+- Do NOT default to hold. The agents disagreed — you must pick the side with better evidence.
+- Confidence should be moderate (0.4-0.6) since this is a tiebreak on ambiguous data.
 Respond ONLY with JSON: {"action": "long|short|hold", "confidence": 0.0-1.0, "reasoning": "one sentence"}"""
 
 
@@ -72,9 +92,13 @@ async def make_verdict_llm(
             temperature=0.1, max_tokens=256,
         )
         text = resp.choices[0].message.content
-        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError(f"No JSON object found in verdict response: {text[:100]}")
+        data = json.loads(text[start:end + 1])
         return TradeVerdict(
-            action=data.get("action", "hold"),
+            action=_normalize_action(data.get("action", "hold")),
             confidence=float(data.get("confidence", 0.0)),
             position_scale=float(data.get("confidence", 0.0)),
             reasoning=f"LLM tiebreak: {data.get('reasoning', '')}",

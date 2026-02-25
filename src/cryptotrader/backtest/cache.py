@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-import json
 from pathlib import Path
-from datetime import datetime
 
 
 CACHE_DB = Path.home() / ".cryptotrader" / "ohlcv_cache.db"
@@ -49,10 +47,7 @@ async def fetch_historical(pair: str, timeframe: str, since_ms: int, until_ms: i
     if cached and cached[0][0] <= since_ms + 86_400_000:
         return cached
 
-    try:
-        import ccxt.async_support as ccxt_async
-    except ImportError:
-        import ccxt as ccxt_async
+    import ccxt.async_support as ccxt_async
 
     exchange = ccxt_async.binance({"enableRateLimit": True})
     all_candles = []

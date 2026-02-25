@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Optional
 
 import typer
 from rich.console import Console
@@ -26,7 +25,9 @@ def run(
 
 async def _run(pairs: list[str], mode: str, exchange_id: str):
     from cryptotrader.graph import build_trading_graph, ArenaState
+    from cryptotrader.config import load_config
 
+    config = load_config()
     graph = build_trading_graph()
 
     for pair in pairs:
@@ -35,17 +36,20 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
         initial: ArenaState = {
             "messages": [], "data": {}, "metadata": {
                 "pair": pair, "engine": mode, "exchange_id": exchange_id,
-                "timeframe": "1h", "ohlcv_limit": 100,
-                "analysis_model": os.environ.get("ARENA_ANALYSIS_MODEL", "openai/deepseek-chat"),
-                "debate_model": os.environ.get("ARENA_DEBATE_MODEL", "openai/claude-sonnet-4-6"),
-                "models": {
-                    "tech_agent": os.environ.get("ARENA_MODEL_TECH", "openai/deepseek-chat"),
-                    "chain_agent": os.environ.get("ARENA_MODEL_CHAIN", "openai/deepseek-chat"),
-                    "news_agent": os.environ.get("ARENA_MODEL_NEWS", "openai/deepseek-chat"),
-                    "macro_agent": os.environ.get("ARENA_MODEL_MACRO", "openai/claude-sonnet-4-6"),
-                },
+                "timeframe": config.data.default_timeframe,
+                "ohlcv_limit": config.data.ohlcv_limit,
+                "analysis_model": config.models.analysis,
+                "debate_model": config.models.debate,
+                "verdict_model": config.models.verdict,
+                "models": config.models.agents,
+                "database_url": os.environ.get("DATABASE_URL"),
+                "redis_url": os.environ.get("REDIS_URL"),
+                "convergence_threshold": config.debate.convergence_threshold,
+                "max_single_pct": config.risk.position.max_single_pct,
             },
-            "debate_round": 0, "max_debate_rounds": 3, "divergence_scores": [],
+            "debate_round": 0,
+            "max_debate_rounds": config.debate.max_rounds,
+            "divergence_scores": [],
         }
 
         result = await graph.ainvoke(initial)
@@ -82,7 +86,7 @@ def journal_log(limit: int = typer.Option(10, "--limit", "-n")):
 
 async def _journal_log(limit: int):
     from cryptotrader.journal.store import JournalStore
-    store = JournalStore(None)
+    store = JournalStore(os.environ.get("DATABASE_URL"))
     commits = await store.log(limit=limit)
     if not commits:
         console.print("[dim]No decisions recorded yet.[/dim]")
@@ -106,7 +110,7 @@ def journal_show(hash: str = typer.Argument(...)):
 
 async def _journal_show(hash: str):
     from cryptotrader.journal.store import JournalStore
-    store = JournalStore(None)
+    store = JournalStore(os.environ.get("DATABASE_URL"))
     commit = await store.show(hash)
     if not commit:
         console.print(f"[red]Commit {hash} not found[/red]")
@@ -164,8 +168,8 @@ async def _scheduler_start():
     from cryptotrader.scheduler import Scheduler
     from cryptotrader.config import load_config
     config = load_config()
-    pairs = getattr(config, 'scheduler_pairs', ["BTC/USDT", "ETH/USDT"])
-    interval = getattr(config, 'scheduler_interval', 240)
+    pairs = config.scheduler.pairs
+    interval = config.scheduler.interval_minutes
     console.print(f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m")
     s = Scheduler(pairs, interval)
     await s.start()
@@ -182,7 +186,8 @@ def scheduler_status():
 @app.command()
 def dashboard():
     """Launch Streamlit dashboard."""
-    import subprocess, sys
+    import subprocess
+    import sys
     from pathlib import Path
     app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
     subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)])

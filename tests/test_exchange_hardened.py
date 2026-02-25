@@ -1,6 +1,5 @@
 """Exchange hardening tests — retry, balance check, precision."""
 
-import pytest
 from cryptotrader.execution.exchange import LiveExchange, ExchangeAdapter
 from cryptotrader.models import Order
 

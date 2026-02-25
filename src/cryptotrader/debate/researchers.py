@@ -9,20 +9,32 @@ import litellm
 
 logger = logging.getLogger(__name__)
 
-BULL_SYSTEM = """You are a Bull Researcher. Your job is to build the strongest possible case for BUYING.
+BULL_SYSTEM = """You are a Bull Researcher in an adversarial debate. Your job is to build the strongest possible case for BUYING.
 Even if the data looks bearish, find bullish signals: oversold conditions, capitulation signs, support levels, positive divergences.
-You must advocate for the long side — this is your role in an adversarial debate.
-Be specific: cite data points from the analyst reports. Don't just list generic reasons."""
+You must advocate for the long side — this is your role.
 
-BEAR_SYSTEM = """You are a Bear Researcher. Your job is to build the strongest possible case for SELLING/SHORTING.
+Rules:
+- Cite specific numbers from the analyst reports (e.g. "RSI at 28 indicates oversold" not "RSI is low").
+- Address the strongest bear argument directly — don't ignore it.
+- Acknowledge weaknesses in your own case to build credibility, then explain why the bull thesis still holds.
+- Do NOT use generic crypto platitudes ("institutions are coming", "adoption is growing"). Only use data provided."""
+
+BEAR_SYSTEM = """You are a Bear Researcher in an adversarial debate. Your job is to build the strongest possible case for SELLING/SHORTING.
 Even if the data looks bullish, find bearish signals: overbought conditions, euphoria, resistance levels, negative divergences.
-You must advocate for the short side — this is your role in an adversarial debate.
-Be specific: cite data points from the analyst reports. Don't just list generic reasons."""
+You must advocate for the short side — this is your role.
+
+Rules:
+- Cite specific numbers from the analyst reports (e.g. "funding rate at 0.05% signals crowded longs" not "funding is high").
+- Address the strongest bull argument directly — don't ignore it.
+- Acknowledge weaknesses in your own case to build credibility, then explain why the bear thesis still holds.
+- Do NOT use generic crypto FUD ("regulation is coming", "bubble will pop"). Only use data provided."""
 
 REBUTTAL_TEMPLATE = """The opposing analyst argued:
 {opponent_argument}
 
-Counter their points with specific evidence from the reports. Where are they wrong or cherry-picking?"""
+Counter their strongest points with specific evidence from the reports.
+Identify where they cherry-picked data, ignored contradicting signals, or made logical leaps.
+Then reinforce your own position with any data points they failed to address."""
 
 
 def _format_reports(analyses: dict[str, dict]) -> str:
@@ -84,17 +96,23 @@ async def run_debate(
     }
 
 
-JUDGE_PROMPT = """You are the Research Manager making the final trading decision. You just observed a structured debate between a Bull and Bear analyst about {pair}.
+JUDGE_PROMPT = """You are the Research Manager making the final trading decision for {pair}.
+You observed a structured bull vs bear debate.
 
-Your job: evaluate argument QUALITY, not quantity. Which side presented more compelling, evidence-based reasoning?
+Evaluate argument QUALITY, not quantity. Judge each side on:
+1. Evidence specificity: Did they cite concrete data points or speak in generalities?
+2. Rebuttal strength: Did they address the opponent's best arguments or dodge them?
+3. Internal consistency: Did their conclusion follow logically from their evidence?
+4. Acknowledged weaknesses: Did they honestly address gaps in their own case?
 
 Rules:
 - If bull arguments are stronger → action: "long"
-- If bear arguments are stronger → action: "short"  
+- If bear arguments are stronger → action: "short"
 - ONLY choose "hold" if both sides are equally weak or data is truly insufficient
 - Do NOT default to hold. Take a stance.
+- Confidence should reflect how decisive the winner was, not a compromise.
 
-Respond ONLY with JSON: {{"action": "long|short|hold", "confidence": 0.0-1.0, "reasoning": "one sentence explaining which side won and why"}}"""
+Respond ONLY with JSON: {{"action": "long|short|hold", "confidence": 0.0-1.0, "reasoning": "one sentence: which side won and the key evidence that decided it"}}"""
 
 
 async def judge_debate(
@@ -110,9 +128,20 @@ async def judge_debate(
     try:
         resp = await litellm.acompletion(model=model, messages=msgs, temperature=0.1, max_tokens=256)
         text = resp.choices[0].message.content
-        data = json.loads(text[text.index("{"):text.rindex("}") + 1])
+        start = text.find("{")
+        end = text.rfind("}")
+        if start == -1 or end == -1 or end <= start:
+            raise ValueError(f"No JSON object found in response: {text[:100]}")
+        data = json.loads(text[start:end + 1])
+        action = data.get("action", "hold").strip().lower()
+        if action in ("buy", "bullish"):
+            action = "long"
+        elif action in ("sell", "bearish"):
+            action = "short"
+        elif action not in ("long", "short", "hold"):
+            action = "hold"
         return {
-            "action": data.get("action", "hold"),
+            "action": action,
             "confidence": float(data.get("confidence", 0.5)),
             "reasoning": data.get("reasoning", ""),
         }

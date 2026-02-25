@@ -17,7 +17,8 @@ async def get_experience(store: JournalStore, snapshot_summary: dict) -> str:
     for dc in similar:
         outcome = f"pnl={dc.pnl}" if dc.pnl is not None else "no outcome yet"
         verdict_action = dc.verdict.action if dc.verdict else "hold"
-        lines.append(
-            f"- {dc.pair} @ {dc.timestamp:%Y-%m-%d}: verdict={verdict_action}, {outcome}"
-        )
+        line = f"- {dc.pair} @ {dc.timestamp:%Y-%m-%d}: verdict={verdict_action}, {outcome}"
+        if dc.retrospective:
+            line += f"\n  Lesson: {dc.retrospective}"
+        lines.append(line)
     return "Historical similar conditions:\n" + "\n".join(lines)

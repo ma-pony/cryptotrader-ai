@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import logging
 from typing import Annotated, Any, Sequence
 
 from langchain_core.messages import BaseMessage
@@ -10,6 +10,8 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 import operator
+
+logger = logging.getLogger(__name__)
 
 
 def merge_dicts(a: dict, b: dict) -> dict:
@@ -47,13 +49,15 @@ async def collect_snapshot(state: ArenaState) -> dict:
         return {"data": {"snapshot_summary": summary}}
 
     from cryptotrader.data.snapshot import SnapshotAggregator
+    from cryptotrader.config import load_config
 
     pair = state["metadata"]["pair"]
     exchange_id = state["metadata"].get("exchange_id", "binance")
     timeframe = state["metadata"].get("timeframe", "1h")
     limit = state["metadata"].get("ohlcv_limit", 100)
 
-    agg = SnapshotAggregator()
+    providers_cfg = load_config().providers
+    agg = SnapshotAggregator(providers_cfg)
     snapshot = await agg.collect(pair, exchange_id, timeframe, limit)
     summary = {
         "pair": pair,
@@ -120,8 +124,22 @@ async def macro_analyze(state: ArenaState) -> dict:
     return await _run_agent("macro_agent", state)
 
 
+_DEBATE_ROLES = {
+    "tech_agent": "technical analysis",
+    "chain_agent": "on-chain and derivatives analysis",
+    "news_agent": "news and sentiment analysis",
+    "macro_agent": "macroeconomic analysis",
+}
+
+DEBATE_SYSTEM = """You are a {role} specialist in a multi-agent trading debate.
+Base your arguments ONLY on the data provided. Cite specific numbers.
+Do not converge just for agreement — hold your position when your data supports it.
+Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "reasoning": "...", "key_factors": [...], "risk_flags": [...]}}"""
+
+
 async def debate_round(state: ArenaState) -> dict:
     from cryptotrader.debate.challenge import build_challenge_prompt
+    import json
     import litellm
 
     analyses = state["data"].get("analyses", {})
@@ -131,22 +149,36 @@ async def debate_round(state: ArenaState) -> dict:
     for agent_id, analysis in analyses.items():
         others = {k: v for k, v in analyses.items() if k != agent_id}
         prompt = build_challenge_prompt(agent_id, state["metadata"]["pair"], analysis, others)
+        role_label = _DEBATE_ROLES.get(agent_id, agent_id)
+        system = DEBATE_SYSTEM.format(role=role_label)
         try:
             resp = await litellm.acompletion(
                 model=model,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
                 max_tokens=1024,
             )
-            import json
-            data = json.loads(resp.choices[0].message.content)
-            updated[agent_id] = {
+            text = resp.choices[0].message.content
+            start = text.find("{")
+            end = text.rfind("}")
+            if start == -1 or end == -1 or end <= start:
+                raise ValueError(f"No JSON in debate response for {agent_id}")
+            data = json.loads(text[start:end + 1])
+            # Start from original analysis to preserve data_points fields,
+            # then overlay only the fields the debate LLM updated
+            merged = dict(analysis)
+            merged.update({
                 "direction": data.get("direction", analysis["direction"]),
                 "confidence": float(data.get("confidence", analysis["confidence"])),
                 "reasoning": data.get("reasoning", analysis["reasoning"]),
                 "key_factors": data.get("key_factors", analysis.get("key_factors", [])),
                 "risk_flags": data.get("risk_flags", analysis.get("risk_flags", [])),
-            }
-        except Exception:
+            })
+            updated[agent_id] = merged
+        except Exception as e:
+            logger.warning("Debate round LLM call failed for %s: %s", agent_id, e)
             updated[agent_id] = analysis
 
     return {
@@ -171,7 +203,8 @@ def convergence_router(state: ArenaState) -> str:
     scores = state.get("divergence_scores") or []
     if state["debate_round"] >= state["max_debate_rounds"]:
         return "converged"
-    if len(scores) >= 2 and check_convergence(scores[:-1], scores[-1]):
+    threshold = state["metadata"].get("convergence_threshold", 0.1)
+    if len(scores) >= 2 and check_convergence(scores[:-1], scores[-1], threshold=threshold):
         return "converged"
     return "continue"
 
@@ -200,27 +233,97 @@ async def make_verdict(state: ArenaState) -> dict:
     }}}
 
 
+# Module-level cache for RiskGate to preserve circuit breaker state across invocations
+_risk_gate_cache: dict[str, Any] = {}
+
+# Per-pair PaperExchange cache to prevent cross-pair balance contamination
+_paper_exchanges: dict[str, Any] = {}
+
+# Lazy notifier — reads config once
+_notifier_instance: Any = None
+
+
+def _get_notifier(state: ArenaState) -> Any:
+    global _notifier_instance
+    if _notifier_instance is None:
+        from cryptotrader.notifications import Notifier
+        from cryptotrader.config import load_config
+        cfg = load_config().notifications
+        _notifier_instance = Notifier(cfg.webhook_url, cfg.enabled, cfg.events)
+    return _notifier_instance
+
+
 async def risk_check(state: ArenaState) -> dict:
     from cryptotrader.risk.gate import RiskGate
     from cryptotrader.risk.state import RedisStateManager
     from cryptotrader.config import load_config
     from cryptotrader.models import TradeVerdict
+    from cryptotrader.portfolio.manager import PortfolioManager
 
-    config = load_config()
-    redis_state = RedisStateManager(state["metadata"].get("redis_url"))
-    gate = RiskGate(config.risk, redis_state)
+    redis_url = state["metadata"].get("redis_url")
+    cache_key = redis_url or "_default"
+    if cache_key not in _risk_gate_cache:
+        config = load_config()
+        redis_state = RedisStateManager(redis_url)
+        _risk_gate_cache[cache_key] = RiskGate(config.risk, redis_state)
+    gate = _risk_gate_cache[cache_key]
 
     vd = state["data"]["verdict"]
     verdict = TradeVerdict(**vd)
+
+    # Extract recent prices and returns from snapshot OHLCV for CVaR/volatility checks
+    # Normalize to daily returns regardless of candle interval
+    snapshot = state["data"].get("snapshot")
+    recent_prices = []
+    returns_daily = []
+    if snapshot and hasattr(snapshot, "market") and snapshot.market.ohlcv is not None:
+        closes = snapshot.market.ohlcv["close"].dropna().tolist()
+        recent_prices = closes[-60:]
+        if len(closes) >= 2:
+            bar_returns = [(closes[i] - closes[i-1]) / closes[i-1]
+                           for i in range(1, len(closes)) if closes[i-1] > 0]
+            # Aggregate sub-daily bars into daily returns
+            timeframe = state["metadata"].get("timeframe", "1h")
+            _tf_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000,
+                      "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+            bars_per_day = int(86_400_000 / _tf_ms.get(timeframe, 3_600_000))
+            if bars_per_day > 1 and len(bar_returns) >= bars_per_day:
+                returns_daily = []
+                for j in range(0, len(bar_returns) - bars_per_day + 1, bars_per_day):
+                    chunk = bar_returns[j:j + bars_per_day]
+                    daily = 1.0
+                    for r in chunk:
+                        daily *= (1 + r)
+                    returns_daily.append(daily - 1)
+            else:
+                returns_daily = bar_returns
+
+    # Load real portfolio state if database is available
+    db_url = state["metadata"].get("database_url")
+    pm = PortfolioManager(db_url)
+    try:
+        pm_data = await pm.get_portfolio()
+        daily_pnl = await pm.get_daily_pnl()
+        drawdown = await pm.get_drawdown()
+        pm_returns = await pm.get_returns()
+    except Exception:
+        pm_data = {"total_value": 0, "positions": {}}
+        daily_pnl = 0.0
+        drawdown = 0.0
+        pm_returns = []
+
+    # Use PortfolioManager data if it has real positions, else fall back to defaults
+    has_real_portfolio = pm_data.get("total_value", 0) > 0
     portfolio = state["data"].get("portfolio", {
-        "total_value": 10000,
-        "positions": {},
-        "daily_pnl": 0.0,
-        "drawdown": 0.0,
-        "returns_60d": [],
-        "recent_prices": [],
+        "total_value": pm_data["total_value"] if has_real_portfolio else 10000,
+        "positions": pm_data.get("positions", {}),
+        "daily_pnl": daily_pnl,
+        "drawdown": drawdown,
+        "returns_60d": pm_returns if pm_returns else returns_daily,
+        "recent_prices": recent_prices,
         "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
         "api_latency_ms": 100,
+        "pair": state["metadata"]["pair"],
     })
     result = await gate.check(verdict, portfolio)
     return {"data": {"risk_gate": {
@@ -248,7 +351,10 @@ async def place_order(state: ArenaState) -> dict:
     price = state["data"].get("snapshot_summary", {}).get("price", 0)
     scale = verdict.get("position_scale", 1.0)
     total = state["data"].get("portfolio", {}).get("total_value", 10000)
-    amount = (total * 0.1 * scale) / max(price, 1)
+    if price <= 0:
+        return {"data": {"order": None}}
+    max_single_pct = state["metadata"].get("max_single_pct", 0.1)
+    amount = (total * max_single_pct * scale) / price
 
     order = Order(
         pair=pair,
@@ -258,44 +364,187 @@ async def place_order(state: ArenaState) -> dict:
     )
 
     engine = state["metadata"].get("engine", "paper")
+    live_exchange = None
     if engine == "paper":
-        exchange = PaperExchange()
+        if pair not in _paper_exchanges:
+            _paper_exchanges[pair] = PaperExchange()
+        exchange = _paper_exchanges[pair]
     else:
         cfg = state["metadata"].get("exchange_config", {})
-        exchange = LiveExchange(
+        live_exchange = LiveExchange(
             cfg.get("exchange_id", "binance"),
             cfg.get("api_key", ""),
             cfg.get("secret", ""),
         )
+        exchange = live_exchange
 
-    result = await exchange.place_order(order)
-    return {"data": {"order": {
+    try:
+        result = await exchange.place_order(order)
+    finally:
+        if live_exchange is not None:
+            await live_exchange.close()
+
+    status = result.get("status", "")
+    if status not in ("filled", "partially_filled"):
+        return {"data": {"order": None}}
+
+    # Use actual filled amount/price from exchange result when available
+    filled_amount = result.get("filled", order.amount) if status == "partially_filled" else order.amount
+    filled_price = result.get("price", order.price)
+
+    # Increment trade count and set cooldown via cached RiskGate's Redis
+    redis_url = state["metadata"].get("redis_url")
+    cache_key = redis_url or "_default"
+    if cache_key in _risk_gate_cache:
+        try:
+            rsm = _risk_gate_cache[cache_key].redis_state
+            await rsm.incr_trade_count()
+            from cryptotrader.config import load_config
+            cooldown_min = load_config().risk.cooldown.same_pair_minutes
+            await rsm.set_cooldown(pair, cooldown_min)
+        except Exception:
+            pass
+
+    order_data = {
         "pair": order.pair,
         "side": order.side,
-        "amount": order.amount,
-        "price": result.get("price", order.price),
-        "status": "filled",
-    }}}
+        "amount": filled_amount,
+        "price": filled_price,
+        "status": status,
+    }
+
+    # Fire-and-forget notification
+    try:
+        notifier = _get_notifier(state)
+        await notifier.notify("trade", {"pair": order.pair, "order": order_data})
+    except Exception:
+        pass
+
+    return {"data": {"order": order_data}}
 
 
-async def journal_rejection(state: ArenaState) -> dict:
-    from cryptotrader.journal.commit import build_commit, generate_hash
+async def journal_trade(state: ArenaState) -> dict:
+    """Journal a successful trade — mirrors journal_rejection but includes order."""
+    from cryptotrader.journal.commit import build_commit
     from cryptotrader.journal.store import JournalStore
+    from cryptotrader.models import AgentAnalysis, TradeVerdict, GateResult, Order
 
     db_url = state["metadata"].get("database_url")
     store = JournalStore(db_url)
+
+    raw_analyses = state["data"].get("analyses", {})
+    analyses = {}
+    for k, v in raw_analyses.items():
+        if isinstance(v, dict):
+            analyses[k] = AgentAnalysis(
+                agent_id=k, pair=state["metadata"]["pair"],
+                direction=v.get("direction", "neutral"),
+                confidence=v.get("confidence", 0.5),
+                reasoning=v.get("reasoning", ""),
+                key_factors=v.get("key_factors", []),
+                risk_flags=v.get("risk_flags", []),
+            )
+        else:
+            analyses[k] = v
+
+    raw_verdict = state["data"].get("verdict")
+    verdict = None
+    if raw_verdict and isinstance(raw_verdict, dict):
+        verdict = TradeVerdict(**{k: v for k, v in raw_verdict.items()
+                                  if k in TradeVerdict.__dataclass_fields__})
+
+    raw_gate = state["data"].get("risk_gate")
+    risk_gate = None
+    if raw_gate and isinstance(raw_gate, dict):
+        risk_gate = GateResult(**{k: v for k, v in raw_gate.items()
+                                   if k in GateResult.__dataclass_fields__})
+
+    raw_order = state["data"].get("order")
+    order = None
+    if raw_order and isinstance(raw_order, dict):
+        order = Order(
+            pair=raw_order.get("pair", ""),
+            side=raw_order.get("side", "buy"),
+            amount=raw_order.get("amount", 0),
+            price=raw_order.get("price", 0),
+        )
+
     commit = build_commit(
         pair=state["metadata"]["pair"],
         snapshot_summary=state["data"].get("snapshot_summary", {}),
-        analyses=state["data"].get("analyses", {}),
+        analyses=analyses,
         debate_rounds=state.get("debate_round", 0),
         divergence=state.get("divergence_scores", [0.0])[-1],
-        verdict=state["data"].get("verdict", {}),
-        risk_gate=state["data"].get("risk_gate", {}),
+        verdict=verdict,
+        risk_gate=risk_gate,
+        order=order,
+        parent_hash=None,
+    )
+    await store.commit(commit)
+    return {"data": {"journal_hash": commit.hash}}
+
+
+async def journal_rejection(state: ArenaState) -> dict:
+    from cryptotrader.journal.commit import build_commit
+    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.models import AgentAnalysis, TradeVerdict, GateResult
+
+    db_url = state["metadata"].get("database_url")
+    store = JournalStore(db_url)
+
+    # Reconstruct dataclass instances from graph dicts
+    raw_analyses = state["data"].get("analyses", {})
+    analyses = {}
+    for k, v in raw_analyses.items():
+        if isinstance(v, dict):
+            analyses[k] = AgentAnalysis(
+                agent_id=k, pair=state["metadata"]["pair"],
+                direction=v.get("direction", "neutral"),
+                confidence=v.get("confidence", 0.5),
+                reasoning=v.get("reasoning", ""),
+                key_factors=v.get("key_factors", []),
+                risk_flags=v.get("risk_flags", []),
+            )
+        else:
+            analyses[k] = v
+
+    raw_verdict = state["data"].get("verdict")
+    verdict = None
+    if raw_verdict and isinstance(raw_verdict, dict):
+        verdict = TradeVerdict(**{k: v for k, v in raw_verdict.items()
+                                  if k in TradeVerdict.__dataclass_fields__})
+
+    raw_gate = state["data"].get("risk_gate")
+    risk_gate = None
+    if raw_gate and isinstance(raw_gate, dict):
+        risk_gate = GateResult(**{k: v for k, v in raw_gate.items()
+                                   if k in GateResult.__dataclass_fields__})
+
+    commit = build_commit(
+        pair=state["metadata"]["pair"],
+        snapshot_summary=state["data"].get("snapshot_summary", {}),
+        analyses=analyses,
+        debate_rounds=state.get("debate_round", 0),
+        divergence=state.get("divergence_scores", [0.0])[-1],
+        verdict=verdict,
+        risk_gate=risk_gate,
         order=None,
         parent_hash=None,
     )
     await store.commit(commit)
+
+    # Fire-and-forget rejection notification
+    try:
+        notifier = _get_notifier(state)
+        raw_gate = state["data"].get("risk_gate", {})
+        await notifier.notify("rejection", {
+            "pair": state["metadata"]["pair"],
+            "rejected_by": raw_gate.get("rejected_by"),
+            "reason": raw_gate.get("reason"),
+        })
+    except Exception:
+        pass
+
     return {"data": {"journal_hash": commit.hash}}
 
 
@@ -402,6 +651,7 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("verdict", make_verdict)
     graph.add_node("risk_gate", risk_check)
     graph.add_node("execute", place_order)
+    graph.add_node("record_trade", journal_trade)
     graph.add_node("record_rejection", journal_rejection)
 
     graph.add_edge(START, "collect_data")
@@ -424,7 +674,8 @@ def _build_full_graph(config: dict | None = None) -> Any:
         "approved": "execute",
         "rejected": "record_rejection",
     })
-    graph.add_edge("execute", END)
+    graph.add_edge("execute", "record_trade")
+    graph.add_edge("record_trade", END)
     graph.add_edge("record_rejection", END)
 
     return graph.compile()

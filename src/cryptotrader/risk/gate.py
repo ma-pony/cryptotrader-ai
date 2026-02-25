@@ -17,10 +17,11 @@ from cryptotrader.risk.state import RedisStateManager
 
 class RiskGate:
     def __init__(self, config: RiskConfig, redis_state: RedisStateManager) -> None:
+        self.redis_state = redis_state
         self._checks = [
             MaxPositionSize(config.position),
             MaxTotalExposure(config.position),
-            DailyLossLimit(config.loss),
+            DailyLossLimit(config.loss, redis_state),
             DrawdownLimit(config.loss),
             CVaRCheck(config.loss),
             CorrelationCheck(),

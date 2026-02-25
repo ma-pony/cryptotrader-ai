@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+import os
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,10 @@ class Scheduler:
         while self._running:
             tasks = [self._run_pair(p) for p in self.pairs]
             await asyncio.gather(*tasks, return_exceptions=True)
+            for p in self.pairs:
+                self._status[p]["next_run"] = (
+                    datetime.now(UTC) + timedelta(seconds=self.interval)
+                ).isoformat()
             await asyncio.sleep(self.interval)
 
     def stop(self) -> None:
@@ -36,18 +41,40 @@ class Scheduler:
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         try:
             from cryptotrader.graph import build_trading_graph
+            from cryptotrader.config import load_config
 
+            config = load_config()
             graph = build_trading_graph()
             initial = {
                 "messages": [], "data": {}, "metadata": {
-                    "pair": pair, "engine": "paper", "exchange_id": "binance",
-                    "timeframe": "1h", "ohlcv_limit": 100,
+                    "pair": pair,
+                    "engine": config.engine,
+                    "exchange_id": config.scheduler.exchange_id,
+                    "timeframe": config.data.default_timeframe,
+                    "ohlcv_limit": config.data.ohlcv_limit,
+                    "analysis_model": config.models.analysis,
+                    "debate_model": config.models.debate,
+                    "verdict_model": config.models.verdict,
+                    "models": config.models.agents,
+                    "database_url": os.environ.get("DATABASE_URL"),
+                    "redis_url": os.environ.get("REDIS_URL"),
+                    "convergence_threshold": config.debate.convergence_threshold,
+                    "max_single_pct": config.risk.position.max_single_pct,
                 },
-                "debate_round": 0, "max_debate_rounds": 3, "divergence_scores": [],
+                "debate_round": 0,
+                "max_debate_rounds": config.debate.max_rounds,
+                "divergence_scores": [],
             }
-            await graph.ainvoke(initial)
+            result = await graph.ainvoke(initial)
             self._status[pair]["last_error"] = None
+
+            # Log outcome to status (notifications are already sent by the graph nodes)
+            data = result.get("data", {})
+            verdict = data.get("verdict", {})
+            risk_gate = data.get("risk_gate", {})
+            self._status[pair]["last_action"] = verdict.get("action", "unknown")
+            self._status[pair]["risk_passed"] = risk_gate.get("passed", False)
+
         except Exception as e:
             logger.error("Scheduler error for %s: %s", pair, e)
             self._status[pair]["last_error"] = str(e)
-        self._status[pair]["next_run"] = datetime.now(UTC).isoformat()

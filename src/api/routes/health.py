@@ -1,5 +1,6 @@
 """Health and metrics endpoints."""
 
+import os
 import time
 
 from fastapi import APIRouter
@@ -12,7 +13,6 @@ _start_time = time.time()
 @router.get("/health")
 async def health():
     import redis.asyncio as aioredis
-    import os
 
     checks = {"api": "ok"}
     redis_url = os.environ.get("REDIS_URL")
@@ -36,7 +36,7 @@ async def health():
 async def metrics():
     from cryptotrader.journal.store import JournalStore
 
-    store = JournalStore(None)
+    store = JournalStore(os.environ.get("DATABASE_URL"))
     commits = await store.log(limit=1000)
     total = len(commits)
     wins = sum(1 for c in commits if c.pnl is not None and c.pnl > 0)

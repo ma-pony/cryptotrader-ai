@@ -7,6 +7,7 @@ engine = "paper"  # paper | live
 [models]
 analysis = "openai/deepseek-chat"
 debate = "openai/claude-sonnet-4-6"
+verdict = "openai/claude-sonnet-4-6"
 
 [models.agents]
 tech_agent = "openai/deepseek-chat"
@@ -40,6 +41,7 @@ coingecko_enabled = true
 enabled = false
 pairs = ["BTC/USDT", "ETH/USDT"]
 interval_minutes = 240
+exchange_id = "binance"
 
 [notifications]
 webhook_url = ""

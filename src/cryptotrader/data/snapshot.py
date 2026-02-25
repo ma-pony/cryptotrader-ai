@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import UTC, datetime
 
 from cryptotrader.models import DataSnapshot
 from cryptotrader.data.market import MarketCollector
@@ -14,11 +14,11 @@ from cryptotrader.data.macro import MacroCollector
 
 class SnapshotAggregator:
 
-    def __init__(self) -> None:
+    def __init__(self, providers_config=None) -> None:
         self.market = MarketCollector()
-        self.onchain = OnchainCollector()
+        self.onchain = OnchainCollector(providers_config)
         self.news = NewsCollector()
-        self.macro = MacroCollector()
+        self.macro = MacroCollector(providers_config)
 
     async def collect(
         self,
@@ -36,7 +36,7 @@ class SnapshotAggregator:
         onchain_data = await self.onchain.collect(pair, market_data.funding_rate)
 
         return DataSnapshot(
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(UTC),
             pair=pair,
             market=market_data,
             onchain=onchain_data,

@@ -90,7 +90,12 @@ class JournalStore:
         order = None
         if d.get("order"):
             od = dict(d["order"])
-            od.pop("status", None)
+            if "status" in od:
+                from cryptotrader.models import OrderStatus
+                try:
+                    od["status"] = OrderStatus(od["status"])
+                except (ValueError, KeyError):
+                    od["status"] = OrderStatus.PENDING
             order = Order(**od)
         return DecisionCommit(
             hash=d["hash"], parent_hash=d.get("parent_hash"),
@@ -133,7 +138,12 @@ class JournalStore:
         order = None
         if row.order_data:
             od = dict(row.order_data)
-            od.pop("status", None)
+            if "status" in od:
+                from cryptotrader.models import OrderStatus
+                try:
+                    od["status"] = OrderStatus(od["status"])
+                except (ValueError, KeyError):
+                    od["status"] = OrderStatus.PENDING
             order = Order(**od)
         return DecisionCommit(
             hash=row.hash, parent_hash=row.parent_hash,
@@ -164,16 +174,17 @@ class JournalStore:
                 _, Row = _sa_models()
                 from sqlalchemy import select
                 async with await _get_session(self._db_url) as session:
-                    q = select(Row).order_by(Row.timestamp.desc()).limit(limit)
+                    q = select(Row).order_by(Row.timestamp.desc())
                     if pair:
                         q = q.where(Row.pair == pair)
+                    q = q.limit(limit)
                     result = await session.execute(q)
                     return [self._row_to_dc(r) for r in result.scalars().all()]
             except Exception as e:
                 logger.warning("DB query failed: %s", e)
         rows = self._memory
         if pair:
-            rows = [r for r in rows if r["pair"] == pair]
+            rows = [r for r in rows if r["data"].get("pair") == pair]
         return [self._deserialize(r) for r in rows[-limit:]]
 
     async def show(self, hash: str) -> DecisionCommit | None:

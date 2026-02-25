@@ -27,7 +27,7 @@ class Reconciler:
             if not order.exchange_id:
                 continue
             try:
-                remote = await self._exchange.get_order(order.exchange_id)
+                remote = await self._exchange.get_order(order.exchange_id, order.pair)
             except Exception as e:
                 logger.warning("Failed to fetch order %s: %s", order.exchange_id, e)
                 continue
@@ -41,7 +41,7 @@ class Reconciler:
         """Detect exchange orders not tracked locally."""
         orphans = []
         try:
-            open_orders = await self._exchange._exchange.fetch_open_orders()
+            open_orders = await self._exchange.fetch_open_orders()
             for o in open_orders:
                 if o.get("id") not in local_ids:
                     orphans.append(o)

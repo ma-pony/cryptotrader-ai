@@ -7,11 +7,11 @@ import streamlit as st
 
 
 def _run(coro):
+    loop = asyncio.new_event_loop()
     try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-    return loop.run_until_complete(coro)
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 st.set_page_config(page_title="CryptoTrader AI", layout="wide")
@@ -21,7 +21,8 @@ page = st.sidebar.radio("Navigation", ["Overview", "Decisions", "Risk Status", "
 if page == "Overview":
     st.title("Overview")
     from cryptotrader.portfolio.manager import PortfolioManager
-    pm = PortfolioManager()
+    import os
+    pm = PortfolioManager(os.environ.get("DATABASE_URL"))
     portfolio = _run(pm.get_portfolio())
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Value", f"${portfolio['total_value']:,.2f}")
@@ -35,14 +36,16 @@ if page == "Overview":
 elif page == "Decisions":
     st.title("Recent Decisions")
     from cryptotrader.journal.store import JournalStore
-    store = JournalStore()
+    import os
+    store = JournalStore(os.environ.get("DATABASE_URL"))
     commits = _run(store.log(limit=20))
     if not commits:
         st.info("No decisions recorded yet.")
     for c in commits:
         action = c.verdict.action if c.verdict else "N/A"
         conf = c.verdict.confidence if c.verdict else 0
-        with st.expander(f"{c.hash} | {c.pair} | {action} | conf={conf:.0%} | div={c.divergence:.2%}"):
+        div = c.divergence if c.divergence is not None else 0.0
+        with st.expander(f"{c.hash} | {c.pair} | {action} | conf={conf:.0%} | div={div:.2%}"):
             st.json({"timestamp": str(c.timestamp), "pair": c.pair,
                       "debate_rounds": c.debate_rounds,
                       "risk_gate": c.risk_gate.passed if c.risk_gate else None,

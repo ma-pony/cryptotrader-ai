@@ -30,6 +30,8 @@ class OnchainData:
     liquidations_24h: dict[str, float] = field(default_factory=dict)
     defi_tvl: float = 0.0
     defi_tvl_change_7d: float = 0.0
+    # Track which providers returned real data vs fallback zeros
+    data_quality: dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass

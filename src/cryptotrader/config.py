@@ -15,6 +15,7 @@ class ModelConfig(BaseModel):
     analysis: str = "gpt-4o-mini"
     debate: str = "gpt-4o-mini"
     verdict: str = "gpt-4o"
+    agents: dict[str, str] = {}
 
 
 class DebateConfig(BaseModel):
@@ -68,6 +69,35 @@ class RiskConfig(BaseModel):
     rate_limit: RateLimitConfig = RateLimitConfig()
 
 
+class SchedulerConfig(BaseModel):
+    enabled: bool = False
+    pairs: list[str] = ["BTC/USDT", "ETH/USDT"]
+    interval_minutes: int = 240
+    exchange_id: str = "binance"
+
+
+class ProvidersConfig(BaseModel):
+    coinglass_api_key: str = ""
+    cryptoquant_api_key: str = ""
+    whale_alert_api_key: str = ""
+    fred_api_key: str = ""
+    coinglass_enabled: bool = True
+    cryptoquant_enabled: bool = True
+    whale_alert_enabled: bool = True
+    fred_enabled: bool = True
+    defillama_enabled: bool = True
+    coingecko_enabled: bool = True
+
+
+class NotificationsConfig(BaseModel):
+    webhook_url: str = ""
+    enabled: bool = True
+    events: list[str] = [
+        "trade", "rejection", "circuit_breaker",
+        "reconcile_mismatch", "daily_summary",
+    ]
+
+
 class AppConfig(BaseModel):
     mode: str = "standalone"
     engine: str = "paper"
@@ -75,6 +105,9 @@ class AppConfig(BaseModel):
     debate: DebateConfig = DebateConfig()
     data: DataConfig = DataConfig()
     risk: RiskConfig = RiskConfig()
+    scheduler: SchedulerConfig = SchedulerConfig()
+    providers: ProvidersConfig = ProvidersConfig()
+    notifications: NotificationsConfig = NotificationsConfig()
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -94,6 +127,9 @@ def load_config(config_dir: Path | None = None) -> AppConfig:
         raw["models"] = data.get("models", {})
         raw["debate"] = data.get("debate", {})
         raw["data"] = data.get("data", {})
+        raw["scheduler"] = data.get("scheduler", {})
+        raw["providers"] = data.get("providers", {})
+        raw["notifications"] = data.get("notifications", {})
 
     risk_path = d / "risk.toml"
     if risk_path.exists():

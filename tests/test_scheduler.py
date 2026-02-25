@@ -1,6 +1,5 @@
 """Scheduler start/stop tests."""
 
-import pytest
 from cryptotrader.scheduler import Scheduler
 
 

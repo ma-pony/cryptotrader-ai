@@ -21,7 +21,17 @@ class OrderManager:
         try:
             result = await exchange.place_order(order)
             order.exchange_id = result.get("id")
-            self.transition(order, OrderStatus.FILLED)
+            status = result.get("status", "")
+            if status in ("closed", "filled"):
+                self.transition(order, OrderStatus.FILLED)
+            elif status == "partially_filled":
+                self.transition(order, OrderStatus.PARTIALLY_FILLED)
+            elif status in ("canceled", "cancelled"):
+                self.transition(order, OrderStatus.CANCELLED)
+            elif status == "open":
+                pass  # remain SUBMITTED, not yet filled
+            else:
+                self.transition(order, OrderStatus.FILLED)
         except Exception:
             self.transition(order, OrderStatus.FAILED)
         return order

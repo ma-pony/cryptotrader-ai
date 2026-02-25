@@ -23,6 +23,7 @@ def check_convergence(
     if not divergence_scores:
         return False
     last = divergence_scores[-1]
-    if last == 0.0:
-        return current_divergence == 0.0
+    # Both near zero — already converged
+    if abs(last) < 1e-9:
+        return abs(current_divergence) < 1e-9
     return abs(current_divergence - last) / abs(last) < threshold

@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 from cryptotrader.config import RateLimitConfig
 from cryptotrader.models import CheckResult, TradeVerdict
 from cryptotrader.risk.state import RedisStateManager
+
+logger = logging.getLogger(__name__)
 
 
 class RateLimitCheck:
@@ -16,12 +20,10 @@ class RateLimitCheck:
         self._redis = redis_state
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
-        if not self._redis.available:
-            return CheckResult(passed=True, reason="Redis unavailable, skipping rate limit check")
-        hourly = await self._redis.get("trades:hourly")
-        daily = await self._redis.get("trades:daily")
-        if hourly is not None and int(hourly) >= self._max_hour:
+        # Works via Redis or in-memory fallback
+        hourly, daily = await self._redis.get_trade_counts()
+        if hourly >= self._max_hour:
             return CheckResult(passed=False, reason=f"Hourly trade limit ({self._max_hour}) reached")
-        if daily is not None and int(daily) >= self._max_day:
+        if daily >= self._max_day:
             return CheckResult(passed=False, reason=f"Daily trade limit ({self._max_day}) reached")
         return CheckResult(passed=True)

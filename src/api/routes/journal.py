@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import APIRouter, HTTPException
 
 router = APIRouter(prefix="/journal")
 
 
+def _get_store():
+    from cryptotrader.journal.store import JournalStore
+    return JournalStore(os.environ.get("DATABASE_URL"))
+
+
 @router.get("/log")
 async def journal_log(limit: int = 10):
-    from cryptotrader.journal.store import JournalStore
-
-    store = JournalStore(None)
+    store = _get_store()
     commits = await store.log(limit=limit)
     return [{"hash": c.hash, "pair": c.pair, "timestamp": str(c.timestamp),
              "action": c.verdict.action if c.verdict else None} for c in commits]
@@ -19,9 +24,7 @@ async def journal_log(limit: int = 10):
 
 @router.get("/{hash}")
 async def journal_show(hash: str):
-    from cryptotrader.journal.store import JournalStore
-
-    store = JournalStore(None)
+    store = _get_store()
     commit = await store.show(hash)
     if not commit:
         raise HTTPException(404, "Commit not found")

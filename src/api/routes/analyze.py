@@ -27,8 +27,11 @@ class AnalyzeResponse(BaseModel):
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
+    import os
     from cryptotrader.graph import build_trading_graph
+    from cryptotrader.config import load_config
 
+    config = load_config()
     graph = build_trading_graph()
     result = await graph.ainvoke({
         "messages": [],
@@ -37,11 +40,19 @@ async def analyze(req: AnalyzeRequest):
             "pair": req.pair,
             "engine": req.mode,
             "exchange_id": req.exchange,
-            "timeframe": "1h",
-            "ohlcv_limit": 100,
+            "timeframe": config.data.default_timeframe,
+            "ohlcv_limit": config.data.ohlcv_limit,
+            "analysis_model": config.models.analysis,
+            "debate_model": config.models.debate,
+            "verdict_model": config.models.verdict,
+            "database_url": os.environ.get("DATABASE_URL"),
+            "redis_url": os.environ.get("REDIS_URL"),
+            "convergence_threshold": config.debate.convergence_threshold,
+            "max_single_pct": config.risk.position.max_single_pct,
+            "models": config.models.agents,
         },
         "debate_round": 0,
-        "max_debate_rounds": 3,
+        "max_debate_rounds": config.debate.max_rounds,
         "divergence_scores": [],
     })
 

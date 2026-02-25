@@ -14,9 +14,11 @@ logger = logging.getLogger(__name__)
 @runtime_checkable
 class ExchangeAdapter(Protocol):
     async def place_order(self, order: Order) -> dict[str, Any]: ...
-    async def cancel_order(self, order_id: str) -> dict[str, Any]: ...
-    async def get_order(self, order_id: str) -> dict[str, Any]: ...
+    async def cancel_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]: ...
+    async def get_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]: ...
     async def get_balance(self) -> dict[str, float]: ...
+    async def fetch_open_orders(self) -> list[dict[str, Any]]: ...
+    async def close(self) -> None: ...
 
 
 class LiveExchange:
@@ -24,7 +26,10 @@ class LiveExchange:
         try:
             import ccxt.async_support as ccxt_async
         except ImportError:
-            import ccxt as ccxt_async
+            raise ImportError(
+                "ccxt.async_support is required for LiveExchange. "
+                "Install with: pip install ccxt"
+            )
         exchange_cls = getattr(ccxt_async, exchange_id)
         self._exchange = exchange_cls({
             "apiKey": api_key, "secret": secret,
@@ -82,30 +87,46 @@ class LiveExchange:
         if result.get("status") != "closed":
             order_id = result.get("id")
             if order_id:
-                result = await self._wait_or_cancel(order_id, timeout=30)
+                result = await self._wait_or_cancel(order_id, order.pair, timeout=30)
 
         return result
 
-    async def _wait_or_cancel(self, order_id: str, timeout: int = 30) -> dict:
+    async def _wait_or_cancel(self, order_id: str, pair: str, timeout: int = 30) -> dict:
         for _ in range(timeout // 2):
             await asyncio.sleep(2)
-            info = await self._retry(self._exchange.fetch_order, order_id)
+            info = await self._retry(self._exchange.fetch_order, order_id, pair)
             if info.get("status") in ("closed", "canceled", "cancelled"):
                 return info
         # Timeout — cancel
         logger.warning("Order %s timed out, cancelling", order_id)
         try:
-            await self._retry(self._exchange.cancel_order, order_id)
+            await self._retry(self._exchange.cancel_order, order_id, pair)
         except Exception:
             pass
-        return await self._retry(self._exchange.fetch_order, order_id)
+        return await self._retry(self._exchange.fetch_order, order_id, pair)
 
-    async def cancel_order(self, order_id: str) -> dict[str, Any]:
-        return await self._retry(self._exchange.cancel_order, order_id)
+    async def cancel_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]:
+        return await self._retry(self._exchange.cancel_order, order_id, symbol)
 
-    async def get_order(self, order_id: str) -> dict[str, Any]:
-        return await self._retry(self._exchange.fetch_order, order_id)
+    async def get_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]:
+        return await self._retry(self._exchange.fetch_order, order_id, symbol)
 
     async def get_balance(self) -> dict[str, float]:
         bal = await self._retry(self._exchange.fetch_balance)
         return {k: float(v) for k, v in bal.get("total", {}).items() if float(v) > 0}
+
+    async def fetch_open_orders(self) -> list[dict[str, Any]]:
+        await self._ensure_markets()
+        return await self._retry(self._exchange.fetch_open_orders)
+
+    async def close(self) -> None:
+        try:
+            await self._exchange.close()
+        except Exception as e:
+            logger.warning("Exchange close failed: %s", e)
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        await self.close()

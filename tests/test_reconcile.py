@@ -9,7 +9,7 @@ class MockExchange:
     def __init__(self, orders: dict):
         self._orders = orders
 
-    async def get_order(self, order_id: str) -> dict:
+    async def get_order(self, order_id: str, symbol: str | None = None) -> dict:
         return self._orders.get(order_id, {})
 
 

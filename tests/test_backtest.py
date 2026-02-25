@@ -1,6 +1,5 @@
 """Backtest engine tests with mock data."""
 
-import pytest
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.backtest.engine import BacktestEngine
 

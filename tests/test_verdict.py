@@ -2,6 +2,7 @@
 
 from cryptotrader.debate.convergence import compute_divergence, check_convergence
 from cryptotrader.debate.verdict import make_verdict_weighted as make_verdict
+from cryptotrader.debate.verdict import _normalize_action
 
 
 def test_divergence_unanimous_bullish():
@@ -65,3 +66,25 @@ def test_verdict_position_scale():
     analyses = {"a": {"direction": "bullish", "confidence": 0.8}}
     v = make_verdict(analyses, divergence=0.3)
     assert v.position_scale == 0.7
+
+
+# ── _normalize_action tests ──
+
+
+def test_normalize_action_passthrough():
+    assert _normalize_action("long") == "long"
+    assert _normalize_action("short") == "short"
+    assert _normalize_action("hold") == "hold"
+
+
+def test_normalize_action_aliases():
+    assert _normalize_action("buy") == "long"
+    assert _normalize_action("bullish") == "long"
+    assert _normalize_action("sell") == "short"
+    assert _normalize_action("bearish") == "short"
+
+
+def test_normalize_action_unknown():
+    assert _normalize_action("maybe") == "hold"
+    assert _normalize_action("") == "hold"
+    assert _normalize_action("  LONG  ") == "long"

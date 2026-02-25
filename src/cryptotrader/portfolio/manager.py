@@ -70,12 +70,12 @@ class PortfolioManager:
                     for r in rows.scalars():
                         positions[r.pair] = {"amount": r.amount, "avg_price": r.avg_price}
                     total = sum(p["amount"] * p["avg_price"] for p in positions.values())
-                    return {"account_id": account_id, "positions": positions, "total_value": max(total, 10000)}
+                    return {"account_id": account_id, "positions": positions, "total_value": total}
             except Exception as e:
                 logger.warning("DB portfolio read failed: %s", e)
         mem = self._memory.get(account_id, {})
-        return {"account_id": account_id, "positions": mem, "total_value": max(
-            sum(p["amount"] * p["avg_price"] for p in mem.values()), 10000)}
+        total = sum(p["amount"] * p["avg_price"] for p in mem.values())
+        return {"account_id": account_id, "positions": mem, "total_value": total}
 
     async def update_position(self, account_id: str, pair: str, amount: float, price: float) -> None:
         if self._db_url:
@@ -100,27 +100,61 @@ class PortfolioManager:
         self._memory[account_id][pair] = {"amount": amount, "avg_price": price}
 
     async def get_daily_pnl(self, account_id: str = "default") -> float:
-        snaps = [s for s in self._snapshots if s.get("account_id") == account_id]
+        snaps = await self._load_snapshots(account_id)
         if len(snaps) < 2:
             return 0.0
         return snaps[-1]["total_value"] - snaps[-2]["total_value"]
 
     async def get_drawdown(self, account_id: str = "default") -> float:
-        snaps = [s["total_value"] for s in self._snapshots if s.get("account_id") == account_id]
+        snaps = [s["total_value"] for s in await self._load_snapshots(account_id)]
         if not snaps:
             return 0.0
         peak = max(snaps)
         return (snaps[-1] - peak) / peak if peak > 0 else 0.0
 
     async def get_returns(self, account_id: str = "default", days: int = 60) -> list[float]:
-        snaps = [s["total_value"] for s in self._snapshots if s.get("account_id") == account_id]
+        snaps = [s["total_value"] for s in await self._load_snapshots(account_id)]
         snaps = snaps[-days:]
         if len(snaps) < 2:
             return []
-        return [(snaps[i] - snaps[i - 1]) / snaps[i - 1] for i in range(1, len(snaps))]
+        return [(snaps[i] - snaps[i - 1]) / snaps[i - 1] for i in range(1, len(snaps)) if snaps[i - 1] > 0]
 
     async def snapshot(self, account_id: str = "default", total_value: float = 0.0) -> None:
-        self._snapshots.append({
+        snap = {
             "account_id": account_id, "total_value": total_value,
             "timestamp": datetime.now(UTC),
-        })
+        }
+        self._snapshots.append(snap)
+        if self._db_url:
+            try:
+                _, _, PortfolioSnapshot = _pm_models()
+                import uuid
+                async with await _pm_session(self._db_url) as session:
+                    session.add(PortfolioSnapshot(
+                        id=str(uuid.uuid4()),
+                        account_id=account_id,
+                        total_value=total_value,
+                    ))
+                    await session.commit()
+            except Exception as e:
+                logger.warning("DB snapshot write failed: %s", e)
+
+    async def _load_snapshots(self, account_id: str) -> list[dict]:
+        """Load snapshots from DB if available, else use in-memory."""
+        if self._db_url:
+            try:
+                _, _, PortfolioSnapshot = _pm_models()
+                from sqlalchemy import select
+                async with await _pm_session(self._db_url) as session:
+                    rows = await session.execute(
+                        select(PortfolioSnapshot)
+                        .where(PortfolioSnapshot.account_id == account_id)
+                        .order_by(PortfolioSnapshot.timestamp)
+                    )
+                    return [
+                        {"account_id": r.account_id, "total_value": r.total_value, "timestamp": r.timestamp}
+                        for r in rows.scalars()
+                    ]
+            except Exception as e:
+                logger.warning("DB snapshot read failed: %s", e)
+        return [s for s in self._snapshots if s.get("account_id") == account_id]

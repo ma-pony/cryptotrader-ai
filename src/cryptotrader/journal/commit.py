@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from cryptotrader.models import (
@@ -34,11 +34,12 @@ def build_commit(
     parent_hash: str | None,
 ) -> DecisionCommit:
     """Build a DecisionCommit with a generated hash."""
-    h = generate_hash({"pair": pair, "summary": snapshot_summary, "parent": parent_hash})
+    now = datetime.now(UTC)
+    h = generate_hash({"pair": pair, "summary": snapshot_summary, "parent": parent_hash, "ts": now.isoformat()})
     return DecisionCommit(
         hash=h,
         parent_hash=parent_hash,
-        timestamp=datetime.utcnow(),
+        timestamp=now,
         pair=pair,
         snapshot_summary=snapshot_summary,
         analyses=analyses,

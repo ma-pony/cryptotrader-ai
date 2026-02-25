@@ -12,7 +12,7 @@ def pm():
 @pytest.mark.asyncio
 async def test_get_portfolio_default(pm):
     p = await pm.get_portfolio()
-    assert p["total_value"] >= 10000
+    assert p["total_value"] == 0
     assert p["positions"] == {}
 
 

@@ -1,6 +1,6 @@
 """Smoke tests for LangGraph construction."""
 
-from cryptotrader.graph import build_trading_graph, ArenaState, merge_dicts
+from cryptotrader.graph import build_trading_graph, merge_dicts
 
 
 def test_merge_dicts():

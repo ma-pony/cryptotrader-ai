@@ -27,6 +27,9 @@ async def search_similar(
 
 
 def _within_range(a: float, b: float) -> bool:
-    if b == 0:
-        return abs(a) < 0.001
-    return abs(a - b) / abs(b) <= 0.5
+    # Both near zero — only match if both are truly near zero
+    if abs(b) < 0.001 and abs(a) < 0.001:
+        return True
+    if abs(b) < 0.001 or abs(a) < 0.001:
+        return False  # one is near zero, the other isn't
+    return abs(a - b) / max(abs(a), abs(b)) <= 0.5

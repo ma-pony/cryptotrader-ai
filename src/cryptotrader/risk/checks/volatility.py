@@ -16,11 +16,15 @@ class VolatilityGate:
         prices = portfolio.get("recent_prices", [])
         if len(prices) < 2:
             return CheckResult(passed=True)
-        peak = max(prices)
+        # Use recent window (last 10 candles) for flash crash detection,
+        # not global peak which triggers false positives during normal downtrends
+        lookback = min(10, len(prices))
+        recent = prices[-lookback:]
+        peak = max(recent)
         current = prices[-1]
         drop = (peak - current) / peak if peak > 0 else 0
         if drop > self._threshold:
-            return CheckResult(passed=False, reason=f"Flash crash detected: {drop:.2%} drop")
+            return CheckResult(passed=False, reason=f"Flash crash detected: {drop:.2%} drop in last {lookback} candles")
         return CheckResult(passed=True)
 
 
