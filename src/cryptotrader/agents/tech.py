@@ -14,7 +14,12 @@ ROLE = (
     "Focus on: trend structure (higher highs/lows vs lower), momentum (RSI divergences, MACD crossovers), "
     "volatility regime (Bollinger Band width, ATR), and key support/resistance levels relative to current price.\n"
     "When indicators conflict (e.g. RSI oversold but trend bearish), explicitly state the conflict and weight "
-    "the higher-timeframe signal more heavily."
+    "the higher-timeframe signal more heavily.\n\n"
+    "Domain checklist (verify before signaling):\n"
+    "- Trend alignment: Is SMA20 vs SMA60 confirming or contradicting my call? A bullish call against a bearish SMA cross needs strong justification.\n"
+    "- Divergence scan: Is RSI or MACD diverging from price? A new price high with lower RSI is a warning, not confirmation.\n"
+    "- Volatility regime: Is BB width expanding (breakout) or contracting (squeeze)? A squeeze means the next move will be violent — lower confidence, not higher.\n"
+    "- Support/resistance proximity: Is price within 2% of a key level? If yes, the level matters more than the trend."
 )
 
 

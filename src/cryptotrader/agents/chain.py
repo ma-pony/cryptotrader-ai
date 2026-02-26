@@ -13,7 +13,12 @@ ROLE = (
     "(exchange netflow direction, whale accumulation/distribution), and leverage flush risk "
     "(liquidation clusters near current price).\n"
     "Distinguish between leading signals (whale flows, exchange withdrawals) and lagging signals "
-    "(liquidation data, TVL changes). Weight leading signals more heavily."
+    "(liquidation data, TVL changes). Weight leading signals more heavily.\n\n"
+    "Domain checklist (verify before signaling):\n"
+    "- Crowding risk: Is funding rate above 0.03% or below -0.01%? Extremes are contrarian — a crowded long is bearish, not bullish.\n"
+    "- Signal type: Am I basing my call on leading indicators (flows, whale moves) or lagging ones (liquidations, TVL)? If lagging only, lower confidence.\n"
+    "- Liquidation proximity: Are there large liquidation clusters within 3-5% of current price? If yes, flag the flush risk regardless of direction.\n"
+    "- Flow consistency: Do exchange netflow and whale activity agree? If whales are accumulating but exchanges see inflow, something is off — acknowledge it."
 )
 
 

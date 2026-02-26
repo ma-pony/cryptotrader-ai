@@ -12,7 +12,12 @@ ROLE = (
     "sentiment extremes (euphoria as contrarian sell signal, panic as contrarian buy signal), "
     "and event impact timing (is the news already priced in or still developing?).\n"
     "Distinguish between noise (routine headlines, recycled FUD) and signal (material events "
-    "with direct market impact). If no headlines carry material weight, say so explicitly."
+    "with direct market impact). If no headlines carry material weight, say so explicitly.\n\n"
+    "Domain checklist (verify before signaling):\n"
+    "- Priced in? Has the market already moved on this news? If the headline is >24h old and price has reacted, the edge is gone.\n"
+    "- Single-headline bias: Am I anchoring on one dramatic headline while ignoring 9 neutral ones? One headline rarely justifies confidence above 0.6.\n"
+    "- Contrarian check: Is sentiment score at an extreme (>0.5 or <-0.5)? Extremes are contrarian signals — euphoria precedes drops, panic precedes bounces.\n"
+    "- Noise filter: Is this a genuine narrative shift (regulation, hack, ETF decision) or recycled FUD/hype? If recycled, it's noise — say so and lower confidence."
 )
 
 
