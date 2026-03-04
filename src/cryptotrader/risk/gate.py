@@ -12,6 +12,7 @@ from cryptotrader.risk.checks.loss import DailyLossLimit, DrawdownLimit
 from cryptotrader.risk.checks.position import MaxPositionSize, MaxTotalExposure
 from cryptotrader.risk.checks.rate_limit import RateLimitCheck
 from cryptotrader.risk.checks.volatility import FundingRateGate, VolatilityGate
+from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 from cryptotrader.risk.state import RedisStateManager
 
 
@@ -30,6 +31,7 @@ class RiskGate:
             FundingRateGate(config.volatility),
             RateLimitCheck(config.rate_limit, redis_state),
             ExchangeHealthCheck(config.exchange),
+            TokenSecurityCheck(),
         ]
 
     async def check(self, verdict: TradeVerdict, portfolio: dict) -> GateResult:

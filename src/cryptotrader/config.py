@@ -1,82 +1,98 @@
-"""Load and validate TOML configuration files."""
+"""Unified configuration using Pydantic Settings."""
 
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Any
-
-import tomli
-from pydantic import BaseModel
-
-CONFIG_DIR = Path(__file__).resolve().parent.parent.parent / "config"
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class ModelConfig(BaseModel):
+class ModelConfig(BaseSettings):
     analysis: str = "gpt-4o-mini"
     debate: str = "gpt-4o-mini"
     verdict: str = "gpt-4o"
-    agents: dict[str, str] = {}
+    tech_agent: str = "gpt-4o-mini"
+    chain_agent: str = "gpt-4o-mini"
+    news_agent: str = "gpt-4o-mini"
+    macro_agent: str = "gpt-4o-mini"
+
+    model_config = SettingsConfigDict(env_prefix="MODEL_")
 
 
-class DebateConfig(BaseModel):
+class DebateConfig(BaseSettings):
     max_rounds: int = 3
     convergence_threshold: float = 0.1
     divergence_hold_threshold: float = 0.7
 
+    model_config = SettingsConfigDict(env_prefix="DEBATE_")
 
-class DataConfig(BaseModel):
+
+class DataConfig(BaseSettings):
     default_timeframe: str = "1h"
     ohlcv_limit: int = 100
 
+    model_config = SettingsConfigDict(env_prefix="DATA_")
 
-class PositionConfig(BaseModel):
+
+class PositionConfig(BaseSettings):
     max_single_pct: float = 0.10
     max_total_exposure_pct: float = 0.50
 
+    model_config = SettingsConfigDict(env_prefix="RISK_POSITION_")
 
-class LossConfig(BaseModel):
+
+class LossConfig(BaseSettings):
     max_daily_loss_pct: float = 0.03
     max_drawdown_pct: float = 0.10
     max_cvar_95: float = 0.05
 
+    model_config = SettingsConfigDict(env_prefix="RISK_LOSS_")
 
-class CooldownConfig(BaseModel):
+
+class CooldownConfig(BaseSettings):
     same_pair_minutes: int = 60
     post_loss_minutes: int = 120
 
+    model_config = SettingsConfigDict(env_prefix="RISK_COOLDOWN_")
 
-class VolatilityConfig(BaseModel):
+
+class VolatilityConfig(BaseSettings):
     flash_crash_threshold: float = 0.05
     funding_rate_threshold: float = 0.001
 
+    model_config = SettingsConfigDict(env_prefix="RISK_VOLATILITY_")
 
-class ExchangeCheckConfig(BaseModel):
+
+class ExchangeCheckConfig(BaseSettings):
     max_api_latency_ms: int = 2000
     health_check_interval_s: int = 30
 
+    model_config = SettingsConfigDict(env_prefix="RISK_EXCHANGE_")
 
-class RateLimitConfig(BaseModel):
+
+class RateLimitConfig(BaseSettings):
     max_trades_per_hour: int = 6
     max_trades_per_day: int = 20
 
-
-class RiskConfig(BaseModel):
-    position: PositionConfig = PositionConfig()
-    loss: LossConfig = LossConfig()
-    cooldown: CooldownConfig = CooldownConfig()
-    volatility: VolatilityConfig = VolatilityConfig()
-    exchange: ExchangeCheckConfig = ExchangeCheckConfig()
-    rate_limit: RateLimitConfig = RateLimitConfig()
+    model_config = SettingsConfigDict(env_prefix="RISK_RATE_LIMIT_")
 
 
-class SchedulerConfig(BaseModel):
+class RiskConfig(BaseSettings):
+    position: PositionConfig = Field(default_factory=PositionConfig)
+    loss: LossConfig = Field(default_factory=LossConfig)
+    cooldown: CooldownConfig = Field(default_factory=CooldownConfig)
+    volatility: VolatilityConfig = Field(default_factory=VolatilityConfig)
+    exchange: ExchangeCheckConfig = Field(default_factory=ExchangeCheckConfig)
+    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
+
+
+class SchedulerConfig(BaseSettings):
     enabled: bool = False
     pairs: list[str] = ["BTC/USDT", "ETH/USDT"]
     interval_minutes: int = 240
     exchange_id: str = "binance"
 
+    model_config = SettingsConfigDict(env_prefix="SCHEDULER_")
 
-class ProvidersConfig(BaseModel):
+
+class ProvidersConfig(BaseSettings):
     coinglass_api_key: str = ""
     cryptoquant_api_key: str = ""
     whale_alert_api_key: str = ""
@@ -87,52 +103,48 @@ class ProvidersConfig(BaseModel):
     fred_enabled: bool = True
     defillama_enabled: bool = True
     coingecko_enabled: bool = True
+    okx_api_key: str = ""
+    okx_secret_key: str = ""
+    okx_passphrase: str = ""
+    okx_enabled: bool = False
+    binance_audit_enabled: bool = True
+    binance_sentiment_enabled: bool = True
+    enforce_token_security: bool = True
+    max_acceptable_risk: str = "MEDIUM"
+
+    model_config = SettingsConfigDict(env_prefix="PROVIDER_")
+
+    def has_okx_credentials(self) -> bool:
+        return all([self.okx_api_key, self.okx_secret_key, self.okx_passphrase])
+
+    def model_post_init(self, __context) -> None:
+        if self.has_okx_credentials():
+            self.okx_enabled = True
 
 
-class NotificationsConfig(BaseModel):
+class NotificationsConfig(BaseSettings):
     webhook_url: str = ""
     enabled: bool = True
-    events: list[str] = [
-        "trade", "rejection", "circuit_breaker",
-        "reconcile_mismatch", "daily_summary",
-    ]
+    events: list[str] = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]
+
+    model_config = SettingsConfigDict(env_prefix="NOTIFICATION_")
 
 
-class AppConfig(BaseModel):
+class AppConfig(BaseSettings):
     mode: str = "standalone"
     engine: str = "paper"
-    models: ModelConfig = ModelConfig()
-    debate: DebateConfig = DebateConfig()
-    data: DataConfig = DataConfig()
-    risk: RiskConfig = RiskConfig()
-    scheduler: SchedulerConfig = SchedulerConfig()
-    providers: ProvidersConfig = ProvidersConfig()
-    notifications: NotificationsConfig = NotificationsConfig()
+    models: ModelConfig = Field(default_factory=ModelConfig)
+    debate: DebateConfig = Field(default_factory=DebateConfig)
+    data: DataConfig = Field(default_factory=DataConfig)
+    risk: RiskConfig = Field(default_factory=RiskConfig)
+    scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+
+    model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="ignore")
 
 
-def _load_toml(path: Path) -> dict[str, Any]:
-    with open(path, "rb") as f:
-        return tomli.load(f)
+def load_config() -> AppConfig:
+    """Load configuration from environment variables."""
+    return AppConfig()
 
-
-def load_config(config_dir: Path | None = None) -> AppConfig:
-    d = config_dir or CONFIG_DIR
-    raw: dict[str, Any] = {}
-
-    default_path = d / "default.toml"
-    if default_path.exists():
-        data = _load_toml(default_path)
-        raw["mode"] = data.get("mode", {}).get("mode", "standalone")
-        raw["engine"] = data.get("execution", {}).get("engine", "paper")
-        raw["models"] = data.get("models", {})
-        raw["debate"] = data.get("debate", {})
-        raw["data"] = data.get("data", {})
-        raw["scheduler"] = data.get("scheduler", {})
-        raw["providers"] = data.get("providers", {})
-        raw["notifications"] = data.get("notifications", {})
-
-    risk_path = d / "risk.toml"
-    if risk_path.exists():
-        raw["risk"] = _load_toml(risk_path)
-
-    return AppConfig(**raw)

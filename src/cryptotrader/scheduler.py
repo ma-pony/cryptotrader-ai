@@ -20,14 +20,22 @@ class Scheduler:
 
     async def start(self) -> None:
         self._running = True
+        self._cycle_count = 0
         logger.info("Scheduler started: pairs=%s interval=%dm", self.pairs, self.interval // 60)
         while self._running:
             tasks = [self._run_pair(p) for p in self.pairs]
             await asyncio.gather(*tasks, return_exceptions=True)
+            self._cycle_count += 1
             for p in self.pairs:
                 self._status[p]["next_run"] = (
                     datetime.now(UTC) + timedelta(seconds=self.interval)
                 ).isoformat()
+
+            # Emit daily summary once per day (every 24h / interval cycles)
+            cycles_per_day = max(1, 86400 // self.interval)
+            if self._cycle_count % cycles_per_day == 0:
+                await self._emit_daily_summary()
+
             await asyncio.sleep(self.interval)
 
     def stop(self) -> None:
@@ -38,7 +46,11 @@ class Scheduler:
         return self._status
 
     async def _run_pair(self, pair: str) -> None:
+        from cryptotrader.tracing import set_trace_id
+
+        trace_id = set_trace_id()
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
+        self._status[pair]["trace_id"] = trace_id
         try:
             from cryptotrader.graph import build_trading_graph
             from cryptotrader.config import load_config
@@ -78,3 +90,38 @@ class Scheduler:
         except Exception as e:
             logger.error("Scheduler error for %s: %s", pair, e)
             self._status[pair]["last_error"] = str(e)
+
+    async def _emit_daily_summary(self) -> None:
+        """Send daily summary notification with portfolio and trading stats."""
+        try:
+            from cryptotrader.config import load_config
+            from cryptotrader.notifications import Notifier
+            from cryptotrader.portfolio.manager import PortfolioManager
+
+            config = load_config()
+            notifier = Notifier(
+                webhook_url=config.notifications.webhook_url,
+                events=config.notifications.events,
+            )
+            pm = PortfolioManager(os.environ.get("DATABASE_URL"))
+            portfolio = await pm.get_portfolio()
+            daily_pnl = await pm.get_daily_pnl()
+            drawdown = await pm.get_drawdown()
+
+            summary = {
+                "date": datetime.now(UTC).strftime("%Y-%m-%d"),
+                "portfolio_value": portfolio.get("total_value", 0),
+                "daily_pnl": daily_pnl,
+                "drawdown": drawdown,
+                "pairs": {
+                    p: {
+                        "last_action": s.get("last_action", "none"),
+                        "risk_passed": s.get("risk_passed"),
+                        "last_error": s.get("last_error"),
+                    }
+                    for p, s in self._status.items()
+                },
+            }
+            await notifier.notify("daily_summary", summary)
+        except Exception:
+            logger.warning("Failed to emit daily summary", exc_info=True)

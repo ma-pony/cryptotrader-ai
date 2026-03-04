@@ -326,6 +326,18 @@ async def risk_check(state: ArenaState) -> dict:
         "pair": state["metadata"]["pair"],
     })
     result = await gate.check(verdict, portfolio)
+
+    # Fire circuit_breaker notification if triggered
+    if not result.passed and result.rejected_by == "daily_loss_limit" and "Circuit breaker" in (result.reason or ""):
+        try:
+            notifier = _get_notifier(state)
+            await notifier.notify("circuit_breaker", {
+                "pair": state["metadata"]["pair"],
+                "reason": result.reason,
+            })
+        except Exception:
+            pass
+
     return {"data": {"risk_gate": {
         "passed": result.passed,
         "rejected_by": result.rejected_by,
@@ -412,6 +424,32 @@ async def place_order(state: ArenaState) -> dict:
         "price": filled_price,
         "status": status,
     }
+
+    # Update portfolio after successful trade
+    db_url = state["metadata"].get("database_url")
+    try:
+        from cryptotrader.portfolio.manager import PortfolioManager
+        pm = PortfolioManager(db_url)
+        portfolio = await pm.get_portfolio()
+        existing = portfolio.get("positions", {}).get(pair, {})
+        old_amount = existing.get("amount", 0.0)
+        old_price = existing.get("avg_price", 0.0)
+
+        if order.side == "buy":
+            new_amount = old_amount + filled_amount
+            new_price = ((old_amount * old_price) + (filled_amount * filled_price)) / new_amount if new_amount > 0 else filled_price
+        else:
+            new_amount = old_amount - filled_amount
+            new_price = old_price if new_amount > 0 else 0.0
+
+        await pm.update_position("default", pair, new_amount, new_price)
+        total = sum(
+            p["amount"] * p["avg_price"]
+            for p in (await pm.get_portfolio()).get("positions", {}).values()
+        )
+        await pm.snapshot("default", total)
+    except Exception:
+        logger.warning("Portfolio write-back failed for %s", pair, exc_info=True)
 
     # Fire-and-forget notification
     try:

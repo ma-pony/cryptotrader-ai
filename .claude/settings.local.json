@@ -1,0 +1,30 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tail:*)",
+      "Bash(ruff check:*)",
+      "Bash(python:*)",
+      "Bash(gh api:*)",
+      "Bash(gh api \"repos/x1xhlol/system-prompts-and-models-of-ai-tools/contents/\" 2>&1 | python3 -c \"import sys,json; [print\\(x['name']\\) for x in json.loads\\(sys.stdin.read\\(\\)\\)]\" 2>&1)",
+      "Bash(gh api \"repos/x1xhlol/system-prompts-and-models-of-ai-tools/contents/Manus Agent Tools & Prompt\" 2>&1 | python3 -c \"import sys,json; [print\\(x['name'], '|', x['path']\\) for x in json.loads\\(sys.stdin.read\\(\\)\\)]\" 2>&1)",
+      "Bash(for dir in \"Amp\" \"Cluely\" \"CodeBuddy Prompts\" \"Comet Assistant\" \"Emergent\" \"Google\" \"Junie\" \"Leap.new\" \"Lovable\"; do echo \"=== $dir ===\" && gh api \"repos/x1xhlol/system-prompts-and-models-of-ai-tools/contents/$dir\" --jq '.[].name' 2>/dev/null; done)",
+      "Bash(for dir in \"NotionAi\" \"Open Source prompts\" \"Orchids.app\" \"Perplexity\" \"Poke\" \"Qoder\" \"Replit\" \"Same.dev\" \"Trae\"; do echo \"=== $dir ===\" && gh api \"repos/x1xhlol/system-prompts-and-models-of-ai-tools/contents/$dir\" --jq '.[].name' 2>/dev/null; done)",
+      "Bash(for dir in \"Traycer AI\" \"VSCode Agent\" \"Warp.dev\" \"Xcode\" \"Z.ai Code\" \"dia\" \"v0 Prompts and Tools\"; do echo \"=== $dir ===\" && gh api \"repos/x1xhlol/system-prompts-and-models-of-ai-tools/contents/$dir\" --jq '.[].name' 2>/dev/null; done)",
+      "Bash(head:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(uv pip:*)",
+      "Bash(echo:*)",
+      "Bash(gh repo:*)",
+      "mcp__fetch__fetch",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(ls:*)",
+      "Bash(pytest:*)"
+    ]
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "shadcn"
+  ]
+}

@@ -26,12 +26,14 @@ def run(
 async def _run(pairs: list[str], mode: str, exchange_id: str):
     from cryptotrader.graph import build_trading_graph, ArenaState
     from cryptotrader.config import load_config
+    from cryptotrader.tracing import set_trace_id
 
     config = load_config()
     graph = build_trading_graph()
 
     for pair in pairs:
-        console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green]")
+        trace_id = set_trace_id()
+        console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]")
 
         initial: ArenaState = {
             "messages": [], "data": {}, "metadata": {
@@ -178,7 +180,37 @@ async def _scheduler_start():
 @scheduler_app.command("status")
 def scheduler_status():
     """Show scheduler status."""
-    console.print("[dim]Scheduler not running (use 'arena scheduler start')[/dim]")
+    asyncio.run(_scheduler_status())
+
+
+async def _scheduler_status():
+    from cryptotrader.portfolio.manager import PortfolioManager
+    import os
+
+    db_url = os.environ.get("DATABASE_URL")
+    pm = PortfolioManager(db_url)
+    try:
+        portfolio = await pm.get_portfolio()
+        daily_pnl = await pm.get_daily_pnl()
+        drawdown = await pm.get_drawdown()
+    except Exception:
+        portfolio = {"total_value": 0, "positions": {}}
+        daily_pnl = 0.0
+        drawdown = 0.0
+
+    table = Table(title="Portfolio Status")
+    table.add_column("Metric", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Total Value", f"${portfolio.get('total_value', 0):,.2f}")
+    table.add_row("Daily PnL", f"${daily_pnl:,.2f}")
+    table.add_row("Drawdown", f"{drawdown:.2%}")
+    positions = portfolio.get("positions", {})
+    if positions:
+        for pair, pos in positions.items():
+            table.add_row(f"  {pair}", f"{pos['amount']:.6f} @ ${pos['avg_price']:,.2f}")
+    else:
+        table.add_row("Positions", "(none)")
+    console.print(table)
 
 
 # ── Dashboard command ──
