@@ -49,7 +49,12 @@ async def analyze(req: AnalyzeRequest):
             "redis_url": os.environ.get("REDIS_URL"),
             "convergence_threshold": config.debate.convergence_threshold,
             "max_single_pct": config.risk.position.max_single_pct,
-            "models": config.models.agents,
+            "models": {
+                "tech_agent": config.models.tech_agent,
+                "chain_agent": config.models.chain_agent,
+                "news_agent": config.models.news_agent,
+                "macro_agent": config.models.macro_agent,
+            },
         },
         "debate_round": 0,
         "max_debate_rounds": config.debate.max_rounds,

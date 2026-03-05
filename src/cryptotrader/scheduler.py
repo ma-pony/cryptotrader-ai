@@ -67,7 +67,12 @@ class Scheduler:
                     "analysis_model": config.models.analysis,
                     "debate_model": config.models.debate,
                     "verdict_model": config.models.verdict,
-                    "models": config.models.agents,
+                    "models": {
+                        "tech_agent": config.models.tech_agent,
+                        "chain_agent": config.models.chain_agent,
+                        "news_agent": config.models.news_agent,
+                        "macro_agent": config.models.macro_agent,
+                    },
                     "database_url": os.environ.get("DATABASE_URL"),
                     "redis_url": os.environ.get("REDIS_URL"),
                     "convergence_threshold": config.debate.convergence_threshold,

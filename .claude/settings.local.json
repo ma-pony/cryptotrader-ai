@@ -20,7 +20,10 @@
       "mcp__fetch__fetch",
       "mcp__sequential-thinking__sequentialthinking",
       "Bash(ls:*)",
-      "Bash(pytest:*)"
+      "Bash(pytest:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(.venv/bin/arena run:*)",
+      "Bash(.venv/bin/pytest:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

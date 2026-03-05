@@ -183,7 +183,12 @@ class BacktestEngine:
             "messages": [], "data": {"snapshot": snapshot},
             "metadata": {
                 "pair": self.pair, "engine": "paper",
-                "models": config.models.agents,
+                "models": {
+                    "tech_agent": config.models.tech_agent,
+                    "chain_agent": config.models.chain_agent,
+                    "news_agent": config.models.news_agent,
+                    "macro_agent": config.models.macro_agent,
+                },
                 "analysis_model": config.models.analysis,
                 "debate_model": config.models.debate,
                 "verdict_model": config.models.verdict,
