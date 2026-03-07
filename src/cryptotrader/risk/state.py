@@ -67,6 +67,16 @@ class RedisStateManager:
     def available(self) -> bool:
         return self._redis is not None
 
+    async def ping(self) -> bool:
+        """Check if Redis is currently reachable."""
+        if self._redis is None:
+            return False
+        try:
+            await self._redis.ping()
+            return True
+        except Exception:
+            return False
+
     async def get(self, key: str) -> str | None:
         if self._redis is not None:
             try:

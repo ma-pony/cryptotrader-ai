@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from typing import Annotated
 
 import typer
 from rich.console import Console
@@ -15,17 +15,19 @@ console = Console()
 
 @app.command()
 def run(
-    pair: list[str] = typer.Option(["BTC/USDT"], "--pair", "-p", help="One or more pairs"),
-    mode: str = typer.Option("paper", "--mode", "-m", help="paper or live"),
-    exchange: str = typer.Option("binance", "--exchange", "-e"),
+    pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
+    mode: Annotated[str, typer.Option("--mode", "-m", help="paper or live")] = "paper",
+    exchange: Annotated[str, typer.Option("--exchange", "-e")] = "binance",
 ):
     """Run one analysis cycle for each pair sequentially."""
+    if pair is None:
+        pair = ["BTC/USDT"]
     asyncio.run(_run(pair, mode, exchange))
 
 
 async def _run(pairs: list[str], mode: str, exchange_id: str):
-    from cryptotrader.graph import build_trading_graph, ArenaState
     from cryptotrader.config import load_config
+    from cryptotrader.graph import ArenaState, build_trading_graph
     from cryptotrader.tracing import set_trace_id
 
     config = load_config()
@@ -33,11 +35,17 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
 
     for pair in pairs:
         trace_id = set_trace_id()
-        console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]")
+        console.print(
+            f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
+        )
 
         initial: ArenaState = {
-            "messages": [], "data": {}, "metadata": {
-                "pair": pair, "engine": mode, "exchange_id": exchange_id,
+            "messages": [],
+            "data": {},
+            "metadata": {
+                "pair": pair,
+                "engine": mode,
+                "exchange_id": exchange_id,
                 "timeframe": config.data.default_timeframe,
                 "ohlcv_limit": config.data.ohlcv_limit,
                 "analysis_model": config.models.analysis,
@@ -49,8 +57,8 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
                     "news_agent": config.models.news_agent,
                     "macro_agent": config.models.macro_agent,
                 },
-                "database_url": os.environ.get("DATABASE_URL"),
-                "redis_url": os.environ.get("REDIS_URL"),
+                "database_url": config.infrastructure.database_url,
+                "redis_url": config.infrastructure.redis_url,
                 "convergence_threshold": config.debate.convergence_threshold,
                 "max_single_pct": config.risk.position.max_single_pct,
             },
@@ -75,7 +83,9 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
         table.add_row("Position Scale", f"{verdict.get('position_scale', 0):.2%}")
         table.add_row("Risk Gate", "PASS" if risk.get("passed") else f"REJECT: {risk.get('reason', '')}")
         if order:
-            table.add_row("Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}")
+            table.add_row(
+                "Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}"
+            )
         console.print(table)
 
 
@@ -92,8 +102,12 @@ def journal_log(limit: int = typer.Option(10, "--limit", "-n")):
 
 
 async def _journal_log(limit: int):
+    from cryptotrader.config import load_config
+
+    config = load_config()
     from cryptotrader.journal.store import JournalStore
-    store = JournalStore(os.environ.get("DATABASE_URL"))
+
+    store = JournalStore(config.infrastructure.database_url)
     commits = await store.log(limit=limit)
     if not commits:
         console.print("[dim]No decisions recorded yet.[/dim]")
@@ -116,23 +130,30 @@ def journal_show(hash: str = typer.Argument(...)):
 
 
 async def _journal_show(hash: str):
+    from cryptotrader.config import load_config
     from cryptotrader.journal.store import JournalStore
-    store = JournalStore(os.environ.get("DATABASE_URL"))
+
+    config = load_config()
+    store = JournalStore(config.infrastructure.database_url)
     commit = await store.show(hash)
     if not commit:
         console.print(f"[red]Commit {hash} not found[/red]")
         return
-    console.print_json(data={
-        "hash": commit.hash, "pair": commit.pair,
-        "timestamp": str(commit.timestamp),
-        "debate_rounds": commit.debate_rounds,
-        "divergence": commit.divergence,
-        "verdict": commit.verdict.action if commit.verdict else None,
-        "risk_gate": commit.risk_gate.passed if commit.risk_gate else None,
-    })
+    console.print_json(
+        data={
+            "hash": commit.hash,
+            "pair": commit.pair,
+            "timestamp": str(commit.timestamp),
+            "debate_rounds": commit.debate_rounds,
+            "divergence": commit.divergence,
+            "verdict": commit.verdict.action if commit.verdict else None,
+            "risk_gate": commit.risk_gate.passed if commit.risk_gate else None,
+        }
+    )
 
 
 # ── Backtest command ──
+
 
 @app.command()
 def backtest(
@@ -141,15 +162,18 @@ def backtest(
     end: str = typer.Option(..., "--end", "-e"),
     interval: str = typer.Option("4h", "--interval", "-i"),
     capital: float = typer.Option(10000, "--capital"),
+    use_llm: bool = typer.Option(True, "--use-llm/--no-llm", help="Use AI agents (default) or SMA crossover"),
 ):
     """Run backtest on historical data."""
-    asyncio.run(_backtest(pair, start, end, interval, capital))
+    asyncio.run(_backtest(pair, start, end, interval, capital, use_llm))
 
 
-async def _backtest(pair: str, start: str, end: str, interval: str, capital: float):
+async def _backtest(pair: str, start: str, end: str, interval: str, capital: float, use_llm: bool):
     from cryptotrader.backtest.engine import BacktestEngine
-    console.print(f"[bold]Backtest[/bold] {pair} from {start} to {end} ({interval})")
-    engine = BacktestEngine(pair, start, end, interval, capital)
+
+    mode = "AI agents" if use_llm else "SMA crossover"
+    console.print(f"[bold]Backtest[/bold] {pair} from {start} to {end} ({interval}) [{mode}]")
+    engine = BacktestEngine(pair, start, end, interval, capital, use_llm=use_llm)
     result = await engine.run()
     table = Table(title="Backtest Results")
     table.add_column("Metric", style="cyan")
@@ -172,8 +196,9 @@ def scheduler_start():
 
 
 async def _scheduler_start():
-    from cryptotrader.scheduler import Scheduler
     from cryptotrader.config import load_config
+    from cryptotrader.scheduler import Scheduler
+
     config = load_config()
     pairs = config.scheduler.pairs
     interval = config.scheduler.interval_minutes
@@ -189,10 +214,11 @@ def scheduler_status():
 
 
 async def _scheduler_status():
+    from cryptotrader.config import load_config
     from cryptotrader.portfolio.manager import PortfolioManager
-    import os
 
-    db_url = os.environ.get("DATABASE_URL")
+    config = load_config()
+    db_url = config.infrastructure.database_url
     pm = PortfolioManager(db_url)
     try:
         portfolio = await pm.get_portfolio()
@@ -220,12 +246,14 @@ async def _scheduler_status():
 
 # ── Dashboard command ──
 
+
 @app.command()
 def dashboard():
     """Launch Streamlit dashboard."""
     import subprocess
     import sys
     from pathlib import Path
+
     app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
     subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)])
 
@@ -234,6 +262,7 @@ def dashboard():
 def serve(port: int = typer.Option(8003, "--port")):
     """Start FastAPI server."""
     import uvicorn
+
     uvicorn.run("api.main:app", host="0.0.0.0", port=port, reload=True)
 
 

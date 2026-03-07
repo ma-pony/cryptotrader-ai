@@ -22,8 +22,8 @@ from cryptotrader.models import (
     TradeVerdict,
 )
 
-
 # ── Fixtures ──
+
 
 @pytest.fixture
 def sample_ohlcv():
@@ -66,20 +66,25 @@ def sample_snapshot(sample_ohlcv):
             key_events=["ETF approval expected"],
         ),
         macro=MacroData(
-            fed_rate=5.25, dxy=104.5, btc_dominance=56.0, fear_greed_index=72,
+            fed_rate=5.25,
+            dxy=104.5,
+            btc_dominance=56.0,
+            fear_greed_index=72,
         ),
     )
 
 
 def _mock_llm_response(direction: str, confidence: float, reasoning: str = "test"):
     """Create a mock litellm response."""
-    content = json.dumps({
-        "direction": direction,
-        "confidence": confidence,
-        "reasoning": reasoning,
-        "key_factors": ["factor1"],
-        "risk_flags": [],
-    })
+    content = json.dumps(
+        {
+            "direction": direction,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "key_factors": ["factor1"],
+            "risk_flags": [],
+        }
+    )
     choice = MagicMock()
     choice.message.content = content
     resp = MagicMock()
@@ -88,6 +93,7 @@ def _mock_llm_response(direction: str, confidence: float, reasoning: str = "test
 
 
 # ── Agent Tests ──
+
 
 class TestAgentParsing:
     """Test agent prompt building and response parsing."""
@@ -139,8 +145,8 @@ class TestAgentParsing:
 
 # ── Verdict Tests ──
 
-class TestVerdict:
 
+class TestVerdict:
     def test_rules_verdict_clear_bullish(self):
         from cryptotrader.debate.verdict import make_verdict_rules
 
@@ -154,8 +160,8 @@ class TestVerdict:
         assert v is not None
         assert v.action == "long"
 
-    def test_rules_verdict_ambiguous_returns_none(self):
-        """When score is near zero, rules should return None for LLM tiebreak."""
+    def test_rules_verdict_ambiguous_returns_hold(self):
+        """When score is near zero, rules verdict should return hold."""
         from cryptotrader.debate.verdict import make_verdict_rules
 
         analyses = {
@@ -165,11 +171,10 @@ class TestVerdict:
             "macro": {"direction": "neutral", "confidence": 0.5},
         }
         v = make_verdict_rules(analyses)
-        assert v is None  # ambiguous, should defer to LLM
+        assert v.action == "hold"  # ambiguous — main path uses AI verdict instead
 
 
 class TestChainAgentPrompt:
-
     def test_chain_prompt_includes_onchain_data(self, sample_snapshot):
         """ChainAgent prompt should include exchange netflow, whale transfers, DeFi TVL."""
         from cryptotrader.agents.chain import ChainAgent
@@ -183,7 +188,6 @@ class TestChainAgentPrompt:
 
 
 class TestMalformedLLMOutput:
-
     @pytest.mark.asyncio
     async def test_agent_parse_malformed_json(self, sample_snapshot):
         """Agent should gracefully handle non-JSON LLM output."""
@@ -202,6 +206,7 @@ class TestMalformedLLMOutput:
 
 
 # ── Risk Gate Integration Tests ──
+
 
 class _FakeRedis:
     """In-memory fake Redis for testing risk checks without a real Redis server."""
@@ -268,8 +273,8 @@ class TestRiskGateIntegration:
 
     @pytest.mark.asyncio
     async def test_all_checks_pass(self, healthy_portfolio):
-        from cryptotrader.risk.gate import RiskGate
         from cryptotrader.config import RiskConfig
+        from cryptotrader.risk.gate import RiskGate
 
         gate = RiskGate(RiskConfig(), _FakeRedis())
         verdict = TradeVerdict(action="long", confidence=0.7, position_scale=0.5)
@@ -278,25 +283,37 @@ class TestRiskGateIntegration:
 
     @pytest.mark.asyncio
     async def test_circuit_breaker_persists_across_calls(self):
-        from cryptotrader.risk.gate import RiskGate
         from cryptotrader.config import RiskConfig
+        from cryptotrader.risk.gate import RiskGate
 
         fake_redis = _FakeRedis()
         gate = RiskGate(RiskConfig(), fake_redis)
         verdict = TradeVerdict(action="long", confidence=0.7, position_scale=0.5)
 
         bad = {
-            "total_value": 10000, "positions": {}, "daily_pnl": -500,
-            "drawdown": 0.0, "returns_60d": [], "recent_prices": [100],
-            "funding_rate": 0.0, "api_latency_ms": 100, "pair": "BTC/USDT",
+            "total_value": 10000,
+            "positions": {},
+            "daily_pnl": -500,
+            "drawdown": 0.0,
+            "returns_60d": [],
+            "recent_prices": [100],
+            "funding_rate": 0.0,
+            "api_latency_ms": 100,
+            "pair": "BTC/USDT",
         }
         r1 = await gate.check(verdict, bad)
         assert not r1.passed
 
         ok = {
-            "total_value": 10000, "positions": {}, "daily_pnl": 0,
-            "drawdown": 0.0, "returns_60d": [], "recent_prices": [100],
-            "funding_rate": 0.0, "api_latency_ms": 100, "pair": "ETH/USDT",
+            "total_value": 10000,
+            "positions": {},
+            "daily_pnl": 0,
+            "drawdown": 0.0,
+            "returns_60d": [],
+            "recent_prices": [100],
+            "funding_rate": 0.0,
+            "api_latency_ms": 100,
+            "pair": "ETH/USDT",
         }
         r2 = await gate.check(verdict, ok)
         assert not r2.passed
@@ -305,8 +322,8 @@ class TestRiskGateIntegration:
 
 # ── Execution Tests ──
 
-class TestPaperExchange:
 
+class TestPaperExchange:
     @pytest.mark.asyncio
     async def test_buy_order_fills(self):
         from cryptotrader.execution.simulator import PaperExchange
@@ -364,8 +381,8 @@ class TestPaperExchange:
 
 # ── Backtest Engine Tests ──
 
-class TestBacktestEngine:
 
+class TestBacktestEngine:
     def test_apply_costs_buy(self):
         from cryptotrader.backtest.engine import BacktestEngine
 
@@ -419,8 +436,8 @@ class TestBacktestEngine:
 
 # ── Config Tests ──
 
-class TestConfigLoading:
 
+class TestConfigLoading:
     def test_default_config_loads(self):
         from cryptotrader.config import AppConfig
 
@@ -450,18 +467,26 @@ class TestConfigLoading:
 
 # ── Journal Tests ──
 
-class TestJournalInMemory:
 
+class TestJournalInMemory:
     @pytest.mark.asyncio
     async def test_commit_and_retrieve(self):
-        from cryptotrader.journal.store import JournalStore
         from cryptotrader.journal.commit import build_commit
+        from cryptotrader.journal.store import JournalStore
 
         store = JournalStore(None)  # in-memory
         commit = build_commit(
             pair="BTC/USDT",
             snapshot_summary={"price": 50000, "volatility": 0.02},
-            analyses={"tech": {"agent_id": "tech", "pair": "BTC/USDT", "direction": "bullish", "confidence": 0.8, "reasoning": "test"}},
+            analyses={
+                "tech": {
+                    "agent_id": "tech",
+                    "pair": "BTC/USDT",
+                    "direction": "bullish",
+                    "confidence": 0.8,
+                    "reasoning": "test",
+                }
+            },
             debate_rounds=1,
             divergence=0.15,
             verdict=None,
@@ -476,8 +501,8 @@ class TestJournalInMemory:
 
     @pytest.mark.asyncio
     async def test_show_by_hash(self):
-        from cryptotrader.journal.store import JournalStore
         from cryptotrader.journal.commit import build_commit
+        from cryptotrader.journal.store import JournalStore
 
         store = JournalStore(None)
         commit = build_commit(
@@ -498,8 +523,8 @@ class TestJournalInMemory:
 
     @pytest.mark.asyncio
     async def test_update_pnl(self):
-        from cryptotrader.journal.store import JournalStore
         from cryptotrader.journal.commit import build_commit
+        from cryptotrader.journal.store import JournalStore
 
         store = JournalStore(None)
         commit = build_commit(
@@ -522,12 +547,12 @@ class TestJournalInMemory:
 
 # ── Verbal Learning Tests ──
 
-class TestVerbalLearning:
 
+class TestVerbalLearning:
     @pytest.mark.asyncio
     async def test_no_history_returns_empty(self):
-        from cryptotrader.learning.verbal import get_experience
         from cryptotrader.journal.store import JournalStore
+        from cryptotrader.learning.verbal import get_experience
 
         store = JournalStore(None)
         result = await get_experience(store, {"funding_rate": 0.0001, "volatility": 0.02})
@@ -535,9 +560,9 @@ class TestVerbalLearning:
 
     @pytest.mark.asyncio
     async def test_with_history_returns_text(self):
-        from cryptotrader.learning.verbal import get_experience
-        from cryptotrader.journal.store import JournalStore
         from cryptotrader.journal.commit import build_commit
+        from cryptotrader.journal.store import JournalStore
+        from cryptotrader.learning.verbal import get_experience
         from cryptotrader.models import TradeVerdict
 
         store = JournalStore(None)
@@ -562,6 +587,7 @@ class TestVerbalLearning:
 
 # ── Full Pipeline Integration Test ──
 
+
 class TestFullPipeline:
     """End-to-end: snapshot → agents → verdict → risk gate → execution.
 
@@ -574,12 +600,14 @@ class TestFullPipeline:
 
     @pytest.fixture
     def verdict_llm_response(self):
-        content = json.dumps({
-            "action": "long",
-            "confidence": 0.7,
-            "position_scale": 0.5,
-            "reasoning": "Consensus bullish across agents",
-        })
+        content = json.dumps(
+            {
+                "action": "long",
+                "confidence": 0.7,
+                "position_scale": 0.5,
+                "reasoning": "Consensus bullish across agents",
+            }
+        )
         choice = MagicMock()
         choice.message.content = content
         resp = MagicMock()
@@ -587,17 +615,16 @@ class TestFullPipeline:
         return resp
 
     @pytest.mark.asyncio
-    async def test_full_pipeline_long_signal(
-        self, sample_snapshot, bullish_llm_response, verdict_llm_response
-    ):
+    async def test_full_pipeline_long_signal(self, sample_snapshot, bullish_llm_response, verdict_llm_response):
         """Full graph: 4 agents all bullish → verdict long → risk passes → order placed."""
-        from cryptotrader.graph import build_lite_graph, _risk_gate_cache
+        from cryptotrader.graph import _risk_gate_cache, build_lite_graph
 
         # Clear cached risk gate to avoid cross-test contamination
         _risk_gate_cache.clear()
 
         # Mock all LLM calls: agents get bullish, verdict gets long
         call_count = {"n": 0}
+
         async def mock_acompletion(*args, **kwargs):
             call_count["n"] += 1
             # First 4 calls are agents, 5th would be verdict

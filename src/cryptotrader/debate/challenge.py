@@ -1,4 +1,9 @@
-"""Cross-challenge prompt builder for multi-agent debate."""
+"""Cross-challenge prompt builder for multi-agent debate.
+
+Phase 4C: Show full agent analyses, demand new_findings, anti-convergence stance.
+"""
+
+import json
 
 
 def build_challenge_prompt(
@@ -7,25 +12,32 @@ def build_challenge_prompt(
     own_analysis: dict,
     other_analyses: dict[str, dict],
 ) -> str:
+    # Show full analyses — not just direction+confidence summaries
     others = "\n\n".join(
-        f"[{name}] direction={a.get('direction')}, confidence={a.get('confidence')}\n"
-        f"reasoning: {a.get('reasoning')}"
-        for name, a in other_analyses.items()
+        f"── {name.upper()} ──\n{json.dumps(a, indent=2, default=str)}" for name, a in other_analyses.items()
     )
+    own = json.dumps(own_analysis, indent=2, default=str)
+
     return (
         f"You are a {agent_role} analyst reviewing {pair}.\n\n"
-        f"Your previous analysis:\n"
-        f"direction={own_analysis.get('direction')}, confidence={own_analysis.get('confidence')}\n"
-        f"reasoning: {own_analysis.get('reasoning')}\n\n"
-        f"Other agents' analyses:\n{others}\n\n"
-        "Evaluate each agent's argument on these criteria:\n"
-        "1. Data support: Does their reasoning cite specific data points, or is it vague?\n"
-        "2. Logic: Are there leaps from data to conclusion, or missing steps?\n"
-        "3. Blind spots: What counter-evidence did they ignore?\n\n"
-        "Challenge the weakest arguments with specific counter-evidence.\n"
-        "Then revise YOUR OWN position honestly:\n"
-        "- If others raised valid points you missed, adjust your direction or confidence.\n"
-        "- If your original data still holds, maintain your stance — do not converge just for agreement.\n"
-        "- Confidence should reflect the strength of evidence, not social pressure.\n\n"
-        "Update your direction, confidence, reasoning, key_factors, and risk_flags."
+        f"YOUR PREVIOUS ANALYSIS:\n{own}\n\n"
+        f"OTHER AGENTS' ANALYSES:\n{others}\n\n"
+        "CHALLENGE PROTOCOL:\n"
+        "1. Attack weak arguments: For each other agent, identify the weakest claim. "
+        "Does their reasoning cite specific data, or is it vague? Are there logical leaps?\n"
+        "2. Defend your position: What counter-evidence did others raise against your view? "
+        "Is it strong enough to change your mind, or does your data still hold?\n"
+        "3. Surface new findings: What did you notice in OTHER agents' data that they missed "
+        "or misinterpreted? Cross-domain insights (e.g., on-chain data contradicting news sentiment) "
+        "are especially valuable.\n\n"
+        "ANTI-CONVERGENCE RULES:\n"
+        "- Do NOT move toward consensus unless you see genuinely new evidence that changes your view.\n"
+        "- 'The other agents also think X' is NOT evidence. Only data is evidence.\n"
+        "- If your original analysis was correct, MAINTAIN your stance — even if you're the only one.\n"
+        "- Lowering confidence just because others disagree is intellectual cowardice. Don't do it.\n"
+        "- If you DO change your view, explain EXACTLY which data point changed your mind.\n\n"
+        "Output JSON with these fields:\n"
+        '{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, '
+        '"reasoning": "2-3 sentences", "key_factors": [...], "risk_flags": [...], '
+        '"new_findings": "cross-domain insight you discovered from reviewing other agents\' data"}'
     )

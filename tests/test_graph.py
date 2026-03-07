@@ -22,9 +22,17 @@ def test_graph_has_nodes():
     graph = build_trading_graph()
     node_names = set(graph.get_graph().nodes.keys())
     expected = {
-        "collect_data", "inject_experience",
-        "tech_agent", "chain_agent", "news_agent", "macro_agent",
-        "cross_challenge", "check_convergence",
-        "verdict", "risk_gate", "execute", "record_rejection",
+        "collect_data",
+        "inject_experience",
+        "tech_agent",
+        "chain_agent",
+        "news_agent",
+        "macro_agent",
+        "debate_round_1",
+        "debate_round_2",
+        "verdict",
+        "risk_gate",
+        "execute",
+        "record_rejection",
     }
     assert expected.issubset(node_names)

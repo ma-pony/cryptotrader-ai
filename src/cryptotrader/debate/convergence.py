@@ -6,10 +6,7 @@ _DIR_MAP = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
 
 
 def compute_divergence(analyses: dict[str, dict]) -> float:
-    values = [
-        a["confidence"] * _DIR_MAP.get(a["direction"], 0.0)
-        for a in analyses.values()
-    ]
+    values = [a["confidence"] * _DIR_MAP.get(a["direction"], 0.0) for a in analyses.values()]
     if len(values) < 2:
         return 0.0
     return statistics.pstdev(values)

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Literal
 
 import pandas as pd
 
-
 # ── Data Layer Models (Section 5.2) ──
+
 
 @dataclass
 class MarketData:
@@ -62,6 +62,7 @@ class DataSnapshot:
 
 # ── Intelligence Layer Models (Section 4.3, 4.5) ──
 
+
 @dataclass
 class AgentAnalysis:
     agent_id: str
@@ -82,9 +83,12 @@ class TradeVerdict:
     position_scale: float = 0.0
     divergence: float = 0.0
     reasoning: str = ""
+    thesis: str = ""
+    invalidation: str = ""
 
 
 # ── Risk Layer Models (Section 6) ──
+
 
 @dataclass
 class CheckResult:
@@ -101,7 +105,8 @@ class GateResult:
 
 # ── Execution Layer Models (Section 7.1) ──
 
-class OrderStatus(str, Enum):
+
+class OrderStatus(StrEnum):
     PENDING = "pending"
     SUBMITTED = "submitted"
     FILLED = "filled"
@@ -112,7 +117,12 @@ class OrderStatus(str, Enum):
 
 VALID_TRANSITIONS: dict[OrderStatus, set[OrderStatus]] = {
     OrderStatus.PENDING: {OrderStatus.SUBMITTED, OrderStatus.CANCELLED, OrderStatus.FAILED},
-    OrderStatus.SUBMITTED: {OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED, OrderStatus.CANCELLED, OrderStatus.FAILED},
+    OrderStatus.SUBMITTED: {
+        OrderStatus.FILLED,
+        OrderStatus.PARTIALLY_FILLED,
+        OrderStatus.CANCELLED,
+        OrderStatus.FAILED,
+    },
     OrderStatus.PARTIALLY_FILLED: {OrderStatus.FILLED, OrderStatus.CANCELLED},
 }
 
@@ -130,6 +140,7 @@ class Order:
 
 
 # ── Decision Journal Models (Section 8.2) ──
+
 
 @dataclass
 class DecisionCommit:

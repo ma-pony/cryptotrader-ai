@@ -13,7 +13,7 @@ class ModelConfig(BaseSettings):
     news_agent: str = "gpt-4o-mini"
     macro_agent: str = "gpt-4o-mini"
 
-    model_config = SettingsConfigDict(env_prefix="MODEL_")
+    model_config = SettingsConfigDict(env_prefix="MODEL_", env_file=".env", extra="ignore")
 
 
 class DebateConfig(BaseSettings):
@@ -21,21 +21,21 @@ class DebateConfig(BaseSettings):
     convergence_threshold: float = 0.1
     divergence_hold_threshold: float = 0.7
 
-    model_config = SettingsConfigDict(env_prefix="DEBATE_")
+    model_config = SettingsConfigDict(env_prefix="DEBATE_", env_file=".env", extra="ignore")
 
 
 class DataConfig(BaseSettings):
     default_timeframe: str = "1h"
     ohlcv_limit: int = 100
 
-    model_config = SettingsConfigDict(env_prefix="DATA_")
+    model_config = SettingsConfigDict(env_prefix="DATA_", env_file=".env", extra="ignore")
 
 
 class PositionConfig(BaseSettings):
     max_single_pct: float = 0.10
     max_total_exposure_pct: float = 0.50
 
-    model_config = SettingsConfigDict(env_prefix="RISK_POSITION_")
+    model_config = SettingsConfigDict(env_prefix="RISK_POSITION_", env_file=".env", extra="ignore")
 
 
 class LossConfig(BaseSettings):
@@ -43,35 +43,35 @@ class LossConfig(BaseSettings):
     max_drawdown_pct: float = 0.10
     max_cvar_95: float = 0.05
 
-    model_config = SettingsConfigDict(env_prefix="RISK_LOSS_")
+    model_config = SettingsConfigDict(env_prefix="RISK_LOSS_", env_file=".env", extra="ignore")
 
 
 class CooldownConfig(BaseSettings):
     same_pair_minutes: int = 60
     post_loss_minutes: int = 120
 
-    model_config = SettingsConfigDict(env_prefix="RISK_COOLDOWN_")
+    model_config = SettingsConfigDict(env_prefix="RISK_COOLDOWN_", env_file=".env", extra="ignore")
 
 
 class VolatilityConfig(BaseSettings):
     flash_crash_threshold: float = 0.05
     funding_rate_threshold: float = 0.001
 
-    model_config = SettingsConfigDict(env_prefix="RISK_VOLATILITY_")
+    model_config = SettingsConfigDict(env_prefix="RISK_VOLATILITY_", env_file=".env", extra="ignore")
 
 
 class ExchangeCheckConfig(BaseSettings):
     max_api_latency_ms: int = 2000
     health_check_interval_s: int = 30
 
-    model_config = SettingsConfigDict(env_prefix="RISK_EXCHANGE_")
+    model_config = SettingsConfigDict(env_prefix="RISK_EXCHANGE_", env_file=".env", extra="ignore")
 
 
 class RateLimitConfig(BaseSettings):
     max_trades_per_hour: int = 6
     max_trades_per_day: int = 20
 
-    model_config = SettingsConfigDict(env_prefix="RISK_RATE_LIMIT_")
+    model_config = SettingsConfigDict(env_prefix="RISK_RATE_LIMIT_", env_file=".env", extra="ignore")
 
 
 class RiskConfig(BaseSettings):
@@ -89,7 +89,7 @@ class SchedulerConfig(BaseSettings):
     interval_minutes: int = 240
     exchange_id: str = "binance"
 
-    model_config = SettingsConfigDict(env_prefix="SCHEDULER_")
+    model_config = SettingsConfigDict(env_prefix="SCHEDULER_", env_file=".env", extra="ignore")
 
 
 class ProvidersConfig(BaseSettings):
@@ -112,7 +112,7 @@ class ProvidersConfig(BaseSettings):
     enforce_token_security: bool = True
     max_acceptable_risk: str = "MEDIUM"
 
-    model_config = SettingsConfigDict(env_prefix="PROVIDER_")
+    model_config = SettingsConfigDict(env_prefix="PROVIDER_", env_file=".env", extra="ignore")
 
     def has_okx_credentials(self) -> bool:
         return all([self.okx_api_key, self.okx_secret_key, self.okx_passphrase])
@@ -127,7 +127,14 @@ class NotificationsConfig(BaseSettings):
     enabled: bool = True
     events: list[str] = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]
 
-    model_config = SettingsConfigDict(env_prefix="NOTIFICATION_")
+    model_config = SettingsConfigDict(env_prefix="NOTIFICATION_", env_file=".env", extra="ignore")
+
+
+class InfrastructureConfig(BaseSettings):
+    database_url: str = ""
+    redis_url: str = ""
+
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 class AppConfig(BaseSettings):
@@ -140,11 +147,17 @@ class AppConfig(BaseSettings):
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    infrastructure: InfrastructureConfig = Field(default_factory=InfrastructureConfig)
 
     model_config = SettingsConfigDict(env_prefix="APP_", env_file=".env", extra="ignore")
 
 
-def load_config() -> AppConfig:
-    """Load configuration from environment variables."""
-    return AppConfig()
+_cached_config: AppConfig | None = None
 
+
+def load_config() -> AppConfig:
+    """Load configuration from environment variables (cached after first call)."""
+    global _cached_config
+    if _cached_config is None:
+        _cached_config = AppConfig()
+    return _cached_config

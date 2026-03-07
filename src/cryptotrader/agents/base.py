@@ -1,10 +1,15 @@
-"""Base agent with LLM-powered analysis."""
+"""Base agent with LLM-powered analysis.
+
+Two agent types:
+- BaseAgent: Single LLM call, for agents with complete pre-computed data (TechAgent, MacroAgent)
+- ToolAgent: LangChain create_agent loop, for agents that need to actively query data (ChainAgent, NewsAgent)
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-from abc import ABC
+from collections.abc import Sequence
 
 import litellm
 
@@ -14,16 +19,20 @@ logger = logging.getLogger(__name__)
 
 ANALYSIS_FRAMEWORK = """
 Rules:
-- Base your analysis ONLY on the provided data. Do not rely on general market knowledge or historical patterns from your training data.
+- Base your analysis ONLY on the provided data. Do not rely on general market knowledge or historical patterns.
 - Every claim must reference a specific data point from the input.
 - If data is missing or insufficient, say so and lower your confidence accordingly.
 - Do NOT default to neutral. Take a directional stance when the data supports one.
 
 Pre-signal checklist (you MUST verify each before outputting your signal):
-1. Contradiction check: Are there signals in the data that CONTRADICT my direction? If yes, have I explicitly acknowledged them and explained why I'm overriding?
-2. Evidence grounding: Does every claim in my reasoning reference a specific number or data point? If I catch myself saying "the market looks..." without citing data, stop and fix it.
-3. Confidence sanity: Would I bet real money at this confidence level? 0.8+ means I see strong convergence with no red flags. If I'm unsure, my confidence should be below 0.6.
-4. Base rate awareness: Most of the time, the correct signal is hold. A directional call requires clear evidence, not just a slight lean.
+1. Contradiction check: Are there signals in the data that CONTRADICT my direction? If yes, have I explicitly
+acknowledged them and explained why I'm overriding?
+2. Evidence grounding: Does every claim in my reasoning reference a specific number or data point? If I catch
+myself saying "the market looks..." without citing data, stop and fix it.
+3. Confidence sanity: Would I bet real money at this confidence level? 0.8+ means I see strong convergence with
+no red flags. If I'm unsure, my confidence should be below 0.6.
+4. Base rate awareness: Most of the time, the correct signal is hold. A directional call requires clear evidence,
+not just a slight lean.
 5. Recency trap: Am I overweighting the most recent data point while ignoring the broader context in the window?
 
 Confidence calibration:
@@ -33,10 +42,12 @@ Confidence calibration:
 - 0.3-0.4: Weak or conflicting signals, low conviction
 - 0.1-0.2: Almost no signal, data insufficient or contradictory
 
-Output JSON: {"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "reasoning": "2-3 sentences citing specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...], "data_points": {"indicator": value, ...}}"""
+Output JSON: {"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "reasoning": "2-3 sentences citing
+specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...], "data_points": {"indicator": value,
+...}}"""
 
 
-class BaseAgent(ABC):
+class BaseAgent:
     def __init__(self, agent_id: str, role_description: str, model: str = "gpt-4o-mini") -> None:
         self.agent_id = agent_id
         self.role_description = role_description
@@ -78,14 +89,14 @@ class BaseAgent(ABC):
             f"Timestamp: {snapshot.timestamp}",
             f"Ticker: {snapshot.market.ticker}",
             f"Volatility: {snapshot.market.volatility:.4f}",
-            f"Funding rate: {fr:.6f}" + (
-                " (ELEVATED — crowded long)" if fr > 0.0003
-                else " (NEGATIVE — crowded short)" if fr < -0.0001
-                else ""),
+            f"Funding rate: {fr:.6f}"
+            + (" (ELEVATED — crowded long)" if fr > 0.0003 else " (NEGATIVE — crowded short)" if fr < -0.0001 else ""),
         ]
         if fut_vol > 0:
-            parts.append(f"Futures volume: {fut_vol:,.0f} BTC, vs 20d avg: {vol_ratio:.2f}x" + (
-                " (SPIKE)" if vol_ratio > 1.5 else " (LOW)" if vol_ratio < 0.7 else ""))
+            parts.append(
+                f"Futures volume: {fut_vol:,.0f} BTC, vs 20d avg: {vol_ratio:.2f}x"
+                + (" (SPIKE)" if vol_ratio > 1.5 else " (LOW)" if vol_ratio < 0.7 else "")
+            )
         if snapshot.onchain.open_interest > 0:
             parts.append(f"Open interest: {snapshot.onchain.open_interest:,.0f}")
         if experience:
@@ -98,7 +109,7 @@ class BaseAgent(ABC):
             end = response_text.rfind("}")
             if start == -1 or end == -1 or end <= start:
                 raise ValueError("No JSON object found in LLM response")
-            data = json.loads(response_text[start:end + 1])
+            data = json.loads(response_text[start : end + 1])
         except (ValueError, json.JSONDecodeError):
             logger.warning("Failed to parse LLM response for %s", self.agent_id)
             return AgentAnalysis(
@@ -125,3 +136,51 @@ class BaseAgent(ABC):
             risk_flags=data.get("risk_flags", []),
             data_points=dp,
         )
+
+
+class ToolAgent(BaseAgent):
+    """Agent with tool-calling capability via LangChain create_agent.
+
+    Unlike BaseAgent (single LLM call), ToolAgent runs a model→tool→model loop,
+    allowing the AI to actively query data sources during analysis.
+    """
+
+    def __init__(
+        self,
+        agent_id: str,
+        role_description: str,
+        tools: Sequence,
+        model: str = "gpt-4o-mini",
+    ) -> None:
+        super().__init__(agent_id, role_description, model)
+        self.tools = list(tools)
+
+    async def analyze(self, snapshot: DataSnapshot, experience: str = "") -> AgentAnalysis:
+        prompt = self._build_prompt(snapshot, experience)
+        system = self.role_description + ANALYSIS_FRAMEWORK
+
+        try:
+            from langchain.agents import create_agent
+            from langchain_openai import ChatOpenAI
+
+            # Map litellm model strings to provider-specific format for ChatOpenAI
+            model_name = self.model
+            if model_name.startswith("openai/"):
+                model_name = model_name[len("openai/") :]
+
+            llm = ChatOpenAI(model=model_name, temperature=0.2, max_completion_tokens=1024)
+            agent = create_agent(llm, tools=self.tools, system_prompt=system)
+
+            result = await agent.ainvoke(
+                {"messages": [{"role": "user", "content": prompt}]},
+            )
+
+            # Extract final message text from agent output
+            final_msg = result["messages"][-1]
+            text = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
+            return self._parse_response(text, snapshot.pair)
+
+        except Exception:
+            logger.exception("ToolAgent call failed for %s, falling back to single-call", self.agent_id)
+            # Fallback to single LLM call (same as BaseAgent)
+            return await super().analyze(snapshot, experience)
