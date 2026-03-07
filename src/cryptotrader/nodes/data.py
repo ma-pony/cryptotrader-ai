@@ -43,6 +43,50 @@ async def collect_snapshot(state: ArenaState) -> dict:
     return {"data": {"snapshot": snapshot, "snapshot_summary": summary}}
 
 
+async def update_past_pnl(state: ArenaState) -> dict:
+    """Back-fill PnL for recent trades that haven't been evaluated yet.
+
+    Runs at the start of each cycle: looks up recent journal entries
+    with orders but no PnL, compares entry price with current price.
+    This closes the feedback loop so calibration has data to work with.
+    """
+    from cryptotrader.journal.store import JournalStore
+
+    db_url = state["metadata"].get("database_url")
+    store = JournalStore(db_url)
+    current_price = state["data"].get("snapshot_summary", {}).get("price", 0)
+    pair = state["metadata"].get("pair")
+    if not current_price or not pair:
+        return {"data": {}}
+
+    try:
+        commits = await store.log(limit=50, pair=pair)
+        updated = 0
+        for dc in commits:
+            if dc.pnl is not None:
+                continue  # Already evaluated
+            if dc.order is None:
+                continue  # No trade was placed
+            entry_price = dc.order.price
+            if not entry_price or entry_price <= 0:
+                continue
+            # Calculate unrealized/realized PnL
+            if dc.order.side == "buy":
+                pnl_pct = (current_price - entry_price) / entry_price
+            else:
+                pnl_pct = (entry_price - current_price) / entry_price
+            pnl_abs = pnl_pct * dc.order.amount * entry_price
+            retro = f"Entry {entry_price:.2f} → Current {current_price:.2f} = {pnl_pct:+.2%}"
+            await store.update_pnl(dc.hash, pnl_abs, retro)
+            updated += 1
+        if updated:
+            logger.info("Updated PnL for %d past trades on %s", updated, pair)
+    except Exception:
+        logger.debug("PnL back-fill failed", exc_info=True)
+
+    return {"data": {}}
+
+
 async def verbal_reinforcement(state: ArenaState) -> dict:
     """Inject past experience + bias corrections into agent context."""
     from cryptotrader.journal.calibrate import detect_biases, generate_bias_correction, generate_verdict_calibration

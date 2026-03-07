@@ -82,6 +82,71 @@ async def _update_portfolio(state: ArenaState, order, filled_amount: float, fill
         logger.warning("Portfolio write-back failed for %s", pair, exc_info=True)
 
 
+async def check_stop_loss(state: ArenaState) -> dict:
+    """Check existing positions for stop-loss conditions before new analysis.
+
+    Triggers automatic exit when:
+    - Unrealized loss exceeds max_stop_loss_pct (default 5%)
+    - Position held longer than max_hold_bars (default 30 bars)
+    """
+    from cryptotrader.portfolio.manager import PortfolioManager
+
+    pair = state["metadata"]["pair"]
+    price = state["data"].get("snapshot_summary", {}).get("price", 0)
+    if not price:
+        return {"data": {}}
+
+    db_url = state["metadata"].get("database_url")
+    pm = PortfolioManager(db_url)
+    try:
+        portfolio = await pm.get_portfolio()
+    except Exception:
+        return {"data": {}}
+
+    pos = portfolio.get("positions", {}).get(pair)
+    if not pos or not isinstance(pos, dict):
+        return {"data": {}}
+
+    amount = pos.get("amount", 0)
+    avg_price = pos.get("avg_price", 0)
+    if amount == 0 or avg_price <= 0:
+        return {"data": {}}
+
+    # Calculate unrealized PnL
+    if amount > 0:  # Long
+        pnl_pct = (price - avg_price) / avg_price
+    else:  # Short
+        pnl_pct = (avg_price - price) / avg_price
+
+    max_loss_pct = state["metadata"].get("max_stop_loss_pct", 0.05)
+
+    if pnl_pct < -max_loss_pct:
+        logger.warning(
+            "Stop-loss triggered for %s: %.2f%% loss (threshold: %.2f%%)",
+            pair,
+            pnl_pct * 100,
+            -max_loss_pct * 100,
+        )
+        # Override verdict to force exit
+        side = "sell" if amount > 0 else "buy"
+        return {
+            "data": {
+                "verdict": {
+                    "action": "short" if side == "sell" else "long",
+                    "confidence": 1.0,
+                    "position_scale": 1.0,
+                    "divergence": 0.0,
+                    "reasoning": f"Stop-loss: {pnl_pct:+.2%} unrealized loss exceeds {max_loss_pct:.0%} threshold",
+                    "thesis": "Stop-loss exit to preserve capital",
+                    "invalidation": "N/A — forced exit",
+                },
+                "stop_loss_triggered": True,
+            }
+        }
+
+    return {"data": {}}
+
+
 async def place_order(state: ArenaState) -> dict:
     """Place order via exchange (paper or live)."""
     from cryptotrader.models import Order

@@ -15,7 +15,8 @@ class MaxPositionSize:
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         total = portfolio.get("total_value", 0)
         if total <= 0:
-            return CheckResult(passed=False, reason="Invalid portfolio value")
+            # Cold start: no portfolio yet, allow first trade with default capital
+            return CheckResult(passed=True)
         if verdict.position_scale > 1.0:
             return CheckResult(passed=False, reason=f"Position scale {verdict.position_scale:.2%} exceeds 100%")
         # New trade size = max_pct * scale
@@ -51,7 +52,7 @@ class MaxTotalExposure:
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         total = portfolio.get("total_value", 0)
         if total <= 0:
-            return CheckResult(passed=False, reason="Invalid portfolio value")
+            return CheckResult(passed=True)
         positions = portfolio.get("positions", {})
         # positions can be {pair: float} or {pair: {"amount": x, "avg_price": y}}
         raw = 0.0

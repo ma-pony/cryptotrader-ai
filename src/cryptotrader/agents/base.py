@@ -100,6 +100,17 @@ class BaseAgent:
             )
         if snapshot.onchain.open_interest > 0:
             parts.append(f"Open interest: {snapshot.onchain.open_interest:,.0f}")
+        # Data quality warnings — tell agents when sources are empty
+        warnings = []
+        if snapshot.onchain.open_interest == 0 and snapshot.onchain.exchange_netflow == 0:
+            warnings.append("On-chain data unavailable (no API keys configured). Do NOT infer from missing data.")
+        if snapshot.news.sentiment_score == 0 and not snapshot.news.headlines:
+            warnings.append("News sentiment unavailable. Do NOT assume neutral sentiment from missing data.")
+        if hasattr(snapshot, "macro") and snapshot.macro.fed_rate == 0 and snapshot.macro.dxy == 0:
+            warnings.append("Macro data unavailable (FRED/DXY). Do NOT infer from zero values — they are missing.")
+        if warnings:
+            parts.append("⚠ DATA QUALITY WARNINGS:\n" + "\n".join(f"  - {w}" for w in warnings))
+
         if experience:
             parts.append(f"Past experience:\n{experience}")
         return "\n".join(parts)

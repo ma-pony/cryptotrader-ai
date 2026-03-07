@@ -55,7 +55,7 @@ class CooldownConfig(BaseSettings):
 
 class VolatilityConfig(BaseSettings):
     flash_crash_threshold: float = 0.05
-    funding_rate_threshold: float = 0.001
+    funding_rate_threshold: float = 0.005
 
     model_config = SettingsConfigDict(env_prefix="RISK_VOLATILITY_", env_file=".env", extra="ignore")
 

@@ -86,9 +86,10 @@ async def test_max_position_fail(portfolio):
 
 @pytest.mark.asyncio
 async def test_max_position_zero_portfolio(verdict):
+    """Cold start: zero portfolio should allow first trade (not reject)."""
     c = MaxPositionSize(PositionConfig())
     r = await c.evaluate(verdict, {"total_value": 0})
-    assert not r.passed
+    assert r.passed
 
 
 @pytest.mark.asyncio

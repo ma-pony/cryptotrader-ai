@@ -18,7 +18,7 @@ from cryptotrader.nodes.agents import (  # noqa: E402
     news_analyze,
     tech_analyze,
 )
-from cryptotrader.nodes.data import collect_snapshot, verbal_reinforcement  # noqa: E402
+from cryptotrader.nodes.data import collect_snapshot, update_past_pnl, verbal_reinforcement  # noqa: E402
 from cryptotrader.nodes.debate import (  # noqa: E402
     bull_bear_debate,
     check_stability,
@@ -26,7 +26,7 @@ from cryptotrader.nodes.debate import (  # noqa: E402
     debate_round,
     judge_verdict,
 )
-from cryptotrader.nodes.execution import place_order  # noqa: E402
+from cryptotrader.nodes.execution import check_stop_loss, place_order  # noqa: E402
 from cryptotrader.nodes.journal import journal_rejection, journal_trade  # noqa: E402
 from cryptotrader.nodes.verdict import _risk_gate_cache, make_verdict, risk_check, risk_router  # noqa: E402, F401
 from cryptotrader.state import ArenaState, merge_dicts  # noqa: F401
@@ -36,6 +36,8 @@ __all__ = [
     "ArenaState",
     "merge_dicts",
     "collect_snapshot",
+    "update_past_pnl",
+    "check_stop_loss",
     "verbal_reinforcement",
     "tech_analyze",
     "chain_analyze",
@@ -121,6 +123,13 @@ def build_debate_graph(config: dict | None = None) -> Any:
     return graph.compile()
 
 
+def _stop_loss_router(state: ArenaState) -> str:
+    """Route to exit if stop-loss was triggered, otherwise continue normal flow."""
+    if state.get("data", {}).get("stop_loss_triggered"):
+        return "exit_position"
+    return "continue"
+
+
 def _build_full_graph(config: dict | None = None) -> Any:
     """Full pipeline: agents → 2 fixed debate rounds → AI verdict → risk gate → execute.
 
@@ -130,6 +139,8 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph = StateGraph(ArenaState)
 
     graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("update_pnl", update_past_pnl)
+    graph.add_node("stop_loss_check", check_stop_loss)
     graph.add_node("inject_experience", verbal_reinforcement)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
@@ -144,7 +155,18 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("record_rejection", journal_rejection)
 
     graph.add_edge(START, "collect_data")
-    graph.add_edge("collect_data", "inject_experience")
+    # After data collection: update PnL for past trades + check stop-loss
+    graph.add_edge("collect_data", "update_pnl")
+    graph.add_edge("update_pnl", "stop_loss_check")
+    # Stop-loss router: if triggered, skip analysis and go straight to risk gate
+    graph.add_conditional_edges(
+        "stop_loss_check",
+        _stop_loss_router,
+        {
+            "continue": "inject_experience",
+            "exit_position": "risk_gate",
+        },
+    )
     graph.add_edge("inject_experience", "tech_agent")
     graph.add_edge("inject_experience", "chain_agent")
     graph.add_edge("inject_experience", "news_agent")

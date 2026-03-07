@@ -40,16 +40,18 @@ class RiskGate:
         ]
 
     async def check(self, verdict: TradeVerdict, portfolio: dict) -> GateResult:
-        # Conservative rejection: if Redis was configured but is now unavailable,
-        # reject trades since cooldown/rate-limit state may be lost
+        # If Redis was configured but is now unavailable, log warning but continue.
+        # Skip Redis-dependent checks (cooldown, rate_limit, daily_loss) when Redis is down
+        # rather than blocking ALL trades.
+        redis_available = True
         if self._redis_was_configured and not await self.redis_state.ping():
-            logger.warning("Redis unavailable, rejecting trade (conservative)")
-            return GateResult(
-                passed=False,
-                rejected_by="redis_health",
-                reason="Redis configured but unavailable — rejecting conservatively",
-            )
+            logger.warning("Redis unavailable — skipping Redis-dependent checks (cooldown, rate limit)")
+            redis_available = False
+
+        redis_dependent = {"cooldown_check", "rate_limit", "daily_loss_limit"}
         for c in self._checks:
+            if not redis_available and c.name in redis_dependent:
+                continue
             result = await c.evaluate(verdict, portfolio)
             if not result.passed:
                 return GateResult(passed=False, rejected_by=c.name, reason=result.reason)
