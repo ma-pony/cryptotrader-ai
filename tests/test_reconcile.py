@@ -1,6 +1,7 @@
 """Reconciliation scenario tests."""
 
 import pytest
+
 from cryptotrader.execution.reconcile import Reconciler
 from cryptotrader.models import Order, OrderStatus
 
@@ -17,8 +18,9 @@ class MockExchange:
 async def test_reconcile_mismatch():
     ex = MockExchange({"ord1": {"status": "closed"}})
     r = Reconciler(ex)
-    order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000,
-                  status=OrderStatus.SUBMITTED, exchange_id="ord1")
+    order = Order(
+        pair="BTC/USDT", side="buy", amount=0.1, price=50000, status=OrderStatus.SUBMITTED, exchange_id="ord1"
+    )
     mismatches = await r.reconcile([order])
     assert len(mismatches) == 1
     assert mismatches[0][1] == "filled"
@@ -28,8 +30,7 @@ async def test_reconcile_mismatch():
 async def test_reconcile_no_mismatch():
     ex = MockExchange({"ord1": {"status": "closed"}})
     r = Reconciler(ex)
-    order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000,
-                  status=OrderStatus.FILLED, exchange_id="ord1")
+    order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000, status=OrderStatus.FILLED, exchange_id="ord1")
     mismatches = await r.reconcile([order])
     assert len(mismatches) == 0
 

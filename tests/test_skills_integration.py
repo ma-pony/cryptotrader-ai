@@ -1,6 +1,9 @@
 """Tests for skills integration."""
-import pytest
+
 import os
+
+import pytest
+
 from cryptotrader.data.binance_audit import BinanceAudit
 from cryptotrader.data.binance_sentiment import BinanceSentiment
 
@@ -11,9 +14,7 @@ async def test_binance_audit():
     audit = BinanceAudit()
     # Test with USDT on BSC (known safe token)
     result = await audit.audit_token(
-        symbol="USDT",
-        contract_address="0x55d398326f99059ff775485246999027b3197955",
-        chain="BSC"
+        symbol="USDT", contract_address="0x55d398326f99059ff775485246999027b3197955", chain="BSC"
     )
     assert "risk_level" in result
     assert result["risk_level"] in ["LOW", "MEDIUM", "HIGH", "UNKNOWN"]
@@ -26,6 +27,7 @@ async def test_okx_market():
         pytest.skip("OKX credentials not configured")
 
     from cryptotrader.data.okx_market import OKXMarket
+
     okx = OKXMarket()
     # Test with native token on XLayer
     price = await okx.get_price("196", "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")

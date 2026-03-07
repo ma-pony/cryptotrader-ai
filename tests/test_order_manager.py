@@ -2,8 +2,8 @@
 
 import pytest
 
-from cryptotrader.models import Order, OrderStatus
 from cryptotrader.execution.order import OrderManager
+from cryptotrader.models import Order, OrderStatus
 
 
 @pytest.fixture
@@ -59,6 +59,7 @@ async def test_place_success(mgr):
     class MockExchange:
         async def place_order(self, order):
             return {"id": "abc123", "status": "closed"}
+
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
     result = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.FILLED
@@ -70,6 +71,7 @@ async def test_place_partial_fill(mgr):
     class MockExchange:
         async def place_order(self, order):
             return {"id": "abc456", "status": "partially_filled"}
+
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
     result = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.PARTIALLY_FILLED
@@ -80,6 +82,7 @@ async def test_place_failure(mgr):
     class MockExchange:
         async def place_order(self, order):
             raise RuntimeError("Connection lost")
+
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
     result = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.FAILED
@@ -88,9 +91,11 @@ async def test_place_failure(mgr):
 @pytest.mark.asyncio
 async def test_place_open_stays_submitted(mgr):
     """Exchange returns 'open' status — order should stay SUBMITTED, not jump to FILLED."""
+
     class MockExchange:
         async def place_order(self, order):
             return {"id": "abc789", "status": "open"}
+
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
     result = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.SUBMITTED

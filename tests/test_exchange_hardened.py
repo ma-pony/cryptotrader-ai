@@ -1,14 +1,14 @@
 """Exchange hardening tests — retry, balance check, precision."""
 
-from cryptotrader.execution.exchange import LiveExchange, ExchangeAdapter
+from cryptotrader.execution.exchange import ExchangeAdapter, LiveExchange
 from cryptotrader.models import Order
 
 
 def test_exchange_adapter_protocol():
     assert issubclass(LiveExchange, ExchangeAdapter)
-    assert hasattr(ExchangeAdapter, 'place_order')
-    assert hasattr(ExchangeAdapter, 'cancel_order')
-    assert hasattr(ExchangeAdapter, 'get_balance')
+    assert hasattr(ExchangeAdapter, "place_order")
+    assert hasattr(ExchangeAdapter, "cancel_order")
+    assert hasattr(ExchangeAdapter, "get_balance")
 
 
 def test_order_creation():

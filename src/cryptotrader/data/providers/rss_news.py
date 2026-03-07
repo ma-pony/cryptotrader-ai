@@ -22,11 +22,13 @@ def fetch_crypto_news(max_per_source: int = 10) -> list[dict]:
         try:
             feed = feedparser.parse(url)
             for entry in feed.entries[:max_per_source]:
-                articles.append({
-                    "title": entry.get("title", ""),
-                    "source": name,
-                    "published": entry.get("published", ""),
-                })
+                articles.append(
+                    {
+                        "title": entry.get("title", ""),
+                        "source": name,
+                        "published": entry.get("published", ""),
+                    }
+                )
         except Exception:
             logger.warning("RSS fetch failed for %s", name, exc_info=True)
     return articles

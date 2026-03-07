@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+
 from cryptotrader.execution.exchange import ExchangeAdapter
 from cryptotrader.models import Order, OrderStatus
 

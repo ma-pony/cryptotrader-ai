@@ -5,9 +5,18 @@ from datetime import UTC, datetime
 import pandas as pd
 
 from cryptotrader.models import (
-    AgentAnalysis, DataSnapshot, DecisionCommit,
-    GateResult, MacroData, MarketData, NewsSentiment, OnchainData,
-    Order, OrderStatus, TradeVerdict, VALID_TRANSITIONS,
+    VALID_TRANSITIONS,
+    AgentAnalysis,
+    DataSnapshot,
+    DecisionCommit,
+    GateResult,
+    MacroData,
+    MarketData,
+    NewsSentiment,
+    OnchainData,
+    Order,
+    OrderStatus,
+    TradeVerdict,
 )
 
 
@@ -26,9 +35,12 @@ def test_market_data():
 
 def test_agent_analysis():
     a = AgentAnalysis(
-        agent_id="tech", pair="BTC/USDT",
-        direction="bullish", confidence=0.8,
-        reasoning="test", key_factors=["ma_cross"],
+        agent_id="tech",
+        pair="BTC/USDT",
+        direction="bullish",
+        confidence=0.8,
+        reasoning="test",
+        key_factors=["ma_cross"],
     )
     assert a.direction == "bullish"
     assert a.confidence == 0.8
@@ -71,9 +83,13 @@ def test_gate_result():
 
 def test_decision_commit():
     dc = DecisionCommit(
-        hash="abc12345", parent_hash=None,
-        timestamp=datetime.now(UTC), pair="BTC/USDT",
-        snapshot_summary={}, analyses={}, debate_rounds=2,
+        hash="abc12345",
+        parent_hash=None,
+        timestamp=datetime.now(UTC),
+        pair="BTC/USDT",
+        snapshot_summary={},
+        analyses={},
+        debate_rounds=2,
     )
     assert dc.hash == "abc12345"
     assert dc.pnl is None

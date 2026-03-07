@@ -37,8 +37,9 @@ class DailyLossLimit:
             # Persist to Redis so it survives process restarts
             if self._redis and self._redis.available:
                 await self._redis.set_circuit_breaker()
-            logger.warning("Circuit breaker triggered: daily loss %.2f%% exceeds max %.2f%%",
-                           loss_pct * 100, self._max_pct * 100)
+            logger.warning(
+                "Circuit breaker triggered: daily loss %.2f%% exceeds max %.2f%%", loss_pct * 100, self._max_pct * 100
+            )
             return CheckResult(passed=False, reason=f"Daily loss {loss_pct:.2%} exceeds max {self._max_pct:.2%}")
         return CheckResult(passed=True)
 

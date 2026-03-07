@@ -44,22 +44,26 @@ Coordinate your analysts to determine: long, short, or hold?
     # Extract verdict from supervisor's final message
     final_message = result["messages"][-1].content
 
-    # Parse verdict (supervisor should output JSON)
-    import json
+    from cryptotrader.debate.verdict import _extract_json
 
     try:
-        verdict = json.loads(final_message)
-    except json.JSONDecodeError:
-        # Fallback if supervisor doesn't output valid JSON
+        verdict = _extract_json(final_message)
+    except (ValueError, Exception):
         verdict = {
             "action": "hold",
             "confidence": 0.5,
             "reasoning": final_message,
             "position_scale": 0.5,
-            "divergence": 0.0,
-            "thesis": "",
-            "invalidation": "",
         }
+
+    # Ensure all required fields for downstream nodes
+    verdict.setdefault("action", "hold")
+    verdict.setdefault("confidence", 0.5)
+    verdict.setdefault("position_scale", 0.5)
+    verdict.setdefault("reasoning", "")
+    verdict.setdefault("divergence", 0.0)
+    verdict.setdefault("thesis", "")
+    verdict.setdefault("invalidation", "")
 
     return {"data": {"verdict": verdict}}
 

@@ -1,7 +1,8 @@
 """Binance Token Security Audit API."""
-import httpx
-from typing import Optional
+
 from uuid import uuid4
+
+import httpx
 
 
 class BinanceAudit:
@@ -9,13 +10,7 @@ class BinanceAudit:
 
     BASE_URL = "https://web3.binance.com/bapi/defi/v1/public/wallet-direct"
 
-    CHAIN_MAP = {
-        "BTC": "1",
-        "ETH": "1",
-        "BSC": "56",
-        "BASE": "8453",
-        "SOL": "CT_501"
-    }
+    CHAIN_MAP = {"BTC": "1", "ETH": "1", "BSC": "56", "BASE": "8453", "SOL": "CT_501"}
 
     async def audit_token(self, symbol: str, contract_address: str, chain: str = "BSC") -> dict:
         """Audit token security.
@@ -36,15 +31,8 @@ class BinanceAudit:
             try:
                 resp = await client.post(
                     f"{self.BASE_URL}/security/token/audit",
-                    json={
-                        "binanceChainId": chain_id,
-                        "contractAddress": contract_address,
-                        "requestId": str(uuid4())
-                    },
-                    headers={
-                        "Content-Type": "application/json",
-                        "Accept-Encoding": "identity"
-                    }
+                    json={"binanceChainId": chain_id, "contractAddress": contract_address, "requestId": str(uuid4())},
+                    headers={"Content-Type": "application/json", "Accept-Encoding": "identity"},
                 )
                 resp.raise_for_status()
                 data = resp.json()
@@ -95,5 +83,5 @@ class BinanceAudit:
             "is_scam": is_scam,
             "buy_tax": buy_tax,
             "sell_tax": sell_tax,
-            "issues": issues
+            "issues": issues,
         }

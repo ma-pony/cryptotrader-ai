@@ -30,11 +30,13 @@ def load_past_experience(context: str) -> str:
     Returns: Summary of similar past decisions and their results.
     """
     import asyncio
+    import os
 
     from cryptotrader.journal.store import JournalStore
     from cryptotrader.learning.verbal import get_experience
 
-    store = JournalStore(None)
+    db_url = os.environ.get("DATABASE_URL")
+    store = JournalStore(db_url)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

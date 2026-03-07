@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import json
-import pytest
-import httpx
 
-from cryptotrader.data.providers import defillama, coinglass, cryptoquant, whale_alert
+import httpx
+import pytest
+
+from cryptotrader.data.providers import coinglass, cryptoquant, defillama, whale_alert
 
 
 class MockResponse:
@@ -27,6 +28,7 @@ class MockResponse:
 
 
 # ── DefiLlama ──
+
 
 @pytest.mark.asyncio
 async def test_defillama_tvl(monkeypatch):
@@ -53,6 +55,7 @@ async def test_defillama_failure(monkeypatch):
 
 # ── CoinGlass ──
 
+
 @pytest.mark.asyncio
 async def test_coinglass_no_key():
     result = await coinglass.fetch_derivatives(api_key=None)
@@ -78,6 +81,7 @@ async def test_coinglass_with_key(monkeypatch):
 
 # ── CryptoQuant ──
 
+
 @pytest.mark.asyncio
 async def test_cryptoquant_no_key():
     result = await cryptoquant.fetch_exchange_netflow(api_key=None)
@@ -96,6 +100,7 @@ async def test_cryptoquant_with_key(monkeypatch):
 
 # ── Whale Alert ──
 
+
 @pytest.mark.asyncio
 async def test_whale_alert_no_key():
     result = await whale_alert.fetch_whale_transfers(api_key=None)
@@ -105,9 +110,13 @@ async def test_whale_alert_no_key():
 @pytest.mark.asyncio
 async def test_whale_alert_with_key(monkeypatch):
     async def mock_get(self, url, **kw):
-        return MockResponse({"transactions": [
-            {"hash": "abc", "from": {"owner": "binance"}, "to": {"owner": "unknown"}, "amount_usd": 1000000}
-        ]})
+        return MockResponse(
+            {
+                "transactions": [
+                    {"hash": "abc", "from": {"owner": "binance"}, "to": {"owner": "unknown"}, "amount_usd": 1000000}
+                ]
+            }
+        )
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
     result = await whale_alert.fetch_whale_transfers("test-key")

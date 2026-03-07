@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 from fastapi import APIRouter
 from pydantic import BaseModel
 
@@ -32,9 +30,12 @@ class RiskStatusOut(BaseModel):
 
 @router.get("/portfolio", response_model=PortfolioOut)
 async def get_portfolio():
+    from cryptotrader.config import load_config
     from cryptotrader.portfolio.manager import PortfolioManager
 
-    pm = PortfolioManager(os.environ.get("DATABASE_URL"))
+    config = load_config()
+
+    pm = PortfolioManager(config.infrastructure.database_url)
     portfolio = await pm.get_portfolio()
     daily_pnl = await pm.get_daily_pnl()
     drawdown = await pm.get_drawdown()
@@ -57,9 +58,12 @@ async def get_portfolio():
 
 @router.get("/risk/status", response_model=RiskStatusOut)
 async def get_risk_status():
+    from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
 
-    rsm = RedisStateManager(os.environ.get("REDIS_URL"))
+    config = load_config()
+
+    rsm = RedisStateManager(config.infrastructure.redis_url)
     if rsm.available:
         hourly, daily = await rsm.get_trade_counts()
         cb = await rsm.is_circuit_breaker_active()

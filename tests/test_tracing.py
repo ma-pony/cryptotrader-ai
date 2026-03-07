@@ -1,6 +1,8 @@
 """Test request tracing."""
+
 import structlog
-from cryptotrader.tracing import set_trace_id, get_trace_id
+
+from cryptotrader.tracing import get_trace_id, set_trace_id
 
 
 def test_set_and_get_trace_id():

@@ -2,15 +2,14 @@
 
 from __future__ import annotations
 
+import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
-import ccxt.async_support as ccxt
 
 from cryptotrader.models import MarketData
 
 
 class MarketCollector:
-
     async def collect(
         self,
         pair: str,
@@ -23,9 +22,7 @@ class MarketCollector:
             await exchange.load_markets()
 
             ohlcv_raw = await exchange.fetch_ohlcv(pair, timeframe, limit=limit)
-            df = pd.DataFrame(
-                ohlcv_raw, columns=["timestamp", "open", "high", "low", "close", "volume"]
-            )
+            df = pd.DataFrame(ohlcv_raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
             df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
             ticker = await exchange.fetch_ticker(pair)

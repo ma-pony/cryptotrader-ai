@@ -1,6 +1,7 @@
 """Webhook notification tests."""
 
 import pytest
+
 from cryptotrader.notifications import Notifier
 
 

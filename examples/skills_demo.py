@@ -1,6 +1,8 @@
 """Demo script for skills integration."""
+
 import asyncio
 import os
+
 from cryptotrader.data.binance_audit import BinanceAudit
 from cryptotrader.data.binance_sentiment import BinanceSentiment
 
@@ -12,18 +14,16 @@ async def demo_token_security():
 
     # Check USDT on BSC (should be safe)
     result = await audit.audit_token(
-        symbol="USDT",
-        contract_address="0x55d398326f99059ff775485246999027b3197955",
-        chain="BSC"
+        symbol="USDT", contract_address="0x55d398326f99059ff775485246999027b3197955", chain="BSC"
     )
 
-    print(f"Token: USDT")
+    print("Token: USDT")
     print(f"Risk Level: {result['risk_level']}")
     print(f"Is Honeypot: {result['is_honeypot']}")
     print(f"Is Scam: {result['is_scam']}")
     print(f"Buy Tax: {result['buy_tax']}%")
     print(f"Sell Tax: {result['sell_tax']}%")
-    if result['issues']:
+    if result["issues"]:
         print(f"Issues: {', '.join(result['issues'])}")
 
 
@@ -38,6 +38,7 @@ async def demo_okx_market():
         return
 
     from cryptotrader.data.okx_market import OKXMarket
+
     okx = OKXMarket()
 
     # Get native OKB price on XLayer

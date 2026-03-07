@@ -1,4 +1,4 @@
-.PHONY: install test run serve lint
+.PHONY: install test run serve lint format pre-commit-install pre-commit-run
 
 install:
 	uv pip install -e ".[dev]"
@@ -14,3 +14,12 @@ serve:
 
 lint:
 	ruff check src/ tests/
+
+format:
+	ruff format src/ tests/
+
+pre-commit-install:
+	pre-commit install
+
+pre-commit-run:
+	pre-commit run --all-files

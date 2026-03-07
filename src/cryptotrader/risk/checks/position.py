@@ -34,7 +34,10 @@ class MaxPositionSize:
         if combined_pct > self._max_pct:
             return CheckResult(
                 passed=False,
-                reason=f"Combined position {combined_pct:.2%} (existing {existing_pct:.2%} + new {new_trade_pct:.2%}) exceeds max {self._max_pct:.2%}",
+                reason=(
+                    f"Combined position {combined_pct:.2%} (existing {existing_pct:.2%} + new {new_trade_pct:.2%}) "
+                    f"exceeds max {self._max_pct:.2%}"
+                ),
             )
         return CheckResult(passed=True)
 

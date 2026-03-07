@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 
 import httpx
 
@@ -17,8 +16,7 @@ async def _fetch_fred(series: str, api_key: str) -> float:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
                 "https://api.stlouisfed.org/fred/series/observations",
-                params={"series_id": series, "api_key": api_key,
-                        "sort_order": "desc", "limit": 1, "file_type": "json"},
+                params={"series_id": series, "api_key": api_key, "sort_order": "desc", "limit": 1, "file_type": "json"},
             )
             r.raise_for_status()
             obs = r.json().get("observations", [])
@@ -54,7 +52,6 @@ async def _fetch_btc_dominance() -> float:
 
 
 class MacroCollector:
-
     def __init__(self, providers_config=None):
         self._cfg = providers_config
 
@@ -63,7 +60,7 @@ class MacroCollector:
         fred_on = getattr(cfg, "fred_enabled", True) if cfg else True
         coingecko_on = getattr(cfg, "coingecko_enabled", True) if cfg else True
 
-        fred_key = (cfg.fred_api_key if cfg else None) or os.environ.get("FRED_API_KEY", "")
+        fred_key = cfg.fred_api_key if cfg else ""
 
         import asyncio
 
@@ -76,7 +73,10 @@ class MacroCollector:
         dom_task = _fetch_btc_dominance() if coingecko_on else _noop_float()
 
         fed_rate, dxy, fear_greed, btc_dom = await asyncio.gather(
-            fed_task, dxy_task, fg_task, dom_task,
+            fed_task,
+            dxy_task,
+            fg_task,
+            dom_task,
         )
 
         return MacroData(

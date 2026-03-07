@@ -1,6 +1,7 @@
 """Portfolio manager tests."""
 
 import pytest
+
 from cryptotrader.portfolio.manager import PortfolioManager
 
 

@@ -1,14 +1,18 @@
 """A/B test: compare models on the same BTC market data."""
-import asyncio, json, time, os, sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-import litellm
-from cryptotrader.data.market import MarketCollector
-from cryptotrader.data.snapshot import SnapshotAggregator
-from cryptotrader.agents.tech import TechAgent, compute_indicators
+import asyncio
+import json
+import os
+import sys
+import time
+
 from cryptotrader.agents.chain import ChainAgent
-from cryptotrader.agents.news import NewsAgent
 from cryptotrader.agents.macro import MacroAgent
+from cryptotrader.agents.news import NewsAgent
+from cryptotrader.agents.tech import TechAgent, compute_indicators
+from cryptotrader.data.snapshot import SnapshotAggregator
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 MODELS = [
     "openai/glm-5",
@@ -25,6 +29,7 @@ AGENT_CLASSES = [
     ("news", NewsAgent),
     ("macro", MacroAgent),
 ]
+
 
 async def test_single(agent_cls, agent_id, model, snapshot):
     agent = agent_cls(model=model)
@@ -52,6 +57,7 @@ async def test_single(agent_cls, agent_id, model, snapshot):
             "parse_ok": False,
         }
 
+
 async def main():
     print("Collecting BTC/USDT market data...")
     agg = SnapshotAggregator()
@@ -61,7 +67,7 @@ async def main():
     print(f"RSI: {indicators['rsi']}, MACD hist: {indicators['macd']['histogram']}")
     print(f"Volatility: {snapshot.market.volatility:.4f}")
     print(f"Fear&Greed: {snapshot.macro.fear_greed_index}")
-    print(f"\nTesting {len(MODELS)} models x {len(AGENT_CLASSES)} agents = {len(MODELS)*len(AGENT_CLASSES)} calls\n")
+    print(f"\nTesting {len(MODELS)} models x {len(AGENT_CLASSES)} agents = {len(MODELS) * len(AGENT_CLASSES)} calls\n")
     print("=" * 80)
 
     all_results = []
@@ -98,9 +104,14 @@ async def main():
 
     # Save full results
     out = "/Users/pony/Projects/cryptotrader-ai/scripts/benchmark_results.json"
-    with open(out, "w") as f:
-        json.dump(all_results, f, indent=2, ensure_ascii=False, default=str)
+    await asyncio.to_thread(_write_results, out, all_results)
     print(f"\nFull results saved to {out}")
+
+
+def _write_results(path: str, data: list):
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False, default=str)
+
 
 if __name__ == "__main__":
     asyncio.run(main())

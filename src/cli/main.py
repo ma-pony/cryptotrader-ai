@@ -18,20 +18,31 @@ def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
     mode: Annotated[str, typer.Option("--mode", "-m", help="paper or live")] = "paper",
     exchange: Annotated[str, typer.Option("--exchange", "-e")] = "binance",
+    graph: Annotated[str, typer.Option("--graph", "-g", help="full, lite, debate, supervisor")] = "full",
 ):
     """Run one analysis cycle for each pair sequentially."""
     if pair is None:
         pair = ["BTC/USDT"]
-    asyncio.run(_run(pair, mode, exchange))
+    asyncio.run(_run(pair, mode, exchange, graph))
 
 
-async def _run(pairs: list[str], mode: str, exchange_id: str):
+async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = "full"):
     from cryptotrader.config import load_config
-    from cryptotrader.graph import ArenaState, build_trading_graph
+    from cryptotrader.graph import ArenaState, build_debate_graph, build_lite_graph, build_trading_graph
     from cryptotrader.tracing import set_trace_id
 
     config = load_config()
-    graph = build_trading_graph()
+    builders = {
+        "full": build_trading_graph,
+        "lite": build_lite_graph,
+        "debate": build_debate_graph,
+    }
+    if graph_mode == "supervisor":
+        from cryptotrader.graph import build_supervisor_graph_v2
+
+        graph = build_supervisor_graph_v2()
+    else:
+        graph = builders.get(graph_mode, build_trading_graph)()
 
     for pair in pairs:
         trace_id = set_trace_id()

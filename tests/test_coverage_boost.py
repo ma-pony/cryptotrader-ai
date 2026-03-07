@@ -8,7 +8,6 @@ from cryptotrader.execution.simulator import PaperExchange
 from cryptotrader.models import Order
 from cryptotrader.notifications import Notifier
 
-
 # ── BacktestEngine._apply_costs ──
 
 
@@ -31,8 +30,7 @@ def test_apply_costs_sell():
 
 def test_compute_result_basic():
     engine = BacktestEngine("BTC/USDT", "2025-01-01", "2025-01-02", initial_capital=10000)
-    trades = [{"side": "buy", "price": 100, "amount": 1, "ts": 0},
-              {"side": "close", "price": 110, "pnl": 10, "ts": 1}]
+    trades = [{"side": "buy", "price": 100, "amount": 1, "ts": 0}, {"side": "close", "price": 110, "pnl": 10, "ts": 1}]
     result = engine._compute_result(10010, [10000, 10005, 10010], trades)
     assert result.total_return == pytest.approx(0.001)
     assert result.win_rate == 1.0
@@ -150,6 +148,7 @@ def test_backtest_result_to_json(tmp_path):
     path = str(tmp_path / "result.json")
     r.to_json(path)
     import json
+
     with open(path) as f:
         data = json.load(f)
     assert data["summary"]["total_return"] == "10.00%"

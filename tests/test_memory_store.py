@@ -1,6 +1,6 @@
 """Tests for RedisStateManager in-memory fallback (_MemoryStore)."""
 
-import time
+import asyncio
 
 import pytest
 
@@ -24,7 +24,7 @@ async def test_get_set_basic(rsm):
 async def test_set_with_ttl_expires(rsm):
     await rsm.set("key2", "val2", ex=1)
     assert await rsm.get("key2") == "val2"
-    time.sleep(1.1)
+    await asyncio.sleep(1.1)
     assert await rsm.get("key2") is None
 
 
@@ -41,7 +41,7 @@ async def test_expire_sets_ttl(rsm):
     await rsm.set("key3", "val3")
     await rsm.expire("key3", 1)
     assert await rsm.get("key3") == "val3"
-    time.sleep(1.1)
+    await asyncio.sleep(1.1)
     assert await rsm.get("key3") is None
 
 

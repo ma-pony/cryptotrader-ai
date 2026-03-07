@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+
 import streamlit as st
 
 
@@ -20,26 +21,29 @@ page = st.sidebar.radio("Navigation", ["Overview", "Decisions", "Risk Status", "
 
 if page == "Overview":
     st.title("Overview")
+    from cryptotrader.config import load_config
     from cryptotrader.portfolio.manager import PortfolioManager
-    import os
-    pm = PortfolioManager(os.environ.get("DATABASE_URL"))
+
+    config = load_config()
+    pm = PortfolioManager(config.infrastructure.database_url)
     portfolio = _run(pm.get_portfolio())
     daily_pnl = _run(pm.get_daily_pnl())
     drawdown = _run(pm.get_drawdown())
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Total Value", f"${portfolio['total_value']:,.2f}")
-    col2.metric("Daily PnL", f"${daily_pnl:,.2f}",
-                delta=f"{daily_pnl:+,.2f}" if daily_pnl != 0 else None,
-                delta_color="normal")
-    col3.metric("Drawdown", f"{drawdown:.2%}",
-                delta=f"{drawdown:.2%}" if drawdown != 0 else None,
-                delta_color="inverse")
+    col2.metric(
+        "Daily PnL", f"${daily_pnl:,.2f}", delta=f"{daily_pnl:+,.2f}" if daily_pnl != 0 else None, delta_color="normal"
+    )
+    col3.metric(
+        "Drawdown", f"{drawdown:.2%}", delta=f"{drawdown:.2%}" if drawdown != 0 else None, delta_color="inverse"
+    )
 
     # Equity curve chart
     snapshots = _run(pm._load_snapshots("default"))
     if snapshots:
         import pandas as pd
+
         df = pd.DataFrame(snapshots)
         if "timestamp" in df.columns and "total_value" in df.columns:
             df = df.set_index("timestamp")
@@ -50,18 +54,27 @@ if page == "Overview":
     positions = portfolio.get("positions", {})
     if positions:
         st.subheader("Positions")
-        st.table([{"Pair": k, "Amount": f"{v['amount']:.6f}",
+        st.table(
+            [
+                {
+                    "Pair": k,
+                    "Amount": f"{v['amount']:.6f}",
                     "Avg Price": f"${v['avg_price']:,.2f}",
-                    "Value": f"${v['amount'] * v['avg_price']:,.2f}"}
-                   for k, v in positions.items()])
+                    "Value": f"${v['amount'] * v['avg_price']:,.2f}",
+                }
+                for k, v in positions.items()
+            ]
+        )
     else:
         st.info("No open positions.")
 
 elif page == "Decisions":
     st.title("Recent Decisions")
+    from cryptotrader.config import load_config
     from cryptotrader.journal.store import JournalStore
-    import os
-    store = JournalStore(os.environ.get("DATABASE_URL"))
+
+    config = load_config()
+    store = JournalStore(config.infrastructure.database_url)
     commits = _run(store.log(limit=20))
     if not commits:
         st.info("No decisions recorded yet.")
@@ -113,9 +126,11 @@ elif page == "Decisions":
 
 elif page == "Risk Status":
     st.title("Risk Status")
+    from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
-    import os
-    rsm = RedisStateManager(os.environ.get("REDIS_URL"))
+
+    config = load_config()
+    rsm = RedisStateManager(config.infrastructure.redis_url)
     if rsm.available:
         hourly, daily = _run(rsm.get_trade_counts())
         cb = _run(rsm.is_circuit_breaker_active())
@@ -132,15 +147,18 @@ elif page == "Risk Status":
     # Show risk config summary
     try:
         from cryptotrader.config import load_config
+
         config = load_config()
         st.subheader("Risk Parameters")
-        st.table([
-            {"Check": "Max Position", "Value": f"{config.risk.position.max_single_pct:.0%}"},
-            {"Check": "Max Exposure", "Value": f"{config.risk.position.max_total_exposure_pct:.0%}"},
-            {"Check": "Daily Loss Limit", "Value": f"{config.risk.loss.max_daily_loss_pct:.0%}"},
-            {"Check": "Max Drawdown", "Value": f"{config.risk.loss.max_drawdown_pct:.0%}"},
-            {"Check": "Cooldown", "Value": f"{config.risk.cooldown.same_pair_minutes}m"},
-        ])
+        st.table(
+            [
+                {"Check": "Max Position", "Value": f"{config.risk.position.max_single_pct:.0%}"},
+                {"Check": "Max Exposure", "Value": f"{config.risk.position.max_total_exposure_pct:.0%}"},
+                {"Check": "Daily Loss Limit", "Value": f"{config.risk.loss.max_daily_loss_pct:.0%}"},
+                {"Check": "Max Drawdown", "Value": f"{config.risk.loss.max_drawdown_pct:.0%}"},
+                {"Check": "Cooldown", "Value": f"{config.risk.cooldown.same_pair_minutes}m"},
+            ]
+        )
     except Exception:
         pass
 
@@ -154,6 +172,7 @@ elif page == "Backtest":
     capital = col1.number_input("Initial Capital", value=10000, step=1000)
     if st.button("Run Backtest"):
         from cryptotrader.backtest.engine import BacktestEngine
+
         with st.spinner("Running backtest..."):
             engine = BacktestEngine(pair, str(start), str(end), interval, initial_capital=capital)
             result = _run(engine.run())
@@ -168,5 +187,6 @@ elif page == "Backtest":
         if result.trades:
             st.subheader(f"Trades ({len(result.trades)})")
             import pandas as pd
+
             df = pd.DataFrame(result.trades)
             st.dataframe(df, use_container_width=True)

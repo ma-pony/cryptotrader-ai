@@ -1,5 +1,7 @@
 """Request tracing with structlog."""
+
 import uuid
+
 import structlog
 
 

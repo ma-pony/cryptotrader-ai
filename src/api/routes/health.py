@@ -1,6 +1,5 @@
 """Health and metrics endpoints."""
 
-import os
 import time
 
 from fastapi import APIRouter
@@ -14,8 +13,12 @@ _start_time = time.time()
 async def health():
     import redis.asyncio as aioredis
 
+    from cryptotrader.config import load_config
+
+    config = load_config()
+
     checks = {"api": "ok"}
-    redis_url = os.environ.get("REDIS_URL")
+    redis_url = config.infrastructure.redis_url
     if redis_url:
         try:
             r = aioredis.from_url(redis_url)
@@ -25,7 +28,7 @@ async def health():
         except Exception:
             checks["redis"] = "unavailable"
 
-    db_url = os.environ.get("DATABASE_URL")
+    db_url = config.infrastructure.database_url
     checks["db"] = "configured" if db_url else "not_configured"
 
     status = "ok" if checks["api"] == "ok" else "degraded"
@@ -34,9 +37,12 @@ async def health():
 
 @router.get("/metrics")
 async def metrics():
+    from cryptotrader.config import load_config
     from cryptotrader.journal.store import JournalStore
 
-    store = JournalStore(os.environ.get("DATABASE_URL"))
+    config = load_config()
+
+    store = JournalStore(config.infrastructure.database_url)
     commits = await store.log(limit=1000)
     total = len(commits)
     wins = sum(1 for c in commits if c.pnl is not None and c.pnl > 0)

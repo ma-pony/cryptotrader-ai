@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 
 from cryptotrader.journal.store import JournalStore
-from cryptotrader.models import DecisionCommit, TradeVerdict, GateResult
+from cryptotrader.models import DecisionCommit, GateResult, TradeVerdict
 
 
 @pytest.fixture
@@ -16,10 +16,14 @@ def store():
 @pytest.fixture
 def sample_commit():
     return DecisionCommit(
-        hash="abc12345", parent_hash=None,
-        timestamp=datetime.now(UTC), pair="BTC/USDT",
+        hash="abc12345",
+        parent_hash=None,
+        timestamp=datetime.now(UTC),
+        pair="BTC/USDT",
         snapshot_summary={"funding_rate": 0.001, "volatility": 0.02},
-        analyses={}, debate_rounds=2, divergence=0.15,
+        analyses={},
+        debate_rounds=2,
+        divergence=0.15,
         verdict=TradeVerdict(action="long", confidence=0.7, position_scale=0.8),
         risk_gate=GateResult(passed=True),
     )
@@ -61,9 +65,13 @@ async def test_update_pnl(store, sample_commit):
 async def test_log_filter_by_pair(store, sample_commit):
     await store.commit(sample_commit)
     c2 = DecisionCommit(
-        hash="def67890", parent_hash="abc12345",
-        timestamp=datetime.now(UTC), pair="ETH/USDT",
-        snapshot_summary={}, analyses={}, debate_rounds=1,
+        hash="def67890",
+        parent_hash="abc12345",
+        timestamp=datetime.now(UTC),
+        pair="ETH/USDT",
+        snapshot_summary={},
+        analyses={},
+        debate_rounds=1,
     )
     await store.commit(c2)
     btc = await store.log(limit=10, pair="BTC/USDT")

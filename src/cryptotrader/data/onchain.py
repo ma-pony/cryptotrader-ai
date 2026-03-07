@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio as _aio
 import logging
-import os
 
 from cryptotrader.models import OnchainData
 
@@ -12,15 +11,14 @@ logger = logging.getLogger(__name__)
 
 
 class OnchainCollector:
-
     def __init__(self, providers_config=None):
         self._cfg = providers_config
 
     async def collect(self, pair: str, funding_rate: float = 0.0) -> OnchainData:
         from cryptotrader.data.providers.binance import fetch_derivatives_binance
-        from cryptotrader.data.providers.defillama import fetch_tvl
         from cryptotrader.data.providers.coinglass import fetch_derivatives as fetch_cg
         from cryptotrader.data.providers.cryptoquant import fetch_exchange_netflow
+        from cryptotrader.data.providers.defillama import fetch_tvl
         from cryptotrader.data.providers.whale_alert import fetch_whale_transfers
 
         symbol = pair.split("/")[0]
@@ -32,10 +30,10 @@ class OnchainCollector:
         cryptoquant_on = getattr(cfg, "cryptoquant_enabled", True) if cfg else True
         whale_alert_on = getattr(cfg, "whale_alert_enabled", True) if cfg else True
 
-        # Prefer config keys, fall back to env vars
-        cg_key = (cfg.coinglass_api_key if cfg else None) or os.environ.get("COINGLASS_API_KEY")
-        cq_key = (cfg.cryptoquant_api_key if cfg else None) or os.environ.get("CRYPTOQUANT_API_KEY")
-        wa_key = (cfg.whale_alert_api_key if cfg else None) or os.environ.get("WHALE_ALERT_API_KEY")
+        # Get API keys from config
+        cg_key = cfg.coinglass_api_key if cfg else ""
+        cq_key = cfg.cryptoquant_api_key if cfg else ""
+        wa_key = cfg.whale_alert_api_key if cfg else ""
 
         # Build tasks — only call enabled providers
 
@@ -55,7 +53,11 @@ class OnchainCollector:
         whales_task = fetch_whale_transfers(wa_key) if whale_alert_on else _noop_list()
 
         tvl_data, deriv, cg_data, netflow, whales = await _aio.gather(
-            tvl_task, deriv_task, cg_task, netflow_task, whales_task,
+            tvl_task,
+            deriv_task,
+            cg_task,
+            netflow_task,
+            whales_task,
             return_exceptions=True,
         )
 
@@ -88,11 +90,13 @@ class OnchainCollector:
 
         # Merge liquidation data
         liq = cg_data.get("liquidations_24h", {})
-        liq.update({
-            "long_short_ratio": deriv.get("long_short_ratio", 1.0),
-            "top_trader_ratio": deriv.get("top_trader_ratio", 1.0),
-            "taker_buy_sell_ratio": deriv.get("taker_buy_sell_ratio", 1.0),
-        })
+        liq.update(
+            {
+                "long_short_ratio": deriv.get("long_short_ratio", 1.0),
+                "top_trader_ratio": deriv.get("top_trader_ratio", 1.0),
+                "taker_buy_sell_ratio": deriv.get("taker_buy_sell_ratio", 1.0),
+            }
+        )
 
         return OnchainData(
             exchange_netflow=netflow if isinstance(netflow, float) else 0.0,

@@ -12,6 +12,7 @@ class AnalyzeRequest(BaseModel):
     pair: str = "BTC/USDT"
     exchange: str = "binance"
     mode: str = "paper"
+    graph_mode: str = "full"
 
 
 class AnalyzeResponse(BaseModel):
@@ -27,39 +28,50 @@ class AnalyzeResponse(BaseModel):
 
 @router.post("/analyze", response_model=AnalyzeResponse)
 async def analyze(req: AnalyzeRequest):
-    import os
-    from cryptotrader.graph import build_trading_graph
     from cryptotrader.config import load_config
+    from cryptotrader.graph import build_debate_graph, build_lite_graph, build_trading_graph
 
     config = load_config()
-    graph = build_trading_graph()
-    result = await graph.ainvoke({
-        "messages": [],
-        "data": {},
-        "metadata": {
-            "pair": req.pair,
-            "engine": req.mode,
-            "exchange_id": req.exchange,
-            "timeframe": config.data.default_timeframe,
-            "ohlcv_limit": config.data.ohlcv_limit,
-            "analysis_model": config.models.analysis,
-            "debate_model": config.models.debate,
-            "verdict_model": config.models.verdict,
-            "database_url": os.environ.get("DATABASE_URL"),
-            "redis_url": os.environ.get("REDIS_URL"),
-            "convergence_threshold": config.debate.convergence_threshold,
-            "max_single_pct": config.risk.position.max_single_pct,
-            "models": {
-                "tech_agent": config.models.tech_agent,
-                "chain_agent": config.models.chain_agent,
-                "news_agent": config.models.news_agent,
-                "macro_agent": config.models.macro_agent,
+    builders = {
+        "full": build_trading_graph,
+        "lite": build_lite_graph,
+        "debate": build_debate_graph,
+    }
+    if req.graph_mode == "supervisor":
+        from cryptotrader.graph import build_supervisor_graph_v2
+
+        graph = build_supervisor_graph_v2()
+    else:
+        graph = builders.get(req.graph_mode, build_trading_graph)()
+    result = await graph.ainvoke(
+        {
+            "messages": [],
+            "data": {},
+            "metadata": {
+                "pair": req.pair,
+                "engine": req.mode,
+                "exchange_id": req.exchange,
+                "timeframe": config.data.default_timeframe,
+                "ohlcv_limit": config.data.ohlcv_limit,
+                "analysis_model": config.models.analysis,
+                "debate_model": config.models.debate,
+                "verdict_model": config.models.verdict,
+                "database_url": config.infrastructure.database_url,
+                "redis_url": config.infrastructure.redis_url,
+                "convergence_threshold": config.debate.convergence_threshold,
+                "max_single_pct": config.risk.position.max_single_pct,
+                "models": {
+                    "tech_agent": config.models.tech_agent,
+                    "chain_agent": config.models.chain_agent,
+                    "news_agent": config.models.news_agent,
+                    "macro_agent": config.models.macro_agent,
+                },
             },
-        },
-        "debate_round": 0,
-        "max_debate_rounds": config.debate.max_rounds,
-        "divergence_scores": [],
-    })
+            "debate_round": 0,
+            "max_debate_rounds": config.debate.max_rounds,
+            "divergence_scores": [],
+        }
+    )
 
     verdict = result.get("data", {}).get("verdict", {})
     analyses = result.get("data", {}).get("analyses", {})
