@@ -50,7 +50,9 @@
       "Bash(pip install:*)",
       "Bash(pyenv versions)",
       "Read(//Users/rccpony/.pyenv/versions/**)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(git status:*)",
+      "Bash(curl:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

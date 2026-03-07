@@ -1,0 +1,90 @@
+# CryptoTrader AI — Main Configuration
+# All settings in this file. No environment variables needed.
+
+[app]
+mode = "standalone"    # standalone | api
+engine = "paper"       # paper | live
+
+[llm]
+# Unified LLM API endpoint — all models go through the same gateway
+api_key = ""
+base_url = ""          # e.g. "http://localhost:3000/v1" or your proxy
+
+[models]
+analysis = "gemini-3-flash"
+debate = "gemini-3-flash"
+verdict = "gpt-5.4"
+tech_agent = "gemini-3-flash"
+chain_agent = "deepseek-chat"
+news_agent = "deepseek-chat"
+macro_agent = "deepseek-chat"
+fallback = "deepseek-chat"
+
+[debate]
+max_rounds = 3
+convergence_threshold = 0.1
+divergence_hold_threshold = 0.7
+
+[data]
+default_timeframe = "1h"
+ohlcv_limit = 100
+
+[risk.position]
+max_single_pct = 0.10
+max_total_exposure_pct = 0.50
+
+[risk.loss]
+max_daily_loss_pct = 0.03
+max_drawdown_pct = 0.10
+max_cvar_95 = 0.05
+
+[risk.cooldown]
+same_pair_minutes = 60
+post_loss_minutes = 120
+
+[risk.volatility]
+flash_crash_threshold = 0.05
+funding_rate_threshold = 0.005
+
+[risk.exchange]
+max_api_latency_ms = 2000
+health_check_interval_s = 30
+
+[risk.rate_limit]
+max_trades_per_hour = 6
+max_trades_per_day = 20
+
+[scheduler]
+enabled = false
+pairs = ["BTC/USDT", "ETH/USDT"]
+interval_minutes = 240
+exchange_id = "binance"
+
+[providers]
+coinglass_api_key = ""
+cryptoquant_api_key = ""
+whale_alert_api_key = ""
+fred_api_key = ""
+coinglass_enabled = true
+cryptoquant_enabled = true
+whale_alert_enabled = true
+fred_enabled = true
+defillama_enabled = true
+coingecko_enabled = true
+okx_api_key = ""
+okx_secret_key = ""
+okx_passphrase = ""
+okx_enabled = false
+binance_audit_enabled = true
+binance_sentiment_enabled = true
+enforce_token_security = true
+max_acceptable_risk = "MEDIUM"
+
+[notifications]
+webhook_url = ""
+enabled = true
+events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]
+
+[infrastructure]
+database_url = ""
+redis_url = ""

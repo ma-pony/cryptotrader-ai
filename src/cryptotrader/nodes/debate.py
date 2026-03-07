@@ -31,8 +31,6 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "r
 
 async def debate_round(state: ArenaState) -> dict:
     """One round of cross-challenge debate between agents."""
-    import litellm
-
     from cryptotrader.debate.challenge import build_challenge_prompt
     from cryptotrader.debate.verdict import _extract_json
 
@@ -46,14 +44,16 @@ async def debate_round(state: ArenaState) -> dict:
         role_label = _DEBATE_ROLES.get(agent_id, agent_id)
         system = DEBATE_SYSTEM.format(role=role_label)
         try:
-            resp = await litellm.acompletion(
+            from cryptotrader.agents.base import acompletion_with_fallback
+
+            resp = await acompletion_with_fallback(
                 model=model,
                 messages=[
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=1024,
-                timeout=30,
+                timeout=60,
             )
             text = resp.choices[0].message.content
             data = _extract_json(text)

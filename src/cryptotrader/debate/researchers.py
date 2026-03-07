@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 
-import litellm
-
+from cryptotrader.agents.base import acompletion_with_fallback
 from cryptotrader.debate.verdict import _extract_json
 
 logger = logging.getLogger(__name__)
@@ -73,8 +72,12 @@ async def run_debate(
         bull_msgs.append({"role": "user", "content": bull_prompt})
 
         try:
-            resp = await litellm.acompletion(
-                model=model, messages=bull_msgs, temperature=0.3, max_tokens=512, timeout=30
+            resp = await acompletion_with_fallback(
+                model=model,
+                messages=bull_msgs,
+                temperature=0.3,
+                max_tokens=512,
+                timeout=60,
             )
             bull_arg = resp.choices[0].message.content
         except Exception:
@@ -88,8 +91,12 @@ async def run_debate(
         bear_msgs.append({"role": "user", "content": bear_prompt})
 
         try:
-            resp = await litellm.acompletion(
-                model=model, messages=bear_msgs, temperature=0.3, max_tokens=512, timeout=30
+            resp = await acompletion_with_fallback(
+                model=model,
+                messages=bear_msgs,
+                temperature=0.3,
+                max_tokens=512,
+                timeout=60,
             )
             bear_arg = resp.choices[0].message.content
         except Exception:
@@ -138,7 +145,13 @@ async def judge_debate(
         {"role": "user", "content": debate["full_debate"]},
     ]
     try:
-        resp = await litellm.acompletion(model=model, messages=msgs, temperature=0.1, max_tokens=256, timeout=30)
+        resp = await acompletion_with_fallback(
+            model=model,
+            messages=msgs,
+            temperature=0.1,
+            max_tokens=256,
+            timeout=60,
+        )
         text = resp.choices[0].message.content
         data = _extract_json(text)
         action = data.get("action", "hold").strip().lower()

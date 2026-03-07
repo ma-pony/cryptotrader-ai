@@ -10,8 +10,6 @@ import json
 import logging
 import re
 
-import litellm
-
 from cryptotrader.models import TradeVerdict
 
 
@@ -145,7 +143,9 @@ AGENT ANALYSES:
 {agent_reports}"""
 
     try:
-        resp = await litellm.acompletion(
+        from cryptotrader.agents.base import acompletion_with_fallback
+
+        resp = await acompletion_with_fallback(
             model=model,
             messages=[
                 {"role": "system", "content": VERDICT_PROMPT},
@@ -153,7 +153,7 @@ AGENT ANALYSES:
             ],
             temperature=0.1,
             max_tokens=512,
-            timeout=30,
+            timeout=60,
         )
         text = resp.choices[0].message.content
         data = _extract_json(text)

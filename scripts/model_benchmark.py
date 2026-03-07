@@ -15,12 +15,15 @@ from cryptotrader.data.snapshot import SnapshotAggregator
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 MODELS = [
-    "openai/glm-5",
-    "openai/kimi-k2.5",
-    "openai/claude-sonnet-4-6",
-    "openai/claude-opus-4-6",
-    "openai/deepseek-reasoner",
-    "openai/gpt-5.2",
+    "gpt-5.2",
+    "gpt-5.4",
+    "gemini-3-flash",
+    "gemini-3-pro",
+    "gemini-3.1-pro",
+    "claude-sonnet-4-5",
+    "kimi-k2.5",
+    "deepseek-reasoner",
+    "deepseek-chat",
 ]
 
 AGENT_CLASSES = [
@@ -38,7 +41,7 @@ async def test_single(agent_cls, agent_id, model, snapshot):
         result = await agent.analyze(snapshot)
         elapsed = time.time() - t0
         return {
-            "model": model.replace("openai/", ""),
+            "model": model,
             "agent": agent_id,
             "direction": result.direction,
             "confidence": result.confidence,
@@ -50,7 +53,7 @@ async def test_single(agent_cls, agent_id, model, snapshot):
         }
     except Exception as e:
         return {
-            "model": model.replace("openai/", ""),
+            "model": model,
             "agent": agent_id,
             "error": str(e)[:200],
             "latency_s": round(time.time() - t0, 1),

@@ -13,6 +13,8 @@ dependencies = [
     "langchain>=1.2",
     "langchain-core>=1.2",
     "langchain-openai>=1.1",
+    "langchain-google-genai>=2.1",
+    "langchain-anthropic>=0.3",
     "langgraph>=1.0",
     "litellm>=1.80",
     "ccxt>=4.5",
@@ -32,7 +34,6 @@ dependencies = [
     "streamlit>=1.30",
     "feedparser>=6.0.12",
     "structlog>=24.1",
-    "pydantic-settings>=2.0",
     "alembic>=1.13",
 ]
 

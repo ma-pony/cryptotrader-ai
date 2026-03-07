@@ -10,12 +10,49 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
+from typing import Any
 
 import litellm
 
 from cryptotrader.models import AgentAnalysis, DataSnapshot
 
-logger = logging.getLogger(__name__)
+# ── Unified LLM gateway ──
+
+
+def get_llm_kwargs() -> dict:
+    """Return api_base/api_key/custom_llm_provider kwargs from config for litellm calls."""
+    from cryptotrader.config import load_config
+
+    llm_cfg = load_config().llm
+    kwargs: dict = {}
+    if llm_cfg.base_url:
+        kwargs["api_base"] = llm_cfg.base_url
+        kwargs["custom_llm_provider"] = "openai"
+    if llm_cfg.api_key:
+        kwargs["api_key"] = llm_cfg.api_key
+    return kwargs
+
+
+async def acompletion_with_fallback(*, model: str, **kwargs) -> Any:
+    """litellm.acompletion with automatic fallback to config fallback model.
+
+    On timeout or error, retries once with the fallback model defined in config.
+    """
+    from cryptotrader.config import load_config
+
+    llm_kw = get_llm_kwargs()
+    try:
+        return await litellm.acompletion(model=model, **llm_kw, **kwargs)
+    except Exception as primary_err:
+        fallback = load_config().models.fallback
+        if fallback and fallback != model:
+            _logger.warning("Model %s failed (%s), falling back to %s", model, primary_err, fallback)
+            return await litellm.acompletion(model=fallback, **llm_kw, **kwargs)
+        raise
+
+
+_logger = logging.getLogger(__name__)
+logger = _logger
 
 ANALYSIS_FRAMEWORK = """
 Rules:
@@ -57,7 +94,7 @@ class BaseAgent:
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
         try:
-            response = await litellm.acompletion(
+            response = await acompletion_with_fallback(
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system},
@@ -65,7 +102,7 @@ class BaseAgent:
                 ],
                 temperature=0.2,
                 max_tokens=1024,
-                timeout=30,
+                timeout=60,
             )
             text = response.choices[0].message.content
             return self._parse_response(text, snapshot.pair)
@@ -150,6 +187,24 @@ class BaseAgent:
         )
 
 
+def _create_chat_model(model: str, temperature: float = 0.2, max_tokens: int = 1024):
+    """Create a LangChain chat model using the unified LLM gateway.
+
+    All models route through the same base_url/api_key configured in config/default.toml.
+    """
+    from langchain_openai import ChatOpenAI
+
+    from cryptotrader.config import load_config
+
+    llm_cfg = load_config().llm
+    kwargs: dict = {"model": model, "temperature": temperature, "max_completion_tokens": max_tokens}
+    if llm_cfg.base_url:
+        kwargs["base_url"] = llm_cfg.base_url
+    if llm_cfg.api_key:
+        kwargs["api_key"] = llm_cfg.api_key
+    return ChatOpenAI(**kwargs)
+
+
 class ToolAgent(BaseAgent):
     """Agent with tool-calling capability via LangChain create_agent.
 
@@ -173,14 +228,8 @@ class ToolAgent(BaseAgent):
 
         try:
             from langchain.agents import create_agent
-            from langchain_openai import ChatOpenAI
 
-            # Map litellm model strings to provider-specific format for ChatOpenAI
-            model_name = self.model
-            if model_name.startswith("openai/"):
-                model_name = model_name[len("openai/") :]
-
-            llm = ChatOpenAI(model=model_name, temperature=0.2, max_completion_tokens=1024)
+            llm = _create_chat_model(self.model, temperature=0.2, max_tokens=1024)
             agent = create_agent(llm, tools=self.tools, system_prompt=system)
 
             result = await agent.ainvoke(
