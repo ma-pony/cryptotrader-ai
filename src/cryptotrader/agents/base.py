@@ -65,6 +65,7 @@ class BaseAgent:
                 ],
                 temperature=0.2,
                 max_tokens=1024,
+                timeout=30,
             )
             text = response.choices[0].message.content
             return self._parse_response(text, snapshot.pair)

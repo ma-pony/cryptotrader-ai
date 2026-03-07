@@ -8,10 +8,33 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 
 import litellm
 
 from cryptotrader.models import TradeVerdict
+
+
+def _extract_json(text: str) -> dict:
+    """Extract JSON object from LLM response, handling code blocks and inline braces."""
+    # Try ```json ... ``` code block first
+    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if m:
+        return json.loads(m.group(1))
+    # Fall back to outermost balanced braces
+    start = text.find("{")
+    if start == -1:
+        raise ValueError(f"No JSON object found: {text[:200]}")
+    depth = 0
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return json.loads(text[start : i + 1])
+    raise ValueError(f"Unbalanced braces in response: {text[:200]}")
+
 
 logger = logging.getLogger(__name__)
 
@@ -130,13 +153,10 @@ AGENT ANALYSES:
             ],
             temperature=0.1,
             max_tokens=512,
+            timeout=30,
         )
         text = resp.choices[0].message.content
-        start = text.find("{")
-        end = text.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            raise ValueError(f"No JSON object found in verdict response: {text[:200]}")
-        data = json.loads(text[start : end + 1])
+        data = _extract_json(text)
 
         action = _normalize_action(data.get("action", "hold"))
         confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))

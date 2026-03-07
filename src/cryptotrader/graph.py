@@ -163,8 +163,6 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "r
 
 
 async def debate_round(state: ArenaState) -> dict:
-    import json
-
     import litellm
 
     from cryptotrader.debate.challenge import build_challenge_prompt
@@ -186,13 +184,12 @@ async def debate_round(state: ArenaState) -> dict:
                     {"role": "user", "content": prompt},
                 ],
                 max_tokens=1024,
+                timeout=30,
             )
             text = resp.choices[0].message.content
-            start = text.find("{")
-            end = text.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                raise ValueError(f"No JSON in debate response for {agent_id}")
-            data = json.loads(text[start : end + 1])
+            from cryptotrader.debate.verdict import _extract_json
+
+            data = _extract_json(text)
             # Start from original analysis to preserve data_points fields,
             # then overlay only the fields the debate LLM updated
             merged = dict(analysis)

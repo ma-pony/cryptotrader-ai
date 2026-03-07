@@ -51,7 +51,8 @@ def _sa_models():
 async def _get_session(database_url: str):
     global _engine, _sessionmaker, _table_ready
     if _engine is None:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
         _engine = create_async_engine(database_url, pool_size=5, max_overflow=10)
         _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     if not _table_ready:
@@ -65,6 +66,8 @@ async def _get_session(database_url: str):
 class JournalStore:
     """Stores decision commits. PostgreSQL when DATABASE_URL set, else in-memory."""
 
+    _MAX_MEMORY = 10_000  # Cap in-memory store to prevent OOM
+
     def __init__(self, database_url: str | None = None):
         self._db_url = database_url
         self._memory: list[dict[str, Any]] = []
@@ -74,13 +77,18 @@ class JournalStore:
         return bool(self._db_url)
 
     def _serialize(self, dc: DecisionCommit) -> dict[str, Any]:
-        return {"hash": dc.hash, "parent_hash": dc.parent_hash,
-                "timestamp": dc.timestamp.isoformat(), "pair": dc.pair,
-                "data": json.loads(json.dumps(asdict(dc), default=str))}
+        return {
+            "hash": dc.hash,
+            "parent_hash": dc.parent_hash,
+            "timestamp": dc.timestamp.isoformat(),
+            "pair": dc.pair,
+            "data": json.loads(json.dumps(asdict(dc), default=str)),
+        }
 
     def _deserialize(self, row: dict[str, Any]) -> DecisionCommit:
         d = row["data"]
-        from cryptotrader.models import AgentAnalysis, TradeVerdict, GateResult, Order
+        from cryptotrader.models import AgentAnalysis, GateResult, Order, TradeVerdict
+
         analyses = {k: AgentAnalysis(**v) for k, v in d.get("analyses", {}).items()}
         for a in analyses.values():
             if isinstance(a.timestamp, str):
@@ -92,41 +100,57 @@ class JournalStore:
             od = dict(d["order"])
             if "status" in od:
                 from cryptotrader.models import OrderStatus
+
                 try:
                     od["status"] = OrderStatus(od["status"])
                 except (ValueError, KeyError):
                     od["status"] = OrderStatus.PENDING
             order = Order(**od)
         return DecisionCommit(
-            hash=d["hash"], parent_hash=d.get("parent_hash"),
-            timestamp=datetime.fromisoformat(d["timestamp"]), pair=d["pair"],
-            snapshot_summary=d.get("snapshot_summary", {}), analyses=analyses,
-            debate_rounds=d.get("debate_rounds", 0), challenges=d.get("challenges", []),
+            hash=d["hash"],
+            parent_hash=d.get("parent_hash"),
+            timestamp=datetime.fromisoformat(d["timestamp"]),
+            pair=d["pair"],
+            snapshot_summary=d.get("snapshot_summary", {}),
+            analyses=analyses,
+            debate_rounds=d.get("debate_rounds", 0),
+            challenges=d.get("challenges", []),
             divergence=d.get("divergence", 0.0),
-            verdict=verdict, risk_gate=risk_gate, order=order,
-            fill_price=d.get("fill_price"), slippage=d.get("slippage"),
+            verdict=verdict,
+            risk_gate=risk_gate,
+            order=order,
+            fill_price=d.get("fill_price"),
+            slippage=d.get("slippage"),
             portfolio_after=d.get("portfolio_after", {}),
-            pnl=d.get("pnl"), retrospective=d.get("retrospective"))
+            pnl=d.get("pnl"),
+            retrospective=d.get("retrospective"),
+        )
 
     def _dc_to_row_dict(self, dc: DecisionCommit) -> dict[str, Any]:
         d = json.loads(json.dumps(asdict(dc), default=str))
         return {
-            "hash": dc.hash, "parent_hash": dc.parent_hash,
-            "timestamp": dc.timestamp, "pair": dc.pair,
+            "hash": dc.hash,
+            "parent_hash": dc.parent_hash,
+            "timestamp": dc.timestamp,
+            "pair": dc.pair,
             "snapshot_summary": d.get("snapshot_summary", {}),
             "analyses": d.get("analyses", {}),
             "debate_rounds": dc.debate_rounds,
             "challenges": d.get("challenges", []),
             "divergence": dc.divergence,
-            "verdict": d.get("verdict"), "risk_gate": d.get("risk_gate"),
+            "verdict": d.get("verdict"),
+            "risk_gate": d.get("risk_gate"),
             "order_data": d.get("order"),
-            "fill_price": dc.fill_price, "slippage": dc.slippage,
+            "fill_price": dc.fill_price,
+            "slippage": dc.slippage,
             "portfolio_after": d.get("portfolio_after", {}),
-            "pnl": dc.pnl, "retrospective": dc.retrospective,
+            "pnl": dc.pnl,
+            "retrospective": dc.retrospective,
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:
-        from cryptotrader.models import AgentAnalysis, TradeVerdict, GateResult, Order
+        from cryptotrader.models import AgentAnalysis, GateResult, Order, TradeVerdict
+
         analyses = {}
         for k, v in (row.analyses or {}).items():
             if isinstance(v, dict):
@@ -140,21 +164,31 @@ class JournalStore:
             od = dict(row.order_data)
             if "status" in od:
                 from cryptotrader.models import OrderStatus
+
                 try:
                     od["status"] = OrderStatus(od["status"])
                 except (ValueError, KeyError):
                     od["status"] = OrderStatus.PENDING
             order = Order(**od)
         return DecisionCommit(
-            hash=row.hash, parent_hash=row.parent_hash,
-            timestamp=row.timestamp, pair=row.pair,
+            hash=row.hash,
+            parent_hash=row.parent_hash,
+            timestamp=row.timestamp,
+            pair=row.pair,
             snapshot_summary=row.snapshot_summary or {},
-            analyses=analyses, debate_rounds=row.debate_rounds,
-            challenges=row.challenges or [], divergence=row.divergence or 0.0,
-            verdict=verdict, risk_gate=risk_gate, order=order,
-            fill_price=row.fill_price, slippage=row.slippage,
+            analyses=analyses,
+            debate_rounds=row.debate_rounds,
+            challenges=row.challenges or [],
+            divergence=row.divergence or 0.0,
+            verdict=verdict,
+            risk_gate=risk_gate,
+            order=order,
+            fill_price=row.fill_price,
+            slippage=row.slippage,
             portfolio_after=row.portfolio_after or {},
-            pnl=row.pnl, retrospective=row.retrospective)
+            pnl=row.pnl,
+            retrospective=row.retrospective,
+        )
 
     async def commit(self, dc: DecisionCommit) -> None:
         if self._use_db:
@@ -167,12 +201,15 @@ class JournalStore:
             except Exception as e:
                 logger.warning("DB commit failed, falling back to memory: %s", e)
         self._memory.append(self._serialize(dc))
+        if len(self._memory) > self._MAX_MEMORY:
+            self._memory = self._memory[-self._MAX_MEMORY :]
 
     async def log(self, limit: int = 10, pair: str | None = None) -> list[DecisionCommit]:
         if self._use_db:
             try:
                 _, Row = _sa_models()
                 from sqlalchemy import select
+
                 async with await _get_session(self._db_url) as session:
                     q = select(Row).order_by(Row.timestamp.desc())
                     if pair:
@@ -192,6 +229,7 @@ class JournalStore:
             try:
                 _, Row = _sa_models()
                 from sqlalchemy import select
+
                 async with await _get_session(self._db_url) as session:
                     result = await session.execute(select(Row).where(Row.hash == hash))
                     row = result.scalar_one_or_none()
@@ -208,9 +246,11 @@ class JournalStore:
             try:
                 _, Row = _sa_models()
                 from sqlalchemy import update
+
                 async with await _get_session(self._db_url) as session:
                     await session.execute(
-                        update(Row).where(Row.hash == hash).values(pnl=pnl, retrospective=retrospective))
+                        update(Row).where(Row.hash == hash).values(pnl=pnl, retrospective=retrospective)
+                    )
                     await session.commit()
                 return
             except Exception as e:

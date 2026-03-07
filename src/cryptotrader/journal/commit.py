@@ -17,9 +17,9 @@ from cryptotrader.models import (
 
 
 def generate_hash(data: dict) -> str:
-    """SHA256 of json-serialized data, return first 8 chars."""
+    """SHA256 of json-serialized data, return first 16 chars."""
     raw = json.dumps(data, sort_keys=True, default=str)
-    return hashlib.sha256(raw.encode()).hexdigest()[:8]
+    return hashlib.sha256(raw.encode()).hexdigest()[:16]
 
 
 def build_commit(
