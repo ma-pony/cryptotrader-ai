@@ -457,3 +457,241 @@ def test_build_challenge_prompt():
     assert "CHAIN_AGENT" in prompt
     assert "ANTI-CONVERGENCE" in prompt
     assert "new_findings" in prompt
+
+
+# ── nodes/verdict.py — deeper coverage ──
+
+
+@pytest.mark.asyncio
+async def test_gather_risk_constraints():
+    """_gather_risk_constraints collects portfolio and market constraints."""
+    from cryptotrader.nodes.verdict import _gather_risk_constraints
+
+    state = _base_state()
+
+    mock_pm = MagicMock()
+    mock_pm.get_portfolio = AsyncMock(
+        return_value={"total_value": 100000, "positions": {"BTC/USDT": {"amount": 0.5, "avg_price": 50000}}}
+    )
+    mock_pm.get_daily_pnl = AsyncMock(return_value=-500.0)
+    mock_pm.get_drawdown = AsyncMock(return_value=0.03)
+
+    mock_rsm = MagicMock()
+    mock_rsm.is_circuit_breaker_active = AsyncMock(return_value=False)
+    mock_rsm.get = AsyncMock(return_value=None)
+
+    with (
+        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
+        patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
+    ):
+        constraints = await _gather_risk_constraints(state)
+
+    assert "max_position_pct" in constraints
+    assert "max_drawdown_pct" in constraints
+    assert constraints.get("funding_rate") == 0.01
+    assert constraints.get("volatility") == 0.02
+    assert constraints.get("drawdown_current") == 0.03
+    assert constraints.get("circuit_breaker_active") is False
+
+
+@pytest.mark.asyncio
+async def test_gather_risk_constraints_no_portfolio():
+    """_gather_risk_constraints handles missing portfolio gracefully."""
+    from cryptotrader.nodes.verdict import _gather_risk_constraints
+
+    state = _base_state()
+
+    mock_pm = MagicMock()
+    mock_pm.get_portfolio = AsyncMock(side_effect=Exception("DB unavailable"))
+
+    mock_rsm = MagicMock()
+    mock_rsm.is_circuit_breaker_active = AsyncMock(side_effect=Exception("Redis down"))
+
+    with (
+        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
+        patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
+    ):
+        constraints = await _gather_risk_constraints(state)
+
+    # Should not raise, returns at least config defaults
+    assert "max_position_pct" in constraints
+    assert "remaining_exposure_pct" not in constraints  # Portfolio failed
+
+
+@pytest.mark.asyncio
+async def test_risk_check_node():
+    """risk_check node runs gate checks and returns result dict."""
+    from cryptotrader.nodes.verdict import _risk_gate_cache, risk_check
+
+    state = _base_state(
+        verdict={
+            "action": "long",
+            "confidence": 0.7,
+            "position_scale": 0.5,
+            "divergence": 0.1,
+            "reasoning": "bullish",
+            "thesis": "breakout",
+            "invalidation": "below 48k",
+        },
+    )
+
+    # Clear cache to ensure fresh gate
+    _risk_gate_cache.clear()
+
+    mock_pm = MagicMock()
+    mock_pm.get_portfolio = AsyncMock(return_value={"total_value": 10000, "positions": {}})
+    mock_pm.get_daily_pnl = AsyncMock(return_value=0.0)
+    mock_pm.get_drawdown = AsyncMock(return_value=0.0)
+    mock_pm.get_returns = AsyncMock(return_value=[0.01] * 30)
+
+    with patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm):
+        result = await risk_check(state)
+
+    rg = result["data"]["risk_gate"]
+    assert "passed" in rg
+    assert "rejected_by" in rg
+    assert "reason" in rg
+
+
+@pytest.mark.asyncio
+async def test_make_verdict_llm():
+    """make_verdict with llm_verdict=True calls LLM and returns verdict."""
+    from cryptotrader.nodes.verdict import make_verdict
+
+    analyses = {
+        "tech_agent": {"direction": "bullish", "confidence": 0.85, "reasoning": "breakout"},
+        "chain_agent": {"direction": "bullish", "confidence": 0.7, "reasoning": "positive funding"},
+    }
+    state = _base_state(analyses=analyses)
+    state["metadata"]["llm_verdict"] = True
+
+    mock_verdict = MagicMock()
+    mock_verdict.action = "long"
+    mock_verdict.confidence = 0.8
+    mock_verdict.position_scale = 0.7
+    mock_verdict.divergence = 0.1
+    mock_verdict.reasoning = "Strong bullish consensus"
+    mock_verdict.thesis = "Breakout confirmed"
+    mock_verdict.invalidation = "Below 48k"
+
+    with (
+        patch(
+            "cryptotrader.debate.verdict.make_verdict_llm",
+            new_callable=AsyncMock,
+            return_value=mock_verdict,
+        ),
+        patch(
+            "cryptotrader.nodes.verdict._gather_risk_constraints",
+            new_callable=AsyncMock,
+            return_value={"max_position_pct": 0.1},
+        ),
+    ):
+        result = await make_verdict(state)
+
+    v = result["data"]["verdict"]
+    assert v["action"] == "long"
+    assert v["confidence"] == 0.8
+    assert v["thesis"] == "Breakout confirmed"
+
+
+# ── nodes/execution.py — deeper coverage ──
+
+
+@pytest.mark.asyncio
+async def test_place_order_short():
+    """place_order creates sell order for short verdict."""
+    from cryptotrader.nodes.execution import _paper_exchanges, place_order
+
+    state = _base_state(
+        verdict={"action": "short", "confidence": 0.7, "position_scale": 0.5},
+        portfolio={"total_value": 10000},
+    )
+
+    mock_exchange = MagicMock()
+    mock_exchange.place_order = AsyncMock(return_value={"status": "filled", "filled": 0.01, "price": 50000})
+
+    _paper_exchanges["BTC/USDT"] = mock_exchange
+    try:
+        result = await place_order(state)
+        order = result["data"]["order"]
+        assert order["side"] == "sell"
+    finally:
+        _paper_exchanges.pop("BTC/USDT", None)
+
+
+@pytest.mark.asyncio
+async def test_place_order_partial_fill():
+    """place_order handles partially filled orders."""
+    from cryptotrader.nodes.execution import _paper_exchanges, place_order
+
+    state = _base_state(
+        verdict={"action": "long", "confidence": 0.8, "position_scale": 1.0},
+        portfolio={"total_value": 10000},
+    )
+
+    mock_exchange = MagicMock()
+    mock_exchange.place_order = AsyncMock(return_value={"status": "partially_filled", "filled": 0.005, "price": 50100})
+
+    _paper_exchanges["BTC/USDT"] = mock_exchange
+    try:
+        result = await place_order(state)
+        order = result["data"]["order"]
+        assert order is not None
+        assert order["amount"] == 0.005
+        assert order["status"] == "partially_filled"
+    finally:
+        _paper_exchanges.pop("BTC/USDT", None)
+
+
+@pytest.mark.asyncio
+async def test_place_order_rejected():
+    """place_order returns None for rejected order."""
+    from cryptotrader.nodes.execution import _paper_exchanges, place_order
+
+    state = _base_state(
+        verdict={"action": "long", "confidence": 0.8, "position_scale": 1.0},
+        portfolio={"total_value": 10000},
+    )
+
+    mock_exchange = MagicMock()
+    mock_exchange.place_order = AsyncMock(return_value={"status": "rejected"})
+
+    _paper_exchanges["BTC/USDT"] = mock_exchange
+    try:
+        result = await place_order(state)
+        assert result["data"]["order"] is None
+    finally:
+        _paper_exchanges.pop("BTC/USDT", None)
+
+
+# ── nodes/data.py — live collection path ──
+
+
+@pytest.mark.asyncio
+async def test_collect_snapshot_live_path():
+    """collect_snapshot calls SnapshotAggregator when no pre-provided snapshot."""
+    from cryptotrader.nodes.data import collect_snapshot
+
+    state = {
+        "messages": [],
+        "data": {},
+        "metadata": {"pair": "ETH/USDT", "exchange_id": "binance", "timeframe": "1h", "ohlcv_limit": 50},
+        "debate_round": 0,
+        "max_debate_rounds": 2,
+        "divergence_scores": [],
+    }
+
+    mock_snapshot = _make_snapshot("ETH/USDT", 3000)
+
+    with (
+        patch("cryptotrader.data.snapshot.SnapshotAggregator") as MockAgg,
+        patch("cryptotrader.config.load_config") as mock_cfg,
+    ):
+        mock_cfg.return_value.providers = MagicMock()
+        MockAgg.return_value.collect = AsyncMock(return_value=mock_snapshot)
+
+        result = await collect_snapshot(state)
+
+    assert result["data"]["snapshot_summary"]["pair"] == "ETH/USDT"
+    assert result["data"]["snapshot_summary"]["price"] == 3000
+    assert "snapshot" in result["data"]
