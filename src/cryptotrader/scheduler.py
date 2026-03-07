@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -27,9 +26,7 @@ class Scheduler:
             await asyncio.gather(*tasks, return_exceptions=True)
             self._cycle_count += 1
             for p in self.pairs:
-                self._status[p]["next_run"] = (
-                    datetime.now(UTC) + timedelta(seconds=self.interval)
-                ).isoformat()
+                self._status[p]["next_run"] = (datetime.now(UTC) + timedelta(seconds=self.interval)).isoformat()
 
             # Emit daily summary once per day (every 24h / interval cycles)
             cycles_per_day = max(1, 86400 // self.interval)
@@ -52,13 +49,15 @@ class Scheduler:
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:
-            from cryptotrader.graph import build_trading_graph
             from cryptotrader.config import load_config
+            from cryptotrader.graph import build_trading_graph
 
             config = load_config()
             graph = build_trading_graph()
             initial = {
-                "messages": [], "data": {}, "metadata": {
+                "messages": [],
+                "data": {},
+                "metadata": {
                     "pair": pair,
                     "engine": config.engine,
                     "exchange_id": config.scheduler.exchange_id,
@@ -73,8 +72,8 @@ class Scheduler:
                         "news_agent": config.models.news_agent,
                         "macro_agent": config.models.macro_agent,
                     },
-                    "database_url": os.environ.get("DATABASE_URL"),
-                    "redis_url": os.environ.get("REDIS_URL"),
+                    "database_url": config.infrastructure.database_url,
+                    "redis_url": config.infrastructure.redis_url,
                     "convergence_threshold": config.debate.convergence_threshold,
                     "max_single_pct": config.risk.position.max_single_pct,
                 },
@@ -108,7 +107,7 @@ class Scheduler:
                 webhook_url=config.notifications.webhook_url,
                 events=config.notifications.events,
             )
-            pm = PortfolioManager(os.environ.get("DATABASE_URL"))
+            pm = PortfolioManager(config.infrastructure.database_url)
             portfolio = await pm.get_portfolio()
             daily_pnl = await pm.get_daily_pnl()
             drawdown = await pm.get_drawdown()

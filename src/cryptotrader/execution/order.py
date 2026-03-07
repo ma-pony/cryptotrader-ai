@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import logging
+
 from cryptotrader.execution.exchange import ExchangeAdapter
-from cryptotrader.models import Order, OrderStatus, VALID_TRANSITIONS
+from cryptotrader.models import VALID_TRANSITIONS, Order, OrderStatus
+
+logger = logging.getLogger(__name__)
 
 
 class OrderManager:
     def transition(self, order: Order, new_status: OrderStatus) -> Order:
         allowed = VALID_TRANSITIONS.get(order.status, set())
         if new_status not in allowed:
-            raise ValueError(
-                f"Invalid transition: {order.status.value} -> {new_status.value}"
-            )
+            raise ValueError(f"Invalid transition: {order.status.value} -> {new_status.value}")
         order.status = new_status
         return order
 
@@ -31,7 +33,8 @@ class OrderManager:
             elif status == "open":
                 pass  # remain SUBMITTED, not yet filled
             else:
-                self.transition(order, OrderStatus.FILLED)
+                logger.warning("Unknown order status from exchange: %s, marking FAILED", status)
+                self.transition(order, OrderStatus.FAILED)
         except Exception:
             self.transition(order, OrderStatus.FAILED)
         return order

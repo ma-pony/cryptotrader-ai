@@ -1,10 +1,10 @@
 """OKX DEX Market Data API."""
-import os
-import hmac
-import hashlib
+
 import base64
-from datetime import datetime, timezone
-from typing import Optional, List
+import hashlib
+import hmac
+from datetime import UTC, datetime
+
 import httpx
 
 
@@ -13,39 +13,32 @@ class OKXMarket:
 
     BASE_URL = "https://web3.okx.com"
 
-    def __init__(self, api_key: Optional[str] = None, secret_key: Optional[str] = None,
-                 passphrase: Optional[str] = None):
+    def __init__(self, api_key: str, secret_key: str, passphrase: str):
         """Initialize OKX client.
 
         Args:
-            api_key: OKX API key (defaults to OKX_API_KEY env var)
-            secret_key: OKX secret key (defaults to OKX_SECRET_KEY env var)
-            passphrase: OKX passphrase (defaults to OKX_PASSPHRASE env var)
+            api_key: OKX API key
+            secret_key: OKX secret key
+            passphrase: OKX passphrase
         """
-        self.api_key = api_key or os.getenv("OKX_API_KEY")
-        self.secret_key = secret_key or os.getenv("OKX_SECRET_KEY")
-        self.passphrase = passphrase or os.getenv("OKX_PASSPHRASE")
+        self.api_key = api_key
+        self.secret_key = secret_key
+        self.passphrase = passphrase
 
         if not all([self.api_key, self.secret_key, self.passphrase]):
             raise ValueError(
-                "OKX credentials not configured. Set OKX_API_KEY, OKX_SECRET_KEY, "
-                "and OKX_PASSPHRASE environment variables or pass them to constructor."
+                "OKX credentials not configured. Set PROVIDER_OKX_API_KEY, PROVIDER_OKX_SECRET_KEY, "
+                "and PROVIDER_OKX_PASSPHRASE environment variables or pass them to constructor."
             )
 
     def _sign(self, timestamp: str, method: str, path: str, body: str = "") -> str:
         """Generate HMAC-SHA256 signature."""
         message = timestamp + method + path + body
-        return base64.b64encode(
-            hmac.new(
-                self.secret_key.encode(),
-                message.encode(),
-                hashlib.sha256
-            ).digest()
-        ).decode()
+        return base64.b64encode(hmac.new(self.secret_key.encode(), message.encode(), hashlib.sha256).digest()).decode()
 
-    async def get_price(self, chain_id: str, contract_address: str) -> Optional[float]:
+    async def get_price(self, chain_id: str, contract_address: str) -> float | None:
         """Get token price in USD."""
-        timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         path = "/api/v6/dex/market/price"
         body = f'[{{"chainIndex":"{chain_id}","tokenContractAddress":"{contract_address}"}}]'
 
@@ -61,8 +54,8 @@ class OKXMarket:
                         "OK-ACCESS-SIGN": sign,
                         "OK-ACCESS-PASSPHRASE": self.passphrase,
                         "OK-ACCESS-TIMESTAMP": timestamp,
-                        "Content-Type": "application/json"
-                    }
+                        "Content-Type": "application/json",
+                    },
                 )
                 data = resp.json()
                 if data.get("code") == "0" and data.get("data"):
@@ -71,10 +64,9 @@ class OKXMarket:
                 pass
         return None
 
-    async def get_candles(self, chain_id: str, contract_address: str,
-                         bar: str = "1H", limit: int = 24) -> List[dict]:
+    async def get_candles(self, chain_id: str, contract_address: str, bar: str = "1H", limit: int = 24) -> list[dict]:
         """Get K-line candles."""
-        timestamp = datetime.now(timezone.utc).isoformat().replace('+00:00', 'Z')
+        timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
         params = f"chainIndex={chain_id}&tokenContractAddress={contract_address}&bar={bar}&limit={limit}"
         path = f"/api/v6/dex/market/candles?{params}"
 
@@ -88,8 +80,8 @@ class OKXMarket:
                         "OK-ACCESS-KEY": self.api_key,
                         "OK-ACCESS-SIGN": sign,
                         "OK-ACCESS-PASSPHRASE": self.passphrase,
-                        "OK-ACCESS-TIMESTAMP": timestamp
-                    }
+                        "OK-ACCESS-TIMESTAMP": timestamp,
+                    },
                 )
                 data = resp.json()
                 if data.get("code") == "0":

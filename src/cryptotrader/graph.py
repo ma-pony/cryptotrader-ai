@@ -531,13 +531,7 @@ async def place_order(state: ArenaState) -> dict:
         return {"data": {"order": None}}
 
     pair = state["metadata"]["pair"]
-    price = (
-        state["data"]
-        .get(
-            "snapshot_summary",
-        )
-        .get("price", 0)
-    )
+    price = state["data"].get("snapshot_summary", {}).get("price", 0)
     scale = verdict.get("position_scale", 1.0)
     total = state["data"].get("portfolio", {}).get("total_value", 10000)
     if price <= 0:
@@ -775,7 +769,7 @@ async def judge_verdict(state: ArenaState) -> dict:
             "verdict": {
                 "action": result["action"],
                 "confidence": result["confidence"],
-                "position_scale": result["confidence"],
+                "position_scale": result.get("position_scale", result["confidence"]),
                 "divergence": 0.0,
                 "reasoning": result["reasoning"],
             }

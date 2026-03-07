@@ -41,7 +41,8 @@ def _pm_models():
 async def _pm_session(database_url: str):
     global _pm_engine, _pm_sessionmaker, _pm_table_ready
     if _pm_engine is None:
-        from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
         _pm_engine = create_async_engine(database_url, pool_size=5, max_overflow=10)
         _pm_sessionmaker = async_sessionmaker(_pm_engine, expire_on_commit=False)
     if not _pm_table_ready:
@@ -64,9 +65,9 @@ class PortfolioManager:
             try:
                 _, Portfolio, _ = _pm_models()
                 from sqlalchemy import select
+
                 async with await _pm_session(self._db_url) as session:
-                    rows = await session.execute(
-                        select(Portfolio).where(Portfolio.id.startswith(f"{account_id}:")))
+                    rows = await session.execute(select(Portfolio).where(Portfolio.id.startswith(f"{account_id}:")))
                     for r in rows.scalars():
                         positions[r.pair] = {"amount": r.amount, "avg_price": r.avg_price}
                     total = sum(p["amount"] * p["avg_price"] for p in positions.values())
@@ -82,6 +83,7 @@ class PortfolioManager:
             try:
                 _, Portfolio, _ = _pm_models()
                 from sqlalchemy import select
+
                 async with await _pm_session(self._db_url) as session:
                     key = f"{account_id}:{pair}"
                     row = (await session.execute(select(Portfolio).where(Portfolio.id == key))).scalar_one_or_none()
@@ -121,7 +123,8 @@ class PortfolioManager:
 
     async def snapshot(self, account_id: str = "default", total_value: float = 0.0) -> None:
         snap = {
-            "account_id": account_id, "total_value": total_value,
+            "account_id": account_id,
+            "total_value": total_value,
             "timestamp": datetime.now(UTC),
         }
         self._snapshots.append(snap)
@@ -129,12 +132,15 @@ class PortfolioManager:
             try:
                 _, _, PortfolioSnapshot = _pm_models()
                 import uuid
+
                 async with await _pm_session(self._db_url) as session:
-                    session.add(PortfolioSnapshot(
-                        id=str(uuid.uuid4()),
-                        account_id=account_id,
-                        total_value=total_value,
-                    ))
+                    session.add(
+                        PortfolioSnapshot(
+                            id=str(uuid.uuid4()),
+                            account_id=account_id,
+                            total_value=total_value,
+                        )
+                    )
                     await session.commit()
             except Exception as e:
                 logger.warning("DB snapshot write failed: %s", e)
@@ -145,6 +151,7 @@ class PortfolioManager:
             try:
                 _, _, PortfolioSnapshot = _pm_models()
                 from sqlalchemy import select
+
                 async with await _pm_session(self._db_url) as session:
                     rows = await session.execute(
                         select(PortfolioSnapshot)

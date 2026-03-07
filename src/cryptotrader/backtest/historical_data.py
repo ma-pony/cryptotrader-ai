@@ -1,6 +1,8 @@
 """Fetch and cache historical macro/news data for backtesting."""
+
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import UTC, datetime
 
@@ -9,36 +11,15 @@ import httpx
 from cryptotrader.backtest.cache import CACHE_DB
 
 
-
-import os
-
-
-def _get_fred_api_key() -> str:
-    return os.environ.get("FRED_API_KEY", "")
-
-
 def _ensure_tables():
     conn = sqlite3.connect(str(CACHE_DB))
+    conn.execute("CREATE TABLE IF NOT EXISTS fear_greed (date TEXT PRIMARY KEY, value INTEGER, classification TEXT)")
+    conn.execute("CREATE TABLE IF NOT EXISTS funding_rate (date TEXT PRIMARY KEY, rate REAL, count INTEGER)")
+    conn.execute("CREATE TABLE IF NOT EXISTS btc_dominance (date TEXT PRIMARY KEY, dominance REAL)")
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS fear_greed "
-        "(date TEXT PRIMARY KEY, value INTEGER, classification TEXT)"
+        "CREATE TABLE IF NOT EXISTS fred_series (series_id TEXT, date TEXT, value REAL, PRIMARY KEY (series_id, date))"
     )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS funding_rate "
-        "(date TEXT PRIMARY KEY, rate REAL, count INTEGER)"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS btc_dominance "
-        "(date TEXT PRIMARY KEY, dominance REAL)"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS fred_series "
-        "(series_id TEXT, date TEXT, value REAL, PRIMARY KEY (series_id, date))"
-    )
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS futures_volume "
-        "(date TEXT PRIMARY KEY, volume REAL, quote_volume REAL)"
-    )
+    conn.execute("CREATE TABLE IF NOT EXISTS futures_volume (date TEXT PRIMARY KEY, volume REAL, quote_volume REAL)")
     conn.commit()
     conn.close()
 
@@ -47,10 +28,12 @@ async def fetch_fear_greed(start_date: str, end_date: str) -> dict[str, int]:
     """Fetch Fear & Greed Index history. Returns {date_str: value}."""
     _ensure_tables()
     conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(conn.execute(
-        "SELECT date, value FROM fear_greed WHERE date >= ? AND date <= ?",
-        (start_date, end_date),
-    ).fetchall())
+    cached = dict(
+        conn.execute(
+            "SELECT date, value FROM fear_greed WHERE date >= ? AND date <= ?",
+            (start_date, end_date),
+        ).fetchall()
+    )
     conn.close()
 
     if len(cached) > 180:  # good enough coverage
@@ -85,10 +68,12 @@ async def fetch_funding_rate(symbol: str, start_date: str, end_date: str) -> dic
     """Fetch daily avg funding rate from Binance. Returns {date_str: avg_rate}."""
     _ensure_tables()
     conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(conn.execute(
-        "SELECT date, rate FROM funding_rate WHERE date >= ? AND date <= ?",
-        (start_date, end_date),
-    ).fetchall())
+    cached = dict(
+        conn.execute(
+            "SELECT date, rate FROM funding_rate WHERE date >= ? AND date <= ?",
+            (start_date, end_date),
+        ).fetchall()
+    )
     conn.close()
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
@@ -141,10 +126,12 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
     """Fetch BTC dominance from CoinGecko. Estimates total mcap from BTC+ETH."""
     _ensure_tables()
     conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(conn.execute(
-        "SELECT date, dominance FROM btc_dominance WHERE date >= ? AND date <= ?",
-        (start_date, end_date),
-    ).fetchall())
+    cached = dict(
+        conn.execute(
+            "SELECT date, dominance FROM btc_dominance WHERE date >= ? AND date <= ?",
+            (start_date, end_date),
+        ).fetchall()
+    )
     conn.close()
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
@@ -163,7 +150,8 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
         btc_r.raise_for_status()
         btc_caps = {
             datetime.fromtimestamp(p[0] / 1000, UTC).strftime("%Y-%m-%d"): p[1]
-            for p in btc_r.json().get("market_caps", []) if p[1]
+            for p in btc_r.json().get("market_caps", [])
+            if p[1]
         }
 
         eth_r = await client.get(
@@ -174,7 +162,8 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
         eth_r.raise_for_status()
         eth_caps = {
             datetime.fromtimestamp(p[0] / 1000, UTC).strftime("%Y-%m-%d"): p[1]
-            for p in eth_r.json().get("market_caps", []) if p[1]
+            for p in eth_r.json().get("market_caps", [])
+            if p[1]
         }
 
     # BTC+ETH ≈ 66.4% of total market (stable ratio). Estimate total, then compute dominance.
@@ -198,14 +187,18 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
     return {k: v for k, v in cached.items() if start_date <= k <= end_date}
 
 
-async def fetch_fred_series(series_id: str, start_date: str, end_date: str) -> dict[str, float]:
+async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_key: str = "") -> dict[str, float]:
     """Fetch a FRED time series. Returns {date_str: value}. Fills weekends/holidays forward."""
     _ensure_tables()
+    if not api_key:
+        api_key = os.environ.get("FRED_API_KEY", "")
     conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(conn.execute(
-        "SELECT date, value FROM fred_series WHERE series_id=? AND date>=? AND date<=?",
-        (series_id, start_date, end_date),
-    ).fetchall())
+    cached = dict(
+        conn.execute(
+            "SELECT date, value FROM fred_series WHERE series_id=? AND date>=? AND date<=?",
+            (series_id, start_date, end_date),
+        ).fetchall()
+    )
     conn.close()
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
@@ -216,9 +209,13 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str) -> d
     async with httpx.AsyncClient() as client:
         r = await client.get(
             "https://api.stlouisfed.org/fred/series/observations",
-            params={"series_id": series_id, "api_key": _get_fred_api_key(),
-                    "file_type": "json", "observation_start": start_date,
-                    "observation_end": end_date},
+            params={
+                "series_id": series_id,
+                "api_key": api_key,
+                "file_type": "json",
+                "observation_start": start_date,
+                "observation_end": end_date,
+            },
             timeout=30,
         )
         r.raise_for_status()
@@ -241,6 +238,7 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str) -> d
         all_dates = sorted(cached.keys())
         last_val = cached[all_dates[0]]
         from datetime import timedelta
+
         cur = start_dt
         end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
         filled = {}
@@ -268,7 +266,7 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
     # Volatility spike detection
     recent_returns = []
     for i in range(max(1, idx - 14), idx + 1):
-        recent_returns.append(abs(candles[i][4] - candles[i-1][4]) / candles[i-1][4])
+        recent_returns.append(abs(candles[i][4] - candles[i - 1][4]) / candles[i - 1][4])
     avg_vol = sum(recent_returns) / len(recent_returns) if recent_returns else 0.01
     today_vol = recent_returns[-1] if recent_returns else 0
 
@@ -287,10 +285,13 @@ async def fetch_futures_volume(symbol: str, start_date: str, end_date: str) -> d
     """Fetch daily futures volume from Binance. Returns {date: {volume, quote_volume}}."""
     _ensure_tables()
     conn = sqlite3.connect(str(CACHE_DB))
-    cached = {r[0]: {"volume": r[1], "quote_volume": r[2]} for r in conn.execute(
-        "SELECT date, volume, quote_volume FROM futures_volume WHERE date >= ? AND date <= ?",
-        (start_date, end_date),
-    ).fetchall()}
+    cached = {
+        r[0]: {"volume": r[1], "quote_volume": r[2]}
+        for r in conn.execute(
+            "SELECT date, volume, quote_volume FROM futures_volume WHERE date >= ? AND date <= ?",
+            (start_date, end_date),
+        ).fetchall()
+    }
     conn.close()
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
@@ -299,6 +300,7 @@ async def fetch_futures_volume(symbol: str, start_date: str, end_date: str) -> d
         return cached
 
     import ccxt.async_support as ccxt_async
+
     exchange = ccxt_async.binance({"options": {"defaultType": "future"}})
     try:
         pair = f"{symbol}/USDT"

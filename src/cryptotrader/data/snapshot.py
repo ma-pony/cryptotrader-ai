@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 
-from cryptotrader.models import DataSnapshot
-from cryptotrader.data.market import MarketCollector
-from cryptotrader.data.onchain import OnchainCollector
-from cryptotrader.data.news import NewsCollector
 from cryptotrader.data.macro import MacroCollector
+from cryptotrader.data.market import MarketCollector
+from cryptotrader.data.news import NewsCollector
+from cryptotrader.data.onchain import OnchainCollector
+from cryptotrader.models import DataSnapshot
 
 
 class SnapshotAggregator:
-
     def __init__(self, providers_config=None) -> None:
         self.market = MarketCollector()
         self.onchain = OnchainCollector(providers_config)

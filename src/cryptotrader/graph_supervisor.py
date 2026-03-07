@@ -39,7 +39,7 @@ Coordinate your analysts to determine: long, short, or hold?
 """
 
     supervisor = create_supervisor_agent(model)
-    result = supervisor.invoke({"messages": [{"role": "user", "content": context}]})
+    result = await supervisor.ainvoke({"messages": [{"role": "user", "content": context}]})
 
     # Extract verdict from supervisor's final message
     final_message = result["messages"][-1].content
@@ -56,6 +56,9 @@ Coordinate your analysts to determine: long, short, or hold?
             "confidence": 0.5,
             "reasoning": final_message,
             "position_scale": 0.5,
+            "divergence": 0.0,
+            "thesis": "",
+            "invalidation": "",
         }
 
     return {"data": {"verdict": verdict}}
