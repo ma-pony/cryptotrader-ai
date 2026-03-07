@@ -13,6 +13,14 @@ app = typer.Typer(name="arena", help="CryptoTrader AI — Multi-agent debate tra
 console = Console()
 
 
+@app.callback()
+def _setup():
+    """Initialize logging on every CLI invocation."""
+    from cryptotrader.log_config import setup_logging
+
+    setup_logging()
+
+
 @app.command()
 def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
@@ -255,6 +263,35 @@ async def _scheduler_status():
     console.print(table)
 
 
+# ── Migrate command ──
+
+
+@app.command()
+def migrate():
+    """Apply database schema migrations (create tables if needed)."""
+    asyncio.run(_migrate())
+
+
+async def _migrate():
+    from cryptotrader.config import load_config
+
+    config = load_config()
+    db_url = config.infrastructure.database_url
+    if not db_url:
+        console.print("[red]DATABASE_URL not configured — nothing to migrate.[/red]")
+        raise typer.Exit(1)
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from cryptotrader.journal.store import _sa_models
+
+    Base, _ = _sa_models()
+    engine = create_async_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    await engine.dispose()
+    console.print("[green]Database tables created / verified.[/green]")
+
+
 # ── Dashboard command ──
 
 
@@ -270,11 +307,15 @@ def dashboard():
 
 
 @app.command()
-def serve(port: int = typer.Option(8003, "--port")):
+def serve(
+    port: int = typer.Option(8003, "--port"),
+    reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev only)"),
+    host: str = typer.Option("0.0.0.0", "--host"),
+):
     """Start FastAPI server."""
     import uvicorn
 
-    uvicorn.run("api.main:app", host="0.0.0.0", port=port, reload=True)
+    uvicorn.run("api.main:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

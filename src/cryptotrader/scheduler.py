@@ -15,11 +15,20 @@ class Scheduler:
         self.pairs = pairs
         self.interval = interval_minutes * 60
         self._running = False
+        self._sleep_task: asyncio.Task | None = None
         self._status: dict[str, dict[str, Any]] = {p: {} for p in pairs}
 
     async def start(self) -> None:
         self._running = True
         self._cycle_count = 0
+
+        # Register signal handlers for graceful shutdown
+        import signal
+
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, self.stop)
+
         logger.info("Scheduler started: pairs=%s interval=%dm", self.pairs, self.interval // 60)
         while self._running:
             tasks = [self._run_pair(p) for p in self.pairs]
@@ -33,10 +42,18 @@ class Scheduler:
             if self._cycle_count % cycles_per_day == 0:
                 await self._emit_daily_summary()
 
-            await asyncio.sleep(self.interval)
+            try:
+                self._sleep_task = asyncio.ensure_future(asyncio.sleep(self.interval))
+                await self._sleep_task
+            except asyncio.CancelledError:
+                break
+
+        logger.info("Scheduler stopped gracefully")
 
     def stop(self) -> None:
         self._running = False
+        if self._sleep_task and not self._sleep_task.done():
+            self._sleep_task.cancel()
 
     @property
     def status(self) -> dict[str, dict[str, Any]]:

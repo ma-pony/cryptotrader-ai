@@ -33,6 +33,7 @@ dependencies = [
     "feedparser>=6.0.12",
     "structlog>=24.1",
     "pydantic-settings>=2.0",
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]

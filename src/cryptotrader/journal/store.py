@@ -27,8 +27,8 @@ def _sa_models():
 
     class DecisionCommitRow(Base):
         __tablename__ = "decision_commits"
-        hash = Column(String(8), primary_key=True)
-        parent_hash = Column(String(8), nullable=True)
+        hash = Column(String(16), primary_key=True)
+        parent_hash = Column(String(16), nullable=True)
         timestamp = Column(DateTime, nullable=False, index=True)
         pair = Column(String(20), nullable=False, index=True)
         snapshot_summary = Column(JSONB, default={})
