@@ -1,8 +1,8 @@
 """Tests for verdict generation and divergence calculation."""
 
-from cryptotrader.debate.convergence import compute_divergence, check_convergence
+from cryptotrader.debate.convergence import check_convergence, compute_divergence
+from cryptotrader.debate.verdict import _format_constraints, _normalize_action, make_verdict_rules
 from cryptotrader.debate.verdict import make_verdict_weighted as make_verdict
-from cryptotrader.debate.verdict import _normalize_action
 
 
 def test_divergence_unanimous_bullish():
@@ -88,3 +88,80 @@ def test_normalize_action_unknown():
     assert _normalize_action("maybe") == "hold"
     assert _normalize_action("") == "hold"
     assert _normalize_action("  LONG  ") == "long"
+
+
+# ── _format_constraints tests ──
+
+
+def test_format_constraints_empty():
+    assert _format_constraints({}) == "No risk constraints available."
+
+
+def test_format_constraints_circuit_breaker():
+    result = _format_constraints({"circuit_breaker_active": True})
+    assert "CIRCUIT BREAKER" in result
+
+
+def test_format_constraints_no_circuit_breaker():
+    result = _format_constraints({"circuit_breaker_active": False})
+    assert "CIRCUIT BREAKER" not in result
+
+
+def test_format_constraints_exhausted_loss():
+    result = _format_constraints({"daily_loss_remaining_pct": 0.0})
+    assert "EXHAUSTED" in result
+
+
+def test_format_constraints_funding_rate_elevated():
+    result = _format_constraints({"funding_rate": 0.001})
+    assert "ELEVATED" in result
+
+
+def test_format_constraints_funding_rate_negative():
+    result = _format_constraints({"funding_rate": -0.0005})
+    assert "NEGATIVE" in result
+
+
+def test_format_constraints_full():
+    result = _format_constraints(
+        {
+            "max_position_pct": 0.1,
+            "remaining_exposure_pct": 0.3,
+            "drawdown_current": 0.05,
+            "max_drawdown_pct": 0.10,
+            "volatility": 0.025,
+        }
+    )
+    assert "10%" in result
+    assert "30%" in result
+    assert "drawdown" in result.lower()
+    assert "volatility" in result.lower()
+
+
+# ── make_verdict_rules tests ──
+
+
+def test_rules_verdict_clear_bullish():
+    analyses = {
+        "a": {"direction": "bullish", "confidence": 0.9},
+        "b": {"direction": "bullish", "confidence": 0.8},
+    }
+    v = make_verdict_rules(analyses)
+    assert v.action == "long"
+    assert v.confidence > 0.5
+
+
+def test_rules_verdict_ambiguous_hold():
+    analyses = {
+        "a": {"direction": "bullish", "confidence": 0.5},
+        "b": {"direction": "bearish", "confidence": 0.5},
+    }
+    v = make_verdict_rules(analyses)
+    assert v.action == "hold"
+
+
+def test_rules_verdict_thesis_fields():
+    analyses = {"a": {"direction": "bullish", "confidence": 0.9}}
+    v = make_verdict_rules(analyses)
+    assert v.thesis == ""  # rules verdict doesn't set thesis
+    assert v.invalidation == ""
