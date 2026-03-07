@@ -1,8 +1,9 @@
 """Tests for previously untested pure functions."""
 
-from cryptotrader.data.news import _score_text
-from cryptotrader.journal.search import _within_range
+from unittest.mock import patch
 
+from cryptotrader.data.news import _score_headlines, _score_text, _score_texts_finbert
+from cryptotrader.journal.search import _within_range
 
 # ── News sentiment scoring ──
 
@@ -26,6 +27,39 @@ def test_score_text_mixed():
 
 def test_score_text_empty():
     assert _score_text("") == 0.0
+
+
+# ── FinBERT / headline scoring ──
+
+
+def test_score_texts_finbert_returns_valid_range():
+    """FinBERT returns a score in [-1, 1] range (or 0.0 if unavailable)."""
+    score = _score_texts_finbert(["Bitcoin surges to new high"])
+    assert -1.0 <= score <= 1.0
+
+
+def test_score_texts_finbert_empty():
+    assert _score_texts_finbert([]) == 0.0
+
+
+def test_score_headlines_falls_back_to_keywords():
+    """When FinBERT unavailable, _score_headlines uses keyword fallback."""
+    with patch("cryptotrader.data.news._score_texts_finbert", return_value=0.0):
+        with patch("cryptotrader.data.news._finbert_available", False):
+            score = _score_headlines(["Bitcoin rally surge breakout"])
+            assert score > 0
+
+
+def test_score_headlines_empty():
+    assert _score_headlines([]) == 0.0
+
+
+def test_score_headlines_uses_finbert_when_available():
+    """When FinBERT is available, use its score even if 0.0."""
+    with patch("cryptotrader.data.news._finbert_available", True):
+        with patch("cryptotrader.data.news._score_texts_finbert", return_value=0.3):
+            score = _score_headlines(["some headline"])
+            assert score == 0.3
 
 
 # ── Journal search similarity ──

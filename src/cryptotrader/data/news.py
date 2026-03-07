@@ -1,4 +1,4 @@
-"""News sentiment collector — RSS feeds + keyword sentiment + social buzz."""
+"""News sentiment collector — RSS feeds + FinBERT/keyword sentiment + social buzz."""
 
 from __future__ import annotations
 
@@ -12,32 +12,136 @@ from cryptotrader.models import NewsSentiment
 
 logger = logging.getLogger(__name__)
 
+# ── FinBERT sentiment (lazy-loaded, CPU-friendly) ──
+
+_finbert_pipeline = None
+_finbert_available: bool | None = None
+
+
+def _get_finbert():
+    """Lazy-load FinBERT pipeline. Returns None if transformers/torch unavailable."""
+    global _finbert_pipeline, _finbert_available
+    if _finbert_available is False:
+        return None
+    if _finbert_pipeline is not None:
+        return _finbert_pipeline
+    try:
+        from transformers import pipeline
+
+        _finbert_pipeline = pipeline(
+            "sentiment-analysis",
+            model="ProsusAI/finbert",
+            truncation=True,
+            max_length=512,
+        )
+        _finbert_available = True
+        logger.info("FinBERT loaded successfully")
+        return _finbert_pipeline
+    except Exception:
+        _finbert_available = False
+        logger.info("FinBERT unavailable, falling back to keyword sentiment")
+        return None
+
+
+def _score_texts_finbert(texts: list[str]) -> float:
+    """Score texts using FinBERT. Returns -1 to +1."""
+    pipe = _get_finbert()
+    if not pipe or not texts:
+        return 0.0
+    try:
+        results = pipe(texts[:20])  # limit to 20 headlines for speed
+        score = 0.0
+        for r in results:
+            label = r["label"].lower()
+            conf = r["score"]
+            if label == "positive":
+                score += conf
+            elif label == "negative":
+                score -= conf
+        return max(-1.0, min(1.0, score / len(results)))
+    except Exception:
+        logger.debug("FinBERT scoring failed, falling back to keywords")
+        return 0.0
+
+
 RSS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
 ]
 
-POSITIVE = {"bullish", "surge", "rally", "soar", "gain", "rise", "jump", "breakout",
-            "adoption", "approval", "partnership", "upgrade", "record", "high", "buy"}
-NEGATIVE = {"bearish", "crash", "plunge", "drop", "fall", "dump", "hack", "ban",
-            "fraud", "lawsuit", "sell", "fear", "risk", "loss", "decline", "sec"}
+POSITIVE = {
+    "bullish",
+    "surge",
+    "rally",
+    "soar",
+    "gain",
+    "rise",
+    "jump",
+    "breakout",
+    "adoption",
+    "approval",
+    "partnership",
+    "upgrade",
+    "record",
+    "high",
+    "buy",
+}
+NEGATIVE = {
+    "bearish",
+    "crash",
+    "plunge",
+    "drop",
+    "fall",
+    "dump",
+    "hack",
+    "ban",
+    "fraud",
+    "lawsuit",
+    "sell",
+    "fear",
+    "risk",
+    "loss",
+    "decline",
+    "sec",
+}
 
 # CoinGecko coin ID mapping for social buzz lookup
 _COINGECKO_IDS = {
-    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "binancecoin",
-    "XRP": "ripple", "ADA": "cardano", "DOGE": "dogecoin", "AVAX": "avalanche-2",
-    "DOT": "polkadot", "MATIC": "matic-network", "LINK": "chainlink",
-    "UNI": "uniswap", "ATOM": "cosmos", "LTC": "litecoin",
+    "BTC": "bitcoin",
+    "ETH": "ethereum",
+    "SOL": "solana",
+    "BNB": "binancecoin",
+    "XRP": "ripple",
+    "ADA": "cardano",
+    "DOGE": "dogecoin",
+    "AVAX": "avalanche-2",
+    "DOT": "polkadot",
+    "MATIC": "matic-network",
+    "LINK": "chainlink",
+    "UNI": "uniswap",
+    "ATOM": "cosmos",
+    "LTC": "litecoin",
 }
 
 
 def _score_text(text: str) -> float:
+    """Keyword-based sentiment score (-1 to +1)."""
     words = set(text.lower().split())
     pos = len(words & POSITIVE)
     neg = len(words & NEGATIVE)
     total = pos + neg
     return (pos - neg) / total if total else 0.0
+
+
+def _score_headlines(headlines: list[str]) -> float:
+    """Score headlines using FinBERT if available, else keyword fallback."""
+    if not headlines:
+        return 0.0
+    finbert_score = _score_texts_finbert(headlines)
+    if finbert_score != 0.0 or _finbert_available:
+        return finbert_score
+    return _score_text(" ".join(headlines))
 
 
 async def _fetch_social_buzz(symbol: str) -> float:
@@ -52,8 +156,7 @@ async def _fetch_social_buzz(symbol: str) -> float:
         async with httpx.AsyncClient(timeout=10) as client:
             resp = await client.get(
                 f"https://api.coingecko.com/api/v3/coins/{coin_id}",
-                params={"localization": "false", "tickers": "false",
-                        "market_data": "false", "sparkline": "false"},
+                params={"localization": "false", "tickers": "false", "market_data": "false", "sparkline": "false"},
             )
             resp.raise_for_status()
             data = resp.json()
@@ -75,7 +178,6 @@ async def _fetch_social_buzz(symbol: str) -> float:
 
 
 class NewsCollector:
-
     async def collect(self, pair: str) -> NewsSentiment:
         symbol = pair.split("/")[0]
 
@@ -83,7 +185,8 @@ class NewsCollector:
         rss_task = self._collect_rss(symbol.lower())
         buzz_task = _fetch_social_buzz(symbol)
         (headlines, score, key_events), social_buzz = await asyncio.gather(
-            rss_task, buzz_task,
+            rss_task,
+            buzz_task,
         )
 
         return NewsSentiment(
@@ -109,6 +212,8 @@ class NewsCollector:
         if not relevant:
             relevant = all_headlines[:10]
 
-        score = _score_text(" ".join(relevant))
-        key_events = [h for h in relevant if any(w in h.lower() for w in ("sec", "etf", "hack", "ban", "approval", "record"))]
+        score = _score_headlines(relevant)
+        key_events = [
+            h for h in relevant if any(w in h.lower() for w in ("sec", "etf", "hack", "ban", "approval", "record"))
+        ]
         return relevant[:10], score, key_events[:5]
