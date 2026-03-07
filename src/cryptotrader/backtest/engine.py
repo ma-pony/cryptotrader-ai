@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import UTC, datetime
 from typing import Any
@@ -11,6 +12,8 @@ import pandas as pd
 from cryptotrader.backtest.cache import fetch_historical
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
+
+logger = logging.getLogger(__name__)
 
 _TF_MS = {
     "1m": 60_000,
@@ -46,6 +49,9 @@ class BacktestEngine:
         self.position_pct = position_pct
         # Cache config once to avoid re-parsing TOML per candle
         self._config = None
+        # LLM usage tracking
+        self._llm_calls = 0
+        self._llm_tokens = 0
 
     @property
     def _cached_config(self):
@@ -209,7 +215,25 @@ class BacktestEngine:
         )
 
     async def _run_graph(self, graph, snapshot: DataSnapshot) -> dict:
+        import litellm
+
         config = self._cached_config
+
+        # Track LLM usage via litellm callbacks
+        if not getattr(litellm, "_backtest_hooks_installed", False):
+            original_success = litellm.success_callback
+
+            def _track_usage(_kwargs, completion_response, _start_time, _end_time):
+                usage = getattr(completion_response, "usage", None)
+                if usage:
+                    litellm._backtest_token_count = getattr(litellm, "_backtest_token_count", 0) + (
+                        usage.total_tokens or 0
+                    )
+                litellm._backtest_call_count = getattr(litellm, "_backtest_call_count", 0) + 1
+
+            litellm.success_callback = [*original_success, _track_usage] if original_success else [_track_usage]
+            litellm._backtest_hooks_installed = True
+
         initial: dict[str, Any] = {
             "messages": [],
             "data": {"snapshot": snapshot},
@@ -232,7 +256,12 @@ class BacktestEngine:
             "max_debate_rounds": 2,
             "divergence_scores": [],
         }
-        return await graph.ainvoke(initial)
+        result = await graph.ainvoke(initial)
+
+        self._llm_calls = getattr(litellm, "_backtest_call_count", 0)
+        self._llm_tokens = getattr(litellm, "_backtest_token_count", 0)
+
+        return result
 
     def _compute_result(self, equity: float, curve: list[float], trades: list[dict]) -> BacktestResult:
         total_return = (equity - self.capital) / self.capital
@@ -269,4 +298,6 @@ class BacktestEngine:
             win_rate=win_rate,
             trades=trades,
             equity_curve=curve,
+            llm_calls=self._llm_calls,
+            llm_tokens=self._llm_tokens,
         )

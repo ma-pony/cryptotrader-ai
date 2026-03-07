@@ -43,6 +43,15 @@ def _get_finbert():
         return None
 
 
+def prewarm_finbert() -> bool:
+    """Pre-load FinBERT model at startup to avoid first-request latency.
+
+    Call this during application startup (e.g. FastAPI lifespan, CLI init).
+    Returns True if model loaded successfully, False otherwise.
+    """
+    return _get_finbert() is not None
+
+
 def _score_texts_finbert(texts: list[str]) -> float:
     """Score texts using FinBERT. Returns -1 to +1."""
     pipe = _get_finbert()
@@ -149,7 +158,7 @@ async def _fetch_social_buzz(symbol: str) -> float:
 
     Returns a normalized 0-1 score based on community engagement metrics.
     """
-    coin_id = _COINGECKO_IDS.get(symbol.upper())
+    coin_id = _COINGECKO_IDS.get(symbol.upper(), symbol.lower())
     if not coin_id:
         return 0.0
     try:

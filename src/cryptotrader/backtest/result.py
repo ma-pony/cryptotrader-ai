@@ -14,17 +14,27 @@ class BacktestResult:
     win_rate: float = 0.0
     trades: list[dict] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
+    llm_calls: int = 0
+    llm_tokens: int = 0
 
     def summary(self) -> dict:
-        return {
+        result = {
             "total_return": f"{self.total_return:.2%}",
             "sharpe_ratio": f"{self.sharpe_ratio:.2f}",
             "max_drawdown": f"{self.max_drawdown:.2%}",
             "win_rate": f"{self.win_rate:.2%}",
             "num_trades": len(self.trades),
         }
+        if self.llm_calls > 0:
+            result["llm_calls"] = self.llm_calls
+            result["llm_tokens"] = self.llm_tokens
+        return result
 
     def to_json(self, path: str) -> None:
         with open(path, "w") as f:
-            json.dump({"summary": self.summary(), "trades": self.trades,
-                        "equity_curve": self.equity_curve}, f, indent=2, default=str)
+            json.dump(
+                {"summary": self.summary(), "trades": self.trades, "equity_curve": self.equity_curve},
+                f,
+                indent=2,
+                default=str,
+            )
