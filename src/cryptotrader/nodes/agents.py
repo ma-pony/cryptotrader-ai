@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from cryptotrader.state import ArenaState  # noqa: TCH001
+from cryptotrader.state import ArenaState
 
 
 async def _run_agent(agent_type: str, state: ArenaState) -> dict:

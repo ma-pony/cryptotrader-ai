@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cryptotrader.state import ArenaState  # noqa: TCH001
+from cryptotrader.state import ArenaState
 
 
 async def journal_trade(state: ArenaState) -> dict:

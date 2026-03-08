@@ -87,37 +87,47 @@ Output ONLY JSON:
 }"""
 
 
-def _format_constraints(constraints: dict) -> str:  # noqa: C901
+def _format_funding_rate(fr: float) -> str:
+    """Format funding rate with crowd signal label."""
+    label = ""
+    if fr > 0.0003:
+        label = " (ELEVATED — crowded long)"
+    elif fr < -0.0001:
+        label = " (NEGATIVE — crowded short)"
+    return f"Current funding rate: {fr:.6f}{label}"
+
+
+def _format_constraints(constraints: dict) -> str:
     """Format risk constraints into a readable block for the verdict prompt."""
     if not constraints:
         return "No risk constraints available."
     parts = []
-    if "max_position_pct" in constraints:
-        parts.append(f"Max position size: {constraints['max_position_pct']:.0%} of portfolio")
-    if "remaining_exposure_pct" in constraints:
-        parts.append(f"Remaining exposure capacity: {constraints['remaining_exposure_pct']:.0%}")
+
+    # Simple formatted fields
+    _fields = [
+        ("max_position_pct", "Max position size: {:.0%} of portfolio"),
+        ("remaining_exposure_pct", "Remaining exposure capacity: {:.0%}"),
+        ("drawdown_current", "Current drawdown: {:.1%}"),
+        ("max_drawdown_pct", "Max drawdown limit: {:.0%}"),
+        ("volatility", "Current volatility: {:.4f}"),
+    ]
+    for key, template in _fields:
+        if key in constraints:
+            parts.append(template.format(constraints[key]))
+
+    # Daily loss with exhaustion warning
     if "daily_loss_remaining_pct" in constraints:
         v = constraints["daily_loss_remaining_pct"]
         suffix = " (EXHAUSTED — no new trades)" if v <= 0 else ""
         parts.append(f"Daily loss budget remaining: {v:.1%}{suffix}")
-    if "drawdown_current" in constraints:
-        parts.append(f"Current drawdown: {constraints['drawdown_current']:.1%}")
-    if "max_drawdown_pct" in constraints:
-        parts.append(f"Max drawdown limit: {constraints['max_drawdown_pct']:.0%}")
+
     if constraints.get("cooldown_pairs"):
         parts.append(f"Pairs on cooldown: {', '.join(constraints['cooldown_pairs'])}")
     if constraints.get("circuit_breaker_active"):
         parts.append("CIRCUIT BREAKER ACTIVE — all trading halted until manual reset")
     if "funding_rate" in constraints:
-        fr = constraints["funding_rate"]
-        label = ""
-        if fr > 0.0003:
-            label = " (ELEVATED — crowded long)"
-        elif fr < -0.0001:
-            label = " (NEGATIVE — crowded short)"
-        parts.append(f"Current funding rate: {fr:.6f}{label}")
-    if "volatility" in constraints:
-        parts.append(f"Current volatility: {constraints['volatility']:.4f}")
+        parts.append(_format_funding_rate(constraints["funding_rate"]))
+
     return "\n".join(parts) if parts else "No specific constraints."
 
 

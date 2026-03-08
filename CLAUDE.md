@@ -138,7 +138,12 @@ pytest with `asyncio_mode = "auto"`. Source path is `src/` (`pythonpath = ["src"
 - **Redis fallback**: If Redis was configured but is unavailable, system rejects trades conservatively. This is intentional.
 - **Config caching**: `load_config()` is cached after first call. Don't expect config changes mid-run.
 
+### Code Quality Rules
+- **禁止 `noqa` 注释** — 不允许用 noqa 跳过 lint 检查。遇到 C901 复杂度警告时，必须重构函数（提取子函数）而不是添加 noqa。遇到 F401 未使用导入时，要么删除导入，要么确保在 `__all__` 中声明为再导出。
+- **零 lint 错误** — `uv run ruff check src/ tests/` 必须零错误通过。所有 pre-commit hooks 必须通过。
+- **函数复杂度** — C901 阈值为 10。超过时拆分为辅助函数，不要加 noqa。
+
 ### Testing
 - **Async tests**: Use `asyncio_mode = "auto"` — no need for `@pytest.mark.asyncio`.
-- **Mock LLM calls**: All agent tests mock `acompletion_with_fallback` or `litellm.acompletion`. When unifying to LangChain, mock `ChatOpenAI.ainvoke` instead.
+- **Mock LLM calls**: Mock `langchain_openai.ChatOpenAI.ainvoke`，返回 `AIMessage(content=...)`.
 - **Import paths**: Tests import from `cryptotrader.*` (not `src.cryptotrader.*`) due to `pythonpath = ["src"]`.

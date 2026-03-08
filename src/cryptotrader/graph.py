@@ -12,27 +12,27 @@ from langgraph.graph import END, START, StateGraph
 
 # ── Re-export node functions for backward compatibility ──
 # These are used by graph_supervisor.py, tests, and external callers.
-from cryptotrader.nodes.agents import (  # noqa: E402
+from cryptotrader.nodes.agents import (
     chain_analyze,
     macro_analyze,
     news_analyze,
     tech_analyze,
 )
-from cryptotrader.nodes.data import collect_snapshot, update_past_pnl, verbal_reinforcement  # noqa: E402
-from cryptotrader.nodes.debate import (  # noqa: E402
+from cryptotrader.nodes.data import collect_snapshot, update_past_pnl, verbal_reinforcement
+from cryptotrader.nodes.debate import (
     bull_bear_debate,
     check_stability,
     convergence_router,
     debate_round,
     judge_verdict,
 )
-from cryptotrader.nodes.execution import check_stop_loss, place_order  # noqa: E402
-from cryptotrader.nodes.journal import journal_rejection, journal_trade  # noqa: E402
-from cryptotrader.nodes.verdict import _risk_gate_cache, make_verdict, risk_check, risk_router  # noqa: E402, F401
-from cryptotrader.state import ArenaState, merge_dicts  # noqa: F401
+from cryptotrader.nodes.execution import check_stop_loss, place_order
+from cryptotrader.nodes.journal import journal_rejection, journal_trade
+from cryptotrader.nodes.verdict import _risk_gate_cache, make_verdict, risk_check, risk_router
+from cryptotrader.state import ArenaState, merge_dicts
 
-# Make linters happy — these are re-exported intentionally
 __all__ = [
+    "_risk_gate_cache",
     "ArenaState",
     "merge_dicts",
     "collect_snapshot",

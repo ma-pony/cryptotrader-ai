@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from cryptotrader.state import ArenaState  # noqa: TCH001
+from cryptotrader.state import ArenaState
 
 logger = logging.getLogger(__name__)
 

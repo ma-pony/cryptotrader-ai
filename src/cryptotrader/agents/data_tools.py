@@ -97,7 +97,7 @@ async def get_whale_transfers(pair: str) -> str:
 
 
 @tool
-async def get_exchange_netflow(pair: str) -> str:  # noqa: ARG001
+async def get_exchange_netflow(pair: str) -> str:
     """Fetch exchange net inflow/outflow data.
 
     Positive = net inflow (sell pressure), Negative = net outflow (accumulation).
