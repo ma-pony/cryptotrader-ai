@@ -152,6 +152,7 @@ class ProvidersConfig:
     okx_enabled: bool = False
     sosovalue_api_key: str = ""
     sosovalue_enabled: bool = True
+    coindesk_api_key: str = ""
     binance_audit_enabled: bool = True
     binance_sentiment_enabled: bool = True
     enforce_token_security: bool = True

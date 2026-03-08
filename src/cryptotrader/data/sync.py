@@ -1017,12 +1017,166 @@ async def sync_coinpaprika_global() -> int:
         return 0
 
 
+def _score_news_daily(
+    daily: dict[str, list[str]],
+    positive: set,
+    negative: set,
+    daily_sentiments: dict[str, list[float]] | None = None,
+) -> list[tuple]:
+    """Score daily headline groups into store records."""
+    event_words = {"sec", "etf", "hack", "ban", "approval", "record", "regulation", "lawsuit"}
+    records = []
+    for date_str in sorted(daily.keys()):
+        headlines = daily[date_str]
+        # Use API sentiment if available, else keyword fallback
+        api_scores = (daily_sentiments or {}).get(date_str, [])
+        if api_scores:
+            score = sum(api_scores) / len(api_scores)
+        else:
+            words = set(" ".join(headlines).lower().split())
+            pos = len(words & positive)
+            neg = len(words & negative)
+            total = pos + neg
+            score = (pos - neg) / total if total else 0.0
+        key_events = [h for h in headlines if any(w in h.lower() for w in event_words)]
+        records.append(
+            (
+                date_str,
+                {
+                    "headlines": headlines[:15],
+                    "sentiment_score": round(score, 3),
+                    "key_events": key_events[:5],
+                    "article_count": len(headlines),
+                },
+            )
+        )
+    return records
+
+
+async def _fetch_news_page(client, symbol, to_ts, api_key, headers):
+    """Fetch a single page of news articles."""
+    if api_key:
+        resp = await client.get(
+            "https://data-api.coindesk.com/news/v1/article/list",
+            params={"lang": "EN", "to_ts": to_ts, "asset_ids": symbol, "limit": 100},
+            headers=headers,
+        )
+    else:
+        resp = await client.get(
+            "https://min-api.cryptocompare.com/data/v2/news/",
+            params={"lang": "EN", "lTs": to_ts, "categories": symbol},
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _collect_articles(articles, ts_key, title_key, cutoff, daily, daily_sentiments):
+    """Extract headlines and sentiments from articles into daily buckets."""
+    sentiment_map = {"POSITIVE": 1.0, "NEGATIVE": -1.0, "NEUTRAL": 0.0}
+    for article in articles:
+        pub_ts = article.get(ts_key, 0)
+        if pub_ts < cutoff:
+            break
+        date_str = datetime.fromtimestamp(pub_ts, UTC).strftime("%Y-%m-%d")
+        title = article.get(title_key, "").strip()
+        if title:
+            daily.setdefault(date_str, []).append(title)
+        sent = article.get("SENTIMENT", "")
+        if sent in sentiment_map:
+            daily_sentiments.setdefault(date_str, []).append(sentiment_map[sent])
+
+
+async def _fetch_coindesk_pages(client, symbol, to_ts, cutoff, max_pages, api_key=""):
+    """Paginate CoinDesk/CryptoCompare news API backwards from to_ts to cutoff."""
+    daily: dict[str, list[str]] = {}
+    daily_sentiments: dict[str, list[float]] = {}
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+    ts_key = "PUBLISHED_ON" if api_key else "published_on"
+    title_key = "TITLE" if api_key else "title"
+    empty_retries = 0
+
+    for page in range(max_pages):
+        try:
+            body = await _fetch_news_page(client, symbol, to_ts, api_key, headers)
+        except Exception:
+            logger.debug("News page %d fetch failed, skipping", page)
+            to_ts -= 86400
+            empty_retries += 1
+            if empty_retries > 5:
+                break
+            continue
+
+        if body.get("Response") == "Error":
+            logger.warning("News API error: %s", body.get("Message", ""))
+            to_ts -= 86400
+            empty_retries += 1
+            if empty_retries > 5:
+                break
+            await asyncio.sleep(1)
+            continue
+        articles = body.get("Data", [])
+        if not isinstance(articles, list) or not articles:
+            to_ts -= 86400
+            empty_retries += 1
+            if empty_retries > 5:
+                break
+            continue
+        empty_retries = 0
+
+        _collect_articles(articles, ts_key, title_key, cutoff, daily, daily_sentiments)
+        oldest = min(a.get(ts_key, to_ts) for a in articles)
+        if oldest <= cutoff:
+            break
+        to_ts = oldest - 1
+        if page % 50 == 0 and page > 0:
+            logger.info("News sync: page %d, dates collected: %d", page, len(daily))
+        await asyncio.sleep(0.2)
+    return daily, daily_sentiments
+
+
+async def sync_cryptocompare_news(symbol: str = "BTC", days: int = 365, api_key: str = "") -> int:
+    """Fetch historical crypto news from CoinDesk/CryptoCompare and compute daily sentiment."""
+    source_key = "cryptocompare_news"
+    data_key = f"news_headlines_{symbol.lower()}"
+    if not _should_fetch(source_key):
+        return count_records(data_key)
+
+    from cryptotrader.data.news import NEGATIVE, POSITIVE
+
+    try:
+        to_ts = int(datetime.now(UTC).timestamp())
+        cutoff = int((datetime.now(UTC) - timedelta(days=days)).timestamp())
+
+        # ~2 pages/day with API key (100 articles/page), ~10 pages/day without
+        max_pages = days * 2 + 10 if api_key else days // 5 + 10
+        async with httpx.AsyncClient(timeout=15) as client:
+            daily, daily_sentiments = await _fetch_coindesk_pages(
+                client,
+                symbol,
+                to_ts,
+                cutoff,
+                max_pages,
+                api_key=api_key,
+            )
+
+        records = _score_news_daily(daily, POSITIVE, NEGATIVE, daily_sentiments)
+        if records:
+            store_batch(data_key, records)
+        _record_fetch(source_key)
+        logger.info("Synced %d days of %s news headlines", len(records), symbol)
+        return len(records)
+    except Exception:
+        logger.warning("News sync failed", exc_info=True)
+        return 0
+
+
 async def sync_all(providers_config=None) -> dict[str, int]:
     """Run all data syncs in parallel (respecting rate limits). Returns {source: record_count}."""
     cfg = providers_config
 
     soso_key = getattr(cfg, "sosovalue_api_key", "") if cfg else ""
     fred_key = getattr(cfg, "fred_api_key", "") if cfg else ""
+    coindesk_key = getattr(cfg, "coindesk_api_key", "") if cfg else ""
 
     tasks = {
         # SoSoValue
@@ -1057,6 +1211,8 @@ async def sync_all(providers_config=None) -> dict[str, int]:
         "binance_funding_full": sync_binance_funding_full(),
         # Global market
         "coinpaprika_global": sync_coinpaprika_global(),
+        # Historical news
+        "cryptocompare_news_btc": sync_cryptocompare_news("BTC", api_key=coindesk_key),
     }
 
     # FRED macro series

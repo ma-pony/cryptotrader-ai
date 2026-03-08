@@ -187,9 +187,15 @@ Confidence calibration:
 - 0.3-0.4: Weak or conflicting signals, low conviction
 - 0.1-0.2: Almost no signal, data insufficient or contradictory
 
-Output JSON: {"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "reasoning": "2-3 sentences citing
-specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...], "data_points": {"indicator": value,
-...}}"""
+Data sufficiency self-assessment:
+- "high": Your core data sources are present and complete. You can make a well-informed directional call.
+- "medium": Some data is present but key sources are missing or stale. Moderate confidence at best.
+- "low": Most of your core data is missing, zero, or placeholder. You MUST set confidence ≤ 0.3 and direction
+  to "neutral". Do NOT guess a direction without data — say "insufficient data" in reasoning.
+
+Output JSON: {"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "data_sufficiency": "high|medium|low",
+"reasoning": "2-3 sentences citing specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...],
+"data_points": {"indicator": value, ...}}"""
 
 
 class BaseAgent:
@@ -284,21 +290,38 @@ class BaseAgent:
                 reasoning=response_text[:500],
             )
         # Standard fields
-        standard = {"direction", "confidence", "reasoning", "key_factors", "risk_flags", "data_points"}
+        standard = {
+            "direction",
+            "confidence",
+            "reasoning",
+            "key_factors",
+            "risk_flags",
+            "data_points",
+            "data_sufficiency",
+        }
         # Everything else goes into data_points for downstream rules engine
         extra = {k: v for k, v in data.items() if k not in standard}
         dp = data.get("data_points", {})
         dp.update(extra)
 
+        # Parse data_sufficiency and enforce confidence cap for low-data agents
+        sufficiency = data.get("data_sufficiency", "medium")
+        if sufficiency not in ("high", "medium", "low"):
+            sufficiency = "medium"
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
+        if sufficiency == "low":
+            confidence = min(confidence, 0.3)
+
         return AgentAnalysis(
             agent_id=self.agent_id,
             pair=pair,
             direction=data.get("direction", "neutral"),
-            confidence=max(0.0, min(1.0, float(data.get("confidence", 0.5)))),
+            confidence=confidence,
             reasoning=data.get("reasoning", ""),
             key_factors=data.get("key_factors", []),
             risk_flags=data.get("risk_flags", []),
             data_points=dp,
+            data_sufficiency=sufficiency,
         )
 
 

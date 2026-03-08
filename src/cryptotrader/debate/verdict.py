@@ -52,33 +52,43 @@ VERDICT_PROMPT = """You are the chief decision-maker for a crypto trading system
 analyzed the market. You must evaluate the QUALITY of their arguments — not just count votes.
 
 Your job:
-1. Read each agent's full analysis: direction, confidence, reasoning, key_factors, risk_flags, and data_points.
-2. Assess which agents have the strongest evidence (specific data points, not vague claims).
-3. Identify contradictions between agents and determine which side has better support.
-4. Factor in the risk constraints below — you CANNOT exceed these limits.
-5. Output a final trading decision.
+1. Read the POSITION STATE — you must factor in your current exposure before deciding.
+2. Read the PRICE CONTEXT — understand where price is in the broader trend.
+3. Evaluate each agent's analysis: direction, confidence, reasoning, data_points, and DATA SUFFICIENCY.
+4. Agents with data_sufficiency "low" have insufficient data — treat their opinions as unreliable noise.
+   Only agents with "high" or "medium" sufficiency should meaningfully influence your decision.
+5. Factor in risk constraints — you CANNOT exceed these limits.
+6. Output a position-aware trading decision.
 
 Evaluation criteria (in order of importance):
+- Data sufficiency filter: How many agents have "high"/"medium" data? If ≤1 agent has real data, default to hold.
 - Evidence quality: Does the agent cite specific numbers, or just make vague claims?
-- Risk flag coverage: Did any agent flag risks that others missed? Unaddressed risks should lower confidence.
+- Position awareness: If already in a position, the bar for HOLDING is lower than for ENTERING.
+  Exiting requires evidence that the thesis has been invalidated, not just uncertainty.
+- Trend alignment: Does the proposed action align with or fight the price trend shown in PRICE CONTEXT?
+  Counter-trend trades need exceptionally strong evidence.
 - Contradiction resolution: When agents disagree, which side has more concrete evidence?
-- Confidence calibration: An agent claiming 0.9 confidence with weak evidence should be trusted LESS than one
-  claiming 0.5 with strong data points.
 
-Decision rules:
-- "hold" is valid when evidence is genuinely mixed or when risk constraints make trading inadvisable.
-- Do NOT default to hold out of caution — if evidence clearly favors a direction, act on it.
-- position_scale should reflect your conviction: 0.3-0.5 for moderate, 0.6-0.8 for strong, 0.9+ for exceptional.
-- thesis: one sentence summarizing WHY you're taking this trade (or why holding).
-- invalidation: what specific condition would prove this thesis wrong
-  (e.g., "BTC drops below 60k", "funding rate flips negative").
+Position-aware decision rules:
+- If FLAT: You need clear evidence to open a new position. Mixed signals → stay flat.
+- If LONG: Ask "has my long thesis been invalidated?" If price is dropping AND agents turn bearish with
+  strong evidence → close or reverse. If just choppy → hold. Don't panic-exit on noise.
+- If SHORT: Ask "has my short thesis been invalidated?" If price is rising AND agents turn bullish with
+  strong evidence → close or reverse. Don't cover too early on a bounce.
+- CLOSING a losing position is not failure — it's risk management. A 3-5% unrealized loss with deteriorating
+  signals is a clear close signal. Don't hold hoping for reversal.
+- REVERSING (close + open opposite) requires the strongest evidence level — both a thesis invalidation
+  AND clear evidence for the opposite direction.
+- position_scale: 0.3-0.5 moderate conviction, 0.6-0.8 strong, 0.9+ exceptional.
+- thesis: one sentence summarizing WHY you're taking this action.
+- invalidation: specific condition that would prove this thesis wrong.
 
 Output ONLY JSON:
 {
   "action": "long|short|hold",
   "confidence": 0.0-1.0,
   "position_scale": 0.0-1.0,
-  "reasoning": "2-3 sentences explaining your evaluation of agent arguments",
+  "reasoning": "2-3 sentences explaining your evaluation of agent arguments and position decision",
   "thesis": "one sentence trade thesis",
   "invalidation": "specific condition that would invalidate thesis"
 }"""
@@ -128,22 +138,75 @@ def _format_constraints(constraints: dict) -> str:
     return "\n".join(parts) if parts else "No specific constraints."
 
 
+def _format_position_context(position_context: dict | None) -> str:
+    """Format current position state for verdict prompt."""
+    if not position_context:
+        return "Current position: FLAT (no open position)"
+    side = position_context.get("side", "flat")
+    if side == "flat":
+        return "Current position: FLAT (no open position)"
+    entry = position_context.get("entry_price", 0)
+    current = position_context.get("current_price", 0)
+    days = position_context.get("days_held", 0)
+    if entry > 0 and current > 0:
+        pnl_pct = (current - entry) / entry if side == "long" else (entry - current) / entry
+    else:
+        pnl_pct = 0.0
+    pnl_label = f"{pnl_pct:+.1%}"
+    return (
+        f"Current position: {side.upper()}\n"
+        f"  Entry price: ${entry:,.2f} | Current price: ${current:,.2f}\n"
+        f"  Unrealized P&L: {pnl_label}\n"
+        f"  Days held: {days}"
+    )
+
+
+def _format_trend_context(trend_context: dict | None) -> str:
+    """Format price trend summary for verdict prompt."""
+    if not trend_context:
+        return "Price context: unavailable"
+    parts = ["Price context:"]
+    for period in ("7d", "14d", "30d"):
+        val = trend_context.get(f"change_{period}")
+        if val is not None:
+            parts.append(f"  {period} change: {val:+.1%}")
+    high = trend_context.get("high_30d")
+    low = trend_context.get("low_30d")
+    if high and low:
+        parts.append(f"  30d range: ${low:,.0f} — ${high:,.0f}")
+        current = trend_context.get("current_price", 0)
+        if current and high > low:
+            pct_in_range = (current - low) / (high - low)
+            parts.append(f"  Current at {pct_in_range:.0%} of 30d range")
+    return "\n".join(parts)
+
+
 async def make_verdict_ai(
     analyses: dict[str, dict],
     constraints: dict | None = None,
     calibration: str = "",
     model: str = "gpt-4o",
+    position_context: dict | None = None,
+    trend_context: dict | None = None,
 ) -> TradeVerdict:
-    """AI-driven verdict that evaluates argument quality with risk constraints and calibration."""
+    """AI-driven verdict that evaluates argument quality with full context."""
     # Format full agent reports (all fields, not just direction+confidence)
     agent_reports = "\n\n".join(
         f"── {aid.upper()} ──\n{json.dumps(a, indent=2, default=str)}" for aid, a in analyses.items()
     )
 
+    position_block = _format_position_context(position_context)
+    trend_block = _format_trend_context(trend_context)
     constraint_block = _format_constraints(constraints or {})
     calibration_block = f"\n\n{calibration}" if calibration else ""
 
-    user_msg = f"""RISK CONSTRAINTS (hard limits — you cannot exceed these):
+    user_msg = f"""POSITION STATE:
+{position_block}
+
+PRICE CONTEXT:
+{trend_block}
+
+RISK CONSTRAINTS (hard limits — you cannot exceed these):
 {constraint_block}{calibration_block}
 
 AGENT ANALYSES:
@@ -204,9 +267,18 @@ async def make_verdict_llm(
     model: str = "",
     constraints: dict | None = None,
     calibration: str = "",
+    position_context: dict | None = None,
+    trend_context: dict | None = None,
 ) -> TradeVerdict:
     """Main entry point — routes to AI verdict."""
-    return await make_verdict_ai(analyses, constraints=constraints, calibration=calibration, model=model)
+    return await make_verdict_ai(
+        analyses,
+        constraints=constraints,
+        calibration=calibration,
+        model=model,
+        position_context=position_context,
+        trend_context=trend_context,
+    )
 
 
 def make_verdict_weighted(

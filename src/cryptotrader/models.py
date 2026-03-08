@@ -81,6 +81,7 @@ class AgentAnalysis:
     key_factors: list[str] = field(default_factory=list)
     risk_flags: list[str] = field(default_factory=list)
     data_points: dict[str, Any] = field(default_factory=dict)
+    data_sufficiency: Literal["high", "medium", "low"] = "medium"
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
     is_mock: bool = False
 

@@ -51,6 +51,7 @@ _RATE_LIMITS = {
     "defillama_options": 3600,  # 1 hour
     "binance_funding_full": 3600,  # 1 hour
     "coinpaprika": 3600,  # 1 hour
+    "cryptocompare_news": 3600,  # 1 hour
     # Live collector cache keys
     "live_news_rss": 600,  # 10 min
     "live_social_buzz": 600,  # 10 min

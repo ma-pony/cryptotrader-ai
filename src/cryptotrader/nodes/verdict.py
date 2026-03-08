@@ -89,7 +89,16 @@ async def make_verdict(state: ArenaState) -> dict:
         model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", _default_model))
         constraints = await _gather_risk_constraints(state)
         calibration = state["data"].get("verdict_calibration", "")
-        verdict = await make_verdict_llm(analyses, model=model, constraints=constraints, calibration=calibration)
+        position_context = state["data"].get("position_context")
+        trend_context = state["data"].get("trend_context")
+        verdict = await make_verdict_llm(
+            analyses,
+            model=model,
+            constraints=constraints,
+            calibration=calibration,
+            position_context=position_context,
+            trend_context=trend_context,
+        )
     else:
         scores = state.get("divergence_scores") or [0.0]
         threshold = state["metadata"].get("divergence_hold_threshold", 0.7)

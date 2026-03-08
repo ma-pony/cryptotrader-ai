@@ -87,6 +87,7 @@ defillama_enabled = true
 coingecko_enabled = true
 sosovalue_api_key = ""
 sosovalue_enabled = true
+coindesk_api_key = ""
 okx_api_key = ""
 okx_secret_key = ""
 okx_passphrase = ""
