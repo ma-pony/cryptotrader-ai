@@ -11,10 +11,10 @@ api_key = ""
 base_url = ""          # e.g. "http://localhost:3000/v1" or your proxy
 
 [models]
-analysis = "gemini-3-flash"
-debate = "gemini-3-flash"
-verdict = "gpt-5.4"
-tech_agent = "gemini-3-flash"
+analysis = "deepseek-chat"
+debate = "deepseek-chat"
+verdict = "deepseek-reasoner"
+tech_agent = "deepseek-reasoner"
 chain_agent = "deepseek-chat"
 news_agent = "deepseek-chat"
 macro_agent = "deepseek-chat"
@@ -71,6 +71,8 @@ whale_alert_enabled = true
 fred_enabled = true
 defillama_enabled = true
 coingecko_enabled = true
+sosovalue_api_key = ""
+sosovalue_enabled = true
 okx_api_key = ""
 okx_secret_key = ""
 okx_passphrase = ""

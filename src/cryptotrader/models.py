@@ -48,6 +48,13 @@ class MacroData:
     dxy: float = 0.0
     btc_dominance: float = 0.0
     fear_greed_index: int = 50
+    etf_daily_net_inflow: float = 0.0
+    etf_total_net_assets: float = 0.0
+    etf_cum_net_inflow: float = 0.0
+    vix: float = 0.0
+    sp500: float = 0.0
+    stablecoin_total_supply: float = 0.0
+    btc_hashrate: float = 0.0
 
 
 @dataclass

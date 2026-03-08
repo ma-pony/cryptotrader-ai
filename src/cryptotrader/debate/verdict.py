@@ -143,19 +143,14 @@ AGENT ANALYSES:
 {agent_reports}"""
 
     try:
-        from cryptotrader.agents.base import acompletion_with_fallback
+        from langchain_core.messages import HumanMessage, SystemMessage
 
-        resp = await acompletion_with_fallback(
-            model=model,
-            messages=[
-                {"role": "system", "content": VERDICT_PROMPT},
-                {"role": "user", "content": user_msg},
-            ],
-            temperature=0.1,
-            max_tokens=512,
-            timeout=60,
-        )
-        text = resp.choices[0].message.content
+        from cryptotrader.agents.base import create_llm, extract_content
+
+        llm = create_llm(model=model, temperature=0.1, timeout=120, json_mode=True)
+        messages = [SystemMessage(content=VERDICT_PROMPT), HumanMessage(content=user_msg)]
+        resp = await llm.ainvoke(messages)
+        text = extract_content(resp)
         data = _extract_json(text)
 
         action = _normalize_action(data.get("action", "hold"))

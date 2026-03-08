@@ -70,7 +70,11 @@ async def make_verdict(state: ArenaState) -> dict:
     """Generate trading verdict via AI or weighted-average fallback."""
     from cryptotrader.debate.verdict import make_verdict_llm, make_verdict_weighted
 
-    analyses = state["data"].get("analyses", {})
+    raw_analyses = state["data"].get("analyses", {})
+    # Filter out mock analyses (LLM failures) — don't let fake data pollute AI verdict
+    analyses = {k: v for k, v in raw_analyses.items() if v.get("reasoning") != "LLM unavailable - mock analysis"}
+    if not analyses:
+        analyses = raw_analyses  # fallback: use all if everything failed
     use_llm_verdict = state["metadata"].get("llm_verdict", True)
 
     if use_llm_verdict:

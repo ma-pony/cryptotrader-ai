@@ -200,17 +200,14 @@ async def test_debate_round():
     }
     state = _base_state(analyses=analyses)
 
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(
-                content='{"direction": "bullish", "confidence": 0.75, "reasoning": "revised", '
-                '"key_factors": [], "risk_flags": [], "new_findings": "cross-check"}'
-            )
-        )
-    ]
+    from langchain_core.messages import AIMessage
 
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+    mock_ai_msg = AIMessage(
+        content='{"direction": "bullish", "confidence": 0.75, "reasoning": "revised", '
+        '"key_factors": [], "risk_flags": [], "new_findings": "cross-check"}'
+    )
+
+    with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_ai_msg):
         result = await debate_round(state)
 
     assert result["debate_round"] == 1

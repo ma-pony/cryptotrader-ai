@@ -3,6 +3,8 @@
 Two agent types:
 - BaseAgent: Single LLM call, for agents with complete pre-computed data (TechAgent, MacroAgent)
 - ToolAgent: LangChain create_agent loop, for agents that need to actively query data (ChainAgent, NewsAgent)
+
+All LLM calls go through unified LangChain gateway with SQLiteCache.
 """
 
 from __future__ import annotations
@@ -10,49 +12,132 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 
-import litellm
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 
 from cryptotrader.models import AgentAnalysis, DataSnapshot
 
-# ── Unified LLM gateway ──
+_logger = logging.getLogger(__name__)
+logger = _logger
+
+# ── LangChain SQLiteCache initialization ──
+
+_cache_initialized = False
 
 
-def get_llm_kwargs() -> dict:
-    """Return api_base/api_key/custom_llm_provider kwargs from config for litellm calls."""
-    from cryptotrader.config import load_config
+def _init_cache() -> None:
+    """Initialize LangChain SQLiteCache for exact-match LLM caching."""
+    global _cache_initialized
+    if _cache_initialized:
+        return
+    try:
+        from langchain_community.cache import SQLiteCache
+        from langchain_core.globals import set_llm_cache
 
-    llm_cfg = load_config().llm
-    kwargs: dict = {}
-    if llm_cfg.base_url:
-        kwargs["api_base"] = llm_cfg.base_url
-        kwargs["custom_llm_provider"] = "openai"
-    if llm_cfg.api_key:
-        kwargs["api_key"] = llm_cfg.api_key
-    return kwargs
+        cache_dir = Path.home() / ".cryptotrader"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_db = cache_dir / "llm_cache.db"
+        set_llm_cache(SQLiteCache(database_path=str(cache_db)))
+        _logger.info("LLM cache initialized: %s", cache_db)
+    except Exception:
+        _logger.warning("Failed to initialize LLM cache, continuing without cache", exc_info=True)
+    _cache_initialized = True
 
 
-async def acompletion_with_fallback(*, model: str, **kwargs) -> Any:
-    """litellm.acompletion with automatic fallback to config fallback model.
+# ── Unified LLM factory ──
 
-    On timeout or error, retries once with the fallback model defined in config.
+
+def create_llm(
+    model: str,
+    temperature: float = 0.2,
+    timeout: int = 120,
+    json_mode: bool = False,
+) -> ChatOpenAI:
+    """Create a LangChain ChatOpenAI instance with unified config.
+
+    All LLM calls in the project route through this factory to ensure
+    consistent configuration, caching, and fallback behavior.
     """
     from cryptotrader.config import load_config
 
-    llm_kw = get_llm_kwargs()
-    try:
-        return await litellm.acompletion(model=model, **llm_kw, **kwargs)
-    except Exception as primary_err:
-        fallback = load_config().models.fallback
-        if fallback and fallback != model:
-            _logger.warning("Model %s failed (%s), falling back to %s", model, primary_err, fallback)
-            return await litellm.acompletion(model=fallback, **llm_kw, **kwargs)
-        raise
+    _init_cache()
+
+    cfg = load_config()
+    llm_cfg = cfg.llm
+
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "temperature": temperature,
+        "timeout": timeout,
+    }
+    if llm_cfg.base_url:
+        kwargs["base_url"] = llm_cfg.base_url
+    if llm_cfg.api_key:
+        kwargs["api_key"] = llm_cfg.api_key
+    if json_mode:
+        kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+
+    llm = ChatOpenAI(**kwargs)
+
+    # Add fallback model
+    fallback_model = cfg.models.fallback
+    if fallback_model and fallback_model != model:
+        fallback_kwargs = dict(kwargs)
+        fallback_kwargs["model"] = fallback_model
+        fallback_llm = ChatOpenAI(**fallback_kwargs)
+        llm = llm.with_fallbacks([fallback_llm])
+
+    return llm
 
 
-_logger = logging.getLogger(__name__)
-logger = _logger
+def _to_langchain_messages(messages: list[dict]) -> list:
+    """Convert OpenAI-format message dicts to LangChain message objects."""
+    result = []
+    for m in messages:
+        role = m["role"]
+        content = m["content"]
+        if role == "system":
+            result.append(SystemMessage(content=content))
+        elif role == "user":
+            result.append(HumanMessage(content=content))
+        else:
+            result.append(AIMessage(content=content))
+    return result
+
+
+def extract_content(response: AIMessage | Any) -> str:
+    """Extract text content from LLM response.
+
+    Handles both LangChain AIMessage and reasoning models (deepseek-reasoner)
+    that may return content in additional_kwargs['reasoning_content'].
+    """
+    if isinstance(response, AIMessage):
+        text = response.content or ""
+        if not text:
+            # deepseek-reasoner puts answer in additional_kwargs
+            text = response.additional_kwargs.get("reasoning_content", "")
+        return text
+    return str(response)
+
+
+async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
+    """Unified LLM call via LangChain with automatic fallback.
+
+    Accepts OpenAI-format kwargs and returns AIMessage.
+    """
+    messages = kwargs.pop("messages", [])
+    temperature = kwargs.pop("temperature", 0.2)
+    timeout = kwargs.pop("timeout", 120)
+    response_format = kwargs.pop("response_format", None)
+    json_mode = response_format is not None and response_format.get("type") == "json_object"
+
+    llm = create_llm(model=model, temperature=temperature, timeout=timeout, json_mode=json_mode)
+    lc_messages = _to_langchain_messages(messages)
+    return await llm.ainvoke(lc_messages)
+
 
 ANALYSIS_FRAMEWORK = """
 Rules:
@@ -94,17 +179,10 @@ class BaseAgent:
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
         try:
-            response = await acompletion_with_fallback(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=0.2,
-                max_tokens=1024,
-                timeout=60,
-            )
-            text = response.choices[0].message.content
+            llm = create_llm(model=self.model, temperature=0.2, timeout=120, json_mode=True)
+            messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
+            response = await llm.ainvoke(messages)
+            text = extract_content(response)
             return self._parse_response(text, snapshot.pair)
         except Exception:
             logger.exception("LLM call failed for %s, returning mock analysis", self.agent_id)
@@ -154,11 +232,9 @@ class BaseAgent:
 
     def _parse_response(self, response_text: str, pair: str) -> AgentAnalysis:
         try:
-            start = response_text.find("{")
-            end = response_text.rfind("}")
-            if start == -1 or end == -1 or end <= start:
-                raise ValueError("No JSON object found in LLM response")
-            data = json.loads(response_text[start : end + 1])
+            from cryptotrader.debate.verdict import _extract_json
+
+            data = _extract_json(response_text)
         except (ValueError, json.JSONDecodeError):
             logger.warning("Failed to parse LLM response for %s", self.agent_id)
             return AgentAnalysis(
@@ -187,17 +263,19 @@ class BaseAgent:
         )
 
 
-def _create_chat_model(model: str, temperature: float = 0.2, max_tokens: int = 1024):
-    """Create a LangChain chat model using the unified LLM gateway.
+def _create_chat_model(model: str, temperature: float = 0.2):
+    """Create a LangChain chat model using the unified LLM factory.
 
-    All models route through the same base_url/api_key configured in config/default.toml.
+    Delegates to create_llm() for consistent config, caching, and fallback.
+    Note: For ToolAgent, fallback is NOT added (create_agent handles errors).
     """
-    from langchain_openai import ChatOpenAI
-
     from cryptotrader.config import load_config
 
-    llm_cfg = load_config().llm
-    kwargs: dict = {"model": model, "temperature": temperature, "max_completion_tokens": max_tokens}
+    _init_cache()
+
+    cfg = load_config()
+    llm_cfg = cfg.llm
+    kwargs: dict[str, Any] = {"model": model, "temperature": temperature, "timeout": 120}
     if llm_cfg.base_url:
         kwargs["base_url"] = llm_cfg.base_url
     if llm_cfg.api_key:
@@ -229,7 +307,7 @@ class ToolAgent(BaseAgent):
         try:
             from langchain.agents import create_agent
 
-            llm = _create_chat_model(self.model, temperature=0.2, max_tokens=1024)
+            llm = _create_chat_model(self.model, temperature=0.2)
             agent = create_agent(llm, tools=self.tools, system_prompt=system)
 
             result = await agent.ainvoke(

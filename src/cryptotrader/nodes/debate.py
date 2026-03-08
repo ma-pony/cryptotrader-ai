@@ -44,18 +44,14 @@ async def debate_round(state: ArenaState) -> dict:
         role_label = _DEBATE_ROLES.get(agent_id, agent_id)
         system = DEBATE_SYSTEM.format(role=role_label)
         try:
-            from cryptotrader.agents.base import acompletion_with_fallback
+            from langchain_core.messages import HumanMessage, SystemMessage
 
-            resp = await acompletion_with_fallback(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                max_tokens=1024,
-                timeout=60,
-            )
-            text = resp.choices[0].message.content
+            from cryptotrader.agents.base import create_llm, extract_content
+
+            llm = create_llm(model=model, temperature=0.3, timeout=120, json_mode=True)
+            lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
+            resp = await llm.ainvoke(lc_msgs)
+            text = extract_content(resp)
             data = _extract_json(text)
             merged = dict(analysis)
             merged.update(

@@ -37,8 +37,11 @@ class BacktestEngine:
         slippage_bps: float = 5.0,
         fee_bps: float = 10.0,
         position_pct: float = 0.1,
+        lookback: int = 60,
     ):
         self.pair = pair
+        self.start = start
+        self.end = end
         self.start_ms = int(datetime.fromisoformat(start).replace(tzinfo=UTC).timestamp() * 1000)
         self.end_ms = int(datetime.fromisoformat(end).replace(tzinfo=UTC).timestamp() * 1000)
         self.interval = interval
@@ -47,11 +50,29 @@ class BacktestEngine:
         self.slippage_bps = slippage_bps  # basis points
         self.fee_bps = fee_bps  # basis points
         self.position_pct = position_pct
+        self.lookback = lookback
         # Cache config once to avoid re-parsing TOML per candle
         self._config = None
         # LLM usage tracking
         self._llm_calls = 0
         self._llm_tokens = 0
+        # Historical data caches (populated in run())
+        self._fng: dict[str, int] = {}
+        self._funding: dict[str, float] = {}
+        self._btc_dom: dict[str, float] = {}
+        self._fed_rate: dict[str, float] = {}
+        self._dxy: dict[str, float] = {}
+        self._fut_vol: dict[str, dict] = {}
+        self._candles: list[list] = []
+        # Extended data from unified store
+        self._etf_flows: dict[str, dict] = {}
+        self._stablecoin_supply: dict[str, float] = {}
+        self._btc_hashrate: dict[str, float] = {}
+        self._defi_tvl: dict[str, float] = {}
+        self._vix: dict[str, float] = {}
+        self._sp500: dict[str, float] = {}
+        self._oi: dict[str, dict] = {}
+        self._ls_ratio: dict[str, dict] = {}
 
     @property
     def _cached_config(self):
@@ -122,8 +143,119 @@ class BacktestEngine:
             trades.append({"side": "close", "price": fill, "pnl": pnl, "ts": ts})
         return equity, trades
 
+    async def _fetch_historical_data(self) -> None:
+        """Pre-fetch all historical data sources for the backtest period."""
+        from cryptotrader.backtest.historical_data import (
+            fetch_btc_dominance,
+            fetch_fear_greed,
+            fetch_fred_series,
+            fetch_funding_rate,
+            fetch_futures_volume,
+        )
+
+        self._candles = await fetch_historical(self.pair, self.interval, self.start_ms, self.end_ms)
+
+        symbol = self.pair.split("/")[0]
+        logger.info("Fetching historical macro data for %s...", self.pair)
+
+        self._fng = await fetch_fear_greed(self.start, self.end)
+        self._funding = await fetch_funding_rate(symbol, self.start, self.end)
+
+        try:
+            self._btc_dom = await fetch_btc_dominance(self.start, self.end)
+        except Exception:
+            logger.warning("BTC dominance fetch failed, using empty")
+
+        try:
+            self._fed_rate = await fetch_fred_series("DFF", self.start, self.end)
+        except Exception:
+            logger.warning("Fed rate fetch failed, using empty")
+
+        try:
+            self._dxy = await fetch_fred_series("DTWEXBGS", self.start, self.end)
+        except Exception:
+            logger.warning("DXY fetch failed, using empty")
+
+        try:
+            self._fut_vol = await fetch_futures_volume(symbol, self.start, self.end)
+        except Exception:
+            logger.warning("Futures volume fetch failed, using empty")
+
+        # Load extended data from unified store (pre-synced via `arena sync`)
+        self._load_extended_data()
+
+        logger.info(
+            "Historical data: %d candles, %d fng, %d funding, %d btc_dom, %d fed, %d dxy, %d fut_vol",
+            len(self._candles),
+            len(self._fng),
+            len(self._funding),
+            len(self._btc_dom),
+            len(self._fed_rate),
+            len(self._dxy),
+            len(self._fut_vol),
+        )
+        logger.info(
+            "Extended data: %d etf_flows, %d stablecoin, %d hashrate, %d tvl, %d vix, %d sp500, %d oi, %d ls_ratio",
+            len(self._etf_flows),
+            len(self._stablecoin_supply),
+            len(self._btc_hashrate),
+            len(self._defi_tvl),
+            len(self._vix),
+            len(self._sp500),
+            len(self._oi),
+            len(self._ls_ratio),
+        )
+
+    def _load_extended_data(self) -> None:  # noqa: C901
+        """Load pre-synced data from unified SQLite store into memory caches."""
+        from cryptotrader.data.store import get_range
+
+        start, end = self.start, self.end
+
+        # ETF fund flows
+        for date, data in get_range("sosovalue_etf", start, end).items():
+            if isinstance(data, dict):
+                self._etf_flows[date] = data
+
+        # Stablecoin total supply
+        for date, data in get_range("stablecoin_total_supply", start, end).items():
+            if isinstance(data, dict):
+                self._stablecoin_supply[date] = data.get("total_supply", 0)
+            elif isinstance(data, (int, float)):
+                self._stablecoin_supply[date] = float(data)
+
+        # BTC hashrate
+        for date, data in get_range("btc_hashrate", start, end).items():
+            self._btc_hashrate[date] = float(data) if isinstance(data, (int, float)) else 0.0
+
+        # DeFi TVL
+        for date, data in get_range("defillama_tvl", start, end).items():
+            if isinstance(data, dict):
+                self._defi_tvl[date] = data.get("tvl", 0)
+            elif isinstance(data, (int, float)):
+                self._defi_tvl[date] = float(data)
+
+        # VIX
+        for date, data in get_range("fred_VIXCLS", start, end).items():
+            self._vix[date] = float(data) if isinstance(data, (int, float)) else 0.0
+
+        # S&P 500
+        for date, data in get_range("fred_SP500", start, end).items():
+            self._sp500[date] = float(data) if isinstance(data, (int, float)) else 0.0
+
+        # Binance OI
+        for date, data in get_range("binance_oi_BTC", start, end).items():
+            if isinstance(data, dict):
+                self._oi[date] = data
+
+        # Binance long/short ratio
+        for date, data in get_range("binance_ls_ratio_BTC", start, end).items():
+            if isinstance(data, dict):
+                self._ls_ratio[date] = data
+
     async def run(self) -> BacktestResult:
-        candles = await fetch_historical(self.pair, self.interval, self.start_ms, self.end_ms)
+        await self._fetch_historical_data()
+        candles = self._candles
         if not candles:
             return BacktestResult()
 
@@ -138,7 +270,7 @@ class BacktestEngine:
 
         graph = build_lite_graph() if self.use_llm else None
 
-        lookback = 100
+        lookback = self.lookback
 
         pending_action: str | None = None
 
@@ -163,9 +295,18 @@ class BacktestEngine:
 
             # Generate signal on current bar (will be executed on NEXT bar)
             if graph and self.use_llm:
-                snapshot = self._build_snapshot(window, ts)
+                snapshot = self._build_snapshot(window, ts, i)
                 result = await self._run_graph(graph, snapshot)
-                action = result.get("data", {}).get("verdict", {}).get("action", "hold")
+                verdict = result.get("data", {}).get("verdict", {})
+                action = verdict.get("action", "hold")
+                confidence = verdict.get("confidence", 0.5)
+                # Dynamic position sizing based on AI confidence
+                if confidence >= 0.8:
+                    self.position_pct = 0.20
+                elif confidence >= 0.6:
+                    self.position_pct = 0.12
+                else:
+                    self.position_pct = 0.06
             else:
                 action = self._simple_signal(window)
 
@@ -195,9 +336,51 @@ class BacktestEngine:
             return "short"
         return "hold"
 
-    def _build_snapshot(self, window: list[list], ts: int) -> DataSnapshot:
+    def _build_snapshot(self, window: list[list], ts: int, candle_idx: int) -> DataSnapshot:
+        from cryptotrader.backtest.historical_data import derive_news_sentiment
+
         df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
         cur = window[-1]
+        date_str = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
+
+        # Historical funding rate
+        fr_val = self._funding.get(date_str, 0.0)
+
+        # Fear & Greed
+        fng_val = self._fng.get(date_str, 50)
+
+        # BTC dominance, Fed rate, DXY
+        dom_val = self._btc_dom.get(date_str, 0.0)
+        fed_val = self._fed_rate.get(date_str, 0.0)
+        dxy_val = self._dxy.get(date_str, 0.0)
+
+        # Futures volume
+        fv = self._fut_vol.get(date_str, {})
+        fut_volume = fv.get("volume", 0.0)
+        # 20-day average volume ratio
+        vol_20d = []
+        for j in range(max(0, candle_idx - 20), candle_idx):
+            d_j = datetime.fromtimestamp(self._candles[j][0] / 1000, UTC).strftime("%Y-%m-%d")
+            vj = self._fut_vol.get(d_j, {}).get("volume", 0)
+            if vj > 0:
+                vol_20d.append(vj)
+        avg_vol = sum(vol_20d) / len(vol_20d) if vol_20d else max(fut_volume, 1)
+        vol_ratio = fut_volume / avg_vol if avg_vol > 0 else 1.0
+
+        # News sentiment derived from price action
+        sentiment, events = derive_news_sentiment(self._candles, candle_idx)
+
+        # Extended data from unified store
+        etf = self._etf_flows.get(date_str, {})
+        oi_data = self._oi.get(date_str, {})
+        ls_data = self._ls_ratio.get(date_str, {})
+        oi_val = oi_data.get("openInterestValue", fut_volume) if oi_data else fut_volume
+        defi_tvl = self._defi_tvl.get(date_str, 0.0)
+        hashrate = self._btc_hashrate.get(date_str, 0.0)
+        stablecoin = self._stablecoin_supply.get(date_str, 0.0)
+        vix_val = self._vix.get(date_str, 0.0)
+        sp500_val = self._sp500.get(date_str, 0.0)
+
         return DataSnapshot(
             timestamp=datetime.fromtimestamp(ts / 1000, tz=UTC),
             pair=self.pair,
@@ -205,34 +388,48 @@ class BacktestEngine:
                 pair=self.pair,
                 ohlcv=df,
                 ticker={"last": cur[4], "baseVolume": cur[5]},
-                funding_rate=0.0,
+                funding_rate=fr_val,
                 orderbook_imbalance=0.0,
                 volatility=float(vol) if not pd.isna(vol := df["close"].pct_change().std()) else 0.0,
             ),
-            onchain=OnchainData(),
-            news=NewsSentiment(),
-            macro=MacroData(),
+            onchain=OnchainData(
+                open_interest=oi_val,
+                liquidations_24h={
+                    "volume_ratio": vol_ratio,
+                    "futures_volume": fut_volume,
+                    "long_short_ratio": ls_data.get("longShortRatio", 1.0) if ls_data else 1.0,
+                },
+                defi_tvl=defi_tvl,
+                data_quality={
+                    "has_oi": bool(oi_data),
+                    "has_ls_ratio": bool(ls_data),
+                    "has_etf": bool(etf),
+                    "has_hashrate": hashrate > 0,
+                    "has_stablecoin": stablecoin > 0,
+                },
+            ),
+            news=NewsSentiment(
+                sentiment_score=sentiment,
+                key_events=events,
+                headlines=[f"BTC at ${cur[4]:,.0f}, Fear&Greed={fng_val}"],
+            ),
+            macro=MacroData(
+                fear_greed_index=fng_val,
+                btc_dominance=dom_val,
+                fed_rate=fed_val,
+                dxy=dxy_val,
+                etf_daily_net_inflow=etf.get("totalNetInflow", 0.0) if etf else 0.0,
+                etf_total_net_assets=etf.get("totalNetAssets", 0.0) if etf else 0.0,
+                etf_cum_net_inflow=etf.get("cumNetInflow", 0.0) if etf else 0.0,
+                vix=vix_val,
+                sp500=sp500_val,
+                stablecoin_total_supply=stablecoin,
+                btc_hashrate=hashrate,
+            ),
         )
 
     async def _run_graph(self, graph, snapshot: DataSnapshot) -> dict:
-        import litellm
-
         config = self._cached_config
-
-        # Track LLM usage via litellm callbacks
-        if not getattr(litellm, "_backtest_hooks_installed", False):
-            original_success = litellm.success_callback
-
-            def _track_usage(_kwargs, completion_response, _start_time, _end_time):
-                usage = getattr(completion_response, "usage", None)
-                if usage:
-                    litellm._backtest_token_count = getattr(litellm, "_backtest_token_count", 0) + (
-                        usage.total_tokens or 0
-                    )
-                litellm._backtest_call_count = getattr(litellm, "_backtest_call_count", 0) + 1
-
-            litellm.success_callback = [*original_success, _track_usage] if original_success else [_track_usage]
-            litellm._backtest_hooks_installed = True
 
         initial: dict[str, Any] = {
             "messages": [],
@@ -257,9 +454,6 @@ class BacktestEngine:
             "divergence_scores": [],
         }
         result = await graph.ainvoke(initial)
-
-        self._llm_calls = getattr(litellm, "_backtest_call_count", 0)
-        self._llm_tokens = getattr(litellm, "_backtest_token_count", 0)
 
         return result
 

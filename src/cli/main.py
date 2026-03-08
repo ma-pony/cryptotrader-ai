@@ -307,6 +307,27 @@ def dashboard():
 
 
 @app.command()
+def sync():
+    """Sync and persist historical market data from all sources."""
+    asyncio.run(_sync())
+
+
+async def _sync():
+    from cryptotrader.config import load_config
+    from cryptotrader.data.sync import sync_all
+
+    config = load_config()
+    console.print("[bold]Syncing market data...[/bold]")
+    results = await sync_all(config.providers)
+    table = Table(title="Data Sync Results")
+    table.add_column("Source", style="cyan")
+    table.add_column("Records", style="green")
+    for source, count in sorted(results.items()):
+        table.add_row(source, str(count))
+    console.print(table)
+
+
+@app.command()
 def serve(
     port: int = typer.Option(8003, "--port"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev only)"),

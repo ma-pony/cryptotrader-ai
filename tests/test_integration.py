@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
@@ -75,7 +75,9 @@ def sample_snapshot(sample_ohlcv):
 
 
 def _mock_llm_response(direction: str, confidence: float, reasoning: str = "test"):
-    """Create a mock litellm response."""
+    """Create a mock LangChain AIMessage response."""
+    from langchain_core.messages import AIMessage
+
     content = json.dumps(
         {
             "direction": direction,
@@ -85,11 +87,7 @@ def _mock_llm_response(direction: str, confidence: float, reasoning: str = "test
             "risk_flags": [],
         }
     )
-    choice = MagicMock()
-    choice.message.content = content
-    resp = MagicMock()
-    resp.choices = [choice]
-    return resp
+    return AIMessage(content=content)
 
 
 # ── Agent Tests ──
@@ -103,7 +101,7 @@ class TestAgentParsing:
         from cryptotrader.agents.tech import TechAgent
 
         mock_resp = _mock_llm_response("bullish", 0.8, "Strong uptrend")
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_resp):
             agent = TechAgent(model="test-model")
             result = await agent.analyze(sample_snapshot)
 
@@ -117,7 +115,7 @@ class TestAgentParsing:
         from cryptotrader.agents.tech import TechAgent
 
         mock_resp = _mock_llm_response("bullish", 1.5)
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_resp):
             result = await TechAgent(model="test").analyze(sample_snapshot)
 
         assert result.confidence == 1.0
@@ -127,7 +125,7 @@ class TestAgentParsing:
         from cryptotrader.agents.tech import TechAgent
 
         mock_resp = _mock_llm_response("bearish", -0.3)
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_resp):
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_resp):
             result = await TechAgent(model="test").analyze(sample_snapshot)
 
         assert result.confidence == 0.0
@@ -136,7 +134,7 @@ class TestAgentParsing:
     async def test_agent_llm_failure_returns_neutral(self, sample_snapshot):
         from cryptotrader.agents.tech import TechAgent
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=Exception("API down")):
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, side_effect=Exception("API down")):
             result = await TechAgent(model="test").analyze(sample_snapshot)
 
         assert result.direction == "neutral"
@@ -191,14 +189,13 @@ class TestMalformedLLMOutput:
     @pytest.mark.asyncio
     async def test_agent_parse_malformed_json(self, sample_snapshot):
         """Agent should gracefully handle non-JSON LLM output."""
+        from langchain_core.messages import AIMessage
+
         from cryptotrader.agents.tech import TechAgent
 
-        choice = MagicMock()
-        choice.message.content = "I think the market is bullish but I can't format JSON"
-        resp = MagicMock()
-        resp.choices = [choice]
+        resp = AIMessage(content="I think the market is bullish but I can't format JSON")
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=resp):
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=resp):
             result = await TechAgent(model="test").analyze(sample_snapshot)
 
         assert result.direction == "neutral"
@@ -600,6 +597,8 @@ class TestFullPipeline:
 
     @pytest.fixture
     def verdict_llm_response(self):
+        from langchain_core.messages import AIMessage
+
         content = json.dumps(
             {
                 "action": "long",
@@ -608,11 +607,7 @@ class TestFullPipeline:
                 "reasoning": "Consensus bullish across agents",
             }
         )
-        choice = MagicMock()
-        choice.message.content = content
-        resp = MagicMock()
-        resp.choices = [choice]
-        return resp
+        return AIMessage(content=content)
 
     @pytest.mark.asyncio
     async def test_full_pipeline_long_signal(self, sample_snapshot, bullish_llm_response, verdict_llm_response):
@@ -632,7 +627,7 @@ class TestFullPipeline:
                 return bullish_llm_response
             return verdict_llm_response
 
-        with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=mock_acompletion):
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, side_effect=mock_acompletion):
             graph = build_lite_graph()
             initial = {
                 "messages": [],

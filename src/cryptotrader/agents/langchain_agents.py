@@ -6,8 +6,8 @@ https://docs.langchain.com/oss/python/langchain/multi-agent/subagents-personal-a
 
 from langchain.agents import create_agent
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 
+from cryptotrader.agents.base import _create_chat_model
 from cryptotrader.agents.skills import get_skill_descriptions
 from cryptotrader.agents.tools import load_past_experience, load_skill
 
@@ -70,19 +70,19 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0,
 
 def create_tech_agent(model: str = "gpt-4o-mini"):
     """Create technical analysis agent using official LangChain API."""
-    llm = ChatOpenAI(model=model, temperature=0.2)
+    llm = _create_chat_model(model, temperature=0.2)
     return create_agent(llm, tools=[load_skill, load_past_experience], system_prompt=TECH_AGENT_PROMPT)
 
 
 def create_chain_agent(model: str = "gpt-4o-mini"):
     """Create on-chain analysis agent using official LangChain API."""
-    llm = ChatOpenAI(model=model, temperature=0.2)
+    llm = _create_chat_model(model, temperature=0.2)
     return create_agent(llm, tools=[load_skill, load_past_experience], system_prompt=CHAIN_AGENT_PROMPT)
 
 
 def create_macro_agent(model: str = "gpt-4o-mini"):
     """Create macro analysis agent using official LangChain API."""
-    llm = ChatOpenAI(model=model, temperature=0.2)
+    llm = _create_chat_model(model, temperature=0.2)
     return create_agent(llm, tools=[load_skill, load_past_experience], system_prompt=MACRO_AGENT_PROMPT)
 
 
@@ -151,7 +151,7 @@ When analysts disagree, weigh their confidence levels and look for convergence i
 
 def create_supervisor_agent(model: str = "gpt-4o-mini"):
     """Create supervisor agent that coordinates specialized analysts."""
-    llm = ChatOpenAI(model=model, temperature=0.2)
+    llm = _create_chat_model(model, temperature=0.2)
     return create_agent(
         llm, tools=[analyze_technicals, analyze_onchain, analyze_macro], system_prompt=SUPERVISOR_PROMPT
     )

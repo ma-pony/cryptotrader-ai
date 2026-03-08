@@ -129,6 +129,8 @@ class ProvidersConfig:
     okx_secret_key: str = ""
     okx_passphrase: str = ""
     okx_enabled: bool = False
+    sosovalue_api_key: str = ""
+    sosovalue_enabled: bool = True
     binance_audit_enabled: bool = True
     binance_sentiment_enabled: bool = True
     enforce_token_security: bool = True

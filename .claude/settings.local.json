@@ -52,7 +52,11 @@
       "Read(//Users/rccpony/.pyenv/versions/**)",
       "Bash(wc:*)",
       "Bash(git status:*)",
-      "Bash(curl:*)"
+      "Bash(curl:*)",
+      "WebFetch(domain:sosovalue.com)",
+      "mcp__web-search-prime__web_search_prime",
+      "WebFetch(domain:sosovalue.gitbook.io)",
+      "mcp__chrome-devtools__navigate_page"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -211,10 +211,11 @@ async def test_run_debate():
         "macro_agent": {"direction": "bearish", "confidence": 0.7, "reasoning": "Fear index at 80"},
     }
 
-    mock_response = MagicMock()
-    mock_response.choices = [MagicMock(message=MagicMock(content="Strong argument here."))]
+    from langchain_core.messages import AIMessage
 
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+    mock_ai_msg = AIMessage(content="Strong argument here.")
+
+    with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_ai_msg):
         result = await run_debate(analyses, rounds=2)
 
     assert len(result["bull_history"]) == 2
@@ -231,7 +232,7 @@ async def test_run_debate_llm_failure():
 
     analyses = {"tech_agent": {"direction": "bullish", "confidence": 0.5, "reasoning": "test"}}
 
-    with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=Exception("API error")):
+    with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, side_effect=Exception("API error")):
         result = await run_debate(analyses, rounds=1)
 
     assert "Unable to generate" in result["bull_history"][0]
@@ -249,14 +250,11 @@ async def test_judge_debate_long():
         "bear_history": ["argument"],
     }
 
-    mock_response = MagicMock()
-    mock_response.choices = [
-        MagicMock(
-            message=MagicMock(content='{"action": "long", "confidence": 0.75, "reasoning": "Bull won with RSI data"}')
-        )
-    ]
+    from langchain_core.messages import AIMessage
 
-    with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+    mock_ai_msg = AIMessage(content='{"action": "long", "confidence": 0.75, "reasoning": "Bull won with RSI data"}')
+
+    with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_ai_msg):
         result = await judge_debate(debate, "BTC/USDT")
 
     assert result["action"] == "long"
@@ -271,13 +269,10 @@ async def test_judge_debate_normalizes_action():
     debate = {"full_debate": "test", "bull_history": [], "bear_history": []}
 
     for raw_action, expected in [("buy", "long"), ("bullish", "long"), ("sell", "short"), ("bearish", "short")]:
-        mock_response = MagicMock()
-        mock_response.choices = [
-            MagicMock(
-                message=MagicMock(content=f'{{"action": "{raw_action}", "confidence": 0.6, "reasoning": "test"}}')
-            )
-        ]
-        with patch("litellm.acompletion", new_callable=AsyncMock, return_value=mock_response):
+        from langchain_core.messages import AIMessage
+
+        mock_ai_msg = AIMessage(content=f'{{"action": "{raw_action}", "confidence": 0.6, "reasoning": "test"}}')
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=mock_ai_msg):
             result = await judge_debate(debate, "BTC/USDT")
         assert result["action"] == expected, f"Expected {expected} for {raw_action}"
 
@@ -289,7 +284,7 @@ async def test_judge_debate_fallback():
 
     debate = {"full_debate": "test", "bull_history": [], "bear_history": []}
 
-    with patch("litellm.acompletion", new_callable=AsyncMock, side_effect=Exception("fail")):
+    with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, side_effect=Exception("fail")):
         result = await judge_debate(debate, "ETH/USDT")
 
     assert result["action"] == "hold"
