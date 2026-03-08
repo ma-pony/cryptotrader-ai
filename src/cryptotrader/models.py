@@ -82,6 +82,10 @@ class AgentAnalysis:
     risk_flags: list[str] = field(default_factory=list)
     data_points: dict[str, Any] = field(default_factory=dict)
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
+    is_mock: bool = False
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
 
 
 @dataclass
@@ -93,6 +97,10 @@ class TradeVerdict:
     reasoning: str = ""
     thesis: str = ""
     invalidation: str = ""
+
+    def __post_init__(self) -> None:
+        self.confidence = max(0.0, min(1.0, self.confidence))
+        self.position_scale = max(0.0, min(1.0, self.position_scale))
 
 
 # ── Risk Layer Models (Section 6) ──
@@ -145,6 +153,12 @@ class Order:
     status: OrderStatus = OrderStatus.PENDING
     exchange_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+
+    def __post_init__(self) -> None:
+        if self.amount <= 0:
+            raise ValueError(f"Order amount must be > 0, got {self.amount}")
+        if self.price < 0:
+            raise ValueError(f"Order price must be >= 0, got {self.price}")
 
 
 # ── Decision Journal Models (Section 8.2) ──

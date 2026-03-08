@@ -13,6 +13,7 @@ from pathlib import Path
 class LLMConfig:
     api_key: str = ""
     base_url: str = ""
+    streaming_models: list[str] = field(default_factory=list)
 
 
 # ── Model names ──
@@ -91,12 +92,32 @@ class RateLimitConfig:
 
 @dataclass
 class RiskConfig:
+    max_stop_loss_pct: float = 0.05
     position: PositionConfig = field(default_factory=PositionConfig)
     loss: LossConfig = field(default_factory=LossConfig)
     cooldown: CooldownConfig = field(default_factory=CooldownConfig)
     volatility: VolatilityConfig = field(default_factory=VolatilityConfig)
     exchange: ExchangeCheckConfig = field(default_factory=ExchangeCheckConfig)
     rate_limit: RateLimitConfig = field(default_factory=RateLimitConfig)
+
+
+# ── Backtest ──
+
+
+@dataclass
+class BacktestPositionSizingConfig:
+    high_confidence_pct: float = 0.20
+    medium_confidence_pct: float = 0.12
+    low_confidence_pct: float = 0.06
+
+
+@dataclass
+class BacktestConfig:
+    initial_capital: float = 10000
+    slippage_base: float = 0.0005
+    sma_fast: int = 20
+    sma_slow: int = 50
+    position_sizing: BacktestPositionSizingConfig = field(default_factory=BacktestPositionSizingConfig)
 
 
 # ── Scheduler ──
@@ -173,6 +194,7 @@ class AppConfig:
     debate: DebateConfig = field(default_factory=DebateConfig)
     data: DataConfig = field(default_factory=DataConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
+    backtest: BacktestConfig = field(default_factory=BacktestConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
@@ -211,12 +233,20 @@ def _build_config(toml_data: dict) -> AppConfig:
     risk_raw = toml_data.get("risk", {})
 
     risk = RiskConfig(
+        max_stop_loss_pct=risk_raw.get("max_stop_loss_pct", 0.05),
         position=PositionConfig(**risk_raw.get("position", {})),
         loss=LossConfig(**risk_raw.get("loss", {})),
         cooldown=CooldownConfig(**risk_raw.get("cooldown", {})),
         volatility=VolatilityConfig(**risk_raw.get("volatility", {})),
         exchange=ExchangeCheckConfig(**risk_raw.get("exchange", {})),
         rate_limit=RateLimitConfig(**risk_raw.get("rate_limit", {})),
+    )
+
+    backtest_raw = dict(toml_data.get("backtest", {}))  # copy to avoid mutating original
+    backtest_ps_raw = backtest_raw.pop("position_sizing", {})
+    backtest = BacktestConfig(
+        **backtest_raw,
+        position_sizing=BacktestPositionSizingConfig(**backtest_ps_raw),
     )
 
     providers_raw = toml_data.get("providers", {})
@@ -232,6 +262,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         debate=DebateConfig(**toml_data.get("debate", {})),
         data=DataConfig(**toml_data.get("data", {})),
         risk=risk,
+        backtest=backtest,
         scheduler=SchedulerConfig(**toml_data.get("scheduler", {})),
         providers=providers,
         notifications=NotificationsConfig(**toml_data.get("notifications", {})),

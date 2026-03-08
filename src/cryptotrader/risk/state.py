@@ -61,6 +61,7 @@ class RedisStateManager:
             try:
                 self._redis = redis.from_url(redis_url)
             except Exception:
+                logger.warning("Redis connection failed, using memory fallback", exc_info=True)
                 self._redis = None
 
     @property
@@ -75,6 +76,7 @@ class RedisStateManager:
             await self._redis.ping()
             return True
         except Exception:
+            logger.debug("Redis ping failed", exc_info=True)
             return False
 
     async def get(self, key: str) -> str | None:

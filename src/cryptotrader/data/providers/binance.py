@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import httpx
@@ -38,8 +39,6 @@ async def fetch_derivatives_binance(symbol: str = "BTC") -> dict:
 
 
 async def _gather(c: httpx.AsyncClient, pair: str):
-    import asyncio
-
     async def _get(url, params=None):
         try:
             r = await c.get(url, params=params)
@@ -47,6 +46,7 @@ async def _gather(c: httpx.AsyncClient, pair: str):
             d = r.json()
             return d[0] if isinstance(d, list) else d
         except Exception:
+            logger.debug("Binance API request failed", exc_info=True)
             return None
 
     return await asyncio.gather(

@@ -1,17 +1,34 @@
-"""Macro data collector — FRED, CoinGecko, Alternative.me."""
+"""Macro data collector — FRED, CoinGecko, Alternative.me.
+
+Uses unified SQLite store for caching: check cache first, only call API if stale.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from datetime import UTC, datetime
 
 import httpx
 
+from cryptotrader.data.store import cache_result, get_cached_or_none, get_latest
 from cryptotrader.models import MacroData
 
 logger = logging.getLogger(__name__)
 
 
-async def _fetch_fred(series: str, api_key: str) -> float:
+async def _fetch_fred(series: str, api_key: str, date: str | None = None) -> float:
+    source_key = f"fred_{series}"
+    cached = get_cached_or_none(source_key, date)
+    if cached is not None:
+        return float(cached) if isinstance(cached, int | float) else 0.0
+
+    # Backtest mode: no live API call for historical data
+    if date is not None:
+        return 0.0
+
+    if not api_key:
+        return 0.0
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
@@ -21,31 +38,59 @@ async def _fetch_fred(series: str, api_key: str) -> float:
             r.raise_for_status()
             obs = r.json().get("observations", [])
             if obs:
-                return float(obs[0]["value"])
+                val = float(obs[0]["value"])
+                obs_date = obs[0].get("date")
+                cache_result(source_key, val, date=obs_date)
+                return val
     except Exception:
         logger.warning("FRED fetch failed for %s", series, exc_info=True)
     return 0.0
 
 
-async def _fetch_fear_greed() -> int:
+async def _fetch_fear_greed(date: str | None = None) -> int:
+    cached = get_cached_or_none("fear_greed", date)
+    if cached is not None:
+        return int(cached) if isinstance(cached, int | float) else 50
+
+    # Backtest mode: no live API call for historical data
+    if date is not None:
+        return 50
+
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get("https://api.alternative.me/fng/?limit=1")
             r.raise_for_status()
             data = r.json().get("data", [])
             if data:
-                return int(data[0]["value"])
+                val = int(data[0]["value"])
+                # Use the timestamp from the API as the date
+                ts = data[0].get("timestamp")
+                fg_date = None
+                if ts:
+                    fg_date = datetime.fromtimestamp(int(ts), tz=UTC).strftime("%Y-%m-%d")
+                cache_result("fear_greed", val, date=fg_date)
+                return val
     except Exception:
         logger.warning("Fear & Greed fetch failed", exc_info=True)
     return 50
 
 
-async def _fetch_btc_dominance() -> float:
+async def _fetch_btc_dominance(date: str | None = None) -> float:
+    cached = get_cached_or_none("btc_dominance", date)
+    if cached is not None:
+        return float(cached) if isinstance(cached, int | float) else 0.0
+
+    # Backtest mode: no live API call for historical data
+    if date is not None:
+        return 0.0
+
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get("https://api.coingecko.com/api/v3/global")
             r.raise_for_status()
-            return float(r.json()["data"]["market_cap_percentage"]["btc"])
+            val = float(r.json()["data"]["market_cap_percentage"]["btc"])
+            cache_result("btc_dominance", val)
+            return val
     except Exception:
         logger.warning("CoinGecko dominance fetch failed", exc_info=True)
     return 0.0
@@ -60,8 +105,6 @@ class MacroCollector:
         """Load supplementary data from unified SQLite store (best-effort)."""
         result = {"vix": 0.0, "sp500": 0.0, "stablecoin": 0.0, "hashrate": 0.0}
         try:
-            from cryptotrader.data.store import get_latest
-
             for source, key in [
                 ("fred_VIXCLS", "vix"),
                 ("fred_SP500", "sp500"),
@@ -77,10 +120,10 @@ class MacroCollector:
                 if isinstance(val, int | float):
                     result[key] = float(val)
         except Exception:
-            pass
+            logger.debug("Failed to load store supplements", exc_info=True)
         return result
 
-    async def collect(self) -> MacroData:
+    async def collect(self, date: str | None = None) -> MacroData:
         cfg = self._cfg
         fred_on = getattr(cfg, "fred_enabled", True) if cfg else True
         coingecko_on = getattr(cfg, "coingecko_enabled", True) if cfg else True
@@ -89,18 +132,16 @@ class MacroCollector:
         fred_key = cfg.fred_api_key if cfg else ""
         soso_key = getattr(cfg, "sosovalue_api_key", "") if cfg else ""
 
-        import asyncio
-
         async def _noop_float():
             return 0.0
 
         async def _noop_dict():
             return {}
 
-        fed_task = _fetch_fred("DFF", fred_key) if (fred_on and fred_key) else _noop_float()
-        dxy_task = _fetch_fred("DTWEXBGS", fred_key) if (fred_on and fred_key) else _noop_float()
-        fg_task = _fetch_fear_greed()
-        dom_task = _fetch_btc_dominance() if coingecko_on else _noop_float()
+        fed_task = _fetch_fred("DFF", fred_key, date) if (fred_on and fred_key) else _noop_float()
+        dxy_task = _fetch_fred("DTWEXBGS", fred_key, date) if (fred_on and fred_key) else _noop_float()
+        fg_task = _fetch_fear_greed(date)
+        dom_task = _fetch_btc_dominance(date) if coingecko_on else _noop_float()
 
         if sosovalue_on and soso_key:
             from cryptotrader.data.providers.sosovalue import fetch_etf_metrics

@@ -25,11 +25,12 @@ class SnapshotAggregator:
         exchange_id: str = "binance",
         timeframe: str = "1h",
         limit: int = 100,
+        date: str | None = None,
     ) -> DataSnapshot:
         market_data, news_data, macro_data = await asyncio.gather(
             self.market.collect(pair, exchange_id, timeframe, limit),
-            self.news.collect(pair),
-            self.macro.collect(),
+            self.news.collect(pair, date=date),
+            self.macro.collect(date=date),
         )
 
         onchain_data = await self.onchain.collect(pair, market_data.funding_rate)

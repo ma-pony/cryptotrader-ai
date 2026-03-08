@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
 from cryptotrader.agents.base import create_llm, extract_content
 from cryptotrader.debate.verdict import _extract_json
 
@@ -54,7 +56,7 @@ def _format_reports(analyses: dict[str, dict]) -> str:
 async def run_debate(
     analyses: dict[str, dict],
     rounds: int = 2,
-    model: str = "gpt-4o-mini",
+    model: str = "",
 ) -> dict:
     """Run bull vs bear debate. Returns {bull_history, bear_history, rounds}."""
     reports = _format_reports(analyses)
@@ -72,8 +74,6 @@ async def run_debate(
         bull_msgs.append({"role": "user", "content": bull_prompt})
 
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-
             llm = create_llm(model=model, temperature=0.3, timeout=120)
             lc_msgs = [SystemMessage(content=BULL_SYSTEM), HumanMessage(content=bull_prompt)]
             resp = await llm.ainvoke(lc_msgs)
@@ -87,8 +87,6 @@ async def run_debate(
         bear_prompt = f"Analyst reports:\n{reports}\n\n{REBUTTAL_TEMPLATE.format(opponent_argument=bull_arg)}"
 
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-
             llm = create_llm(model=model, temperature=0.3, timeout=120)
             lc_msgs = [SystemMessage(content=BEAR_SYSTEM), HumanMessage(content=bear_prompt)]
             resp = await llm.ainvoke(lc_msgs)
@@ -131,12 +129,10 @@ and the key evidence that decided it"}}"""
 async def judge_debate(
     debate: dict,
     pair: str,
-    model: str = "gpt-4o-mini",
+    model: str = "",
 ) -> dict:
     """Research manager judges the debate. Returns {action, confidence, reasoning}."""
     try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-
         llm = create_llm(model=model, temperature=0.1, timeout=120, json_mode=True)
         lc_msgs = [
             SystemMessage(content=JUDGE_PROMPT.format(pair=pair)),
@@ -152,9 +148,10 @@ async def judge_debate(
             action = "short"
         elif action not in ("long", "short", "hold"):
             action = "hold"
+        confidence = max(0.0, min(1.0, float(data.get("confidence", 0.5))))
         return {
             "action": action,
-            "confidence": float(data.get("confidence", 0.5)),
+            "confidence": confidence,
             "reasoning": data.get("reasoning", ""),
         }
     except Exception:

@@ -1,5 +1,8 @@
 """Agent tools for progressive disclosure pattern."""
 
+import asyncio
+import os
+
 from langchain_core.tools import tool
 
 from cryptotrader.agents.skills import load_skill_content
@@ -29,9 +32,6 @@ def load_past_experience(context: str) -> str:
 
     Returns: Summary of similar past decisions and their results.
     """
-    import asyncio
-    import os
-
     from cryptotrader.journal.store import JournalStore
     from cryptotrader.learning.verbal import get_experience
 

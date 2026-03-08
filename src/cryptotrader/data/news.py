@@ -1,21 +1,27 @@
-"""News sentiment collector — RSS feeds + FinBERT/keyword sentiment + social buzz."""
+"""News sentiment collector — RSS feeds + FinBERT/keyword sentiment + social buzz.
+
+Uses unified SQLite store for caching: check cache first, only call API if stale.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 
 import feedparser
 import httpx
 
+from cryptotrader.data.store import _record_fetch, _should_fetch, cache_result, get_cached_or_none
 from cryptotrader.models import NewsSentiment
 
 logger = logging.getLogger(__name__)
 
-# ── FinBERT sentiment (lazy-loaded, CPU-friendly) ──
+# ── FinBERT sentiment (lazy-loaded, CPU-friendly, thread-safe) ──
 
 _finbert_pipeline = None
 _finbert_available: bool | None = None
+_finbert_lock = threading.Lock()
 
 
 def _get_finbert():
@@ -25,22 +31,28 @@ def _get_finbert():
         return None
     if _finbert_pipeline is not None:
         return _finbert_pipeline
-    try:
-        from transformers import pipeline
+    with _finbert_lock:
+        # Double-check after acquiring lock
+        if _finbert_pipeline is not None:
+            return _finbert_pipeline
+        if _finbert_available is False:
+            return None
+        try:
+            from transformers import pipeline
 
-        _finbert_pipeline = pipeline(
-            "sentiment-analysis",
-            model="ProsusAI/finbert",
-            truncation=True,
-            max_length=512,
-        )
-        _finbert_available = True
-        logger.info("FinBERT loaded successfully")
-        return _finbert_pipeline
-    except Exception:
-        _finbert_available = False
-        logger.info("FinBERT unavailable, falling back to keyword sentiment")
-        return None
+            _finbert_pipeline = pipeline(
+                "sentiment-analysis",
+                model="ProsusAI/finbert",
+                truncation=True,
+                max_length=512,
+            )
+            _finbert_available = True
+            logger.info("FinBERT loaded successfully")
+            return _finbert_pipeline
+        except Exception:
+            _finbert_available = False
+            logger.info("FinBERT unavailable, falling back to keyword sentiment")
+            return None
 
 
 def prewarm_finbert() -> bool:
@@ -69,7 +81,7 @@ def _score_texts_finbert(texts: list[str]) -> float:
                 score -= conf
         return max(-1.0, min(1.0, score / len(results)))
     except Exception:
-        logger.debug("FinBERT scoring failed, falling back to keywords")
+        logger.debug("FinBERT scoring failed, falling back to keywords", exc_info=True)
         return 0.0
 
 
@@ -153,11 +165,20 @@ def _score_headlines(headlines: list[str]) -> float:
     return _score_text(" ".join(headlines))
 
 
-async def _fetch_social_buzz(symbol: str) -> float:
+async def _fetch_social_buzz(symbol: str, date: str | None = None) -> float:
     """Fetch social buzz score from CoinGecko community data (free, no key).
 
     Returns a normalized 0-1 score based on community engagement metrics.
     """
+    cache_key = f"live_social_buzz_{symbol.upper()}"
+    cached = get_cached_or_none(cache_key, date)
+    if cached is not None:
+        return float(cached) if isinstance(cached, int | float) else 0.0
+
+    # Backtest mode: no live API call
+    if date is not None:
+        return 0.0
+
     coin_id = _COINGECKO_IDS.get(symbol.upper(), symbol.lower())
     if not coin_id:
         return 0.0
@@ -180,23 +201,42 @@ async def _fetch_social_buzz(symbol: str) -> float:
         # Score range: 0.0 (dead) to 1.0 (viral)
         reach = min(1.0, (twitter + reddit) / 10_000_000)  # cap at 10M
         sentiment_shift = (sentiment_up - 50) / 50  # -1 to +1
-        return round(reach * 0.5 + (0.5 * abs(sentiment_shift)), 3)
+        result = round(reach * 0.5 + (0.5 * abs(sentiment_shift)), 3)
+        cache_result(cache_key, result)
+        return result
     except Exception:
         logger.debug("Social buzz fetch failed for %s", symbol, exc_info=True)
         return 0.0
 
 
 class NewsCollector:
-    async def collect(self, pair: str) -> NewsSentiment:
+    async def collect(self, pair: str, date: str | None = None) -> NewsSentiment:
         symbol = pair.split("/")[0]
 
-        # Fetch RSS and social buzz in parallel
-        rss_task = self._collect_rss(symbol.lower())
-        buzz_task = _fetch_social_buzz(symbol)
-        (headlines, score, key_events), social_buzz = await asyncio.gather(
-            rss_task,
-            buzz_task,
-        )
+        # Check RSS cache first — use symbol-specific key for stored data,
+        # but "live_news_rss" as the rate-limit key (matches _RATE_LIMITS entry).
+        rss_store_key = f"live_news_rss_{symbol.lower()}"
+        rss_rate_key = "live_news_rss"
+        cached_rss = get_cached_or_none(rss_store_key, date)
+
+        if cached_rss is not None and isinstance(cached_rss, dict):
+            headlines = cached_rss.get("headlines", [])
+            score = cached_rss.get("score", 0.0)
+            key_events = cached_rss.get("key_events", [])
+        elif date is not None:
+            # Backtest mode: no live API call
+            headlines, score, key_events = [], 0.0, []
+        elif not _should_fetch(rss_rate_key):
+            # Rate-limited globally; no new fetch for any symbol right now
+            headlines, score, key_events = [], 0.0, []
+        else:
+            headlines, score, key_events = await self._collect_rss(symbol.lower())
+            if headlines:
+                cache_result(rss_store_key, {"headlines": headlines, "score": score, "key_events": key_events})
+            _record_fetch(rss_rate_key)
+
+        # Fetch social buzz (with its own caching)
+        social_buzz = await _fetch_social_buzz(symbol, date)
 
         return NewsSentiment(
             headlines=headlines,

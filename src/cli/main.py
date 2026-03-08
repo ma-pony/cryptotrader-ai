@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Annotated
 
 import typer
@@ -11,6 +12,7 @@ from rich.table import Table
 
 app = typer.Typer(name="arena", help="CryptoTrader AI — Multi-agent debate trading")
 console = Console()
+logger = logging.getLogger(__name__)
 
 
 @app.callback()
@@ -244,6 +246,7 @@ async def _scheduler_status():
         daily_pnl = await pm.get_daily_pnl()
         drawdown = await pm.get_drawdown()
     except Exception:
+        logger.debug("Failed to load portfolio status", exc_info=True)
         portfolio = {"total_value": 0, "positions": {}}
         daily_pnl = 0.0
         drawdown = 0.0
@@ -337,6 +340,29 @@ def serve(
     import uvicorn
 
     uvicorn.run("api.main:app", host=host, port=port, reload=reload)
+
+
+# ── Risk subcommands ──
+
+risk_app = typer.Typer(help="Risk management commands")
+app.add_typer(risk_app, name="risk")
+
+
+@risk_app.command("reset-breaker")
+def risk_reset_breaker():
+    """Reset the daily-loss circuit breaker to allow trading to resume."""
+    asyncio.run(_risk_reset_breaker())
+
+
+async def _risk_reset_breaker():
+    from cryptotrader.config import load_config
+    from cryptotrader.risk.state import RedisStateManager
+
+    config = load_config()
+    redis_url = config.infrastructure.redis_url
+    redis_state = RedisStateManager(redis_url)
+    await redis_state.reset_circuit_breaker()
+    console.print("[green]Circuit breaker reset — trading is now allowed.[/green]")
 
 
 if __name__ == "__main__":

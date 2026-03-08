@@ -78,9 +78,14 @@ async def test_max_position_pass(verdict, portfolio):
 
 @pytest.mark.asyncio
 async def test_max_position_fail(portfolio):
-    v = TradeVerdict(action="long", position_scale=1.5)
+    # position_scale is clamped to [0,1] by the model; test over-limit via existing position.
+    # existing BTC/USDT position = 2000, total = 10000 → existing_pct = 0.20.
+    # new_trade_pct = max_single_pct(0.10) * scale(1.0) = 0.10.
+    # combined = 0.30 > 0.10 → should fail.
+    portfolio_with_pair = {**portfolio, "pair": "BTC/USDT"}
+    v = TradeVerdict(action="long", position_scale=1.0)
     c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
-    r = await c.evaluate(v, portfolio)
+    r = await c.evaluate(v, portfolio_with_pair)
     assert not r.passed
 
 

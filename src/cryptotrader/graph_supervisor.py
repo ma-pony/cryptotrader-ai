@@ -15,7 +15,7 @@ from cryptotrader.graph import ArenaState
 async def supervisor_analyze(state: ArenaState) -> dict:
     """Supervisor coordinates specialized analysts to form trading decision."""
     snapshot = state["data"]["snapshot"]
-    model = state["metadata"].get("verdict_model", "gpt-4o-mini")
+    model = state["metadata"].get("verdict_model", "")
 
     # Build context for supervisor
     context = f"""Analyze {snapshot.pair} for trading decision.
@@ -68,7 +68,7 @@ Coordinate your analysts to determine: long, short, or hold?
     return {"data": {"verdict": verdict}}
 
 
-def build_supervisor_graph(config: dict | None = None) -> Any:
+def build_supervisor_graph() -> Any:
     """Build trading graph using supervisor pattern.
 
     This is an alternative to build_trading_graph() that uses LangChain's

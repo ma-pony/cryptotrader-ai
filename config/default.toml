@@ -29,6 +29,9 @@ divergence_hold_threshold = 0.7
 default_timeframe = "1h"
 ohlcv_limit = 100
 
+[risk]
+max_stop_loss_pct = 0.05
+
 [risk.position]
 max_single_pct = 0.10
 max_total_exposure_pct = 0.50
@@ -53,6 +56,17 @@ health_check_interval_s = 30
 [risk.rate_limit]
 max_trades_per_hour = 6
 max_trades_per_day = 20
+
+[backtest]
+initial_capital = 10000
+slippage_base = 0.0005
+sma_fast = 20
+sma_slow = 50
+
+[backtest.position_sizing]
+high_confidence_pct = 0.20    # confidence >= 0.8
+medium_confidence_pct = 0.12  # confidence >= 0.6
+low_confidence_pct = 0.06     # confidence < 0.6
 
 [scheduler]
 enabled = false

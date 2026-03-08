@@ -68,19 +68,19 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0,
 # ── Create Specialized Agents ──
 
 
-def create_tech_agent(model: str = "gpt-4o-mini"):
+def create_tech_agent(model: str = ""):
     """Create technical analysis agent using official LangChain API."""
     llm = _create_chat_model(model, temperature=0.2)
     return create_agent(llm, tools=[load_skill, load_past_experience], system_prompt=TECH_AGENT_PROMPT)
 
 
-def create_chain_agent(model: str = "gpt-4o-mini"):
+def create_chain_agent(model: str = ""):
     """Create on-chain analysis agent using official LangChain API."""
     llm = _create_chat_model(model, temperature=0.2)
     return create_agent(llm, tools=[load_skill, load_past_experience], system_prompt=CHAIN_AGENT_PROMPT)
 
 
-def create_macro_agent(model: str = "gpt-4o-mini"):
+def create_macro_agent(model: str = ""):
     """Create macro analysis agent using official LangChain API."""
     llm = _create_chat_model(model, temperature=0.2)
     return create_agent(llm, tools=[load_skill, load_past_experience], system_prompt=MACRO_AGENT_PROMPT)
@@ -149,7 +149,7 @@ When analysts disagree, weigh their confidence levels and look for convergence i
 """
 
 
-def create_supervisor_agent(model: str = "gpt-4o-mini"):
+def create_supervisor_agent(model: str = ""):
     """Create supervisor agent that coordinates specialized analysts."""
     llm = _create_chat_model(model, temperature=0.2)
     return create_agent(

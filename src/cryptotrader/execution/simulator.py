@@ -12,14 +12,17 @@ if TYPE_CHECKING:
 
 class PaperExchange:
     def __init__(self) -> None:
+        from cryptotrader.config import load_config
+
+        _cfg = load_config()
         self._orders: dict[str, dict[str, Any]] = {}
-        self._balances: dict[str, float] = {"USDT": 10000.0}
+        self._balances: dict[str, float] = {"USDT": _cfg.backtest.initial_capital}
         self._lock = asyncio.Lock()
+        self._slippage_base: float = _cfg.backtest.slippage_base
 
     def estimate_slippage(self, order: Order) -> float:
-        base = 0.0005
         impact = order.amount * order.price * 1e-8
-        return base + impact
+        return self._slippage_base + impact
 
     async def place_order(self, order: Order) -> dict[str, Any]:
         async with self._lock:

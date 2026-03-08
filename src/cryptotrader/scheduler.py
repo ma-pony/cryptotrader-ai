@@ -71,34 +71,20 @@ class Scheduler:
 
             config = load_config()
             graph = build_trading_graph()
-            initial = {
-                "messages": [],
-                "data": {},
-                "metadata": {
-                    "pair": pair,
-                    "engine": config.engine,
-                    "exchange_id": config.scheduler.exchange_id,
-                    "timeframe": config.data.default_timeframe,
-                    "ohlcv_limit": config.data.ohlcv_limit,
-                    "analysis_model": config.models.analysis,
-                    "debate_model": config.models.debate,
-                    "verdict_model": config.models.verdict,
-                    "models": {
-                        "tech_agent": config.models.tech_agent,
-                        "chain_agent": config.models.chain_agent,
-                        "news_agent": config.models.news_agent,
-                        "macro_agent": config.models.macro_agent,
-                    },
-                    "database_url": config.infrastructure.database_url,
-                    "redis_url": config.infrastructure.redis_url,
-                    "convergence_threshold": config.debate.convergence_threshold,
-                    "max_single_pct": config.risk.position.max_single_pct,
-                },
-                "debate_round": 0,
-                "max_debate_rounds": config.debate.max_rounds,
-                "divergence_scores": [],
-            }
-            result = await graph.ainvoke(initial)
+            from cryptotrader.state import build_initial_state
+
+            initial = build_initial_state(
+                pair,
+                engine=config.engine,
+                exchange_id=config.scheduler.exchange_id,
+                config=config,
+            )
+            try:
+                result = await asyncio.wait_for(graph.ainvoke(initial), timeout=300)
+            except TimeoutError:
+                logger.error("Scheduler timed out after 300s for pair %s", pair)
+                self._status[pair]["last_error"] = "timeout after 300s"
+                return
             self._status[pair]["last_error"] = None
 
             # Log outcome to status (notifications are already sent by the graph nodes)

@@ -37,7 +37,7 @@ ROLE = (
 
 
 class NewsAgent(ToolAgent):
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, model: str = "") -> None:
         super().__init__(agent_id="news", role_description=ROLE, tools=NEWS_TOOLS, model=model)
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:

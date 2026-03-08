@@ -10,33 +10,43 @@ import httpx
 
 from cryptotrader.backtest.cache import CACHE_DB
 
+# BTC+ETH combined share of total crypto market cap (approximate stable ratio)
+_BTC_ETH_MARKET_SHARE = 0.664
+# Fallback BTC dominance percentage when ETH market cap data is unavailable
+_BTC_DOMINANCE_FALLBACK = 56.0
+# Minimum number of cached days considered sufficient coverage (skips API fetch)
+_MIN_CACHE_COVERAGE_DAYS = 180
+
 
 def _ensure_tables():
-    conn = sqlite3.connect(str(CACHE_DB))
-    conn.execute("CREATE TABLE IF NOT EXISTS fear_greed (date TEXT PRIMARY KEY, value INTEGER, classification TEXT)")
-    conn.execute("CREATE TABLE IF NOT EXISTS funding_rate (date TEXT PRIMARY KEY, rate REAL, count INTEGER)")
-    conn.execute("CREATE TABLE IF NOT EXISTS btc_dominance (date TEXT PRIMARY KEY, dominance REAL)")
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS fred_series (series_id TEXT, date TEXT, value REAL, PRIMARY KEY (series_id, date))"
-    )
-    conn.execute("CREATE TABLE IF NOT EXISTS futures_volume (date TEXT PRIMARY KEY, volume REAL, quote_volume REAL)")
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fear_greed (date TEXT PRIMARY KEY, value INTEGER, classification TEXT)"
+        )
+        conn.execute("CREATE TABLE IF NOT EXISTS funding_rate (date TEXT PRIMARY KEY, rate REAL, count INTEGER)")
+        conn.execute("CREATE TABLE IF NOT EXISTS btc_dominance (date TEXT PRIMARY KEY, dominance REAL)")
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS fred_series"
+            " (series_id TEXT, date TEXT, value REAL, PRIMARY KEY (series_id, date))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS futures_volume (date TEXT PRIMARY KEY, volume REAL, quote_volume REAL)"
+        )
+        conn.commit()
 
 
 async def fetch_fear_greed(start_date: str, end_date: str) -> dict[str, int]:
     """Fetch Fear & Greed Index history. Returns {date_str: value}."""
     _ensure_tables()
-    conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(
-        conn.execute(
-            "SELECT date, value FROM fear_greed WHERE date >= ? AND date <= ?",
-            (start_date, end_date),
-        ).fetchall()
-    )
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        cached = dict(
+            conn.execute(
+                "SELECT date, value FROM fear_greed WHERE date >= ? AND date <= ?",
+                (start_date, end_date),
+            ).fetchall()
+        )
 
-    if len(cached) > 180:  # good enough coverage
+    if len(cached) > _MIN_CACHE_COVERAGE_DAYS:  # good enough coverage
         return cached
 
     async with httpx.AsyncClient() as client:
@@ -48,33 +58,31 @@ async def fetch_fear_greed(start_date: str, end_date: str) -> dict[str, int]:
         r.raise_for_status()
         data = r.json().get("data", [])
 
-    conn = sqlite3.connect(str(CACHE_DB))
-    for d in data:
-        ts = int(d["timestamp"])
-        dt = datetime.fromtimestamp(ts, UTC)
-        date_str = dt.strftime("%Y-%m-%d")
-        val = int(d["value"])
-        conn.execute(
-            "INSERT OR REPLACE INTO fear_greed (date, value, classification) VALUES (?,?,?)",
-            (date_str, val, d.get("value_classification", "")),
-        )
-        cached[date_str] = val
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        for d in data:
+            ts = int(d["timestamp"])
+            dt = datetime.fromtimestamp(ts, UTC)
+            date_str = dt.strftime("%Y-%m-%d")
+            val = int(d["value"])
+            conn.execute(
+                "INSERT OR REPLACE INTO fear_greed (date, value, classification) VALUES (?,?,?)",
+                (date_str, val, d.get("value_classification", "")),
+            )
+            cached[date_str] = val
+        conn.commit()
     return {k: v for k, v in cached.items() if start_date <= k <= end_date}
 
 
 async def fetch_funding_rate(symbol: str, start_date: str, end_date: str) -> dict[str, float]:
     """Fetch daily avg funding rate from Binance. Returns {date_str: avg_rate}."""
     _ensure_tables()
-    conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(
-        conn.execute(
-            "SELECT date, rate FROM funding_rate WHERE date >= ? AND date <= ?",
-            (start_date, end_date),
-        ).fetchall()
-    )
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        cached = dict(
+            conn.execute(
+                "SELECT date, rate FROM funding_rate WHERE date >= ? AND date <= ?",
+                (start_date, end_date),
+            ).fetchall()
+        )
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
     end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
@@ -109,30 +117,28 @@ async def fetch_funding_rate(symbol: str, start_date: str, end_date: str) -> dic
         d = dt.strftime("%Y-%m-%d")
         daily.setdefault(d, []).append(float(rec["fundingRate"]))
 
-    conn = sqlite3.connect(str(CACHE_DB))
-    for d, rates in daily.items():
-        avg = sum(rates) / len(rates)
-        conn.execute(
-            "INSERT OR REPLACE INTO funding_rate (date, rate, count) VALUES (?,?,?)",
-            (d, avg, len(rates)),
-        )
-        cached[d] = avg
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        for d, rates in daily.items():
+            avg = sum(rates) / len(rates)
+            conn.execute(
+                "INSERT OR REPLACE INTO funding_rate (date, rate, count) VALUES (?,?,?)",
+                (d, avg, len(rates)),
+            )
+            cached[d] = avg
+        conn.commit()
     return {k: v for k, v in cached.items() if start_date <= k <= end_date}
 
 
 async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float]:
     """Fetch BTC dominance from CoinGecko. Estimates total mcap from BTC+ETH."""
     _ensure_tables()
-    conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(
-        conn.execute(
-            "SELECT date, dominance FROM btc_dominance WHERE date >= ? AND date <= ?",
-            (start_date, end_date),
-        ).fetchall()
-    )
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        cached = dict(
+            conn.execute(
+                "SELECT date, dominance FROM btc_dominance WHERE date >= ? AND date <= ?",
+                (start_date, end_date),
+            ).fetchall()
+        )
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
     expected = (datetime.fromisoformat(end_date).replace(tzinfo=UTC) - start_dt).days
@@ -167,23 +173,21 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
         }
 
     # BTC+ETH ≈ 66.4% of total market (stable ratio). Estimate total, then compute dominance.
-    btc_eth_share = 0.664
-    conn = sqlite3.connect(str(CACHE_DB))
-    for d, btc_cap in btc_caps.items():
-        if start_date <= d <= end_date:
-            eth_cap = eth_caps.get(d, 0)
-            if eth_cap > 0:
-                est_total = (btc_cap + eth_cap) / btc_eth_share
-                dom = round(btc_cap / est_total * 100, 2)
-            else:
-                dom = 56.0  # fallback
-            conn.execute(
-                "INSERT OR REPLACE INTO btc_dominance (date, dominance) VALUES (?,?)",
-                (d, dom),
-            )
-            cached[d] = dom
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        for d, btc_cap in btc_caps.items():
+            if start_date <= d <= end_date:
+                eth_cap = eth_caps.get(d, 0)
+                if eth_cap > 0:
+                    est_total = (btc_cap + eth_cap) / _BTC_ETH_MARKET_SHARE
+                    dom = round(btc_cap / est_total * 100, 2)
+                else:
+                    dom = _BTC_DOMINANCE_FALLBACK
+                conn.execute(
+                    "INSERT OR REPLACE INTO btc_dominance (date, dominance) VALUES (?,?)",
+                    (d, dom),
+                )
+                cached[d] = dom
+        conn.commit()
     return {k: v for k, v in cached.items() if start_date <= k <= end_date}
 
 
@@ -192,14 +196,13 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_
     _ensure_tables()
     if not api_key:
         api_key = os.environ.get("FRED_API_KEY", "")
-    conn = sqlite3.connect(str(CACHE_DB))
-    cached = dict(
-        conn.execute(
-            "SELECT date, value FROM fred_series WHERE series_id=? AND date>=? AND date<=?",
-            (series_id, start_date, end_date),
-        ).fetchall()
-    )
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        cached = dict(
+            conn.execute(
+                "SELECT date, value FROM fred_series WHERE series_id=? AND date>=? AND date<=?",
+                (series_id, start_date, end_date),
+            ).fetchall()
+        )
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
     expected = (datetime.fromisoformat(end_date).replace(tzinfo=UTC) - start_dt).days
@@ -221,17 +224,16 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_
         r.raise_for_status()
         obs = r.json().get("observations", [])
 
-    conn = sqlite3.connect(str(CACHE_DB))
-    for o in obs:
-        if o["value"] != ".":  # FRED uses "." for missing
-            val = float(o["value"])
-            conn.execute(
-                "INSERT OR REPLACE INTO fred_series (series_id, date, value) VALUES (?,?,?)",
-                (series_id, o["date"], val),
-            )
-            cached[o["date"]] = val
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        for o in obs:
+            if o["value"] != ".":  # FRED uses "." for missing
+                val = float(o["value"])
+                conn.execute(
+                    "INSERT OR REPLACE INTO fred_series (series_id, date, value) VALUES (?,?,?)",
+                    (series_id, o["date"], val),
+                )
+                cached[o["date"]] = val
+        conn.commit()
 
     # Forward-fill weekends/holidays
     if cached:
@@ -284,15 +286,14 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
 async def fetch_futures_volume(symbol: str, start_date: str, end_date: str) -> dict[str, dict]:
     """Fetch daily futures volume from Binance. Returns {date: {volume, quote_volume}}."""
     _ensure_tables()
-    conn = sqlite3.connect(str(CACHE_DB))
-    cached = {
-        r[0]: {"volume": r[1], "quote_volume": r[2]}
-        for r in conn.execute(
-            "SELECT date, volume, quote_volume FROM futures_volume WHERE date >= ? AND date <= ?",
-            (start_date, end_date),
-        ).fetchall()
-    }
-    conn.close()
+    with sqlite3.connect(str(CACHE_DB)) as conn:
+        cached = {
+            r[0]: {"volume": r[1], "quote_volume": r[2]}
+            for r in conn.execute(
+                "SELECT date, volume, quote_volume FROM futures_volume WHERE date >= ? AND date <= ?",
+                (start_date, end_date),
+            ).fetchall()
+        }
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
     end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
@@ -317,17 +318,16 @@ async def fetch_futures_volume(symbol: str, start_date: str, end_date: str) -> d
                 break
 
         result = {}
-        conn = sqlite3.connect(str(CACHE_DB))
-        for c in all_candles:
-            d = datetime.fromtimestamp(c[0] / 1000, UTC).strftime("%Y-%m-%d")
-            if start_date <= d <= end_date:
-                result[d] = {"volume": c[5], "quote_volume": c[5] * c[4]}
-                conn.execute(
-                    "INSERT OR REPLACE INTO futures_volume VALUES (?, ?, ?)",
-                    (d, c[5], c[5] * c[4]),
-                )
-        conn.commit()
-        conn.close()
+        with sqlite3.connect(str(CACHE_DB)) as conn:
+            for c in all_candles:
+                d = datetime.fromtimestamp(c[0] / 1000, UTC).strftime("%Y-%m-%d")
+                if start_date <= d <= end_date:
+                    result[d] = {"volume": c[5], "quote_volume": c[5] * c[4]}
+                    conn.execute(
+                        "INSERT OR REPLACE INTO futures_volume VALUES (?, ?, ?)",
+                        (d, c[5], c[5] * c[4]),
+                    )
+            conn.commit()
         return result
     finally:
         await exchange.close()

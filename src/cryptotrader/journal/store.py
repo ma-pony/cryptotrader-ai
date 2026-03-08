@@ -8,16 +8,23 @@ from dataclasses import asdict
 from datetime import datetime
 from typing import Any
 
+from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.models import DecisionCommit
 
 logger = logging.getLogger(__name__)
 
-_engine = None
-_sessionmaker = None
-_table_ready = False
+# Track which URLs have had their schema initialised
+_table_ready: set[str] = set()
+
+# Singleton cache for SQLAlchemy model classes
+_sa_cache: tuple | None = None
 
 
 def _sa_models():
+    global _sa_cache
+    if _sa_cache is not None:
+        return _sa_cache
+
     from sqlalchemy import Column, DateTime, Float, Integer, String, Text
     from sqlalchemy.dialects.postgresql import JSONB
     from sqlalchemy.orm import DeclarativeBase
@@ -45,32 +52,45 @@ def _sa_models():
         pnl = Column(Float, nullable=True)
         retrospective = Column(Text, nullable=True)
 
-    return Base, DecisionCommitRow
+    _sa_cache = (Base, DecisionCommitRow)
+    return _sa_cache
+
+
+async def _ensure_tables(database_url: str) -> None:
+    """Create journal schema on first call per database URL."""
+    if database_url not in _table_ready:
+        Base, _ = _sa_models()
+        engine = await get_engine(database_url)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        _table_ready.add(database_url)
 
 
 async def _get_session(database_url: str):
-    global _engine, _sessionmaker, _table_ready
-    if _engine is None:
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-        _engine = create_async_engine(database_url, pool_size=5, max_overflow=10)
-        _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
-    if not _table_ready:
-        Base, _ = _sa_models()
-        async with _engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        _table_ready = True
-    return _sessionmaker()
+    # get_async_session initialises the engine on first call, then we ensure tables exist.
+    session = await get_async_session(database_url)
+    await _ensure_tables(database_url)
+    return session
 
 
 class JournalStore:
     """Stores decision commits. PostgreSQL when DATABASE_URL set, else in-memory."""
 
     _MAX_MEMORY = 10_000  # Cap in-memory store to prevent OOM
+    # Shared fallback memory keyed by db_url — only used when a DB URL is configured (but unreachable).
+    # Pure in-memory mode (db_url=None) keeps a per-instance list so test isolation is maintained.
+    _shared_memory: dict[str, list[dict[str, Any]]] = {}
 
     def __init__(self, database_url: str | None = None):
         self._db_url = database_url
-        self._memory: list[dict[str, Any]] = []
+        if database_url:
+            # Shared fallback: all instances pointing at the same DB share one memory fallback
+            if database_url not in JournalStore._shared_memory:
+                JournalStore._shared_memory[database_url] = []
+            self._memory: list[dict[str, Any]] = JournalStore._shared_memory[database_url]
+        else:
+            # Pure in-memory mode: each instance is independent (preserves test isolation)
+            self._memory = []
 
     @property
     def _use_db(self) -> bool:
@@ -202,7 +222,8 @@ class JournalStore:
                 logger.warning("DB commit failed, falling back to memory: %s", e)
         self._memory.append(self._serialize(dc))
         if len(self._memory) > self._MAX_MEMORY:
-            self._memory = self._memory[-self._MAX_MEMORY :]
+            # Use in-place slice to preserve shared reference for DB-backed instances
+            del self._memory[: len(self._memory) - self._MAX_MEMORY]
 
     async def log(self, limit: int = 10, pair: str | None = None) -> list[DecisionCommit]:
         if self._use_db:

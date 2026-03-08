@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 _p = argparse.ArgumentParser()
 _p.add_argument("--pair", default="BTC/USDT")
-_p.add_argument("--model", default="openai/glm-5")
+_p.add_argument("--model", default="")
 _p.add_argument("--start", default="2025-06-01")
 _p.add_argument("--end", default="2025-12-31")
 _p.add_argument(
@@ -85,8 +85,7 @@ def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
         return 0.0
     plus_di = 100 * plus_di_s / atr
     minus_di = 100 * minus_di_s / atr
-    dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) > 0 else 0
-    return dx  # Simplified: single DX value (approximates ADX for our purpose)
+    return 100 * abs(plus_di - minus_di) / (plus_di + minus_di) if (plus_di + minus_di) > 0 else 0
 
 
 async def _fetch_all_data(pair: str, start: str, end: str, start_ms: int, end_ms: int, interval: str):
@@ -152,10 +151,7 @@ def _check_reversal_stop(position: float, reversal_count: int, entry_price: floa
 def _check_catastrophic_stop(position: float, entry_price: float, c: float, date: str):
     """Check if catastrophic stop should trigger."""
     if position != 0:
-        if position > 0:
-            loss = (entry_price - c) / entry_price
-        else:
-            loss = (c - entry_price) / entry_price
+        loss = (entry_price - c) / entry_price if position > 0 else (c - entry_price) / entry_price
         if loss >= STOP_LOSS:
             pnl = (c - entry_price) * position if position > 0 else (entry_price - c) * abs(position)
             trade = {"side": "catastrophic_stop", "price": c, "pnl": pnl, "date": date}
@@ -173,13 +169,12 @@ def _check_trailing_stop(position: float, entry_price: float, c: float, peak_pri
                 trade = {"side": "trail_stop_long", "price": c, "pnl": pnl, "date": date}
                 return True, pnl, trade, new_peak
             return False, 0.0, None, new_peak
-        else:
-            new_peak = min(peak_price, c) if peak_price > 0 else c
-            if c < entry_price and (c - new_peak) / new_peak >= TRAILING_STOP:
-                pnl = (entry_price - c) * abs(position)
-                trade = {"side": "trail_stop_short", "price": c, "pnl": pnl, "date": date}
-                return True, pnl, trade, new_peak
-            return False, 0.0, None, new_peak
+        new_peak = min(peak_price, c) if peak_price > 0 else c
+        if c < entry_price and (c - new_peak) / new_peak >= TRAILING_STOP:
+            pnl = (entry_price - c) * abs(position)
+            trade = {"side": "trail_stop_short", "price": c, "pnl": pnl, "date": date}
+            return True, pnl, trade, new_peak
+        return False, 0.0, None, new_peak
     return False, 0.0, None, peak_price
 
 
@@ -242,7 +237,7 @@ def _calculate_mtm(position: float, equity: float, entry_price: float, c: float)
     """Calculate mark-to-market equity."""
     if position > 0:
         return equity + (c - entry_price) * position
-    elif position < 0:
+    if position < 0:
         return equity + (entry_price - c) * abs(position)
     return equity
 
@@ -324,9 +319,7 @@ def _process_stops(position, reversal_count, entry_price, c, date, peak_price, a
     new_reversal_count = reversal_count
 
     # Track signal reversal count
-    if position > 0 and action == "short":
-        new_reversal_count += 1
-    elif position < 0 and action == "long":
+    if (position > 0 and action == "short") or (position < 0 and action == "long"):
         new_reversal_count += 1
     else:
         new_reversal_count = 0
@@ -354,11 +347,9 @@ def _should_execute_trade(action, position, stopped, step, paused_until, days_si
     if stopped or step <= paused_until:
         return False
     can_flip = days_since_flip >= MIN_HOLD_DAYS
-    if action == "long" and position <= 0 and (position == 0 or can_flip):
-        return True
-    if action == "short" and position >= 0 and (position == 0 or can_flip):
-        return True
-    return False
+    return (action == "long" and position <= 0 and (position == 0 or can_flip)) or (
+        action == "short" and position >= 0 and (position == 0 or can_flip)
+    )
 
 
 def _check_drawdown_pause(equity, position, entry_price, c, peak_equity, step):
@@ -376,7 +367,7 @@ def _get_position_str(position: float) -> str:
     """Get position state string for display."""
     if position > 0:
         return "LONG"
-    elif position < 0:
+    if position < 0:
         return "SHORT"
     return "FLAT"
 

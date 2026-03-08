@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import math
 from datetime import UTC, datetime
-from typing import Any
 
 import pandas as pd
 
@@ -294,12 +293,13 @@ class BacktestEngine:
                 action = verdict.get("action", "hold")
                 confidence = verdict.get("confidence", 0.5)
                 # Dynamic position sizing based on AI confidence
+                ps = self._cached_config.backtest.position_sizing
                 if confidence >= 0.8:
-                    self.position_pct = 0.20
+                    self.position_pct = ps.high_confidence_pct
                 elif confidence >= 0.6:
-                    self.position_pct = 0.12
+                    self.position_pct = ps.medium_confidence_pct
                 else:
-                    self.position_pct = 0.06
+                    self.position_pct = ps.low_confidence_pct
             else:
                 action = self._simple_signal(window)
 
@@ -319,13 +319,15 @@ class BacktestEngine:
 
     def _simple_signal(self, window: list[list]) -> str:
         closes = [c[4] for c in window]
-        if len(closes) < 20:
+        sma_fast = self._cached_config.backtest.sma_fast
+        sma_slow = self._cached_config.backtest.sma_slow
+        if len(closes) < sma_fast:
             return "hold"
-        sma20 = sum(closes[-20:]) / 20
-        sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else sma20
-        if closes[-1] > sma20 > sma50:
+        fast_avg = sum(closes[-sma_fast:]) / sma_fast
+        slow_avg = sum(closes[-sma_slow:]) / sma_slow if len(closes) >= sma_slow else fast_avg
+        if closes[-1] > fast_avg > slow_avg:
             return "long"
-        if closes[-1] < sma20 < sma50:
+        if closes[-1] < fast_avg < slow_avg:
             return "short"
         return "hold"
 
@@ -422,30 +424,18 @@ class BacktestEngine:
         )
 
     async def _run_graph(self, graph, snapshot: DataSnapshot) -> dict:
-        config = self._cached_config
+        from cryptotrader.state import build_initial_state
 
-        initial: dict[str, Any] = {
-            "messages": [],
-            "data": {"snapshot": snapshot},
-            "metadata": {
-                "pair": self.pair,
-                "engine": "paper",
-                "models": {
-                    "tech_agent": config.models.tech_agent,
-                    "chain_agent": config.models.chain_agent,
-                    "news_agent": config.models.news_agent,
-                    "macro_agent": config.models.macro_agent,
-                },
-                "analysis_model": config.models.analysis,
-                "debate_model": config.models.debate,
-                "verdict_model": config.models.verdict,
-                # Use rules verdict in backtest to avoid LLM cost per candle
-                "llm_verdict": False,
-            },
-            "debate_round": 0,
-            "max_debate_rounds": 2,
-            "divergence_scores": [],
-        }
+        # Use rules verdict in backtest to avoid LLM cost per candle.
+        # Cap debate rounds at 2 to keep per-candle latency low.
+        initial = build_initial_state(
+            self.pair,
+            engine="paper",
+            snapshot=snapshot,
+            config=self._cached_config,
+            extra_metadata={"llm_verdict": False},
+        )
+        initial["max_debate_rounds"] = self._cached_config.debate.max_rounds
         return await graph.ainvoke(initial)
 
     def _compute_result(self, equity: float, curve: list[float], trades: list[dict]) -> BacktestResult:

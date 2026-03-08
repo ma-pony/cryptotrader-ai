@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from cryptotrader.agents.base import create_llm, extract_content
 from cryptotrader.state import ArenaState
 
 logger = logging.getLogger(__name__)
@@ -31,11 +34,14 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "r
 
 async def debate_round(state: ArenaState) -> dict:
     """One round of cross-challenge debate between agents."""
+    from cryptotrader.config import load_config as _load_config
     from cryptotrader.debate.challenge import build_challenge_prompt
     from cryptotrader.debate.verdict import _extract_json
 
     analyses = state["data"].get("analyses", {})
-    model = state["metadata"].get("debate_model", "gpt-4o-mini")
+    _dcfg = _load_config()
+    _default_debate_model = _dcfg.models.debate or _dcfg.models.fallback
+    model = state["metadata"].get("debate_model", _default_debate_model)
     updated: dict[str, Any] = {}
 
     for agent_id, analysis in analyses.items():
@@ -44,10 +50,6 @@ async def debate_round(state: ArenaState) -> dict:
         role_label = _DEBATE_ROLES.get(agent_id, agent_id)
         system = DEBATE_SYSTEM.format(role=role_label)
         try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-
-            from cryptotrader.agents.base import create_llm, extract_content
-
             llm = create_llm(model=model, temperature=0.3, timeout=120, json_mode=True)
             lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
             resp = await llm.ainvoke(lc_msgs)
@@ -101,10 +103,13 @@ def convergence_router(state: ArenaState) -> str:
 
 async def bull_bear_debate(state: ArenaState) -> dict:
     """Run bull/bear adversarial debate."""
+    from cryptotrader.config import load_config as _load_config
     from cryptotrader.debate.researchers import run_debate
 
     analyses = state["data"].get("analyses", {})
-    model = state["metadata"].get("debate_model", "gpt-4o-mini")
+    _bbcfg = _load_config()
+    _default_bb_model = _bbcfg.models.debate or _bbcfg.models.fallback
+    model = state["metadata"].get("debate_model", _default_bb_model)
     rounds = state["metadata"].get("debate_rounds", 2)
     debate = await run_debate(analyses, rounds=rounds, model=model)
     return {"data": {"debate": debate}}
@@ -112,11 +117,14 @@ async def bull_bear_debate(state: ArenaState) -> dict:
 
 async def judge_verdict(state: ArenaState) -> dict:
     """Judge evaluates bull/bear debate and issues verdict."""
+    from cryptotrader.config import load_config as _load_config
     from cryptotrader.debate.researchers import judge_debate
 
     debate = state["data"]["debate"]
     pair = state["metadata"]["pair"]
-    model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", "gpt-4o-mini"))
+    _jcfg = _load_config()
+    _default_judge_model = _jcfg.models.verdict or _jcfg.models.fallback
+    model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", _default_judge_model))
     result = await judge_debate(debate, pair, model=model)
     return {
         "data": {

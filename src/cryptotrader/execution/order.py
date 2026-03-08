@@ -39,5 +39,6 @@ class OrderManager:
                 logger.warning("Unknown order status from exchange: %s, marking FAILED", status)
                 self.transition(order, OrderStatus.FAILED)
         except Exception:
+            logger.warning("Order placement failed", exc_info=True)
             self.transition(order, OrderStatus.FAILED)
         return order

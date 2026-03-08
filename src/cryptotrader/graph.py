@@ -32,31 +32,31 @@ from cryptotrader.nodes.verdict import _risk_gate_cache, make_verdict, risk_chec
 from cryptotrader.state import ArenaState, merge_dicts
 
 __all__ = [
-    "_risk_gate_cache",
     "ArenaState",
-    "merge_dicts",
-    "collect_snapshot",
-    "update_past_pnl",
-    "check_stop_loss",
-    "verbal_reinforcement",
-    "tech_analyze",
-    "chain_analyze",
-    "news_analyze",
-    "macro_analyze",
-    "debate_round",
-    "check_stability",
-    "convergence_router",
+    "_risk_gate_cache",
+    "build_debate_graph",
+    "build_lite_graph",
+    "build_trading_graph",
     "bull_bear_debate",
+    "chain_analyze",
+    "check_stability",
+    "check_stop_loss",
+    "collect_snapshot",
+    "convergence_router",
+    "debate_round",
+    "journal_rejection",
+    "journal_trade",
     "judge_verdict",
+    "macro_analyze",
     "make_verdict",
+    "merge_dicts",
+    "news_analyze",
+    "place_order",
     "risk_check",
     "risk_router",
-    "place_order",
-    "journal_trade",
-    "journal_rejection",
-    "build_trading_graph",
-    "build_lite_graph",
-    "build_debate_graph",
+    "tech_analyze",
+    "update_past_pnl",
+    "verbal_reinforcement",
 ]
 
 
@@ -195,8 +195,8 @@ def _build_full_graph(config: dict | None = None) -> Any:
     return graph.compile()
 
 
-def build_supervisor_graph_v2(config: dict | None = None) -> Any:
+def build_supervisor_graph_v2() -> Any:
     """Build graph using LangChain official supervisor pattern."""
     from cryptotrader.graph_supervisor import build_supervisor_graph
 
-    return build_supervisor_graph(config)
+    return build_supervisor_graph()

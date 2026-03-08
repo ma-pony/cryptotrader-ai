@@ -10,6 +10,8 @@ import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 
+import httpx
+
 from cryptotrader.data.store import (
     _record_fetch,
     _should_fetch,
@@ -54,7 +56,7 @@ async def sync_sosovalue_etf_history(api_key: str) -> int:
             )
         )
 
-    store_batch("sosovalue_etf", records)
+    store_batch("sosovalue_etf", records, forward_fill=True)
     _record_fetch("sosovalue_etf_history")
     logger.info("Synced %d days of SoSoValue ETF history", len(records))
     return len(records)
@@ -84,8 +86,6 @@ async def sync_fear_greed_history() -> int:
     """Fetch historical Fear & Greed index (up to 365 days) and persist."""
     if not _should_fetch("fear_greed"):
         return count_records("fear_greed")
-
-    import httpx
 
     try:
         async with httpx.AsyncClient(timeout=15) as c:
@@ -117,8 +117,6 @@ async def sync_fred_history(api_key: str, series: str = "DFF", limit: int = 365)
     if not _should_fetch(source_key):
         return count_records(source_key)
 
-    import httpx
-
     try:
         start = (datetime.now(UTC) - timedelta(days=limit)).strftime("%Y-%m-%d")
         async with httpx.AsyncClient(timeout=15) as c:
@@ -141,7 +139,7 @@ async def sync_fred_history(api_key: str, series: str = "DFF", limit: int = 365)
             if date and val != ".":
                 records.append((date, float(val)))
 
-        store_batch(source_key, records)
+        store_batch(source_key, records, forward_fill=True)
         _record_fetch(source_key)
         logger.info("Synced %d observations for FRED/%s", len(records), series)
         return len(records)
@@ -180,8 +178,6 @@ async def sync_binance_derivatives(symbol: str = "BTC", days: int = 365) -> int:
     """Fetch Binance futures historical data: OI, long/short ratio, taker ratio."""
     if not _should_fetch("binance_derivatives"):
         return count_records(f"binance_oi_{symbol}")
-
-    import httpx
 
     pair = f"{symbol}USDT"
     base = "https://fapi.binance.com/futures/data"
@@ -306,8 +302,6 @@ async def sync_defillama_tvl(days: int = 365) -> int:
     if not _should_fetch("defillama"):
         return count_records("defillama_tvl")
 
-    import httpx
-
     try:
         async with httpx.AsyncClient(timeout=15, verify=False) as c:
             r = await c.get("https://api.llama.fi/v2/historicalChainTvl/Ethereum")
@@ -335,8 +329,6 @@ async def sync_coingecko_market(days: int = 365) -> int:
     """Fetch BTC market data (price, market cap, volume) from CoinGecko (free)."""
     if not _should_fetch("coingecko"):
         return count_records("coingecko_btc")
-
-    import httpx
 
     try:
         async with httpx.AsyncClient(timeout=15, verify=False) as c:
@@ -381,8 +373,6 @@ async def sync_fred_multi(api_key: str) -> int:
     if not _should_fetch(source_key):
         return sum(count_records(f"fred_{s}") for s in ("T10Y2Y", "VIXCLS", "SP500", "WM2NS", "CPIAUCSL"))
 
-    import httpx
-
     series_list = {
         "T10Y2Y": "yield_curve_spread",
         "VIXCLS": "vix",
@@ -408,7 +398,7 @@ async def sync_fred_multi(api_key: str) -> int:
                 r.raise_for_status()
                 obs = r.json().get("observations", [])
                 records = [(o["date"], float(o["value"])) for o in obs if o.get("value", ".") != "."]
-                store_batch(f"fred_{series_id}", records)
+                store_batch(f"fred_{series_id}", records, forward_fill=True)
                 total += len(records)
                 logger.info("Synced %d observations for FRED/%s (%s)", len(records), series_id, label)
                 await asyncio.sleep(0.2)
@@ -483,8 +473,6 @@ async def sync_defillama_extra() -> int:
     if not _should_fetch("defillama_extra"):
         return count_records("defillama_total_tvl")
 
-    import httpx
-
     cutoff = (datetime.now(UTC) - timedelta(days=365)).timestamp()
 
     async with httpx.AsyncClient(timeout=15, verify=False) as c:
@@ -502,8 +490,6 @@ async def sync_blockchain_info() -> int:
     """Fetch BTC on-chain data from blockchain.info (free, no key)."""
     if not _should_fetch("blockchain_info"):
         return count_records("btc_hashrate")
-
-    import httpx
 
     total = 0
     charts = {
@@ -543,8 +529,6 @@ async def sync_coingecko_eth() -> int:
     """Fetch ETH market data from CoinGecko."""
     if not _should_fetch("coingecko_eth"):
         return count_records("coingecko_eth")
-
-    import httpx
 
     try:
         async with httpx.AsyncClient(timeout=15, verify=False) as c:
@@ -606,7 +590,7 @@ async def sync_sosovalue_eth_etf(api_key: str) -> int:
             )
         )
 
-    store_batch("sosovalue_eth_etf", records)
+    store_batch("sosovalue_eth_etf", records, forward_fill=True)
     _record_fetch("sosovalue_eth_etf")
     logger.info("Synced %d days of SoSoValue ETH ETF history", len(records))
     return len(records)
@@ -616,8 +600,6 @@ async def sync_binance_funding_history(symbols: list[str] | None = None) -> int:
     """Fetch funding rate history for multiple symbols from Binance."""
     if not _should_fetch("binance_funding"):
         return count_records("binance_funding_BTC")
-
-    import httpx
 
     if symbols is None:
         symbols = ["BTC", "ETH", "SOL", "BNB", "XRP"]
@@ -672,8 +654,6 @@ async def sync_binance_eth_derivatives() -> int:
     if not _should_fetch("binance_eth_derivatives"):
         return count_records("binance_oi_ETH")
 
-    import httpx
-
     pair = "ETHUSDT"
     base = "https://fapi.binance.com/futures/data"
     total = 0
@@ -708,8 +688,6 @@ async def sync_stablecoin_total_supply() -> int:
     if not _should_fetch("stablecoin_total"):
         return count_records("stablecoin_total_supply")
 
-    import httpx
-
     try:
         async with httpx.AsyncClient(timeout=15, verify=False) as c:
             r = await c.get("https://stablecoins.llama.fi/stablecoincharts/all")
@@ -738,8 +716,6 @@ async def sync_blockchain_extra() -> int:
     """Fetch additional BTC on-chain metrics: miner revenue, tx volume USD, block size, fees."""
     if not _should_fetch("blockchain_extra"):
         return count_records("btc_miners_revenue")
-
-    import httpx
 
     total = 0
     charts = {
@@ -776,8 +752,6 @@ async def sync_blockchain_extended() -> int:
     if not _should_fetch("blockchain_extended"):
         return count_records("btc_utxo_count")
 
-    import httpx
-
     total = 0
     charts = {
         "btc_utxo_count": ("utxo-count", "365days"),
@@ -813,8 +787,6 @@ async def sync_mempool_space() -> int:
     """Fetch BTC mining data from mempool.space: hashrate, difficulty adjustments, fee rates."""
     if not _should_fetch("mempool_space"):
         return count_records("mempool_hashrate")
-
-    import httpx
 
     total = 0
 
@@ -881,8 +853,6 @@ async def sync_defillama_chains_tvl() -> int:
     if not _should_fetch("defillama_chains"):
         return count_records("defillama_tvl_Solana")
 
-    import httpx
-
     total = 0
     chains = ["Solana", "BSC", "Bitcoin", "Arbitrum", "Base", "Tron"]
     cutoff = (datetime.now(UTC) - timedelta(days=365)).timestamp()
@@ -913,8 +883,6 @@ async def sync_defillama_derivatives_volume() -> int:
     """Fetch perpetual derivatives and options volume history from DefiLlama."""
     if not _should_fetch("defillama_perps"):
         return count_records("defillama_perps_vol")
-
-    import httpx
 
     total = 0
     cutoff = (datetime.now(UTC) - timedelta(days=365)).timestamp()
@@ -969,8 +937,6 @@ async def sync_binance_funding_full(symbols: list[str] | None = None) -> int:
     if not _should_fetch("binance_funding_full"):
         return count_records("binance_funding_full_BTC")
 
-    import httpx
-
     if symbols is None:
         symbols = ["BTC", "ETH"]
 
@@ -1023,8 +989,6 @@ async def sync_coinpaprika_global() -> int:
     """Fetch current global crypto market data from Coinpaprika (free, no key)."""
     if not _should_fetch("coinpaprika"):
         return count_records("coinpaprika_global")
-
-    import httpx
 
     try:
         async with httpx.AsyncClient(timeout=15, verify=False) as c:

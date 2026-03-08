@@ -8,18 +8,15 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
+from langchain_core.messages import HumanMessage, SystemMessage
+
+from cryptotrader.agents.base import FUNDING_RATE_HIGH, FUNDING_RATE_LOW, create_llm, extract_content
 from cryptotrader.models import TradeVerdict
 
 
 def _extract_json(text: str) -> dict:
-    """Extract JSON object from LLM response, handling code blocks and inline braces."""
-    # Try ```json ... ``` code block first
-    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
-    if m:
-        return json.loads(m.group(1))
-    # Fall back to outermost balanced braces
+    """Extract JSON object from LLM response using balanced-brace extraction."""
     start = text.find("{")
     if start == -1:
         raise ValueError(f"No JSON object found: {text[:200]}")
@@ -90,9 +87,9 @@ Output ONLY JSON:
 def _format_funding_rate(fr: float) -> str:
     """Format funding rate with crowd signal label."""
     label = ""
-    if fr > 0.0003:
+    if fr > FUNDING_RATE_HIGH:
         label = " (ELEVATED — crowded long)"
-    elif fr < -0.0001:
+    elif fr < FUNDING_RATE_LOW:
         label = " (NEGATIVE — crowded short)"
     return f"Current funding rate: {fr:.6f}{label}"
 
@@ -153,10 +150,6 @@ AGENT ANALYSES:
 {agent_reports}"""
 
     try:
-        from langchain_core.messages import HumanMessage, SystemMessage
-
-        from cryptotrader.agents.base import create_llm, extract_content
-
         llm = create_llm(model=model, temperature=0.1, timeout=120, json_mode=True)
         messages = [SystemMessage(content=VERDICT_PROMPT), HumanMessage(content=user_msg)]
         resp = await llm.ainvoke(messages)
@@ -208,7 +201,7 @@ def make_verdict_rules(analyses: dict[str, dict]) -> TradeVerdict:
 
 async def make_verdict_llm(
     analyses: dict[str, dict],
-    model: str = "gpt-4o-mini",
+    model: str = "",
     constraints: dict | None = None,
     calibration: str = "",
 ) -> TradeVerdict:

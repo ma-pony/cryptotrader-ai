@@ -20,7 +20,7 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         "macro_agent": lambda m: MacroAgent(model=m),
     }
     models_cfg = state["metadata"].get("models", {})
-    model = models_cfg.get(agent_type, state["metadata"].get("analysis_model", "gpt-4o-mini"))
+    model = models_cfg.get(agent_type, state["metadata"].get("analysis_model", ""))
     agent = agents[agent_type](model)
     snapshot = state["data"]["snapshot"]
     experience = state["data"].get("experience", "")

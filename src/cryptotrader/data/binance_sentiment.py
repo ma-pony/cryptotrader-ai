@@ -1,6 +1,10 @@
 """Binance Market Sentiment & Smart Money API."""
 
+import logging
+
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class BinanceSentiment:
@@ -29,7 +33,7 @@ class BinanceSentiment:
                 if data.get("code") == "000000":
                     return data.get("data", {}).get("leaderBoardList", [])[:limit]
             except Exception:
-                pass
+                logger.debug("Binance social hype API call failed", exc_info=True)
         return []
 
     async def get_smart_money_signals(self, chain_id: str = "CT_501", page: int = 1) -> list[dict]:
@@ -45,5 +49,5 @@ class BinanceSentiment:
                 if data.get("code") == "000000":
                     return data.get("data", [])
             except Exception:
-                pass
+                logger.debug("Binance smart money API call failed", exc_info=True)
         return []

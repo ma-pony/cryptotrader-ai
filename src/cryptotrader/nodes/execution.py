@@ -47,7 +47,7 @@ async def _update_trade_tracking(state: ArenaState, pair: str):
             cooldown_min = load_config().risk.cooldown.same_pair_minutes
             await rsm.set_cooldown(pair, cooldown_min)
         except Exception:
-            pass
+            logger.warning("Trade tracking update failed", exc_info=True)
 
 
 async def _update_portfolio(state: ArenaState, order, filled_amount: float, filled_price: float):
@@ -100,6 +100,7 @@ async def check_stop_loss(state: ArenaState) -> dict:
     try:
         portfolio = await pm.get_portfolio()
     except Exception:
+        logger.debug("Portfolio fetch failed, skipping stop-loss check", exc_info=True)
         return {"data": {}}
 
     pos = portfolio.get("positions", {}).get(pair)
@@ -114,7 +115,10 @@ async def check_stop_loss(state: ArenaState) -> dict:
     # Calculate unrealized PnL
     pnl_pct = (price - avg_price) / avg_price if amount > 0 else (avg_price - price) / avg_price
 
-    max_loss_pct = state["metadata"].get("max_stop_loss_pct", 0.05)
+    from cryptotrader.config import load_config
+
+    cfg = load_config()
+    max_loss_pct = state["metadata"].get("max_stop_loss_pct", cfg.risk.max_stop_loss_pct)
 
     if pnl_pct < -max_loss_pct:
         logger.warning(
@@ -200,6 +204,6 @@ async def place_order(state: ArenaState) -> dict:
         notifier = _get_notifier(state)
         await notifier.notify("trade", {"pair": order.pair, "order": order_data})
     except Exception:
-        pass
+        logger.debug("Notification send failed", exc_info=True)
 
     return {"data": {"order": order_data}}

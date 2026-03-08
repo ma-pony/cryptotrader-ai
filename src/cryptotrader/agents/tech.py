@@ -82,7 +82,7 @@ def compute_indicators(ohlcv: pd.DataFrame) -> dict:
 
 
 class TechAgent(BaseAgent):
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, model: str = "") -> None:
         super().__init__(agent_id="tech", role_description=ROLE, model=model)
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:

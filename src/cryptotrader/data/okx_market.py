@@ -3,9 +3,12 @@
 import base64
 import hashlib
 import hmac
+import logging
 from datetime import UTC, datetime
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 
 class OKXMarket:
@@ -61,7 +64,7 @@ class OKXMarket:
                 if data.get("code") == "0" and data.get("data"):
                     return float(data["data"][0].get("price", 0))
             except Exception:
-                pass
+                logger.debug("OKX API call failed", exc_info=True)
         return None
 
     async def get_candles(self, chain_id: str, contract_address: str, bar: str = "1H", limit: int = 24) -> list[dict]:
@@ -87,5 +90,5 @@ class OKXMarket:
                 if data.get("code") == "0":
                     return data.get("data", [])
             except Exception:
-                pass
+                logger.debug("OKX API call failed", exc_info=True)
         return []

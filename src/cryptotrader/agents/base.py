@@ -25,6 +25,10 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 logger = _logger
 
+# Funding rate thresholds shared with debate/verdict.py
+FUNDING_RATE_HIGH = 0.0003  # above → crowded long
+FUNDING_RATE_LOW = -0.0001  # below → crowded short
+
 # ── LangChain SQLiteCache initialization ──
 
 _cache_initialized = False
@@ -57,6 +61,8 @@ def create_llm(
     temperature: float = 0.2,
     timeout: int = 120,
     json_mode: bool = False,
+    *,
+    with_fallback: bool = True,
 ) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI instance with unified config.
 
@@ -70,6 +76,12 @@ def create_llm(
     cfg = load_config()
     llm_cfg = cfg.llm
 
+    # Resolve empty model to config default
+    if not model:
+        model = cfg.models.analysis or cfg.models.fallback
+    if not model:
+        raise ValueError("No LLM model configured — set models.analysis or models.fallback in config/default.toml")
+
     kwargs: dict[str, Any] = {
         "model": model,
         "temperature": temperature,
@@ -79,18 +91,27 @@ def create_llm(
         kwargs["base_url"] = llm_cfg.base_url
     if llm_cfg.api_key:
         kwargs["api_key"] = llm_cfg.api_key
-    if json_mode:
-        kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+    # Note: response_format is NOT passed — many models (e.g. gpt-5.4)
+    # don't support it. JSON output enforced via prompts + _extract_json().
+
+    # Some models require streaming via third-party proxy restrictions
+    if model in llm_cfg.streaming_models:
+        kwargs["streaming"] = True
 
     llm = ChatOpenAI(**kwargs)
 
     # Add fallback model
-    fallback_model = cfg.models.fallback
-    if fallback_model and fallback_model != model:
-        fallback_kwargs = dict(kwargs)
-        fallback_kwargs["model"] = fallback_model
-        fallback_llm = ChatOpenAI(**fallback_kwargs)
-        llm = llm.with_fallbacks([fallback_llm])
+    if with_fallback:
+        fallback_model = cfg.models.fallback
+        if fallback_model and fallback_model != model:
+            fallback_kwargs = dict(kwargs)
+            fallback_kwargs["model"] = fallback_model
+            # Reset streaming for fallback — it has its own streaming requirements
+            fallback_kwargs.pop("streaming", None)
+            if fallback_model in llm_cfg.streaming_models:
+                fallback_kwargs["streaming"] = True
+            fallback_llm = ChatOpenAI(**fallback_kwargs)
+            llm = llm.with_fallbacks([fallback_llm])
 
     return llm
 
@@ -172,16 +193,25 @@ specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...], "
 
 
 class BaseAgent:
-    def __init__(self, agent_id: str, role_description: str, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, agent_id: str, role_description: str, model: str = "") -> None:
         self.agent_id = agent_id
         self.role_description = role_description
         self.model = model
+
+    def _resolve_model(self) -> str:
+        """Return model name, falling back to config if not set."""
+        if self.model:
+            return self.model
+        from cryptotrader.config import load_config
+
+        cfg = load_config()
+        return cfg.models.analysis or cfg.models.fallback
 
     async def analyze(self, snapshot: DataSnapshot, experience: str = "") -> AgentAnalysis:
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
         try:
-            llm = create_llm(model=self.model, temperature=0.2, timeout=120, json_mode=True)
+            llm = create_llm(model=self._resolve_model(), temperature=0.2, timeout=120, json_mode=True)
             messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
             response = await llm.ainvoke(messages)
             text = extract_content(response)
@@ -194,6 +224,7 @@ class BaseAgent:
                 direction="neutral",
                 confidence=0.5,
                 reasoning="LLM unavailable - mock analysis",
+                is_mock=True,
             )
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
@@ -208,7 +239,13 @@ class BaseAgent:
             f"Ticker: {snapshot.market.ticker}",
             f"Volatility: {snapshot.market.volatility:.4f}",
             f"Funding rate: {fr:.6f}"
-            + (" (ELEVATED — crowded long)" if fr > 0.0003 else " (NEGATIVE — crowded short)" if fr < -0.0001 else ""),
+            + (
+                " (ELEVATED — crowded long)"
+                if fr > FUNDING_RATE_HIGH
+                else " (NEGATIVE — crowded short)"
+                if fr < FUNDING_RATE_LOW
+                else ""
+            ),
         ]
         if fut_vol > 0:
             parts.append(
@@ -266,23 +303,8 @@ class BaseAgent:
 
 
 def _create_chat_model(model: str, temperature: float = 0.2):
-    """Create a LangChain chat model using the unified LLM factory.
-
-    Delegates to create_llm() for consistent config, caching, and fallback.
-    Note: For ToolAgent, fallback is NOT added (create_agent handles errors).
-    """
-    from cryptotrader.config import load_config
-
-    _init_cache()
-
-    cfg = load_config()
-    llm_cfg = cfg.llm
-    kwargs: dict[str, Any] = {"model": model, "temperature": temperature, "timeout": 120}
-    if llm_cfg.base_url:
-        kwargs["base_url"] = llm_cfg.base_url
-    if llm_cfg.api_key:
-        kwargs["api_key"] = llm_cfg.api_key
-    return ChatOpenAI(**kwargs)
+    """Create a LangChain chat model without fallback (for ToolAgent / create_agent)."""
+    return create_llm(model=model, temperature=temperature, with_fallback=False)
 
 
 class ToolAgent(BaseAgent):
@@ -297,7 +319,7 @@ class ToolAgent(BaseAgent):
         agent_id: str,
         role_description: str,
         tools: Sequence,
-        model: str = "gpt-4o-mini",
+        model: str = "",
     ) -> None:
         super().__init__(agent_id, role_description, model)
         self.tools = list(tools)

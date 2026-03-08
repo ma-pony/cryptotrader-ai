@@ -1,10 +1,12 @@
 """Health and metrics endpoints."""
 
+import logging
 import time
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
 _start_time = time.time()
@@ -28,6 +30,7 @@ async def health():
             checks["redis"] = "ok"
             await r.aclose()
         except Exception:
+            logger.debug("Redis health check failed", exc_info=True)
             checks["redis"] = "unavailable"
     else:
         checks["redis"] = "not_configured"
@@ -35,6 +38,7 @@ async def health():
     # Real DB check — execute a query
     db_url = config.infrastructure.database_url
     if db_url:
+        engine = None
         try:
             from sqlalchemy import text
             from sqlalchemy.ext.asyncio import create_async_engine
@@ -42,10 +46,13 @@ async def health():
             engine = create_async_engine(db_url, pool_pre_ping=True)
             async with engine.connect() as conn:
                 await conn.execute(text("SELECT 1"))
-            await engine.dispose()
             checks["db"] = "ok"
         except Exception:
+            logger.debug("DB health check failed", exc_info=True)
             checks["db"] = "unavailable"
+        finally:
+            if engine is not None:
+                await engine.dispose()
     else:
         checks["db"] = "not_configured"
 

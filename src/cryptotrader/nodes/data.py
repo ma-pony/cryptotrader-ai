@@ -106,7 +106,7 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
         bias_correction = generate_bias_correction(biases)
         verdict_calibration = generate_verdict_calibration(biases)
     except Exception:
-        logger.debug("Bias detection failed, continuing without calibration")
+        logger.debug("Bias detection failed, continuing without calibration", exc_info=True)
 
     if bias_correction:
         experience = f"{experience}\n\n{bias_correction}" if experience else bias_correction

@@ -6,14 +6,22 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from cryptotrader.db import get_async_session, get_engine
+
 logger = logging.getLogger(__name__)
 
-_pm_engine = None
-_pm_sessionmaker = None
-_pm_table_ready = False
+# Track which URLs have had their schema initialised
+_pm_table_ready: set[str] = set()
+
+# Singleton cache for SQLAlchemy model classes
+_pm_cache: tuple | None = None
 
 
 def _pm_models():
+    global _pm_cache
+    if _pm_cache is not None:
+        return _pm_cache
+
     from sqlalchemy import Column, DateTime, Float, String
     from sqlalchemy.orm import DeclarativeBase
 
@@ -35,22 +43,25 @@ def _pm_models():
         total_value = Column(Float, default=0.0)
         timestamp = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
 
-    return Base, Portfolio, PortfolioSnapshot
+    _pm_cache = (Base, Portfolio, PortfolioSnapshot)
+    return _pm_cache
+
+
+async def _pm_ensure_tables(database_url: str) -> None:
+    """Create portfolio schema on first call per database URL."""
+    if database_url not in _pm_table_ready:
+        Base, _, _ = _pm_models()
+        engine = await get_engine(database_url)
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        _pm_table_ready.add(database_url)
 
 
 async def _pm_session(database_url: str):
-    global _pm_engine, _pm_sessionmaker, _pm_table_ready
-    if _pm_engine is None:
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-        _pm_engine = create_async_engine(database_url, pool_size=5, max_overflow=10)
-        _pm_sessionmaker = async_sessionmaker(_pm_engine, expire_on_commit=False)
-    if not _pm_table_ready:
-        Base, _, _ = _pm_models()
-        async with _pm_engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-        _pm_table_ready = True
-    return _pm_sessionmaker()
+    # get_async_session initialises the engine on first call, then we ensure tables exist.
+    session = await get_async_session(database_url)
+    await _pm_ensure_tables(database_url)
+    return session
 
 
 class PortfolioManager:

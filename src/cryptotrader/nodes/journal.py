@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
+import logging
+
 from cryptotrader.state import ArenaState
 
+logger = logging.getLogger(__name__)
 
-async def journal_trade(state: ArenaState) -> dict:
-    """Journal a successful trade."""
-    from cryptotrader.journal.commit import build_commit
-    from cryptotrader.journal.store import JournalStore
-    from cryptotrader.models import AgentAnalysis, GateResult, Order, TradeVerdict
 
-    db_url = state["metadata"].get("database_url")
-    store = JournalStore(db_url)
+def _to_agent_analyses(raw_analyses: dict, pair: str) -> dict:
+    """Convert raw analysis dicts from state to AgentAnalysis objects."""
+    from cryptotrader.models import AgentAnalysis
 
-    raw_analyses = state["data"].get("analyses", {})
     analyses = {}
     for k, v in raw_analyses.items():
         if isinstance(v, dict):
             analyses[k] = AgentAnalysis(
                 agent_id=k,
-                pair=state["metadata"]["pair"],
+                pair=pair,
                 direction=v.get("direction", "neutral"),
                 confidence=v.get("confidence", 0.5),
                 reasoning=v.get("reasoning", ""),
@@ -29,6 +27,19 @@ async def journal_trade(state: ArenaState) -> dict:
             )
         else:
             analyses[k] = v
+    return analyses
+
+
+async def journal_trade(state: ArenaState) -> dict:
+    """Journal a successful trade."""
+    from cryptotrader.journal.commit import build_commit
+    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.models import GateResult, Order, TradeVerdict
+
+    db_url = state["metadata"].get("database_url")
+    store = JournalStore(db_url)
+
+    analyses = _to_agent_analyses(state["data"].get("analyses", {}), state["metadata"]["pair"])
 
     raw_verdict = state["data"].get("verdict")
     verdict = None
@@ -50,6 +61,7 @@ async def journal_trade(state: ArenaState) -> dict:
             price=raw_order.get("price", 0),
         )
 
+    parent_hash = state["data"].get("journal_hash")
     commit = build_commit(
         pair=state["metadata"]["pair"],
         snapshot_summary=state["data"].get("snapshot_summary", {}),
@@ -59,7 +71,7 @@ async def journal_trade(state: ArenaState) -> dict:
         verdict=verdict,
         risk_gate=risk_gate,
         order=order,
-        parent_hash=None,
+        parent_hash=parent_hash,
     )
     await store.commit(commit)
     return {"data": {"journal_hash": commit.hash}}
@@ -69,27 +81,13 @@ async def journal_rejection(state: ArenaState) -> dict:
     """Journal a risk-gate rejection."""
     from cryptotrader.journal.commit import build_commit
     from cryptotrader.journal.store import JournalStore
-    from cryptotrader.models import AgentAnalysis, GateResult, TradeVerdict
+    from cryptotrader.models import GateResult, TradeVerdict
     from cryptotrader.nodes.verdict import _get_notifier
 
     db_url = state["metadata"].get("database_url")
     store = JournalStore(db_url)
 
-    raw_analyses = state["data"].get("analyses", {})
-    analyses = {}
-    for k, v in raw_analyses.items():
-        if isinstance(v, dict):
-            analyses[k] = AgentAnalysis(
-                agent_id=k,
-                pair=state["metadata"]["pair"],
-                direction=v.get("direction", "neutral"),
-                confidence=v.get("confidence", 0.5),
-                reasoning=v.get("reasoning", ""),
-                key_factors=v.get("key_factors", []),
-                risk_flags=v.get("risk_flags", []),
-            )
-        else:
-            analyses[k] = v
+    analyses = _to_agent_analyses(state["data"].get("analyses", {}), state["metadata"]["pair"])
 
     raw_verdict = state["data"].get("verdict")
     verdict = None
@@ -101,6 +99,7 @@ async def journal_rejection(state: ArenaState) -> dict:
     if raw_gate and isinstance(raw_gate, dict):
         risk_gate = GateResult(**{k: v for k, v in raw_gate.items() if k in GateResult.__dataclass_fields__})
 
+    parent_hash = state["data"].get("journal_hash")
     commit = build_commit(
         pair=state["metadata"]["pair"],
         snapshot_summary=state["data"].get("snapshot_summary", {}),
@@ -110,7 +109,7 @@ async def journal_rejection(state: ArenaState) -> dict:
         verdict=verdict,
         risk_gate=risk_gate,
         order=None,
-        parent_hash=None,
+        parent_hash=parent_hash,
     )
     await store.commit(commit)
 
@@ -127,6 +126,6 @@ async def journal_rejection(state: ArenaState) -> dict:
             },
         )
     except Exception:
-        pass
+        logger.debug("Rejection notification failed", exc_info=True)
 
     return {"data": {"journal_hash": commit.hash}}

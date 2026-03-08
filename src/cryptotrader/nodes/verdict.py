@@ -42,7 +42,7 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
                 constraints["daily_loss_remaining_pct"] = daily_loss_budget
             constraints["drawdown_current"] = drawdown
     except Exception:
-        pass
+        logger.warning("Failed to gather portfolio risk constraints", exc_info=True)
 
     # Redis-based state (cooldowns, circuit breaker)
     redis_url = state["metadata"].get("redis_url")
@@ -54,7 +54,7 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
         if cooldown_val:
             constraints["cooldown_pairs"] = [pair]
     except Exception:
-        pass
+        logger.warning("Failed to gather Redis risk constraints", exc_info=True)
 
     # Market conditions from snapshot
     summary = state["data"].get("snapshot_summary", {})
@@ -72,13 +72,21 @@ async def make_verdict(state: ArenaState) -> dict:
 
     raw_analyses = state["data"].get("analyses", {})
     # Filter out mock analyses (LLM failures) — don't let fake data pollute AI verdict
-    analyses = {k: v for k, v in raw_analyses.items() if v.get("reasoning") != "LLM unavailable - mock analysis"}
+    analyses = {
+        k: v
+        for k, v in raw_analyses.items()
+        if not (v.get("is_mock") if isinstance(v, dict) else getattr(v, "is_mock", False))
+    }
     if not analyses:
         analyses = raw_analyses  # fallback: use all if everything failed
     use_llm_verdict = state["metadata"].get("llm_verdict", True)
 
     if use_llm_verdict:
-        model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", "gpt-4o-mini"))
+        from cryptotrader.config import load_config as _load_config
+
+        _cfg = _load_config()
+        _default_model = _cfg.models.verdict or _cfg.models.fallback
+        model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", _default_model))
         constraints = await _gather_risk_constraints(state)
         calibration = state["data"].get("verdict_calibration", "")
         verdict = await make_verdict_llm(analyses, model=model, constraints=constraints, calibration=calibration)
@@ -180,6 +188,7 @@ async def risk_check(state: ArenaState) -> dict:
         drawdown = await pm.get_drawdown()
         pm_returns = await pm.get_returns()
     except Exception:
+        logger.debug("Portfolio data fetch failed, using defaults", exc_info=True)
         pm_data = {"total_value": 0, "positions": {}}
         daily_pnl = 0.0
         drawdown = 0.0
@@ -208,7 +217,7 @@ async def risk_check(state: ArenaState) -> dict:
             notifier = _get_notifier(state)
             await notifier.notify("circuit_breaker", {"pair": state["metadata"]["pair"], "reason": result.reason})
         except Exception:
-            pass
+            logger.debug("Circuit-breaker notification failed", exc_info=True)
 
     return {
         "data": {

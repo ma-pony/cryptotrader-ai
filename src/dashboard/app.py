@@ -160,7 +160,7 @@ elif page == "Risk Status":
             ]
         )
     except Exception:
-        pass
+        st.warning("Failed to load risk configuration")
 
 elif page == "Backtest":
     st.title("Backtest")

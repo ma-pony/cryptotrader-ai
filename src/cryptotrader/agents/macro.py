@@ -37,7 +37,7 @@ ROLE = (
 
 
 class MacroAgent(BaseAgent):
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, model: str = "") -> None:
         super().__init__(agent_id="macro", role_description=ROLE, model=model)
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:

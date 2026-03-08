@@ -36,7 +36,7 @@ ROLE = (
 
 
 class ChainAgent(ToolAgent):
-    def __init__(self, model: str = "gpt-4o-mini") -> None:
+    def __init__(self, model: str = "") -> None:
         super().__init__(agent_id="chain", role_description=ROLE, tools=CHAIN_TOOLS, model=model)
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:

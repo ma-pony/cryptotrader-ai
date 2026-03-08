@@ -21,8 +21,6 @@ class MaxPositionSize:
         if total <= 0:
             # Cold start: no portfolio yet, allow first trade with default capital
             return CheckResult(passed=True)
-        if verdict.position_scale > 1.0:
-            return CheckResult(passed=False, reason=f"Position scale {verdict.position_scale:.2%} exceeds 100%")
         # New trade size = max_pct * scale
         new_trade_pct = self._max_pct * verdict.position_scale
         # Check existing position in this pair
