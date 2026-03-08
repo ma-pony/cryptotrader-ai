@@ -363,7 +363,7 @@ async def sync_coingecko_market(days: int = 365) -> int:
             date = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
             by_date.setdefault(date, {})["total_volume"] = vol
 
-        records = [(date, data) for date, data in sorted(by_date.items())]
+        records = sorted(by_date.items())
         store_batch("coingecko_btc", records)
         _record_fetch("coingecko")
         logger.info("Synced %d days of CoinGecko BTC market data", len(records))
@@ -420,72 +420,80 @@ async def sync_fred_multi(api_key: str) -> int:
     return total
 
 
-async def sync_defillama_extra() -> int:  # noqa: C901
+async def _sync_defillama_tvl(c, cutoff: float) -> int:
+    """Sync total TVL across all chains."""
+    try:
+        r = await c.get("https://api.llama.fi/v2/historicalChainTvl")
+        r.raise_for_status()
+        records = [
+            (datetime.fromtimestamp(item["date"], UTC).strftime("%Y-%m-%d"), {"tvl": item.get("tvl", 0)})
+            for item in r.json()
+            if item.get("date", 0) >= cutoff
+        ]
+        store_batch("defillama_total_tvl", records)
+        logger.info("Synced %d days of DefiLlama total TVL", len(records))
+        return len(records)
+    except Exception:
+        logger.warning("DefiLlama total TVL sync failed", exc_info=True)
+        return 0
+
+
+async def _sync_defillama_stablecoin(c, cutoff: float) -> int:
+    """Sync stablecoin total supply (USDT = id 1)."""
+    try:
+        r = await c.get("https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=1")
+        r.raise_for_status()
+        records = []
+        for item in r.json():
+            ts = int(item.get("date", 0))
+            if ts >= cutoff:
+                date = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
+                circ = item.get("totalCirculatingUSD", {}).get("peggedUSD", 0)
+                records.append((date, {"usdt_supply": circ}))
+        store_batch("defillama_stablecoin", records)
+        logger.info("Synced %d days of stablecoin supply", len(records))
+        return len(records)
+    except Exception:
+        logger.warning("DefiLlama stablecoin sync failed", exc_info=True)
+        return 0
+
+
+async def _sync_defillama_dex_volume(c, cutoff: float) -> int:
+    """Sync DEX volume."""
+    try:
+        r = await c.get(
+            "https://api.llama.fi/overview/dexs",
+            params={"excludeTotalDataChart": "false", "excludeTotalDataChartBreakdown": "true"},
+        )
+        r.raise_for_status()
+        records = [
+            (datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d"), {"dex_volume": vol})
+            for ts, vol in r.json().get("totalDataChart", [])
+            if ts >= cutoff
+        ]
+        store_batch("defillama_dex_vol", records)
+        logger.info("Synced %d days of DEX volume", len(records))
+        return len(records)
+    except Exception:
+        logger.warning("DefiLlama DEX volume sync failed", exc_info=True)
+        return 0
+
+
+async def sync_defillama_extra() -> int:
     """Fetch DefiLlama extra data: total TVL (all chains), stablecoin supply, DEX volume."""
     if not _should_fetch("defillama_extra"):
         return count_records("defillama_total_tvl")
 
     import httpx
 
-    total = 0
     cutoff = (datetime.now(UTC) - timedelta(days=365)).timestamp()
 
     async with httpx.AsyncClient(timeout=15, verify=False) as c:
-        # Total TVL across all chains
-        try:
-            r = await c.get("https://api.llama.fi/v2/historicalChainTvl")
-            r.raise_for_status()
-            records = []
-            for item in r.json():
-                ts = item.get("date", 0)
-                if ts >= cutoff:
-                    date = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
-                    records.append((date, {"tvl": item.get("tvl", 0)}))
-            store_batch("defillama_total_tvl", records)
-            total += len(records)
-            logger.info("Synced %d days of DefiLlama total TVL", len(records))
-        except Exception:
-            logger.warning("DefiLlama total TVL sync failed", exc_info=True)
-
+        total = await _sync_defillama_tvl(c, cutoff)
         await asyncio.sleep(0.3)
-
-        # Stablecoin total supply (USDT = id 1)
-        try:
-            r = await c.get("https://stablecoins.llama.fi/stablecoincharts/all?stablecoin=1")
-            r.raise_for_status()
-            records = []
-            for item in r.json():
-                ts = int(item.get("date", 0))
-                if ts >= cutoff:
-                    date = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
-                    circ = item.get("totalCirculatingUSD", {}).get("peggedUSD", 0)
-                    records.append((date, {"usdt_supply": circ}))
-            store_batch("defillama_stablecoin", records)
-            total += len(records)
-            logger.info("Synced %d days of stablecoin supply", len(records))
-        except Exception:
-            logger.warning("DefiLlama stablecoin sync failed", exc_info=True)
-
+        total += await _sync_defillama_stablecoin(c, cutoff)
         await asyncio.sleep(0.3)
-
-        # DEX volume
-        try:
-            r = await c.get(
-                "https://api.llama.fi/overview/dexs",
-                params={"excludeTotalDataChart": "false", "excludeTotalDataChartBreakdown": "true"},
-            )
-            r.raise_for_status()
-            chart = r.json().get("totalDataChart", [])
-            records = []
-            for ts, vol in chart:
-                if ts >= cutoff:
-                    date = datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
-                    records.append((date, {"dex_volume": vol}))
-            store_batch("defillama_dex_vol", records)
-            total += len(records)
-            logger.info("Synced %d days of DEX volume", len(records))
-        except Exception:
-            logger.warning("DefiLlama DEX volume sync failed", exc_info=True)
+        total += await _sync_defillama_dex_volume(c, cutoff)
 
     _record_fetch("defillama_extra")
     return total
@@ -559,7 +567,7 @@ async def sync_coingecko_eth() -> int:
             date = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
             by_date.setdefault(date, {})["total_volume"] = vol
 
-        records = [(date, d) for date, d in sorted(by_date.items())]
+        records = sorted(by_date.items())
         store_batch("coingecko_eth", records)
         _record_fetch("coingecko_eth")
         logger.info("Synced %d days of CoinGecko ETH market data", len(records))

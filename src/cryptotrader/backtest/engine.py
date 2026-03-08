@@ -206,52 +206,45 @@ class BacktestEngine:
             len(self._ls_ratio),
         )
 
-    def _load_extended_data(self) -> None:  # noqa: C901
+    @staticmethod
+    def _extract_numeric(data, key: str | None = None) -> float:
+        """Extract a float value from store data (dict with key, or scalar)."""
+        if isinstance(data, dict):
+            return float(data.get(key, 0)) if key else 0.0
+        if isinstance(data, int | float):
+            return float(data)
+        return 0.0
+
+    @staticmethod
+    def _load_dict_range(source: str, start: str, end: str) -> dict:
+        """Load dict-valued records from store, filtering non-dict entries."""
+        from cryptotrader.data.store import get_range
+
+        return {date: data for date, data in get_range(source, start, end).items() if isinstance(data, dict)}
+
+    def _load_extended_data(self) -> None:
         """Load pre-synced data from unified SQLite store into memory caches."""
         from cryptotrader.data.store import get_range
 
         start, end = self.start, self.end
 
-        # ETF fund flows
-        for date, data in get_range("sosovalue_etf", start, end).items():
-            if isinstance(data, dict):
-                self._etf_flows[date] = data
+        self._etf_flows = self._load_dict_range("sosovalue_etf", start, end)
+        self._oi = self._load_dict_range("binance_oi_BTC", start, end)
+        self._ls_ratio = self._load_dict_range("binance_ls_ratio_BTC", start, end)
 
-        # Stablecoin total supply
         for date, data in get_range("stablecoin_total_supply", start, end).items():
-            if isinstance(data, dict):
-                self._stablecoin_supply[date] = data.get("total_supply", 0)
-            elif isinstance(data, (int, float)):
-                self._stablecoin_supply[date] = float(data)
+            self._stablecoin_supply[date] = self._extract_numeric(data, "total_supply")
 
-        # BTC hashrate
-        for date, data in get_range("btc_hashrate", start, end).items():
-            self._btc_hashrate[date] = float(data) if isinstance(data, (int, float)) else 0.0
-
-        # DeFi TVL
         for date, data in get_range("defillama_tvl", start, end).items():
-            if isinstance(data, dict):
-                self._defi_tvl[date] = data.get("tvl", 0)
-            elif isinstance(data, (int, float)):
-                self._defi_tvl[date] = float(data)
+            self._defi_tvl[date] = self._extract_numeric(data, "tvl")
 
-        # VIX
-        for date, data in get_range("fred_VIXCLS", start, end).items():
-            self._vix[date] = float(data) if isinstance(data, (int, float)) else 0.0
-
-        # S&P 500
-        for date, data in get_range("fred_SP500", start, end).items():
-            self._sp500[date] = float(data) if isinstance(data, (int, float)) else 0.0
-
-        # Binance OI
-        for date, data in get_range("binance_oi_BTC", start, end).items():
-            if isinstance(data, dict):
-                self._oi[date] = data
-
-        # Binance long/short ratio
-        for date, data in get_range("binance_ls_ratio_BTC", start, end).items():
-            if isinstance(data, dict):
-                self._ls_ratio[date] = data
+        for source, cache in [
+            ("btc_hashrate", self._btc_hashrate),
+            ("fred_VIXCLS", self._vix),
+            ("fred_SP500", self._sp500),
+        ]:
+            for date, data in get_range(source, start, end).items():
+                cache[date] = self._extract_numeric(data)
 
     async def run(self) -> BacktestResult:
         await self._fetch_historical_data()

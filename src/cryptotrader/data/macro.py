@@ -55,7 +55,32 @@ class MacroCollector:
     def __init__(self, providers_config=None):
         self._cfg = providers_config
 
-    async def collect(self) -> MacroData:  # noqa: C901
+    @staticmethod
+    def _load_store_supplements() -> dict[str, float]:
+        """Load supplementary data from unified SQLite store (best-effort)."""
+        result = {"vix": 0.0, "sp500": 0.0, "stablecoin": 0.0, "hashrate": 0.0}
+        try:
+            from cryptotrader.data.store import get_latest
+
+            for source, key in [
+                ("fred_VIXCLS", "vix"),
+                ("fred_SP500", "sp500"),
+                ("stablecoin_total_supply", "stablecoin"),
+                ("btc_hashrate", "hashrate"),
+            ]:
+                latest = get_latest(source, limit=1)
+                if not latest:
+                    continue
+                val = latest[0][1]
+                if isinstance(val, dict):
+                    val = val.get("total_supply", 0) if "supply" in source else 0
+                if isinstance(val, int | float):
+                    result[key] = float(val)
+        except Exception:
+            pass
+        return result
+
+    async def collect(self) -> MacroData:
         cfg = self._cfg
         fred_on = getattr(cfg, "fred_enabled", True) if cfg else True
         coingecko_on = getattr(cfg, "coingecko_enabled", True) if cfg else True
@@ -92,35 +117,7 @@ class MacroCollector:
             etf_task,
         )
 
-        # Load supplementary data from unified store (best-effort)
-        vix_val = 0.0
-        sp500_val = 0.0
-        stablecoin_val = 0.0
-        hashrate_val = 0.0
-        try:
-            from cryptotrader.data.store import get_latest
-
-            for source, attr in [
-                ("fred_VIXCLS", "vix"),
-                ("fred_SP500", "sp500"),
-                ("stablecoin_total_supply", "stablecoin"),
-                ("btc_hashrate", "hashrate"),
-            ]:
-                latest = get_latest(source, limit=1)
-                if latest:
-                    val = latest[0][1]
-                    if isinstance(val, dict):
-                        val = val.get("total_supply", 0) if "supply" in source else 0
-                    if attr == "vix":
-                        vix_val = float(val)
-                    elif attr == "sp500":
-                        sp500_val = float(val)
-                    elif attr == "stablecoin":
-                        stablecoin_val = float(val) if isinstance(val, (int, float)) else 0.0
-                    elif attr == "hashrate":
-                        hashrate_val = float(val)
-        except Exception:
-            pass
+        supplements = self._load_store_supplements()
 
         return MacroData(
             fed_rate=fed_rate,
@@ -130,8 +127,8 @@ class MacroCollector:
             etf_daily_net_inflow=etf_data.get("dailyNetInflow", 0.0),
             etf_total_net_assets=etf_data.get("totalNetAssets", 0.0),
             etf_cum_net_inflow=etf_data.get("cumNetInflow", 0.0),
-            vix=vix_val,
-            sp500=sp500_val,
-            stablecoin_total_supply=stablecoin_val,
-            btc_hashrate=hashrate_val,
+            vix=supplements["vix"],
+            sp500=supplements["sp500"],
+            stablecoin_total_supply=supplements["stablecoin"],
+            btc_hashrate=supplements["hashrate"],
         )
