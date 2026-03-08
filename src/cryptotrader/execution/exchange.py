@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from cryptotrader.models import Order
+if TYPE_CHECKING:
+    from cryptotrader.models import Order
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ class LiveExchange:
                 wait = 2**i
                 logger.warning("Retry %d/%d after %s: %s", i + 1, attempts, wait, e)
                 await asyncio.sleep(wait)
+        return None
 
     async def place_order(self, order: Order) -> dict[str, Any]:
         await self._ensure_markets()
@@ -114,10 +117,8 @@ class LiveExchange:
                 return info
         # Timeout — cancel
         logger.warning("Order %s timed out, cancelling", order_id)
-        try:
+        with contextlib.suppress(Exception):
             await self._retry(self._exchange.cancel_order, order_id, pair)
-        except Exception:
-            pass
         return await self._retry(self._exchange.fetch_order, order_id, pair)
 
     async def cancel_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]:

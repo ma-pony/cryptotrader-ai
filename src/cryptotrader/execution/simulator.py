@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from cryptotrader.models import Order
+if TYPE_CHECKING:
+    from cryptotrader.models import Order
 
 
 class PaperExchange:

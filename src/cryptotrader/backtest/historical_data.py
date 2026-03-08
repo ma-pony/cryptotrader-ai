@@ -167,13 +167,13 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
         }
 
     # BTC+ETH ≈ 66.4% of total market (stable ratio). Estimate total, then compute dominance.
-    BTC_ETH_SHARE = 0.664
+    btc_eth_share = 0.664
     conn = sqlite3.connect(str(CACHE_DB))
     for d, btc_cap in btc_caps.items():
         if start_date <= d <= end_date:
             eth_cap = eth_caps.get(d, 0)
             if eth_cap > 0:
-                est_total = (btc_cap + eth_cap) / BTC_ETH_SHARE
+                est_total = (btc_cap + eth_cap) / btc_eth_share
                 dom = round(btc_cap / est_total * 100, 2)
             else:
                 dom = 56.0  # fallback
@@ -264,9 +264,9 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
     ret_7d = (c_now - c_7d) / c_7d
 
     # Volatility spike detection
-    recent_returns = []
-    for i in range(max(1, idx - 14), idx + 1):
-        recent_returns.append(abs(candles[i][4] - candles[i - 1][4]) / candles[i - 1][4])
+    recent_returns = [
+        abs(candles[i][4] - candles[i - 1][4]) / candles[i - 1][4] for i in range(max(1, idx - 14), idx + 1)
+    ]
     avg_vol = sum(recent_returns) / len(recent_returns) if recent_returns else 0.01
     today_vol = recent_returns[-1] if recent_returns else 0
 

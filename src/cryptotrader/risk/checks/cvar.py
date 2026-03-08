@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
 
-from cryptotrader.config import LossConfig
 from cryptotrader.models import CheckResult, TradeVerdict
+
+if TYPE_CHECKING:
+    from cryptotrader.config import LossConfig
 
 
 class CVaRCheck:

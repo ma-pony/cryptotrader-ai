@@ -23,14 +23,13 @@ def _get_exchange(state: ArenaState, pair: str):
         if pair not in _paper_exchanges:
             _paper_exchanges[pair] = PaperExchange()
         return _paper_exchanges[pair], None
-    else:
-        cfg = state["metadata"].get("exchange_config", {})
-        live_exchange = LiveExchange(
-            cfg.get("exchange_id", "binance"),
-            cfg.get("api_key", ""),
-            cfg.get("secret", ""),
-        )
-        return live_exchange, live_exchange
+    cfg = state["metadata"].get("exchange_config", {})
+    live_exchange = LiveExchange(
+        cfg.get("exchange_id", "binance"),
+        cfg.get("api_key", ""),
+        cfg.get("secret", ""),
+    )
+    return live_exchange, live_exchange
 
 
 async def _update_trade_tracking(state: ArenaState, pair: str):
@@ -113,10 +112,7 @@ async def check_stop_loss(state: ArenaState) -> dict:
         return {"data": {}}
 
     # Calculate unrealized PnL
-    if amount > 0:  # Long
-        pnl_pct = (price - avg_price) / avg_price
-    else:  # Short
-        pnl_pct = (avg_price - price) / avg_price
+    pnl_pct = (price - avg_price) / avg_price if amount > 0 else (avg_price - price) / avg_price
 
     max_loss_pct = state["metadata"].get("max_stop_loss_pct", 0.05)
 

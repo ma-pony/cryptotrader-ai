@@ -5,9 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 
 # ── Data Layer Models (Section 5.2) ──
 

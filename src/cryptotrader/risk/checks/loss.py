@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from cryptotrader.config import LossConfig
 from cryptotrader.models import CheckResult, TradeVerdict
-from cryptotrader.risk.state import RedisStateManager
+
+if TYPE_CHECKING:
+    from cryptotrader.config import LossConfig
+    from cryptotrader.risk.state import RedisStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -21,10 +24,9 @@ class DailyLossLimit:
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         # Check Redis-backed circuit breaker first (survives restarts)
-        if self._redis and self._redis.available:
-            if await self._redis.is_circuit_breaker_active():
-                self.circuit_breaker = True
-                return CheckResult(passed=False, reason="Circuit breaker active (persistent)")
+        if self._redis and self._redis.available and await self._redis.is_circuit_breaker_active():
+            self.circuit_breaker = True
+            return CheckResult(passed=False, reason="Circuit breaker active (persistent)")
         if self.circuit_breaker:
             return CheckResult(passed=False, reason="Circuit breaker active")
         total = portfolio.get("total_value", 0)

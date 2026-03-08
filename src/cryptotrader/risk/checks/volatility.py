@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from cryptotrader.config import VolatilityConfig
+from typing import TYPE_CHECKING
+
 from cryptotrader.models import CheckResult, TradeVerdict
+
+if TYPE_CHECKING:
+    from cryptotrader.config import VolatilityConfig
 
 
 class VolatilityGate:

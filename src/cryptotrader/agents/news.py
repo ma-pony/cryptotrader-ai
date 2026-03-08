@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cryptotrader.agents.base import ToolAgent
 from cryptotrader.agents.data_tools import NEWS_TOOLS
-from cryptotrader.models import DataSnapshot
+
+if TYPE_CHECKING:
+    from cryptotrader.models import DataSnapshot
 
 ROLE = (
     "You are an expert crypto news and sentiment analyst. "

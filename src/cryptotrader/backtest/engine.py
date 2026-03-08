@@ -123,7 +123,7 @@ class BacktestEngine:
         """Calculate mark-to-market equity."""
         if position > 0:
             return equity + (current_price - entry_price) * position
-        elif position < 0:
+        if position < 0:
             return equity + (entry_price - current_price) * abs(position)
         return equity
 
@@ -325,7 +325,7 @@ class BacktestEngine:
         sma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else sma20
         if closes[-1] > sma20 > sma50:
             return "long"
-        elif closes[-1] < sma20 < sma50:
+        if closes[-1] < sma20 < sma50:
             return "short"
         return "hold"
 
@@ -446,9 +446,7 @@ class BacktestEngine:
             "max_debate_rounds": 2,
             "divergence_scores": [],
         }
-        result = await graph.ainvoke(initial)
-
-        return result
+        return await graph.ainvoke(initial)
 
     def _compute_result(self, equity: float, curve: list[float], trades: list[dict]) -> BacktestResult:
         total_return = (equity - self.capital) / self.capital

@@ -85,8 +85,8 @@ async def test_run_agent_tech():
         risk_flags=[],
     )
 
-    with patch("cryptotrader.agents.tech.TechAgent") as MockAgent:
-        instance = MockAgent.return_value
+    with patch("cryptotrader.agents.tech.TechAgent") as mock_agent:
+        instance = mock_agent.return_value
         instance.analyze = AsyncMock(return_value=mock_analysis)
         result = await tech_analyze(_base_state())
 
@@ -112,11 +112,11 @@ async def test_run_agent_uses_model_from_config():
         reasoning="Mixed signals",
     )
 
-    with patch("cryptotrader.agents.chain.ChainAgent") as MockAgent:
-        instance = MockAgent.return_value
+    with patch("cryptotrader.agents.chain.ChainAgent") as mock_agent:
+        instance = mock_agent.return_value
         instance.analyze = AsyncMock(return_value=mock_analysis)
         await chain_analyze(state)
-        MockAgent.assert_called_once_with(model="claude-3-haiku")
+        mock_agent.assert_called_once_with(model="claude-3-haiku")
 
 
 @pytest.mark.asyncio
@@ -141,8 +141,8 @@ async def test_run_agent_all_four():
         mock_analysis = AgentAnalysis(
             agent_id=key, pair="BTC/USDT", direction="bearish", confidence=0.6, reasoning="test"
         )
-        with patch(f"{module}.{cls_name}") as M:
-            M.return_value.analyze = AsyncMock(return_value=mock_analysis)
+        with patch(f"{module}.{cls_name}") as m:
+            m.return_value.analyze = AsyncMock(return_value=mock_analysis)
             result = await funcs[key](_base_state())
             assert key in result["data"]["analyses"]
 
@@ -681,11 +681,11 @@ async def test_collect_snapshot_live_path():
     mock_snapshot = _make_snapshot("ETH/USDT", 3000)
 
     with (
-        patch("cryptotrader.data.snapshot.SnapshotAggregator") as MockAgg,
+        patch("cryptotrader.data.snapshot.SnapshotAggregator") as mock_agg,
         patch("cryptotrader.config.load_config") as mock_cfg,
     ):
         mock_cfg.return_value.providers = MagicMock()
-        MockAgg.return_value.collect = AsyncMock(return_value=mock_snapshot)
+        mock_agg.return_value.collect = AsyncMock(return_value=mock_snapshot)
 
         result = await collect_snapshot(state)
 

@@ -187,12 +187,12 @@ async def test_fetch_fear_greed_fallback():
     """_fetch_fear_greed returns 50 on API failure."""
     from cryptotrader.data.macro import _fetch_fear_greed
 
-    with patch("cryptotrader.data.macro.httpx.AsyncClient") as MockClient:
+    with patch("cryptotrader.data.macro.httpx.AsyncClient") as mock_client:
         mock_instance = AsyncMock()
         mock_instance.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_instance.__aexit__ = AsyncMock(return_value=False)
         mock_instance.get = AsyncMock(side_effect=Exception("Network error"))
-        MockClient.return_value = mock_instance
+        mock_client.return_value = mock_instance
         result = await _fetch_fear_greed()
 
     assert result == 50

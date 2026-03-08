@@ -187,9 +187,9 @@ AGENT ANALYSES:
 # Legacy aliases for backward compatibility in tests / backtest
 def make_verdict_rules(analyses: dict[str, dict]) -> TradeVerdict:
     """Lightweight weighted-average verdict for backtesting (no LLM call)."""
-    _DIR_MAP = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
+    _dir_map = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
     score = sum(
-        _DIR_MAP.get(a.get("direction", "neutral"), 0.0) * float(a.get("confidence", 0.0)) for a in analyses.values()
+        _dir_map.get(a.get("direction", "neutral"), 0.0) * float(a.get("confidence", 0.0)) for a in analyses.values()
     )
     action = "long" if score > 0.1 else "short" if score < -0.1 else "hold"
     if action != "hold":
@@ -222,10 +222,10 @@ def make_verdict_weighted(
     divergence_threshold: float = 0.7,
 ) -> TradeVerdict:
     """Legacy fallback: weighted average verdict for backtest/no-LLM mode."""
-    _DIR_MAP = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
+    _dir_map = {"bullish": 1.0, "neutral": 0.0, "bearish": -1.0}
     if divergence > divergence_threshold:
         return TradeVerdict(action="hold", divergence=divergence, reasoning="High divergence")
-    score = sum(a["confidence"] * _DIR_MAP.get(a["direction"], 0.0) for a in analyses.values())
+    score = sum(a["confidence"] * _dir_map.get(a["direction"], 0.0) for a in analyses.values())
     action = "long" if score > 0 else "short" if score < 0 else "hold"
     if action != "hold":
         target = "bullish" if action == "long" else "bearish"

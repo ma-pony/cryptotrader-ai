@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from cryptotrader.execution.exchange import ExchangeAdapter
 from cryptotrader.models import VALID_TRANSITIONS, Order, OrderStatus
+
+if TYPE_CHECKING:
+    from cryptotrader.execution.exchange import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
 

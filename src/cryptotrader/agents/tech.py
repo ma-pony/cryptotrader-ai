@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pandas as pd
 import pandas_ta as ta
 
 from cryptotrader.agents.base import BaseAgent
-from cryptotrader.models import DataSnapshot
+
+if TYPE_CHECKING:
+    from cryptotrader.models import DataSnapshot
 
 ROLE = (
     "You are an expert technical analyst for cryptocurrency markets. "

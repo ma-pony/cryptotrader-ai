@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from cryptotrader.config import RiskConfig
 from cryptotrader.models import GateResult, TradeVerdict
 from cryptotrader.risk.checks.cooldown import CooldownCheck
 from cryptotrader.risk.checks.correlation import CorrelationCheck
@@ -15,7 +15,10 @@ from cryptotrader.risk.checks.position import MaxPositionSize, MaxTotalExposure
 from cryptotrader.risk.checks.rate_limit import RateLimitCheck
 from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 from cryptotrader.risk.checks.volatility import FundingRateGate, VolatilityGate
-from cryptotrader.risk.state import RedisStateManager
+
+if TYPE_CHECKING:
+    from cryptotrader.config import RiskConfig
+    from cryptotrader.risk.state import RedisStateManager
 
 logger = logging.getLogger(__name__)
 

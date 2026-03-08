@@ -6,8 +6,10 @@ Phase 4D: Generate meta-prompt corrections based on historical accuracy patterns
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
-from cryptotrader.journal.store import JournalStore
+if TYPE_CHECKING:
+    from cryptotrader.journal.store import JournalStore
 
 
 async def accuracy_report(store: JournalStore, days: int = 30) -> dict[str, float]:

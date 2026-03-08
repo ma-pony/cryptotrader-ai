@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from cryptotrader.journal.store import JournalStore
-from cryptotrader.models import DecisionCommit
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.models import DecisionCommit
 
 
 async def search_similar(

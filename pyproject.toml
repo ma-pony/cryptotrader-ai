@@ -79,10 +79,31 @@ select = [
     "C",     # flake8-comprehensions
     "B",     # flake8-bugbear
     "T20",   # flake8-print
-    "ASYNC", # flake8-asyncio
+    "ASYNC", # flake8-async
     "UP",    # pyupgrade
+    "RET",   # flake8-return (unnecessary elif/return)
+    "SIM",   # flake8-simplify (code simplification)
+    "PERF",  # perflint (performance anti-patterns)
+    "PIE",   # flake8-pie (misc improvements)
+    "RSE",   # flake8-raise (raise best practices)
+    "RUF",   # ruff-specific rules
+    "DTZ",   # flake8-datetimez (timezone-aware datetime)
+    "TID",   # flake8-tidy-imports (banned imports)
+    "PT",    # flake8-pytest-style
+    "TCH",   # flake8-type-checking (TYPE_CHECKING imports)
+    "S",     # flake8-bandit (security)
+    "N",     # pep8-naming
 ]
-ignore = []
+ignore = [
+    "S101",   # assert — used extensively in tests
+    "S301",   # pickle — not used, but avoid false positives
+    "S501",   # httpx verify=False — needed for some APIs
+    "S110",   # try-except-pass — used for best-effort data loading
+    "S105",   # hardcoded password — false positives on config field names
+    "S106",   # hardcoded password in arg — false positives on config
+    "RUF012", # ClassVar annotation — too strict for dataclasses
+    "PT011",  # pytest.raises match — too strict for unit tests
+]
 
 [tool.ruff.lint.isort]
 known-first-party = ["cryptotrader", "api", "cli"]
@@ -90,3 +111,12 @@ known-first-party = ["cryptotrader", "api", "cli"]
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = ["T201"]
 "scripts/**/*.py" = ["T201"]
+"src/cryptotrader/journal/store.py" = ["N806"]
+"src/cryptotrader/portfolio/manager.py" = ["N806"]
+"src/cli/main.py" = ["N806", "S104", "S603"]
+# state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
+# (LangGraph calls get_type_hints() to extract channel reducers at class creation)
+"src/cryptotrader/state.py" = ["TCH002", "TCH003"]
+# nodes/*.py: ArenaState is inspected at runtime by LangGraph via get_type_hints()
+# when functions are registered as graph nodes/conditional edges
+"src/cryptotrader/nodes/*.py" = ["TCH001"]

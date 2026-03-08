@@ -21,14 +21,14 @@ def fetch_crypto_news(max_per_source: int = 10) -> list[dict]:
     for name, url in RSS_SOURCES.items():
         try:
             feed = feedparser.parse(url)
-            for entry in feed.entries[:max_per_source]:
-                articles.append(
-                    {
-                        "title": entry.get("title", ""),
-                        "source": name,
-                        "published": entry.get("published", ""),
-                    }
-                )
+            articles.extend(
+                {
+                    "title": entry.get("title", ""),
+                    "source": name,
+                    "published": entry.get("published", ""),
+                }
+                for entry in feed.entries[:max_per_source]
+            )
         except Exception:
             logger.warning("RSS fetch failed for %s", name, exc_info=True)
     return articles
@@ -36,7 +36,5 @@ def fetch_crypto_news(max_per_source: int = 10) -> list[dict]:
 
 def headlines_to_text(articles: list[dict], limit: int = 15) -> str:
     """Format articles into a compact string for LLM consumption."""
-    lines = []
-    for a in articles[:limit]:
-        lines.append(f"[{a['source']}] {a['title']}")
+    lines = [f"[{a['source']}] {a['title']}" for a in articles[:limit]]
     return "\n".join(lines) if lines else "(no recent news available)"

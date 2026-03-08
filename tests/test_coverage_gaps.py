@@ -44,10 +44,12 @@ def test_score_texts_finbert_empty():
 
 def test_score_headlines_falls_back_to_keywords():
     """When FinBERT unavailable, _score_headlines uses keyword fallback."""
-    with patch("cryptotrader.data.news._score_texts_finbert", return_value=0.0):
-        with patch("cryptotrader.data.news._finbert_available", False):
-            score = _score_headlines(["Bitcoin rally surge breakout"])
-            assert score > 0
+    with (
+        patch("cryptotrader.data.news._score_texts_finbert", return_value=0.0),
+        patch("cryptotrader.data.news._finbert_available", False),
+    ):
+        score = _score_headlines(["Bitcoin rally surge breakout"])
+        assert score > 0
 
 
 def test_score_headlines_empty():
@@ -56,10 +58,12 @@ def test_score_headlines_empty():
 
 def test_score_headlines_uses_finbert_when_available():
     """When FinBERT is available, use its score even if 0.0."""
-    with patch("cryptotrader.data.news._finbert_available", True):
-        with patch("cryptotrader.data.news._score_texts_finbert", return_value=0.3):
-            score = _score_headlines(["some headline"])
-            assert score == 0.3
+    with (
+        patch("cryptotrader.data.news._finbert_available", True),
+        patch("cryptotrader.data.news._score_texts_finbert", return_value=0.3),
+    ):
+        score = _score_headlines(["some headline"])
+        assert score == 0.3
 
 
 # ── Journal search similarity ──

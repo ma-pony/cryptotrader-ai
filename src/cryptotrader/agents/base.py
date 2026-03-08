@@ -11,14 +11,16 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from cryptotrader.models import AgentAnalysis, DataSnapshot
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _logger = logging.getLogger(__name__)
 logger = _logger

@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from cryptotrader.config import RateLimitConfig
 from cryptotrader.models import CheckResult, TradeVerdict
-from cryptotrader.risk.state import RedisStateManager
+
+if TYPE_CHECKING:
+    from cryptotrader.config import RateLimitConfig
+    from cryptotrader.risk.state import RedisStateManager
 
 logger = logging.getLogger(__name__)
 

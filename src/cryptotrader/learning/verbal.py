@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cryptotrader.journal.search import search_similar
-from cryptotrader.journal.store import JournalStore
+
+if TYPE_CHECKING:
+    from cryptotrader.journal.store import JournalStore
 
 
 async def get_experience(store: JournalStore, snapshot_summary: dict) -> str:

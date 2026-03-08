@@ -379,8 +379,7 @@ async def sync_fred_multi(api_key: str) -> int:
         return 0
     source_key = "fred_multi"
     if not _should_fetch(source_key):
-        total = sum(count_records(f"fred_{s}") for s in ("T10Y2Y", "VIXCLS", "SP500", "WM2NS", "CPIAUCSL"))
-        return total
+        return sum(count_records(f"fred_{s}") for s in ("T10Y2Y", "VIXCLS", "SP500", "WM2NS", "CPIAUCSL"))
 
     import httpx
 

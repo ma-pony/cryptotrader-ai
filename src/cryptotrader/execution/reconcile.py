@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from cryptotrader.execution.exchange import ExchangeAdapter
 from cryptotrader.models import Order, OrderStatus
+
+if TYPE_CHECKING:
+    from cryptotrader.execution.exchange import ExchangeAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +35,7 @@ class Reconciler:
             except Exception as e:
                 logger.warning("Failed to fetch order %s: %s", order.exchange_id, e)
                 continue
-            remote_status = _STATUS_MAP.get(remote.get("status", ""), None)
+            remote_status = _STATUS_MAP.get(remote.get("status", ""))
             if remote_status and remote_status != order.status:
                 mismatches.append((order, remote_status.value))
                 logger.warning("Mismatch: %s local=%s remote=%s", order.exchange_id, order.status, remote_status)
