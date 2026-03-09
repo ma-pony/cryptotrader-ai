@@ -42,6 +42,7 @@ def build_initial_state(
     snapshot: DataSnapshot | None = None,
     config: AppConfig | None = None,
     extra_metadata: dict | None = None,
+    extra_data: dict | None = None,
 ) -> dict:
     """Build the initial state dict for graph invocation.
 
@@ -57,6 +58,8 @@ def build_initial_state(
             :func:`~cryptotrader.config.load_config` when *None*.
         extra_metadata: Additional key/value pairs merged (shallowly) into the
             ``metadata`` dict, allowing callers to override or extend defaults.
+        extra_data: Additional key/value pairs merged into the ``data`` dict,
+            e.g. ``position_context`` for backtests that track position externally.
 
     Returns:
         A fully-formed initial state dict ready to pass to ``graph.ainvoke()``.
@@ -93,6 +96,8 @@ def build_initial_state(
     initial_data: dict[str, Any] = {}
     if snapshot is not None:
         initial_data["snapshot"] = snapshot
+    if extra_data:
+        initial_data.update(extra_data)
 
     return {
         "messages": [],

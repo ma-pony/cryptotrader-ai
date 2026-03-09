@@ -43,6 +43,10 @@ class RiskGate:
         ]
 
     async def check(self, verdict: TradeVerdict, portfolio: dict) -> GateResult:
+        # Close actions always pass — reducing risk should never be blocked
+        if verdict.action == "close":
+            return GateResult(passed=True)
+
         # If Redis was configured but is now unavailable, log warning but continue.
         # Skip Redis-dependent checks (cooldown, rate_limit, daily_loss) when Redis is down
         # rather than blocking ALL trades.

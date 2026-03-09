@@ -77,8 +77,25 @@ async def make_verdict(state: ArenaState) -> dict:
         for k, v in raw_analyses.items()
         if not (v.get("is_mock") if isinstance(v, dict) else getattr(v, "is_mock", False))
     }
+    # If all agents returned mock data (LLM outage), skip verdict entirely
     if not analyses:
-        analyses = raw_analyses  # fallback: use all if everything failed
+        logger.warning("All agents returned mock analyses — forcing hold verdict")
+        from cryptotrader.debate.verdict import TradeVerdict
+
+        verdict = TradeVerdict(action="hold", confidence=0.0, reasoning="All agents failed — no real data")
+        return {
+            "data": {
+                "verdict": {
+                    "action": verdict.action,
+                    "confidence": verdict.confidence,
+                    "position_scale": 0.0,
+                    "divergence": 0.0,
+                    "reasoning": verdict.reasoning,
+                    "thesis": "",
+                    "invalidation": "",
+                }
+            }
+        }
     use_llm_verdict = state["metadata"].get("llm_verdict", True)
 
     if use_llm_verdict:

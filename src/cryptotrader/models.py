@@ -91,7 +91,7 @@ class AgentAnalysis:
 
 @dataclass
 class TradeVerdict:
-    action: Literal["long", "short", "hold"]
+    action: Literal["long", "short", "hold", "close"]
     confidence: float = 0.0
     position_scale: float = 0.0
     divergence: float = 0.0

@@ -228,9 +228,10 @@ class BaseAgent:
                 agent_id=self.agent_id,
                 pair=snapshot.pair,
                 direction="neutral",
-                confidence=0.5,
+                confidence=0.1,
                 reasoning="LLM unavailable - mock analysis",
                 is_mock=True,
+                data_sufficiency="low",
             )
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:

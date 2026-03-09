@@ -18,7 +18,7 @@ from cryptotrader.nodes.agents import (
     news_analyze,
     tech_analyze,
 )
-from cryptotrader.nodes.data import collect_snapshot, update_past_pnl, verbal_reinforcement
+from cryptotrader.nodes.data import collect_snapshot, enrich_verdict_context, update_past_pnl, verbal_reinforcement
 from cryptotrader.nodes.debate import (
     bull_bear_debate,
     check_stability,
@@ -44,6 +44,7 @@ __all__ = [
     "collect_snapshot",
     "convergence_router",
     "debate_round",
+    "enrich_verdict_context",
     "journal_rejection",
     "journal_trade",
     "judge_verdict",
@@ -77,6 +78,7 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_node("chain_agent", chain_analyze)
     graph.add_node("news_agent", news_analyze)
     graph.add_node("macro_agent", macro_analyze)
+    graph.add_node("enrich_context", enrich_verdict_context)
     graph.add_node("verdict", make_verdict)
 
     graph.add_edge(START, "collect_data")
@@ -85,10 +87,11 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_edge("inject_experience", "chain_agent")
     graph.add_edge("inject_experience", "news_agent")
     graph.add_edge("inject_experience", "macro_agent")
-    graph.add_edge("tech_agent", "verdict")
-    graph.add_edge("chain_agent", "verdict")
-    graph.add_edge("news_agent", "verdict")
-    graph.add_edge("macro_agent", "verdict")
+    graph.add_edge("tech_agent", "enrich_context")
+    graph.add_edge("chain_agent", "enrich_context")
+    graph.add_edge("news_agent", "enrich_context")
+    graph.add_edge("macro_agent", "enrich_context")
+    graph.add_edge("enrich_context", "verdict")
     graph.add_edge("verdict", END)
 
     return graph.compile()
@@ -105,6 +108,7 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph.add_node("news_agent", news_analyze)
     graph.add_node("macro_agent", macro_analyze)
     graph.add_node("debate", bull_bear_debate)
+    graph.add_node("enrich_context", enrich_verdict_context)
     graph.add_node("verdict", judge_verdict)
 
     graph.add_edge(START, "collect_data")
@@ -117,7 +121,8 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph.add_edge("chain_agent", "debate")
     graph.add_edge("news_agent", "debate")
     graph.add_edge("macro_agent", "debate")
-    graph.add_edge("debate", "verdict")
+    graph.add_edge("debate", "enrich_context")
+    graph.add_edge("enrich_context", "verdict")
     graph.add_edge("verdict", END)
 
     return graph.compile()
@@ -148,6 +153,7 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("macro_agent", macro_analyze)
     graph.add_node("debate_round_1", debate_round)
     graph.add_node("debate_round_2", debate_round)
+    graph.add_node("enrich_context", enrich_verdict_context)
     graph.add_node("verdict", make_verdict)
     graph.add_node("risk_gate", risk_check)
     graph.add_node("execute", place_order)
@@ -178,7 +184,8 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_edge("macro_agent", "debate_round_1")
     # Fixed 2 rounds — no convergence-seeking
     graph.add_edge("debate_round_1", "debate_round_2")
-    graph.add_edge("debate_round_2", "verdict")
+    graph.add_edge("debate_round_2", "enrich_context")
+    graph.add_edge("enrich_context", "verdict")
     graph.add_edge("verdict", "risk_gate")
     graph.add_conditional_edges(
         "risk_gate",

@@ -28,9 +28,7 @@ _p.add_argument("--pair", default="BTC/USDT")
 _p.add_argument("--model", default="")
 _p.add_argument("--start", default="2025-06-01")
 _p.add_argument("--end", default="2025-12-31")
-_p.add_argument(
-    "--stop-loss", type=float, default=0.15, help="Catastrophic stop loss pct (default 15%, safety net only)"
-)
+_p.add_argument("--stop-loss", type=float, default=0.08, help="Catastrophic stop loss pct (default 8%)")
 _p.add_argument("--trailing-stop", type=float, default=0.0, help="Trailing stop pct (default 0 = disabled)")
 _p.add_argument(
     "--reversal-days", type=int, default=3, help="Consecutive opposite-signal days to trigger exit (default 3)"
@@ -208,7 +206,18 @@ def _execute_trade(
     """Execute a trade based on action signal."""
     trades = []
 
-    if action == "long" and position <= 0:
+    if action == "close" and position != 0:
+        # AI-driven close — flatten position
+        if position > 0:
+            pnl = (c - entry_price) * position
+            trades.append({"side": "ai_close_long", "price": c, "pnl": pnl, "date": date})
+        else:
+            pnl = (entry_price - c) * abs(position)
+            trades.append({"side": "ai_close_short", "price": c, "pnl": pnl, "date": date})
+        equity += pnl
+        position = 0.0
+        entry_price = 0.0
+    elif action == "long" and position <= 0:
         if position < 0:  # Close short first
             pnl = (entry_price - c) * abs(position)
             equity += pnl
@@ -233,13 +242,20 @@ def _execute_trade(
 
 
 def _calculate_position_size(confidence: float, equity: float, c: float, window: list, atr_sizing: bool) -> float:
-    """Calculate position size based on confidence and optionally ATR."""
+    """Calculate position size based on confidence and optionally ATR.
+
+    Uses config-driven thresholds from [backtest.position_sizing] for consistency
+    with backtest engine.
+    """
+    from cryptotrader.config import load_config
+
+    ps = load_config().backtest.position_sizing
     if confidence >= 0.8:
-        size_pct = 0.15
+        size_pct = ps.high_confidence_pct
     elif confidence >= 0.6:
-        size_pct = 0.10
+        size_pct = ps.medium_confidence_pct
     else:
-        size_pct = 0.05
+        size_pct = ps.low_confidence_pct
 
     if atr_sizing and len(window) >= 15:
         atr_sum = sum(
@@ -358,22 +374,6 @@ def _build_snapshot(candles, i, ts, c, v, window, fng, funding, btc_dom, fed_rat
     ), fng_val
 
 
-def _build_trend_context(candles, i, c):
-    """Build trend summary from price history for verdict AI."""
-    ctx = {"current_price": c}
-    for days, label in [(7, "7d"), (14, "14d"), (30, "30d")]:
-        if i >= days:
-            past_close = candles[i - days][4]
-            if past_close > 0:
-                ctx[f"change_{label}"] = (c - past_close) / past_close
-    # 30d high/low
-    lookback_30 = candles[max(0, i - 30) : i + 1]
-    if lookback_30:
-        ctx["high_30d"] = max(bar[2] for bar in lookback_30)
-        ctx["low_30d"] = min(bar[3] for bar in lookback_30)
-    return ctx
-
-
 def _build_position_context(position, entry_price, c, entry_step, current_step):
     """Build position state dict for verdict AI."""
     if position == 0:
@@ -390,35 +390,35 @@ async def _get_action(
     graph, snapshot, candles, i, window, equity, c, t0, position=0.0, entry_price=0.0, entry_step=0, current_step=0
 ):
     """Get trading action from ADX filter or graph."""
+    from cryptotrader.state import build_initial_state
+
     adx = calc_adx(candles, i)
     if adx < ADX_THRESHOLD:
         return "hold", 0.0, 0.05, time.time() - t0, adx
 
     position_context = _build_position_context(position, entry_price, c, entry_step, current_step)
-    trend_context = _build_trend_context(candles, i, c)
 
-    result = await graph.ainvoke(
-        {
-            "messages": [],
-            "data": {
-                "snapshot": snapshot,
-                "position_context": position_context,
-                "trend_context": trend_context,
-            },
-            "metadata": {
-                "pair": PAIR,
-                "engine": "paper",
-                "models": dict.fromkeys(["tech_agent", "chain_agent", "news_agent", "macro_agent"], MODEL),
-                "debate_model": MODEL,
-                "verdict_model": MODEL,
-                "llm_verdict": True,
-                "debate_rounds": _args.debate_rounds,
-            },
-            "debate_round": 0,
-            "max_debate_rounds": 0,
-            "divergence_scores": [],
-        }
+    # Use build_initial_state for consistent state construction with live path.
+    # position_context is injected via extra_data; trend_context is built by the
+    # enrich_verdict_context graph node from snapshot OHLCV (single source of truth).
+    extra_meta = {
+        "llm_verdict": True,
+        "debate_rounds": _args.debate_rounds,
+    }
+    if MODEL:
+        extra_meta["models"] = dict.fromkeys(["tech_agent", "chain_agent", "news_agent", "macro_agent"], MODEL)
+        extra_meta["debate_model"] = MODEL
+        extra_meta["verdict_model"] = MODEL
+
+    initial = build_initial_state(
+        PAIR,
+        engine="paper",
+        snapshot=snapshot,
+        extra_metadata=extra_meta,
+        extra_data={"position_context": position_context},
     )
+
+    result = await graph.ainvoke(initial)
     verdict = result.get("data", {}).get("verdict", {})
     action = verdict.get("action", "hold")
     confidence = verdict.get("confidence", 0.5)
@@ -458,6 +458,9 @@ def _should_execute_trade(action, position, stopped, step, paused_until, days_si
     """Check if trade should be executed based on all conditions."""
     if stopped or step <= paused_until:
         return False
+    # Close is always allowed — AI-driven risk reduction should never be blocked
+    if action == "close" and position != 0:
+        return True
     can_flip = days_since_flip >= MIN_HOLD_DAYS
     return (action == "long" and position <= 0 and (position == 0 or can_flip)) or (
         action == "short" and position >= 0 and (position == 0 or can_flip)
@@ -473,6 +476,22 @@ def _check_drawdown_pause(equity, position, entry_price, c, peak_equity, step):
     if DRAWDOWN_PAUSE > 0 and (new_peak - mtm_now) / new_peak >= DRAWDOWN_PAUSE:
         return new_peak, step + 1
     return new_peak, -1
+
+
+def _execute_pending(
+    pending_action, position, equity, open_price, entry_price, step, paused_until, last_dir_change, date
+):
+    """Execute a deferred pending action at current bar's open price."""
+    if pending_action is None:
+        return position, entry_price, equity, [], step, last_dir_change
+    pa_action, pa_size_pct = pending_action
+    days_since_flip = step - last_dir_change
+    if not _should_execute_trade(pa_action, position, False, step, paused_until, days_since_flip):
+        return position, entry_price, equity, [], step, last_dir_change
+    position, entry_price, equity, new_trades = _execute_trade(
+        pa_action, position, equity, open_price, entry_price, pa_size_pct, date
+    )
+    return position, entry_price, equity, new_trades, step, step
 
 
 def _get_position_str(position: float) -> str:
@@ -555,19 +574,14 @@ async def main():
         date = datetime.fromtimestamp(ts / 1000, UTC).strftime("%m-%d")
 
         # Execute pending action from previous bar at current bar's open price
-        open_price = cur[1]  # Use open price for execution (eliminates look-ahead bias)
-        if pending_action is not None:
-            pa_action, pa_size_pct = pending_action
-            pending_action = None
-            days_since_flip = step - last_direction_change
-            if _should_execute_trade(pa_action, position, False, step, paused_until, days_since_flip):
-                position, entry_price, equity, new_trades = _execute_trade(
-                    pa_action, position, equity, open_price, entry_price, pa_size_pct, date
-                )
-                trades.extend(new_trades)
-                peak_price = open_price
-                last_direction_change = step
-                entry_step = step
+        open_price = cur[1]
+        position, entry_price, equity, new_trades, entry_step, last_direction_change = _execute_pending(
+            pending_action, position, equity, open_price, entry_price, step, paused_until, last_direction_change, date
+        )
+        if new_trades:
+            trades.extend(new_trades)
+            peak_price = open_price
+        pending_action = None
 
         t0 = time.time()
         snapshot, fng_val = _build_snapshot(
@@ -621,7 +635,7 @@ async def main():
             size_pct = _calculate_position_size(confidence, equity, c, window, True)
 
         # Defer execution to next bar's open (eliminates look-ahead bias)
-        if action in ("long", "short") and not stopped:
+        if action in ("long", "short", "close") and not stopped:
             pending_action = (action, size_pct)
 
         # Track actual position state for display

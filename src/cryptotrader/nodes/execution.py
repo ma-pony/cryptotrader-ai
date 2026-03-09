@@ -128,13 +128,12 @@ async def check_stop_loss(state: ArenaState) -> dict:
             -max_loss_pct * 100,
         )
         # Override verdict to force exit
-        side = "sell" if amount > 0 else "buy"
         return {
             "data": {
                 "verdict": {
-                    "action": "short" if side == "sell" else "long",
+                    "action": "close",
                     "confidence": 1.0,
-                    "position_scale": 1.0,
+                    "position_scale": 0.0,
                     "divergence": 0.0,
                     "reasoning": f"Stop-loss: {pnl_pct:+.2%} unrealized loss exceeds {max_loss_pct:.0%} threshold",
                     "thesis": "Stop-loss exit to preserve capital",
@@ -151,6 +150,7 @@ async def place_order(state: ArenaState) -> dict:
     """Place order via exchange (paper or live)."""
     from cryptotrader.models import Order
     from cryptotrader.nodes.verdict import _get_notifier
+    from cryptotrader.portfolio.manager import PortfolioManager
 
     verdict = state["data"]["verdict"]
     if verdict["action"] == "hold":
@@ -158,19 +158,39 @@ async def place_order(state: ArenaState) -> dict:
 
     pair = state["metadata"]["pair"]
     price = state["data"].get("snapshot_summary", {}).get("price", 0)
-    scale = verdict.get("position_scale", 1.0)
-    total = state["data"].get("portfolio", {}).get("total_value", 10000)
     if price <= 0:
         return {"data": {"order": None}}
-    max_single_pct = state["metadata"].get("max_single_pct", 0.1)
-    amount = (total * max_single_pct * scale) / price
 
-    order = Order(
-        pair=pair,
-        side="buy" if verdict["action"] == "long" else "sell",
-        amount=amount,
-        price=price,
-    )
+    # Handle close action — flatten the current position
+    if verdict["action"] == "close":
+        db_url = state["metadata"].get("database_url")
+        pm = PortfolioManager(db_url)
+        try:
+            portfolio = await pm.get_portfolio()
+            pos = portfolio.get("positions", {}).get(pair, {})
+            pos_amount = pos.get("amount", 0)
+        except Exception:
+            logger.debug("Portfolio fetch for close failed", exc_info=True)
+            pos_amount = 0
+        if pos_amount == 0:
+            return {"data": {"order": None}}
+        order = Order(
+            pair=pair,
+            side="sell" if pos_amount > 0 else "buy",
+            amount=abs(pos_amount),
+            price=price,
+        )
+    else:
+        scale = verdict.get("position_scale", 1.0)
+        total = state["data"].get("portfolio", {}).get("total_value", 10000)
+        max_single_pct = state["metadata"].get("max_single_pct", 0.1)
+        amount = (total * max_single_pct * scale) / price
+        order = Order(
+            pair=pair,
+            side="buy" if verdict["action"] == "long" else "sell",
+            amount=amount,
+            price=price,
+        )
 
     exchange, live_exchange = _get_exchange(state, pair)
 

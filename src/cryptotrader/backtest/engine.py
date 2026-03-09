@@ -94,7 +94,19 @@ class BacktestEngine:
     ) -> tuple[float, float, float, list[dict]]:
         """Execute pending action and return updated position, entry_price, equity, and new trades."""
         trades = []
-        if pending_action == "long" and position <= 0:
+        if pending_action == "close" and position != 0:
+            if position > 0:
+                fill = self._apply_costs(exec_price, "sell")
+                pnl = (fill - entry_price) * position
+                trades.append({"side": "ai_close_long", "price": fill, "pnl": pnl, "ts": ts})
+            else:
+                fill = self._apply_costs(exec_price, "buy")
+                pnl = (entry_price - fill) * abs(position)
+                trades.append({"side": "ai_close_short", "price": fill, "pnl": pnl, "ts": ts})
+            equity += pnl
+            position = 0.0
+            entry_price = 0.0
+        elif pending_action == "long" and position <= 0:
             if position < 0:  # close short
                 fill = self._apply_costs(exec_price, "buy")
                 pnl = (entry_price - fill) * abs(position)
@@ -227,9 +239,10 @@ class BacktestEngine:
 
         start, end = self.start, self.end
 
+        symbol = self.pair.split("/")[0]
         self._etf_flows = self._load_dict_range("sosovalue_etf", start, end)
-        self._oi = self._load_dict_range("binance_oi_BTC", start, end)
-        self._ls_ratio = self._load_dict_range("binance_ls_ratio_BTC", start, end)
+        self._oi = self._load_dict_range(f"binance_oi_{symbol}", start, end)
+        self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", start, end)
 
         for date, data in get_range("stablecoin_total_supply", start, end).items():
             self._stablecoin_supply[date] = self._extract_numeric(data, "total_supply")
@@ -288,7 +301,7 @@ class BacktestEngine:
             # Generate signal on current bar (will be executed on NEXT bar)
             if graph and self.use_llm:
                 snapshot = self._build_snapshot(window, ts, i)
-                result = await self._run_graph(graph, snapshot)
+                result = await self._run_graph(graph, snapshot, position, entry_price)
                 verdict = result.get("data", {}).get("verdict", {})
                 action = verdict.get("action", "hold")
                 confidence = verdict.get("confidence", 0.5)
@@ -423,17 +436,32 @@ class BacktestEngine:
             ),
         )
 
-    async def _run_graph(self, graph, snapshot: DataSnapshot) -> dict:
+    async def _run_graph(
+        self,
+        graph,
+        snapshot: DataSnapshot,
+        position: float = 0.0,
+        entry_price: float = 0.0,
+    ) -> dict:
         from cryptotrader.state import build_initial_state
 
-        # Use rules verdict in backtest to avoid LLM cost per candle.
-        # Cap debate rounds at 2 to keep per-candle latency low.
+        # Build position context so verdict has position awareness
+        if position == 0:
+            pos_ctx = {"side": "flat"}
+        else:
+            pos_ctx = {
+                "side": "long" if position > 0 else "short",
+                "entry_price": entry_price,
+                "current_price": snapshot.market.ticker.get("last", 0),
+            }
+
         initial = build_initial_state(
             self.pair,
             engine="paper",
             snapshot=snapshot,
             config=self._cached_config,
-            extra_metadata={"llm_verdict": False},
+            extra_metadata={"llm_verdict": self.use_llm},
+            extra_data={"position_context": pos_ctx},
         )
         initial["max_debate_rounds"] = self._cached_config.debate.max_rounds
         return await graph.ainvoke(initial)

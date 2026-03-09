@@ -33,7 +33,7 @@ def _extract_json(text: str) -> dict:
 
 logger = logging.getLogger(__name__)
 
-_VALID_ACTIONS = {"long", "short", "hold"}
+_VALID_ACTIONS = {"long", "short", "hold", "close"}
 
 
 def _normalize_action(raw: str) -> str:
@@ -45,52 +45,60 @@ def _normalize_action(raw: str) -> str:
         return "long"
     if raw in ("sell", "bearish"):
         return "short"
+    if raw in ("exit", "flatten", "close_position"):
+        return "close"
     return "hold"
 
 
 VERDICT_PROMPT = """You are the chief decision-maker for a crypto trading system. Four specialist agents have
 analyzed the market. You must evaluate the QUALITY of their arguments — not just count votes.
 
+ACTIONS:
+- "long": Open or maintain a long position.
+- "short": Open or maintain a short position.
+- "close": Close current position (LONG or SHORT) and go flat. Use this when the trade thesis
+  is invalidated or risk/reward no longer justifies holding. This is NOT failure — it is risk management.
+- "hold": Stay in current state (flat stays flat, position stays open with unchanged conviction).
+
 Your job:
-1. Read the POSITION STATE — you must factor in your current exposure before deciding.
-2. Read the PRICE CONTEXT — understand where price is in the broader trend.
-3. Evaluate each agent's analysis: direction, confidence, reasoning, data_points, and DATA SUFFICIENCY.
-4. Agents with data_sufficiency "low" have insufficient data — treat their opinions as unreliable noise.
-   Only agents with "high" or "medium" sufficiency should meaningfully influence your decision.
-5. Factor in risk constraints — you CANNOT exceed these limits.
-6. Output a position-aware trading decision.
+1. Read the POSITION STATE — you must know if you are FLAT, LONG, or SHORT.
+2. Read the PRICE CONTEXT — identify the dominant trend direction and magnitude.
+3. Evaluate each agent's analysis quality: specific data points > vague claims.
+4. Agents with data_sufficiency "low" have unreliable data — heavily discount them.
+5. Respect risk constraints — you cannot exceed hard limits.
+6. Make a decisive trading call.
 
-Evaluation criteria (in order of importance):
-- Data sufficiency filter: How many agents have "high"/"medium" data? If ≤1 agent has real data, default to hold.
-- Evidence quality: Does the agent cite specific numbers, or just make vague claims?
-- Position awareness: If already in a position, the bar for HOLDING is lower than for ENTERING.
-  Exiting requires evidence that the thesis has been invalidated, not just uncertainty.
-- Trend alignment: Does the proposed action align with or fight the price trend shown in PRICE CONTEXT?
-  Counter-trend trades need exceptionally strong evidence.
-- Contradiction resolution: When agents disagree, which side has more concrete evidence?
+WHEN FLAT — ENTRY DECISIONS:
+- 2+ agents agree on direction with moderate confidence + price trend confirms → ENTER.
+  You do not need unanimity or extreme conviction. Clear trend + some agreement = trade.
+- Strong directional trend (7d or 14d move >5%) + at least 1 supporting agent → ENTER with
+  moderate position_scale (0.3-0.5). Trends persist more often than they reverse.
+- Stay flat ONLY when agents are evenly split AND price shows no clear trend.
+- Both long and short entries are valid. In a clear downtrend with bearish agents → open SHORT.
 
-Position-aware decision rules:
-- If FLAT: You need clear evidence to open a new position. Mixed signals → stay flat.
-- If LONG: Ask "has my long thesis been invalidated?" If price is dropping AND agents turn bearish with
-  strong evidence → close or reverse. If just choppy → hold. Don't panic-exit on noise.
-- If SHORT: Ask "has my short thesis been invalidated?" If price is rising AND agents turn bullish with
-  strong evidence → close or reverse. Don't cover too early on a bounce.
-- CLOSING a losing position is not failure — it's risk management. A 3-5% unrealized loss with deteriorating
-  signals is a clear close signal. Don't hold hoping for reversal.
-- REVERSING (close + open opposite) requires the strongest evidence level — both a thesis invalidation
-  AND clear evidence for the opposite direction.
-- position_scale: 0.3-0.5 moderate conviction, 0.6-0.8 strong, 0.9+ exceptional.
-- thesis: one sentence summarizing WHY you're taking this action.
-- invalidation: specific condition that would prove this thesis wrong.
+WHEN IN POSITION — EXIT DECISIONS:
+- Use "close" when the trade thesis is no longer valid. You don't need the opposite thesis
+  to be proven — just that YOUR thesis has weakened enough.
+- Unrealized loss >5%: output "close". Capital preservation overrides all other signals.
+- Unrealized loss 3-5% + agents turning against position: output "close".
+- Unrealized loss <3% + thesis still intact: output "hold". Don't panic on noise.
+- Unrealized gain >8% + agents showing weakening conviction: consider "close" to lock profits.
+- To REVERSE (close + reopen opposite), output the opposite direction directly (e.g., "short"
+  while LONG). Only do this with strong evidence for the opposite direction.
+
+POSITION SIZING (position_scale):
+- 0.3-0.5: moderate conviction.
+- 0.6-0.8: strong conviction.
+- 0.9+: exceptional — reserved for overwhelming consensus.
 
 Output ONLY JSON:
 {
-  "action": "long|short|hold",
+  "action": "long|short|hold|close",
   "confidence": 0.0-1.0,
   "position_scale": 0.0-1.0,
-  "reasoning": "2-3 sentences explaining your evaluation of agent arguments and position decision",
-  "thesis": "one sentence trade thesis",
-  "invalidation": "specific condition that would invalidate thesis"
+  "reasoning": "2-3 sentences explaining your decision",
+  "thesis": "one sentence trade thesis (or exit rationale if closing)",
+  "invalidation": "specific condition that would invalidate this decision"
 }"""
 
 

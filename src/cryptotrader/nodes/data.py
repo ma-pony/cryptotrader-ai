@@ -112,3 +112,92 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
         experience = f"{experience}\n\n{bias_correction}" if experience else bias_correction
 
     return {"data": {"experience": experience, "verdict_calibration": verdict_calibration}}
+
+
+def _build_trend_from_ohlcv(snapshot) -> dict | None:
+    """Build trend context from snapshot OHLCV data."""
+    ohlcv = snapshot.market.ohlcv
+    if ohlcv is None or ohlcv.empty:
+        return None
+    closes = ohlcv["close"].dropna().tolist()
+    if len(closes) < 2:
+        return None
+    current = closes[-1]
+    ctx: dict = {"current_price": current}
+    # Infer bar duration from timestamps to calculate lookback indices
+    bars_per_day = 1  # default: assume daily bars
+    if "timestamp" in ohlcv.columns:
+        timestamps = ohlcv["timestamp"].dropna().tolist()
+        if len(timestamps) >= 2:
+            bar_ms = abs(timestamps[-1] - timestamps[-2])
+            if bar_ms > 0:
+                bars_per_day = 86_400_000 / bar_ms
+    for days, label in [(7, "7d"), (14, "14d"), (30, "30d")]:
+        bars_back = int(days * bars_per_day)
+        if len(closes) > bars_back:
+            past = closes[-(bars_back + 1)]
+            if past > 0:
+                ctx[f"change_{label}"] = (current - past) / past
+    # 30d high/low (or as much data as available)
+    lookback_30 = int(30 * bars_per_day)
+    n = min(lookback_30, len(closes))
+    highs = ohlcv["high"].dropna().tolist()[-n:]
+    lows = ohlcv["low"].dropna().tolist()[-n:]
+    if highs and lows:
+        ctx["high_30d"] = max(highs)
+        ctx["low_30d"] = min(lows)
+    return ctx
+
+
+async def _build_position_from_portfolio(pair: str, price: float, db_url: str | None) -> dict:
+    """Build position context from PortfolioManager."""
+    from cryptotrader.portfolio.manager import PortfolioManager
+
+    pm = PortfolioManager(db_url)
+    try:
+        portfolio = await pm.get_portfolio()
+        pos = portfolio.get("positions", {}).get(pair, {})
+        amount = pos.get("amount", 0)
+        avg_price = pos.get("avg_price", 0)
+        if amount == 0 or avg_price <= 0:
+            return {"side": "flat"}
+        return {
+            "side": "long" if amount > 0 else "short",
+            "entry_price": avg_price,
+            "current_price": price,
+        }
+    except Exception:
+        logger.debug("Portfolio fetch for position context failed", exc_info=True)
+        return {"side": "flat"}
+
+
+async def enrich_verdict_context(state: ArenaState) -> dict:
+    """Build position_context and trend_context for the verdict node.
+
+    This runs in ALL graph variants (full, lite, debate), ensuring the verdict AI
+    always has consistent position awareness and price trend data.
+
+    - trend_context: always built from snapshot OHLCV (authoritative)
+    - position_context: uses pre-set value if provided (backtest), else reads PortfolioManager (live)
+    """
+    result: dict = {}
+    snapshot = state["data"].get("snapshot")
+
+    # Always build trend_context from snapshot OHLCV (single source of truth)
+    if snapshot:
+        trend = _build_trend_from_ohlcv(snapshot)
+        if trend:
+            result["trend_context"] = trend
+
+    # Position context: respect caller-provided value (backtest), else read live portfolio
+    if state["data"].get("position_context"):
+        # Already set by caller (e.g., backtest script) — keep it
+        pass
+    else:
+        pair = state["metadata"].get("pair", "")
+        price = state["data"].get("snapshot_summary", {}).get("price", 0)
+        db_url = state["metadata"].get("database_url")
+        pos_ctx = await _build_position_from_portfolio(pair, price, db_url)
+        result["position_context"] = pos_ctx
+
+    return {"data": result}

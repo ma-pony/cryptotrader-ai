@@ -31,6 +31,8 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         "reasoning": analysis.reasoning,
         "key_factors": analysis.key_factors,
         "risk_flags": analysis.risk_flags,
+        "is_mock": analysis.is_mock,
+        "data_sufficiency": analysis.data_sufficiency,
     }
     result.update(analysis.data_points)
     return {"data": {"analyses": {agent_type: result}}}
