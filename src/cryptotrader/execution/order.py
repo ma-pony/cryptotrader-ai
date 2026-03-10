@@ -21,8 +21,10 @@ class OrderManager:
         order.status = new_status
         return order
 
-    async def place(self, order: Order, exchange: ExchangeAdapter) -> Order:
+    async def place(self, order: Order, exchange: ExchangeAdapter) -> tuple[Order, dict]:
+        """Place order and return (order, exchange_result) tuple."""
         self.transition(order, OrderStatus.SUBMITTED)
+        result: dict = {}
         try:
             result = await exchange.place_order(order)
             order.exchange_id = result.get("id")
@@ -41,4 +43,4 @@ class OrderManager:
         except Exception:
             logger.warning("Order placement failed", exc_info=True)
             self.transition(order, OrderStatus.FAILED)
-        return order
+        return order, result

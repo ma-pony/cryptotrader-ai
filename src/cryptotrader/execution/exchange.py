@@ -29,7 +29,7 @@ class ExchangeAdapter(Protocol):
 
 
 class LiveExchange:
-    def __init__(self, exchange_id: str, api_key: str, secret: str, sandbox: bool = True) -> None:
+    def __init__(self, exchange_id: str, api_key: str, secret: str, *, sandbox: bool, passphrase: str = "") -> None:
         try:
             import ccxt.async_support as ccxt_async
         except ImportError:
@@ -37,14 +37,15 @@ class LiveExchange:
                 "ccxt.async_support is required for LiveExchange. Install with: pip install ccxt"
             ) from None
         exchange_cls = getattr(ccxt_async, exchange_id)
-        self._exchange = exchange_cls(
-            {
-                "apiKey": api_key,
-                "secret": secret,
-                "sandbox": sandbox,
-                "enableRateLimit": True,
-            }
-        )
+        config = {
+            "apiKey": api_key,
+            "secret": secret,
+            "sandbox": sandbox,
+            "enableRateLimit": True,
+        }
+        if passphrase:
+            config["password"] = passphrase
+        self._exchange = exchange_cls(config)
         self._markets_loaded = False
 
     async def _ensure_markets(self) -> None:
@@ -53,14 +54,19 @@ class LiveExchange:
             self._markets_loaded = True
 
     async def _retry(self, coro_fn, *args, attempts: int = 3):
+        import ccxt
+
+        _fatal = (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.BadSymbol, ccxt.InsufficientFunds)
         for i in range(attempts):
             try:
                 return await coro_fn(*args)
+            except _fatal:
+                raise  # Fatal errors — don't retry
             except Exception as e:
                 if i == attempts - 1:
                     raise
                 wait = 2**i
-                logger.warning("Retry %d/%d after %s: %s", i + 1, attempts, wait, e)
+                logger.warning("Retry %d/%d after %ss: %s", i + 1, attempts, wait, e)
                 await asyncio.sleep(wait)
         return None
 

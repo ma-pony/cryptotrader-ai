@@ -61,7 +61,7 @@ async def test_place_success(mgr):
             return {"id": "abc123", "status": "closed"}
 
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
-    result = await mgr.place(order, MockExchange())
+    result, _raw = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.FILLED
     assert result.exchange_id == "abc123"
 
@@ -73,7 +73,7 @@ async def test_place_partial_fill(mgr):
             return {"id": "abc456", "status": "partially_filled"}
 
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
-    result = await mgr.place(order, MockExchange())
+    result, _ = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.PARTIALLY_FILLED
 
 
@@ -84,7 +84,7 @@ async def test_place_failure(mgr):
             raise RuntimeError("Connection lost")
 
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
-    result = await mgr.place(order, MockExchange())
+    result, _ = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.FAILED
 
 
@@ -97,6 +97,6 @@ async def test_place_open_stays_submitted(mgr):
             return {"id": "abc789", "status": "open"}
 
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
-    result = await mgr.place(order, MockExchange())
+    result, _ = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.SUBMITTED
     assert result.exchange_id == "abc789"

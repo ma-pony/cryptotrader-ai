@@ -120,6 +120,18 @@ class BacktestConfig:
     position_sizing: BacktestPositionSizingConfig = field(default_factory=BacktestPositionSizingConfig)
 
 
+# ── Reflection ──
+
+
+@dataclass
+class ReflectionConfig:
+    enabled: bool = True
+    every_n_cycles: int = 20
+    min_commits_required: int = 10
+    lookback_commits: int = 30
+    model: str = ""  # empty = use models.analysis
+
+
 # ── Scheduler ──
 
 
@@ -174,6 +186,31 @@ class NotificationsConfig:
     )
 
 
+# ── Exchanges ──
+
+
+@dataclass
+class ExchangeCredentials:
+    api_key: str = ""
+    secret: str = ""
+    passphrase: str = ""
+    sandbox: bool = True
+
+
+@dataclass
+class ExchangesConfig:
+    _exchanges: dict[str, ExchangeCredentials] = field(default_factory=dict)
+
+    def get(self, exchange_id: str) -> ExchangeCredentials | None:
+        return self._exchanges.get(exchange_id)
+
+    def __iter__(self):
+        return iter(self._exchanges)
+
+    def items(self):
+        return self._exchanges.items()
+
+
 # ── Infrastructure ──
 
 
@@ -196,10 +233,12 @@ class AppConfig:
     data: DataConfig = field(default_factory=DataConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     infrastructure: InfrastructureConfig = field(default_factory=InfrastructureConfig)
+    exchanges: ExchangesConfig = field(default_factory=ExchangesConfig)
 
 
 # ── TOML loading ──
@@ -255,6 +294,14 @@ def _build_config(toml_data: dict) -> AppConfig:
     if providers.has_okx_credentials():
         providers.okx_enabled = True
 
+    # Parse exchanges
+    exchanges_raw = toml_data.get("exchanges", {})
+    exchange_creds = {}
+    for ex_id, ex_data in exchanges_raw.items():
+        if isinstance(ex_data, dict):
+            exchange_creds[ex_id] = ExchangeCredentials(**ex_data)
+    exchanges = ExchangesConfig(_exchanges=exchange_creds)
+
     return AppConfig(
         mode=app.get("mode", "standalone"),
         engine=app.get("engine", "paper"),
@@ -264,10 +311,12 @@ def _build_config(toml_data: dict) -> AppConfig:
         data=DataConfig(**toml_data.get("data", {})),
         risk=risk,
         backtest=backtest,
+        reflection=ReflectionConfig(**toml_data.get("reflection", {})),
         scheduler=SchedulerConfig(**toml_data.get("scheduler", {})),
         providers=providers,
         notifications=NotificationsConfig(**toml_data.get("notifications", {})),
         infrastructure=InfrastructureConfig(**toml_data.get("infrastructure", {})),
+        exchanges=exchanges,
     )
 
 

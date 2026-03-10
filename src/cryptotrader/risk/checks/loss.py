@@ -17,9 +17,12 @@ logger = logging.getLogger(__name__)
 class DailyLossLimit:
     name = "daily_loss_limit"
 
-    def __init__(self, config: LossConfig, redis_state: RedisStateManager | None = None) -> None:
+    def __init__(
+        self, config: LossConfig, redis_state: RedisStateManager | None = None, post_loss_minutes: int = 120
+    ) -> None:
         self._max_pct = config.max_daily_loss_pct
         self._redis = redis_state
+        self._post_loss_minutes = post_loss_minutes
         self.circuit_breaker = False
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
@@ -39,6 +42,7 @@ class DailyLossLimit:
             # Persist to Redis so it survives process restarts
             if self._redis and self._redis.available:
                 await self._redis.set_circuit_breaker()
+                await self._redis.set_post_loss_cooldown(self._post_loss_minutes)
             logger.warning(
                 "Circuit breaker triggered: daily loss %.2f%% exceeds max %.2f%%", loss_pct * 100, self._max_pct * 100
             )
@@ -49,11 +53,16 @@ class DailyLossLimit:
 class DrawdownLimit:
     name = "drawdown_limit"
 
-    def __init__(self, config: LossConfig) -> None:
+    def __init__(self, config: LossConfig, redis_state: RedisStateManager | None = None) -> None:
         self._max_pct = config.max_drawdown_pct
+        self._redis = redis_state
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         drawdown = abs(portfolio.get("drawdown", 0))
         if drawdown > self._max_pct:
+            # Trigger circuit breaker on excessive drawdown
+            if self._redis and self._redis.available:
+                await self._redis.set_circuit_breaker()
+            logger.warning("Drawdown %.2f%% exceeds max %.2f%%", drawdown * 100, self._max_pct * 100)
             return CheckResult(passed=False, reason=f"Drawdown {drawdown:.2%} exceeds max {self._max_pct:.2%}")
         return CheckResult(passed=True)

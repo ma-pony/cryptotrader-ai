@@ -64,9 +64,16 @@ sma_fast = 20
 sma_slow = 50
 
 [backtest.position_sizing]
-high_confidence_pct = 0.20    # confidence >= 0.8
-medium_confidence_pct = 0.12  # confidence >= 0.6
-low_confidence_pct = 0.06     # confidence < 0.6
+high_confidence_pct = 0.35    # ceiling for position_scale mapping
+medium_confidence_pct = 0.12  # legacy fallback (confidence >= 0.6)
+low_confidence_pct = 0.06     # floor for position_scale mapping
+
+[reflection]
+enabled = true
+every_n_cycles = 20
+min_commits_required = 10
+lookback_commits = 30
+model = ""
 
 [scheduler]
 enabled = false
@@ -100,7 +107,18 @@ max_acceptable_risk = "MEDIUM"
 [notifications]
 webhook_url = ""
 enabled = true
-events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]
+events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary", "portfolio_stale"]
+
+[exchanges.binance]
+api_key = ""
+secret = ""
+sandbox = true
+
+[exchanges.okx]
+api_key = ""
+secret = ""
+passphrase = ""
+sandbox = true
 
 [infrastructure]
 database_url = ""

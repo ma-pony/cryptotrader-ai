@@ -135,8 +135,8 @@ class RedisStateManager:
         daily = await self.get(f"trades:daily:{now.strftime('%Y%m%d')}")
         return int(hourly or 0), int(daily or 0)
 
-    async def set_circuit_breaker(self) -> None:
-        await self.set("circuit_breaker:active", "1")
+    async def set_circuit_breaker(self, ttl_seconds: int = 86400) -> None:
+        await self.set("circuit_breaker:active", "1", ex=ttl_seconds)
 
     async def is_circuit_breaker_active(self) -> bool:
         val = await self.get("circuit_breaker:active")

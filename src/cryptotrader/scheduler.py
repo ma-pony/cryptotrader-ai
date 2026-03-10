@@ -29,6 +29,9 @@ class Scheduler:
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.stop)
 
+        # Startup reconciliation for live mode
+        await self._startup_reconcile()
+
         logger.info("Scheduler started: pairs=%s interval=%dm", self.pairs, self.interval // 60)
         while self._running:
             tasks = [self._run_pair(p) for p in self.pairs]
@@ -54,10 +57,65 @@ class Scheduler:
         self._running = False
         if self._sleep_task and not self._sleep_task.done():
             self._sleep_task.cancel()
+        # Schedule cleanup — may not run if loop is shutting down
+        try:
+            loop = asyncio.get_running_loop()
+            self._cleanup_task = loop.create_task(self._close_live_exchanges())
+        except RuntimeError:
+            pass  # No running loop — exchanges will be GC'd
+
+    async def _close_live_exchanges(self) -> None:
+        from cryptotrader.nodes.execution import _live_exchanges
+
+        for ex_id, exchange in list(_live_exchanges.items()):
+            try:
+                await exchange.close()
+            except Exception:
+                logger.debug("Failed to close exchange %s", ex_id, exc_info=True)
+        _live_exchanges.clear()
 
     @property
     def status(self) -> dict[str, dict[str, Any]]:
         return self._status
+
+    async def _startup_reconcile(self) -> None:
+        """Run startup reconciliation to detect orphaned orders (live mode only)."""
+        from cryptotrader.config import load_config
+
+        config = load_config()
+        if config.engine != "live":
+            return
+
+        try:
+            from cryptotrader.execution.reconcile import Reconciler
+            from cryptotrader.nodes.execution import _get_exchange
+
+            # Build a minimal state to get the exchange
+            dummy_state = {"metadata": {"engine": "live", "exchange_id": config.scheduler.exchange_id}, "data": {}}
+            exchange, _ = _get_exchange(dummy_state, self.pairs[0])
+            reconciler = Reconciler(exchange)
+            orphans = await reconciler.detect_orphans(set())
+            if orphans:
+                logger.warning("Startup reconciliation found %d orphaned orders", len(orphans))
+                notifier = self._get_notifier(config)
+                await notifier.notify(
+                    "reconcile_mismatch",
+                    {"orphan_count": len(orphans), "orphan_ids": [o.get("id") for o in orphans]},
+                )
+            else:
+                logger.info("Startup reconciliation: no orphaned orders")
+        except Exception:
+            logger.warning("Startup reconciliation failed", exc_info=True)
+
+    @staticmethod
+    def _get_notifier(config):
+        from cryptotrader.notifications import Notifier
+
+        return Notifier(
+            webhook_url=config.notifications.webhook_url,
+            enabled=config.notifications.enabled,
+            events=config.notifications.events,
+        )
 
     async def _run_pair(self, pair: str) -> None:
         from cryptotrader.tracing import set_trace_id
@@ -78,6 +136,7 @@ class Scheduler:
                 engine=config.engine,
                 exchange_id=config.scheduler.exchange_id,
                 config=config,
+                extra_metadata={"cycle_count": self._cycle_count},
             )
             try:
                 result = await asyncio.wait_for(graph.ainvoke(initial), timeout=300)
@@ -91,8 +150,18 @@ class Scheduler:
             data = result.get("data", {})
             verdict = data.get("verdict", {})
             risk_gate = data.get("risk_gate", {})
-            self._status[pair]["last_action"] = verdict.get("action", "unknown")
-            self._status[pair]["risk_passed"] = risk_gate.get("passed", False)
+            action = verdict.get("action", "unknown")
+            risk_passed = risk_gate.get("passed", False)
+            self._status[pair]["last_action"] = action
+            self._status[pair]["risk_passed"] = risk_passed
+            logger.info(
+                "Cycle complete [%s] trace=%s: action=%s confidence=%.2f risk=%s",
+                pair,
+                trace_id,
+                action,
+                verdict.get("confidence", 0),
+                "PASS" if risk_passed else f"REJECT({risk_gate.get('rejected_by', '?')})",
+            )
 
         except Exception as e:
             logger.error("Scheduler error for %s: %s", pair, e)

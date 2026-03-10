@@ -30,8 +30,8 @@ class RiskGate:
         self._checks = [
             MaxPositionSize(config.position),
             MaxTotalExposure(config.position),
-            DailyLossLimit(config.loss, redis_state),
-            DrawdownLimit(config.loss),
+            DailyLossLimit(config.loss, redis_state, post_loss_minutes=config.cooldown.post_loss_minutes),
+            DrawdownLimit(config.loss, redis_state),
             CVaRCheck(config.loss),
             CorrelationCheck(),
             CooldownCheck(config.cooldown, redis_state),
@@ -47,18 +47,16 @@ class RiskGate:
         if verdict.action == "close":
             return GateResult(passed=True)
 
-        # If Redis was configured but is now unavailable, log warning but continue.
-        # Skip Redis-dependent checks (cooldown, rate_limit, daily_loss) when Redis is down
-        # rather than blocking ALL trades.
-        redis_available = True
+        # If Redis was configured but is now unavailable, reject conservatively
         if self._redis_was_configured and not await self.redis_state.ping():
-            logger.warning("Redis unavailable — skipping Redis-dependent checks (cooldown, rate limit)")
-            redis_available = False
+            logger.warning("Redis configured but unreachable — rejecting trade conservatively")
+            return GateResult(
+                passed=False,
+                rejected_by="redis_unavailable",
+                reason="Redis configured but unreachable — cannot verify risk state",
+            )
 
-        redis_dependent = {"cooldown_check", "rate_limit", "daily_loss_limit"}
         for c in self._checks:
-            if not redis_available and c.name in redis_dependent:
-                continue
             result = await c.evaluate(verdict, portfolio)
             if not result.passed:
                 return GateResult(passed=False, rejected_by=c.name, reason=result.reason)

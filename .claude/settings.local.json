@@ -56,7 +56,17 @@
       "WebFetch(domain:sosovalue.com)",
       "mcp__web-search-prime__web_search_prime",
       "WebFetch(domain:sosovalue.gitbook.io)",
-      "mcp__chrome-devtools__navigate_page"
+      "mcp__chrome-devtools__navigate_page",
+      "Bash(git stash:*)",
+      "Bash(git checkout:*)",
+      "Bash(python3:*)",
+      "Bash(sqlite3:*)",
+      "WebFetch(domain:developers.coindesk.com)",
+      "WebFetch(domain:data-api.coindesk.com)",
+      "Bash(kill %1:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker exec:*)",
+      "Bash(git:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

@@ -12,10 +12,12 @@ logger = logging.getLogger(__name__)
 # Per-pair PaperExchange cache to prevent cross-pair balance contamination
 _paper_exchanges: dict[str, Any] = {}
 
+# Module-level cache for live exchanges (reuse connections, avoid repeated load_markets())
+_live_exchanges: dict[str, Any] = {}
+
 
 def _get_exchange(state: ArenaState, pair: str):
     """Get exchange instance (paper or live) for the given pair."""
-    from cryptotrader.execution.exchange import LiveExchange
     from cryptotrader.execution.simulator import PaperExchange
 
     engine = state["metadata"].get("engine", "paper")
@@ -23,13 +25,31 @@ def _get_exchange(state: ArenaState, pair: str):
         if pair not in _paper_exchanges:
             _paper_exchanges[pair] = PaperExchange()
         return _paper_exchanges[pair], None
-    cfg = state["metadata"].get("exchange_config", {})
+
+    from cryptotrader.config import load_config
+    from cryptotrader.execution.exchange import LiveExchange
+
+    exchange_id = state["metadata"].get("exchange_id", "binance")
+    if exchange_id in _live_exchanges:
+        return _live_exchanges[exchange_id], None  # cached — don't close
+
+    config = load_config()
+    creds = config.exchanges.get(exchange_id)
+    if creds is None or not creds.api_key or not creds.secret:
+        raise RuntimeError(
+            f"No credentials configured for exchange '{exchange_id}'. "
+            f"Set api_key/secret in config/local.toml under [exchanges.{exchange_id}]"
+        )
+
     live_exchange = LiveExchange(
-        cfg.get("exchange_id", "binance"),
-        cfg.get("api_key", ""),
-        cfg.get("secret", ""),
+        exchange_id,
+        creds.api_key,
+        creds.secret,
+        sandbox=creds.sandbox,
+        passphrase=creds.passphrase,
     )
-    return live_exchange, live_exchange
+    _live_exchanges[exchange_id] = live_exchange
+    return live_exchange, None  # cached — don't close
 
 
 async def _update_trade_tracking(state: ArenaState, pair: str):
@@ -50,8 +70,8 @@ async def _update_trade_tracking(state: ArenaState, pair: str):
             logger.warning("Trade tracking update failed", exc_info=True)
 
 
-async def _update_portfolio(state: ArenaState, order, filled_amount: float, filled_price: float):
-    """Update portfolio after successful trade."""
+async def _update_portfolio(state: ArenaState, order, filled_amount: float, filled_price: float) -> bool:
+    """Update portfolio after successful trade. Returns True on success."""
     pair = order.pair
     db_url = state["metadata"].get("database_url")
     try:
@@ -77,8 +97,10 @@ async def _update_portfolio(state: ArenaState, order, filled_amount: float, fill
         await pm.update_position("default", pair, new_amount, new_price)
         total = sum(p["amount"] * p["avg_price"] for p in (await pm.get_portfolio()).get("positions", {}).values())
         await pm.snapshot("default", total)
+        return True
     except Exception:
         logger.warning("Portfolio write-back failed for %s", pair, exc_info=True)
+        return False
 
 
 async def check_stop_loss(state: ArenaState) -> dict:
@@ -192,20 +214,30 @@ async def place_order(state: ArenaState) -> dict:
             price=price,
         )
 
-    exchange, live_exchange = _get_exchange(state, pair)
+    exchange, _ = _get_exchange(state, pair)
 
-    try:
-        result = await exchange.place_order(order)
-    finally:
-        if live_exchange is not None:
-            await live_exchange.close()
+    from cryptotrader.execution.order import OrderManager
+    from cryptotrader.models import OrderStatus
 
-    status = result.get("status", "")
-    if status not in ("filled", "partially_filled"):
+    logger.info("Placing order: %s %s %.6f @ %.2f", order.side, pair, order.amount, order.price)
+    om = OrderManager()
+    order, result = await om.place(order, exchange)
+
+    status = order.status
+    if status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
+        logger.warning("Order not filled: %s %s status=%s", order.side, pair, status)
         return {"data": {"order": None}}
 
-    filled_amount = result.get("filled", order.amount) if status == "partially_filled" else order.amount
+    filled_amount = result.get("filled", order.amount) if status == OrderStatus.PARTIALLY_FILLED else order.amount
     filled_price = result.get("price", order.price)
+    logger.info(
+        "Order filled: %s %s %.6f @ %.2f (status=%s)",
+        order.side,
+        pair,
+        filled_amount,
+        filled_price,
+        status.value if hasattr(status, "value") else status,
+    )
 
     await _update_trade_tracking(state, pair)
 
@@ -214,15 +246,17 @@ async def place_order(state: ArenaState) -> dict:
         "side": order.side,
         "amount": filled_amount,
         "price": filled_price,
-        "status": status,
+        "status": status.value if hasattr(status, "value") else str(status),
     }
 
-    await _update_portfolio(state, order, filled_amount, filled_price)
+    portfolio_ok = await _update_portfolio(state, order, filled_amount, filled_price)
 
-    # Fire-and-forget notification
+    # Fire-and-forget notifications
     try:
         notifier = _get_notifier(state)
         await notifier.notify("trade", {"pair": order.pair, "order": order_data})
+        if not portfolio_ok:
+            await notifier.notify("portfolio_stale", {"pair": order.pair, "order": order_data})
     except Exception:
         logger.debug("Notification send failed", exc_info=True)
 

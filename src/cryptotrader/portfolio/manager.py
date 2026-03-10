@@ -34,14 +34,14 @@ def _pm_models():
         pair = Column(String(20), nullable=False)
         amount = Column(Float, default=0.0)
         avg_price = Column(Float, default=0.0)
-        updated_at = Column(DateTime, default=lambda: datetime.now(UTC))
+        updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     class PortfolioSnapshot(Base):
         __tablename__ = "portfolio_snapshots"
         id = Column(String, primary_key=True)
         account_id = Column(String, nullable=False)
         total_value = Column(Float, default=0.0)
-        timestamp = Column(DateTime, default=lambda: datetime.now(UTC), index=True)
+        timestamp = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC), index=True)
 
     _pm_cache = (Base, Portfolio, PortfolioSnapshot)
     return _pm_cache

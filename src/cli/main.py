@@ -54,6 +54,18 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
     else:
         graph = builders.get(graph_mode, build_trading_graph)()
 
+    # Live mode pre-flight checks
+    if mode == "live":
+        creds = config.exchanges.get(exchange_id)
+        if creds is None or not creds.api_key or not creds.secret:
+            console.print(
+                f"[red]ERROR: No credentials configured for exchange '{exchange_id}'.[/red]\n"
+                f"Set api_key/secret in config/local.toml under [exchanges.{exchange_id}]"
+            )
+            raise typer.Exit(1)
+        if creds.sandbox:
+            console.print("[yellow]WARNING: Running in SANDBOX mode (sandbox=true in config)[/yellow]")
+
     for pair in pairs:
         trace_id = set_trace_id()
         console.print(
@@ -88,7 +100,14 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
             "divergence_scores": [],
         }
 
-        result = await graph.ainvoke(initial)
+        try:
+            result = await graph.ainvoke(initial)
+        except Exception as exc:
+            if mode == "live":
+                console.print(f"[red]ERROR: {exc}[/red]")
+                console.print("[yellow]Check logs — a partial trade may have been placed.[/yellow]")
+                raise typer.Exit(1) from None
+            raise
 
         verdict = result.get("data", {}).get("verdict", {})
         risk = result.get("data", {}).get("risk_gate", {})
@@ -363,6 +382,101 @@ async def _risk_reset_breaker():
     redis_state = RedisStateManager(redis_url)
     await redis_state.reset_circuit_breaker()
     console.print("[green]Circuit breaker reset — trading is now allowed.[/green]")
+
+
+@app.command("live-check")
+def live_check(
+    exchange: Annotated[str, typer.Option("--exchange", "-e")] = "binance",
+):
+    """Run pre-flight checks for live trading."""
+    asyncio.run(_live_check(exchange))
+
+
+def _check_credentials(config, exchange_id: str) -> tuple[str, bool, str]:
+    creds = config.exchanges.get(exchange_id)
+    if creds and creds.api_key and creds.secret:
+        sandbox_note = " (SANDBOX)" if creds.sandbox else ""
+        return ("Credentials", True, f"{exchange_id}{sandbox_note}")
+    return ("Credentials", False, f"No credentials for {exchange_id}")
+
+
+async def _check_exchange_api(config, exchange_id: str) -> tuple[str, bool, str]:
+    import time
+
+    creds = config.exchanges.get(exchange_id)
+    if not creds or not creds.api_key:
+        return ("Exchange API", False, "Skipped (no credentials)")
+    try:
+        from cryptotrader.execution.exchange import LiveExchange
+
+        ex = LiveExchange(exchange_id, creds.api_key, creds.secret, sandbox=creds.sandbox, passphrase=creds.passphrase)
+        t0 = time.monotonic()
+        bal = await ex.get_balance()
+        latency = int((time.monotonic() - t0) * 1000)
+        await ex.close()
+        return ("Exchange API", True, f"{latency}ms latency, {len(bal)} assets")
+    except Exception as e:
+        return ("Exchange API", False, str(e))
+
+
+async def _check_redis(config) -> tuple[str, bool, str]:
+    redis_url = config.infrastructure.redis_url
+    if not redis_url:
+        return ("Redis", False, "Not configured")
+    from cryptotrader.risk.state import RedisStateManager
+
+    rsm = RedisStateManager(redis_url)
+    if await rsm.ping():
+        return ("Redis", True, "Connected")
+    return ("Redis", False, "Configured but unreachable")
+
+
+async def _check_database(config) -> tuple[str, bool, str]:
+    db_url = config.infrastructure.database_url
+    if not db_url:
+        return ("Database", False, "Not configured")
+    try:
+        from cryptotrader.portfolio.manager import PortfolioManager
+
+        pm = PortfolioManager(db_url)
+        portfolio = await pm.get_portfolio()
+        total = portfolio.get("total_value", 0)
+        return ("Database", True, f"Portfolio: ${total:,.2f}")
+    except Exception as e:
+        return ("Database", False, str(e))
+
+
+async def _live_check(exchange_id: str):
+    from cryptotrader.config import load_config
+
+    config = load_config()
+    checks = [
+        _check_credentials(config, exchange_id),
+        await _check_exchange_api(config, exchange_id),
+        await _check_redis(config),
+        await _check_database(config),
+    ]
+
+    # Output
+    table = Table(title=f"Live Trading Pre-flight — {exchange_id}")
+    table.add_column("Check", style="cyan")
+    table.add_column("Status")
+    table.add_column("Detail")
+
+    all_pass = True
+    for name, ok, detail in checks:
+        status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
+        if not ok:
+            all_pass = False
+        table.add_row(name, status, detail)
+
+    console.print(table)
+
+    if all_pass:
+        console.print("\n[bold green]GO[/bold green] — All checks passed")
+    else:
+        console.print("\n[bold red]NO-GO[/bold red] — Fix failing checks before live trading")
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
