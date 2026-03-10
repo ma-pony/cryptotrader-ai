@@ -121,6 +121,14 @@ async def make_verdict(state: ArenaState) -> dict:
         threshold = state["metadata"].get("divergence_hold_threshold", 0.7)
         verdict = make_verdict_weighted(analyses, scores[-1], threshold)
 
+    logger.info(
+        "Verdict: action=%s confidence=%.2f scale=%.2f divergence=%.2f | %s",
+        verdict.action,
+        verdict.confidence,
+        verdict.position_scale,
+        verdict.divergence,
+        verdict.reasoning[:120],
+    )
     return {
         "data": {
             "verdict": {
@@ -154,6 +162,103 @@ def _get_notifier(state: ArenaState) -> Any:
     return _notifier_instance
 
 
+def _merge_returns(pm_returns: list[float], ohlcv_returns: list[float], min_count: int = 20) -> list[float]:
+    """Prefer portfolio returns; supplement with OHLCV returns if insufficient."""
+    if len(pm_returns) >= min_count:
+        return pm_returns
+    if not pm_returns:
+        return ohlcv_returns
+    # Pad with OHLCV returns at the front
+    needed = min_count - len(pm_returns)
+    return ohlcv_returns[:needed] + pm_returns
+
+
+async def _fetch_exchange_total(state: ArenaState) -> float:
+    """Query exchange balance and return total USDT value (best-effort)."""
+    exchange_id = state["metadata"].get("exchange_id", "binance")
+    try:
+        exchange = _get_or_create_live_exchange(exchange_id)
+        if exchange is None:
+            return 0.0
+        bal = await exchange.get_balance()
+        return bal.get("USDT", 0.0)
+    except Exception:
+        logger.warning("Exchange balance query failed", exc_info=True)
+        return 0.0
+
+
+def _get_or_create_live_exchange(exchange_id: str):
+    """Get cached live exchange, or create one from config if needed."""
+    from cryptotrader.nodes.execution import _live_exchanges
+
+    if exchange_id in _live_exchanges:
+        return _live_exchanges[exchange_id]
+
+    from cryptotrader.config import load_config
+    from cryptotrader.execution.exchange import LiveExchange
+
+    config = load_config()
+    creds = config.exchanges.get(exchange_id)
+    if creds is None or not creds.api_key or not creds.secret:
+        return None
+
+    live_exchange = LiveExchange(
+        exchange_id,
+        creds.api_key,
+        creds.secret,
+        sandbox=creds.sandbox,
+        passphrase=creds.passphrase,
+    )
+    _live_exchanges[exchange_id] = live_exchange
+    return live_exchange
+
+
+def _extract_ohlcv_returns(state: ArenaState) -> tuple[list[float], list[float]]:
+    """Extract recent prices and daily returns from snapshot OHLCV data."""
+    snapshot = state["data"].get("snapshot")
+    if not snapshot or not hasattr(snapshot, "market") or snapshot.market.ohlcv is None:
+        return [], []
+    closes = snapshot.market.ohlcv["close"].dropna().tolist()
+    recent_prices = closes[-60:]
+    if len(closes) < 2:
+        return recent_prices, []
+    bar_returns = [(closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0]
+    timeframe = state["metadata"].get("timeframe", "1h")
+    _tf_ms = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "1h": 3_600_000, "4h": 14_400_000, "1d": 86_400_000}
+    bars_per_day = int(86_400_000 / _tf_ms.get(timeframe, 3_600_000))
+    if bars_per_day > 1 and len(bar_returns) >= bars_per_day:
+        returns_daily = []
+        for j in range(0, len(bar_returns) - bars_per_day + 1, bars_per_day):
+            chunk = bar_returns[j : j + bars_per_day]
+            daily = 1.0
+            for r in chunk:
+                daily *= 1 + r
+            returns_daily.append(daily - 1)
+    else:
+        returns_daily = bar_returns
+    return recent_prices, returns_daily
+
+
+async def _measure_api_latency(state: ArenaState) -> int:
+    """Measure real exchange API latency for live mode; return ms."""
+    engine = state["metadata"].get("engine", "paper")
+    if engine != "live":
+        return 100
+    import time
+
+    exchange_id = state["metadata"].get("exchange_id", "binance")
+    try:
+        exchange = _get_or_create_live_exchange(exchange_id)
+        if exchange is None:
+            return 100
+        t0 = time.monotonic()
+        await exchange.get_balance()
+        return int((time.monotonic() - t0) * 1000)
+    except Exception:
+        logger.warning("API latency check failed, using default", exc_info=True)
+        return 100
+
+
 async def risk_check(state: ArenaState) -> dict:
     """Run all risk gate checks on the verdict."""
     from cryptotrader.config import load_config
@@ -173,37 +278,7 @@ async def risk_check(state: ArenaState) -> dict:
     vd = state["data"]["verdict"]
     verdict = TradeVerdict(**vd)
 
-    # Extract recent prices and returns from snapshot OHLCV for CVaR/volatility checks
-    snapshot = state["data"].get("snapshot")
-    recent_prices: list[float] = []
-    returns_daily: list[float] = []
-    if snapshot and hasattr(snapshot, "market") and snapshot.market.ohlcv is not None:
-        closes = snapshot.market.ohlcv["close"].dropna().tolist()
-        recent_prices = closes[-60:]
-        if len(closes) >= 2:
-            bar_returns = [
-                (closes[i] - closes[i - 1]) / closes[i - 1] for i in range(1, len(closes)) if closes[i - 1] > 0
-            ]
-            timeframe = state["metadata"].get("timeframe", "1h")
-            _tf_ms = {
-                "1m": 60_000,
-                "5m": 300_000,
-                "15m": 900_000,
-                "1h": 3_600_000,
-                "4h": 14_400_000,
-                "1d": 86_400_000,
-            }
-            bars_per_day = int(86_400_000 / _tf_ms.get(timeframe, 3_600_000))
-            if bars_per_day > 1 and len(bar_returns) >= bars_per_day:
-                returns_daily = []
-                for j in range(0, len(bar_returns) - bars_per_day + 1, bars_per_day):
-                    chunk = bar_returns[j : j + bars_per_day]
-                    daily = 1.0
-                    for r in chunk:
-                        daily *= 1 + r
-                    returns_daily.append(daily - 1)
-            else:
-                returns_daily = bar_returns
+    recent_prices, returns_daily = _extract_ohlcv_returns(state)
 
     # Load real portfolio state
     db_url = state["metadata"].get("database_url")
@@ -221,6 +296,27 @@ async def risk_check(state: ArenaState) -> dict:
         pm_returns = []
 
     has_real_portfolio = pm_data.get("total_value", 0) > 0
+    engine = state["metadata"].get("engine", "paper")
+
+    # Live mode: if local portfolio is empty, query exchange for real balance
+    if engine == "live" and not has_real_portfolio:
+        exchange_total = await _fetch_exchange_total(state)
+        if exchange_total > 0:
+            pm_data["total_value"] = exchange_total
+            has_real_portfolio = True
+        else:
+            return {
+                "data": {
+                    "risk_gate": {
+                        "passed": False,
+                        "rejected_by": "portfolio_unknown",
+                        "reason": "Live mode: no portfolio data — local DB empty and exchange balance query failed.",
+                    }
+                }
+            }
+
+    api_latency_ms = await _measure_api_latency(state)
+
     portfolio = state["data"].get(
         "portfolio",
         {
@@ -228,14 +324,24 @@ async def risk_check(state: ArenaState) -> dict:
             "positions": pm_data.get("positions", {}),
             "daily_pnl": daily_pnl,
             "drawdown": drawdown,
-            "returns_60d": pm_returns if pm_returns else returns_daily,
+            "returns_60d": _merge_returns(pm_returns, returns_daily),
             "recent_prices": recent_prices,
             "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
-            "api_latency_ms": 100,
+            "api_latency_ms": api_latency_ms,
             "pair": state["metadata"]["pair"],
         },
     )
     result = await gate.check(verdict, portfolio)
+
+    if result.passed:
+        logger.info("Risk gate PASSED for %s (action=%s)", state["metadata"]["pair"], verdict.action)
+    else:
+        logger.warning(
+            "Risk gate REJECTED for %s: %s — %s",
+            state["metadata"]["pair"],
+            result.rejected_by,
+            result.reason,
+        )
 
     # Fire circuit_breaker notification if triggered
     if not result.passed and result.rejected_by == "daily_loss_limit" and "Circuit breaker" in (result.reason or ""):

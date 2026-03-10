@@ -73,6 +73,7 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph = StateGraph(ArenaState)
 
     graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("inject_experience", verbal_reinforcement)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
@@ -82,7 +83,8 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_node("verdict", make_verdict)
 
     graph.add_edge(START, "collect_data")
-    graph.add_edge("collect_data", "inject_experience")
+    graph.add_edge("collect_data", "update_pnl")
+    graph.add_edge("update_pnl", "inject_experience")
     graph.add_edge("inject_experience", "tech_agent")
     graph.add_edge("inject_experience", "chain_agent")
     graph.add_edge("inject_experience", "news_agent")
@@ -102,6 +104,7 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph = StateGraph(ArenaState)
 
     graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("inject_experience", verbal_reinforcement)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
@@ -112,7 +115,8 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph.add_node("verdict", judge_verdict)
 
     graph.add_edge(START, "collect_data")
-    graph.add_edge("collect_data", "inject_experience")
+    graph.add_edge("collect_data", "update_pnl")
+    graph.add_edge("update_pnl", "inject_experience")
     graph.add_edge("inject_experience", "tech_agent")
     graph.add_edge("inject_experience", "chain_agent")
     graph.add_edge("inject_experience", "news_agent")

@@ -472,8 +472,18 @@ class TestJournalInMemory:
     async def test_commit_and_retrieve(self):
         from cryptotrader.journal.commit import build_commit
         from cryptotrader.journal.store import JournalStore
+        from cryptotrader.models import Order, TradeVerdict
 
         store = JournalStore(None)  # in-memory
+        order = Order(
+            pair="BTC/USDT",
+            side="buy",
+            amount=0.02,
+            price=50000,
+            status="filled",
+            order_type="market",
+            exchange_id="paper-001",
+        )
         commit = build_commit(
             pair="BTC/USDT",
             snapshot_summary={"price": 50000, "volatility": 0.02},
@@ -488,15 +498,25 @@ class TestJournalInMemory:
             },
             debate_rounds=1,
             divergence=0.15,
-            verdict=None,
+            verdict=TradeVerdict(action="long", confidence=0.8),
             risk_gate=None,
-            order=None,
+            order=order,
             parent_hash=None,
+            fill_price=50050.0,
+            slippage=0.001,
         )
         await store.commit(commit)
         logs = await store.log(limit=10)
         assert len(logs) == 1
         assert logs[0].pair == "BTC/USDT"
+        # Verify order fields are preserved through serialize/deserialize
+        assert logs[0].order is not None
+        assert logs[0].order.status.value == "filled"
+        assert logs[0].order.order_type == "market"
+        assert logs[0].order.exchange_id == "paper-001"
+        # Verify fill_price/slippage roundtrip
+        assert logs[0].fill_price == 50050.0
+        assert logs[0].slippage == 0.001
 
     @pytest.mark.asyncio
     async def test_show_by_hash(self):

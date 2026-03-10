@@ -76,20 +76,30 @@ WHEN FLAT — ENTRY DECISIONS:
 - Stay flat ONLY when agents are evenly split AND price shows no clear trend.
 - Both long and short entries are valid. In a clear downtrend with bearish agents → open SHORT.
 
-WHEN IN POSITION — EXIT DECISIONS:
-- Use "close" when the trade thesis is no longer valid. You don't need the opposite thesis
-  to be proven — just that YOUR thesis has weakened enough.
-- Unrealized loss >5%: output "close". Capital preservation overrides all other signals.
-- Unrealized loss 3-5% + agents turning against position: output "close".
-- Unrealized loss <3% + thesis still intact: output "hold". Don't panic on noise.
-- Unrealized gain >8% + agents showing weakening conviction: consider "close" to lock profits.
+WHEN IN POSITION — THINK THROUGH:
+- What is the current unrealized P&L? Is this a normal pullback for this asset's volatility,
+  or is the trade thesis actually broken?
+- BTC typically has 5-10% intraday/multi-day swings even in strong trends. A drawdown alone
+  is not evidence the trade was wrong.
+- Consider: Has the TREND reversed (not just pulled back)? Have the agents changed their view?
+- Weigh the cost of closing vs holding: closing locks in a loss AND costs fees to re-enter later.
+  If you recently closed a position and are considering re-entering at a similar price,
+  think carefully about what has materially changed.
 - To REVERSE (close + reopen opposite), output the opposite direction directly (e.g., "short"
   while LONG). Only do this with strong evidence for the opposite direction.
 
+RISK AWARENESS (context, not rules):
+- The system has a catastrophic stop-loss at 8% as a safety net outside your control.
+- Small unrealized losses (1-5%) in a confirmed trend are usually noise.
+- Large unrealized gains with weakening momentum may warrant profit-taking.
+- Your decision should be based on the FULL picture: trend, agents, momentum, position P&L.
+
 POSITION SIZING (position_scale):
+- position_scale directly controls capital allocation (e.g. 0.7 → 24.5% of equity).
 - 0.3-0.5: moderate conviction.
-- 0.6-0.8: strong conviction.
+- 0.6-0.8: strong conviction, clear trend with multiple supporting agents.
 - 0.9+: exceptional — reserved for overwhelming consensus.
+- Scale UP when trend is strong and agents agree. Scale DOWN when uncertain.
 
 Output ONLY JSON:
 {
@@ -152,6 +162,9 @@ def _format_position_context(position_context: dict | None) -> str:
         return "Current position: FLAT (no open position)"
     side = position_context.get("side", "flat")
     if side == "flat":
+        last_ctx = position_context.get("last_action_context", "")
+        if last_ctx:
+            return f"Current position: FLAT (no open position)\n  Previous verdict: {last_ctx}"
         return "Current position: FLAT (no open position)"
     entry = position_context.get("entry_price", 0)
     current = position_context.get("current_price", 0)
@@ -161,12 +174,16 @@ def _format_position_context(position_context: dict | None) -> str:
     else:
         pnl_pct = 0.0
     pnl_label = f"{pnl_pct:+.1%}"
-    return (
-        f"Current position: {side.upper()}\n"
-        f"  Entry price: ${entry:,.2f} | Current price: ${current:,.2f}\n"
-        f"  Unrealized P&L: {pnl_label}\n"
-        f"  Days held: {days}"
-    )
+    parts = [
+        f"Current position: {side.upper()}",
+        f"  Entry price: ${entry:,.2f} | Current price: ${current:,.2f}",
+        f"  Unrealized P&L: {pnl_label}",
+        f"  Days held: {days}",
+    ]
+    last_ctx = position_context.get("last_action_context", "")
+    if last_ctx:
+        parts.append(f"  Previous verdict: {last_ctx}")
+    return "\n".join(parts)
 
 
 def _format_trend_context(trend_context: dict | None) -> str:
@@ -206,7 +223,7 @@ async def make_verdict_ai(
     position_block = _format_position_context(position_context)
     trend_block = _format_trend_context(trend_context)
     constraint_block = _format_constraints(constraints or {})
-    calibration_block = f"\n\n{calibration}" if calibration else ""
+    calibration_block = f"\n\n{calibration}\n" if calibration else ""
 
     user_msg = f"""POSITION STATE:
 {position_block}
@@ -215,8 +232,8 @@ PRICE CONTEXT:
 {trend_block}
 
 RISK CONSTRAINTS (hard limits — you cannot exceed these):
-{constraint_block}{calibration_block}
-
+{constraint_block}
+{calibration_block}
 AGENT ANALYSES:
 {agent_reports}"""
 
@@ -235,7 +252,7 @@ AGENT ANALYSES:
             action = "hold"
             confidence = 0.0
 
-        return TradeVerdict(
+        verdict = TradeVerdict(
             action=action,
             confidence=confidence,
             position_scale=max(0.0, min(1.0, float(data.get("position_scale", confidence)))),
@@ -243,6 +260,14 @@ AGENT ANALYSES:
             thesis=data.get("thesis", ""),
             invalidation=data.get("invalidation", ""),
         )
+        logger.info(
+            "AI verdict: action=%s confidence=%.2f scale=%.2f thesis=%s",
+            verdict.action,
+            verdict.confidence,
+            verdict.position_scale,
+            (verdict.thesis or "")[:100],
+        )
+        return verdict
     except Exception:
         logger.exception("Verdict AI call failed, falling back to conservative hold")
         return TradeVerdict(action="hold", confidence=0.1, reasoning="Verdict AI call failed — defaulting to hold")

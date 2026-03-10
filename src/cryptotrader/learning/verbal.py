@@ -14,7 +14,8 @@ async def get_experience(store: JournalStore, snapshot_summary: dict) -> str:
     """Search for similar historical conditions and format as verbal experience."""
     fr = snapshot_summary.get("funding_rate", 0.0)
     vol = snapshot_summary.get("volatility", 0.0)
-    similar = await search_similar(store, fr, vol, limit=3)
+    price_change_7d = snapshot_summary.get("price_change_7d")
+    similar = await search_similar(store, fr, vol, limit=3, price_change_7d=price_change_7d)
     if not similar:
         return ""
     lines: list[str] = []

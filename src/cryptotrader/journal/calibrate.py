@@ -13,23 +13,27 @@ if TYPE_CHECKING:
 
 
 async def accuracy_report(store: JournalStore, days: int = 30) -> dict[str, float]:
-    """Check if each agent's direction matched the pnl outcome."""
+    """Check if each agent's direction matched the pnl outcome.
+
+    Only directional calls (bullish/bearish) count — neutral calls are excluded
+    from both numerator and denominator to avoid diluting accuracy.
+    """
     commits = await store.log(limit=1000)
     cutoff = datetime.now(UTC) - timedelta(days=days)
     correct: dict[str, int] = {}
-    total: dict[str, int] = {}
+    directional: dict[str, int] = {}
     for dc in commits:
         if dc.timestamp < cutoff or dc.pnl is None:
             continue
         for agent_id, analysis in dc.analyses.items():
-            total[agent_id] = total.get(agent_id, 0) + 1
             if analysis.direction == "neutral":
                 continue
+            directional[agent_id] = directional.get(agent_id, 0) + 1
             pnl_positive = dc.pnl > 0
             bullish = analysis.direction == "bullish"
             if pnl_positive == bullish:
                 correct[agent_id] = correct.get(agent_id, 0) + 1
-    return {a: correct.get(a, 0) / total[a] for a in total}
+    return {a: correct.get(a, 0) / directional[a] for a in directional}
 
 
 async def calibrate_weights(store: JournalStore, days: int = 30) -> dict[str, float]:
@@ -112,51 +116,57 @@ async def detect_biases(store: JournalStore, days: int = 30) -> dict[str, dict]:
     return biases
 
 
-def generate_bias_correction(biases: dict[str, dict]) -> str:
-    """Generate a meta-prompt correction string based on detected biases.
+def _build_agent_warnings(b: dict) -> list[str]:
+    """Build warning strings for a single agent's bias report."""
+    warnings: list[str] = []
 
-    This gets injected into agent prompts so they can self-correct.
+    # Overconfidence: high confidence on wrong calls
+    if b["avg_conf_when_wrong"] > 0.65:
+        warnings.append(
+            f"OVERCONFIDENT — your avg confidence on wrong calls is {b['avg_conf_when_wrong']:.0%}. "
+            "Lower your confidence unless evidence is exceptionally strong."
+        )
+
+    # Directional bias
+    if b["bullish_rate"] > 0.65:
+        warnings.append(
+            f"BULLISH BIAS — {b['bullish_rate']:.0%} of your calls are bullish. "
+            "Actively look for bearish evidence you might be ignoring."
+        )
+    elif b["bearish_rate"] > 0.65:
+        warnings.append(
+            f"BEARISH BIAS — {b['bearish_rate']:.0%} of your calls are bearish. "
+            "Actively look for bullish evidence you might be ignoring."
+        )
+
+    # Neutral-defaulting
+    if b["neutral_rate"] > 0.5:
+        warnings.append(
+            f"NEUTRAL DEFAULTING — {b['neutral_rate']:.0%} of your calls are neutral. "
+            "Take a directional stance when data supports one. Neutral should be rare."
+        )
+
+    # Low accuracy
+    if b["accuracy"] < 0.4 and b["sample_size"] >= 5:
+        warnings.append(
+            f"LOW ACCURACY — only {b['accuracy']:.0%} correct over {b['sample_size']} calls. "
+            "Re-examine your analytical framework. What are you consistently getting wrong?"
+        )
+
+    return warnings
+
+
+def generate_bias_correction(biases: dict[str, dict]) -> str:
+    """Generate a combined meta-prompt correction string (legacy, all agents).
+
+    Prefer generate_per_agent_corrections() for targeted per-agent injection.
     """
     if not biases:
         return ""
 
     lines: list[str] = []
     for agent_id, b in biases.items():
-        warnings: list[str] = []
-
-        # Overconfidence: high confidence on wrong calls
-        if b["avg_conf_when_wrong"] > 0.65:
-            warnings.append(
-                f"OVERCONFIDENT — your avg confidence on wrong calls is {b['avg_conf_when_wrong']:.0%}. "
-                "Lower your confidence unless evidence is exceptionally strong."
-            )
-
-        # Directional bias
-        if b["bullish_rate"] > 0.65:
-            warnings.append(
-                f"BULLISH BIAS — {b['bullish_rate']:.0%} of your calls are bullish. "
-                "Actively look for bearish evidence you might be ignoring."
-            )
-        elif b["bearish_rate"] > 0.65:
-            warnings.append(
-                f"BEARISH BIAS — {b['bearish_rate']:.0%} of your calls are bearish. "
-                "Actively look for bullish evidence you might be ignoring."
-            )
-
-        # Neutral-defaulting
-        if b["neutral_rate"] > 0.5:
-            warnings.append(
-                f"NEUTRAL DEFAULTING — {b['neutral_rate']:.0%} of your calls are neutral. "
-                "Take a directional stance when data supports one. Neutral should be rare."
-            )
-
-        # Low accuracy
-        if b["accuracy"] < 0.4 and b["sample_size"] >= 5:
-            warnings.append(
-                f"LOW ACCURACY — only {b['accuracy']:.0%} correct over {b['sample_size']} calls. "
-                "Re-examine your analytical framework. What are you consistently getting wrong?"
-            )
-
+        warnings = _build_agent_warnings(b)
         if warnings:
             label = agent_id.replace("_agent", "").upper()
             lines.append(f"[{label}] " + " | ".join(warnings))
@@ -164,6 +174,23 @@ def generate_bias_correction(biases: dict[str, dict]) -> str:
     if not lines:
         return ""
     return "Calibration warnings (based on your track record):\n" + "\n".join(lines)
+
+
+def generate_per_agent_corrections(biases: dict[str, dict]) -> dict[str, str]:
+    """Generate per-agent bias correction strings.
+
+    Returns a dict mapping agent_id → correction text (only for agents with warnings).
+    Each agent only sees their own calibration warnings.
+    """
+    if not biases:
+        return {}
+
+    result: dict[str, str] = {}
+    for agent_id, b in biases.items():
+        warnings = _build_agent_warnings(b)
+        if warnings:
+            result[agent_id] = "Calibration warnings (based on YOUR track record):\n" + " | ".join(warnings)
+    return result
 
 
 def generate_verdict_calibration(biases: dict[str, dict]) -> str:

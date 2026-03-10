@@ -116,7 +116,7 @@ async def test_run_agent_uses_model_from_config():
         instance = mock_agent.return_value
         instance.analyze = AsyncMock(return_value=mock_analysis)
         await chain_analyze(state)
-        mock_agent.assert_called_once_with(model="claude-3-haiku")
+        mock_agent.assert_called_once_with(model="claude-3-haiku", backtest_mode=False)
 
 
 @pytest.mark.asyncio
@@ -173,8 +173,11 @@ async def test_verbal_reinforcement():
         patch(
             "cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock, return_value="Past: bullish worked"
         ),
-        patch("cryptotrader.journal.calibrate.detect_biases", new_callable=AsyncMock, return_value=[]),
-        patch("cryptotrader.journal.calibrate.generate_bias_correction", return_value=""),
+        patch("cryptotrader.journal.calibrate.detect_biases", new_callable=AsyncMock, return_value={}),
+        patch(
+            "cryptotrader.journal.calibrate.generate_per_agent_corrections",
+            return_value={"tech_agent": "OVERCONFIDENT"},
+        ),
         patch(
             "cryptotrader.journal.calibrate.generate_verdict_calibration",
             return_value="calibrate: reduce overconfidence",
@@ -183,6 +186,7 @@ async def test_verbal_reinforcement():
         result = await verbal_reinforcement(state)
 
     assert "experience" in result["data"]
+    assert result["data"]["agent_corrections"] == {"tech_agent": "OVERCONFIDENT"}
     assert result["data"]["verdict_calibration"] == "calibrate: reduce overconfidence"
 
 
@@ -337,7 +341,7 @@ async def test_place_order_zero_price_returns_none():
 
 @pytest.mark.asyncio
 async def test_journal_trade_produces_hash():
-    """journal_trade commits and returns a hash."""
+    """journal_trade commits and returns a hash, including fill_price/slippage and full order fields."""
     from cryptotrader.nodes.journal import journal_trade
 
     state = _base_state(
@@ -354,12 +358,39 @@ async def test_journal_trade_produces_hash():
             "invalidation": "below 48k",
         },
         risk_gate={"passed": True, "rejected_by": None, "reason": None},
-        order={"pair": "BTC/USDT", "side": "buy", "amount": 0.02, "price": 50000},
+        order={
+            "pair": "BTC/USDT",
+            "side": "buy",
+            "amount": 0.02,
+            "price": 50000,
+            "status": "filled",
+            "order_type": "market",
+            "exchange_id": "paper-001",
+        },
+        fill_price=50050.0,
+        slippage=0.001,
     )
 
-    result = await journal_trade(state)
+    # Capture the commit object passed to store.commit()
+    captured = {}
+
+    async def _capture_commit(dc):
+        captured["dc"] = dc
+
+    with patch("cryptotrader.journal.store.JournalStore.commit", side_effect=_capture_commit):
+        result = await journal_trade(state)
+
     assert "journal_hash" in result["data"]
     assert len(result["data"]["journal_hash"]) >= 16
+
+    # Verify fill_price and slippage were recorded in the commit
+    dc = captured["dc"]
+    assert dc.fill_price == 50050.0
+    assert dc.slippage == 0.001
+    # Verify order fields were preserved (not just pair/side/amount/price)
+    assert dc.order is not None
+    assert str(dc.order.status) == "filled"
+    assert dc.order.order_type == "market"
 
 
 @pytest.mark.asyncio

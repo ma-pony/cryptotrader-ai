@@ -85,6 +85,7 @@ async def check_stability(state: ArenaState) -> dict:
     divergence = compute_divergence(analyses)
     scores = list(state.get("divergence_scores") or [])
     scores.append(divergence)
+    logger.info("Divergence after round %d: %.4f (history: %s)", state["debate_round"], divergence, scores)
     return {"divergence_scores": scores}
 
 
@@ -94,10 +95,13 @@ def convergence_router(state: ArenaState) -> str:
 
     scores = state.get("divergence_scores") or []
     if state["debate_round"] >= state["max_debate_rounds"]:
+        logger.info("Debate max rounds reached (%d) — converging", state["max_debate_rounds"])
         return "converged"
     threshold = state["metadata"].get("convergence_threshold", 0.1)
     if len(scores) >= 2 and check_convergence(scores[:-1], scores[-1], threshold=threshold):
+        logger.info("Debate converged at round %d (threshold=%.2f)", state["debate_round"], threshold)
         return "converged"
+    logger.info("Debate continuing to round %d", state["debate_round"] + 1)
     return "continue"
 
 

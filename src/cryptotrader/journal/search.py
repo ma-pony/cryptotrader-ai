@@ -14,18 +14,29 @@ async def search_similar(
     funding_rate: float,
     volatility: float,
     limit: int = 3,
+    price_change_7d: float | None = None,
 ) -> list[DecisionCommit]:
-    """Fetch recent commits and filter by similar funding_rate/volatility (within 50%)."""
+    """Fetch recent commits and filter by similar market conditions.
+
+    Matches on funding_rate and volatility (within 50% relative tolerance),
+    plus price trend direction when available (both must have same sign).
+    """
     recent = await store.log(limit=100)
     matches: list[DecisionCommit] = []
     for dc in recent:
         s = dc.snapshot_summary
         fr = s.get("funding_rate", 0.0)
         vol = s.get("volatility", 0.0)
-        if _within_range(fr, funding_rate) and _within_range(vol, volatility):
-            matches.append(dc)
-            if len(matches) >= limit:
-                break
+        if not (_within_range(fr, funding_rate) and _within_range(vol, volatility)):
+            continue
+        # Price trend direction: if caller provides 7d change, require same sign
+        if price_change_7d is not None:
+            hist_change = s.get("price_change_7d")
+            if hist_change is not None and not _same_trend(price_change_7d, hist_change):
+                continue
+        matches.append(dc)
+        if len(matches) >= limit:
+            break
     return matches
 
 
@@ -36,3 +47,17 @@ def _within_range(a: float, b: float) -> bool:
     if abs(b) < 0.001 or abs(a) < 0.001:
         return False  # one is near zero, the other isn't
     return abs(a - b) / max(abs(a), abs(b)) <= 0.5
+
+
+def _same_trend(a: float, b: float) -> bool:
+    """Check if two price changes have the same directional trend.
+
+    Both positive → True, both negative → True, both near-zero → True.
+    One positive and one negative → False.
+    """
+    threshold = 0.005  # <0.5% change treated as flat/no-trend
+    a_flat = abs(a) < threshold
+    b_flat = abs(b) < threshold
+    if a_flat or b_flat:
+        return True  # flat is compatible with any direction
+    return (a > 0) == (b > 0)

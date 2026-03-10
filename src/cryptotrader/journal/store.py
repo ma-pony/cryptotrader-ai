@@ -36,7 +36,7 @@ def _sa_models():
         __tablename__ = "decision_commits"
         hash = Column(String(16), primary_key=True)
         parent_hash = Column(String(16), nullable=True)
-        timestamp = Column(DateTime, nullable=False, index=True)
+        timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
         pair = Column(String(20), nullable=False, index=True)
         snapshot_summary = Column(JSONB, default={})
         analyses = Column(JSONB, default={})
@@ -51,6 +51,7 @@ def _sa_models():
         portfolio_after = Column(JSONB, default={})
         pnl = Column(Float, nullable=True)
         retrospective = Column(Text, nullable=True)
+        trace_id = Column(String(36), nullable=True, index=True)
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
@@ -144,6 +145,7 @@ class JournalStore:
             portfolio_after=d.get("portfolio_after", {}),
             pnl=d.get("pnl"),
             retrospective=d.get("retrospective"),
+            trace_id=d.get("trace_id"),
         )
 
     def _dc_to_row_dict(self, dc: DecisionCommit) -> dict[str, Any]:
@@ -166,6 +168,7 @@ class JournalStore:
             "portfolio_after": d.get("portfolio_after", {}),
             "pnl": dc.pnl,
             "retrospective": dc.retrospective,
+            "trace_id": dc.trace_id,
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:
@@ -208,6 +211,7 @@ class JournalStore:
             portfolio_after=row.portfolio_after or {},
             pnl=row.pnl,
             retrospective=row.retrospective,
+            trace_id=getattr(row, "trace_id", None),
         )
 
     async def commit(self, dc: DecisionCommit) -> None:
@@ -217,13 +221,38 @@ class JournalStore:
                 async with await _get_session(self._db_url) as session:
                     session.add(Row(**self._dc_to_row_dict(dc)))
                     await session.commit()
+                # DB write succeeded — flush any pending memory commits
+                await self._flush_pending()
                 return
             except Exception as e:
                 logger.warning("DB commit failed, falling back to memory: %s", e)
+        # Fix 5: dedup — skip if hash already in memory
+        if any(r["hash"] == dc.hash for r in self._memory):
+            return
         self._memory.append(self._serialize(dc))
         if len(self._memory) > self._MAX_MEMORY:
             # Use in-place slice to preserve shared reference for DB-backed instances
             del self._memory[: len(self._memory) - self._MAX_MEMORY]
+
+    async def _flush_pending(self) -> None:
+        """Reconcile: write pending in-memory commits back to DB when DB is available."""
+        if not self._memory:
+            return
+        _, Row = _sa_models()
+        flushed = []
+        for rec in self._memory:
+            try:
+                dc = self._deserialize(rec)
+                async with await _get_session(self._db_url) as session:
+                    session.add(Row(**self._dc_to_row_dict(dc)))
+                    await session.commit()
+                flushed.append(rec)
+            except Exception:
+                logger.debug("Flush pending commit %s failed, will retry later", rec.get("hash"), exc_info=True)
+        if flushed:
+            for rec in flushed:
+                self._memory.remove(rec)
+            logger.info("Flushed %d pending commits to DB", len(flushed))
 
     async def log(self, limit: int = 10, pair: str | None = None) -> list[DecisionCommit]:
         if self._use_db:
@@ -243,7 +272,7 @@ class JournalStore:
         rows = self._memory
         if pair:
             rows = [r for r in rows if r["data"].get("pair") == pair]
-        return [self._deserialize(r) for r in rows[-limit:]]
+        return [self._deserialize(r) for r in reversed(rows[-limit:])]
 
     async def show(self, hash: str) -> DecisionCommit | None:
         if self._use_db:
@@ -281,3 +310,4 @@ class JournalStore:
                 r["data"]["pnl"] = pnl
                 r["data"]["retrospective"] = retrospective
                 return
+        logger.debug("update_pnl: hash %s not found in memory store", hash)

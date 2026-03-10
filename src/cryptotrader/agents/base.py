@@ -336,6 +336,9 @@ class ToolAgent(BaseAgent):
 
     Unlike BaseAgent (single LLM call), ToolAgent runs a model→tool→model loop,
     allowing the AI to actively query data sources during analysis.
+
+    In backtest_mode, skips tool-calling entirely and uses BaseAgent's single LLM call
+    to avoid forward-looking bias from real-time API calls and speed up backtesting.
     """
 
     def __init__(
@@ -344,11 +347,17 @@ class ToolAgent(BaseAgent):
         role_description: str,
         tools: Sequence,
         model: str = "",
+        backtest_mode: bool = False,
     ) -> None:
         super().__init__(agent_id, role_description, model)
         self.tools = list(tools)
+        self.backtest_mode = backtest_mode
 
     async def analyze(self, snapshot: DataSnapshot, experience: str = "") -> AgentAnalysis:
+        # In backtest mode, skip tool-calling to avoid forward-looking bias
+        if self.backtest_mode:
+            return await super().analyze(snapshot, experience)
+
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
 

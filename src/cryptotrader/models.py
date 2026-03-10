@@ -184,3 +184,4 @@ class DecisionCommit:
     portfolio_after: dict[str, Any] = field(default_factory=dict)
     pnl: float | None = None
     retrospective: str | None = None
+    trace_id: str | None = None

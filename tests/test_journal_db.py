@@ -80,6 +80,51 @@ async def test_log_filter_by_pair(store, sample_commit):
 
 
 @pytest.mark.asyncio
+async def test_log_ordering(store):
+    """In-memory log() returns newest-first, matching DB behavior."""
+    from datetime import timedelta
+
+    base = datetime.now(UTC)
+    for i in range(3):
+        c = DecisionCommit(
+            hash=f"order_{i}",
+            parent_hash=None,
+            timestamp=base + timedelta(seconds=i),
+            pair="BTC/USDT",
+            snapshot_summary={},
+            analyses={},
+            debate_rounds=0,
+        )
+        await store.commit(c)
+
+    logs = await store.log(limit=10)
+    assert len(logs) == 3
+    # newest-first: order_2, order_1, order_0
+    assert logs[0].hash == "order_2"
+    assert logs[1].hash == "order_1"
+    assert logs[2].hash == "order_0"
+
+
+@pytest.mark.asyncio
+async def test_commit_dedup(store):
+    """Committing the same hash twice should only store one record."""
+    c = DecisionCommit(
+        hash="dedup_test",
+        parent_hash=None,
+        timestamp=datetime.now(UTC),
+        pair="BTC/USDT",
+        snapshot_summary={},
+        analyses={},
+        debate_rounds=0,
+    )
+    await store.commit(c)
+    await store.commit(c)
+
+    logs = await store.log(limit=10)
+    assert len(logs) == 1
+
+
+@pytest.mark.asyncio
 async def test_use_db_false_without_url():
     store = JournalStore(None)
     assert not store._use_db

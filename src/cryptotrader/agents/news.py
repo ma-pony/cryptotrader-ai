@@ -37,8 +37,10 @@ ROLE = (
 
 
 class NewsAgent(ToolAgent):
-    def __init__(self, model: str = "") -> None:
-        super().__init__(agent_id="news", role_description=ROLE, tools=NEWS_TOOLS, model=model)
+    def __init__(self, model: str = "", backtest_mode: bool = False) -> None:
+        super().__init__(
+            agent_id="news", role_description=ROLE, tools=NEWS_TOOLS, model=model, backtest_mode=backtest_mode
+        )
 
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
         base = super()._build_prompt(snapshot, experience)

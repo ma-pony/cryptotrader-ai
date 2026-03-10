@@ -28,13 +28,16 @@ _p.add_argument("--pair", default="BTC/USDT")
 _p.add_argument("--model", default="")
 _p.add_argument("--start", default="2025-06-01")
 _p.add_argument("--end", default="2025-12-31")
-_p.add_argument("--stop-loss", type=float, default=0.08, help="Catastrophic stop loss pct (default 8%)")
+_p.add_argument("--stop-loss", type=float, default=0.08, help="Catastrophic stop loss pct (default 8%%)")
 _p.add_argument("--trailing-stop", type=float, default=0.0, help="Trailing stop pct (default 0 = disabled)")
 _p.add_argument(
     "--reversal-days", type=int, default=3, help="Consecutive opposite-signal days to trigger exit (default 3)"
 )
 _p.add_argument(
-    "--drawdown-pause", type=float, default=0.10, help="Account drawdown pct to pause trading (default 10%)"
+    "--drawdown-pause", type=float, default=0.10, help="Account drawdown pct to pause trading (default 10%%)"
+)
+_p.add_argument(
+    "--min-reentry-days", type=int, default=3, help="Cooldown days after AI close before re-entry (default 3)"
 )
 _p.add_argument("--atr-sizing", action="store_true", help="Use ATR-based position sizing")
 _p.add_argument("--version", default="v13", help="Version label for output")
@@ -56,6 +59,7 @@ TRAILING_STOP = _args.trailing_stop
 ATR_SIZING = _args.atr_sizing
 REVERSAL_DAYS = _args.reversal_days
 DRAWDOWN_PAUSE = _args.drawdown_pause
+MIN_REENTRY_DAYS = _args.min_reentry_days
 
 
 def calc_adx(candles: list[list], idx: int, period: int = 14) -> float:
@@ -241,21 +245,34 @@ def _execute_trade(
     return position, entry_price, equity, trades
 
 
-def _calculate_position_size(confidence: float, equity: float, c: float, window: list, atr_sizing: bool) -> float:
-    """Calculate position size based on confidence and optionally ATR.
+def _calculate_position_size(
+    confidence: float,
+    equity: float,
+    c: float,
+    window: list,
+    atr_sizing: bool,
+    position_scale: float = 0.0,
+) -> float:
+    """Calculate position size based on AI position_scale (continuous) or confidence (fallback).
 
-    Uses config-driven thresholds from [backtest.position_sizing] for consistency
-    with backtest engine.
+    When position_scale > 0, uses continuous mapping: size = max(floor, scale * ceiling).
+    Falls back to 3-tier confidence mapping when position_scale is not provided.
     """
     from cryptotrader.config import load_config
 
     ps = load_config().backtest.position_sizing
-    if confidence >= 0.8:
-        size_pct = ps.high_confidence_pct
+    floor = ps.low_confidence_pct
+    ceiling = ps.high_confidence_pct
+
+    if position_scale > 0:
+        # Continuous mapping: AI says 0.7 → 0.7 * 0.35 = 24.5%
+        size_pct = max(floor, position_scale * ceiling)
+    elif confidence >= 0.8:
+        size_pct = ceiling
     elif confidence >= 0.6:
         size_pct = ps.medium_confidence_pct
     else:
-        size_pct = ps.low_confidence_pct
+        size_pct = floor
 
     if atr_sizing and len(window) >= 15:
         atr_sum = sum(
@@ -374,29 +391,46 @@ def _build_snapshot(candles, i, ts, c, v, window, fng, funding, btc_dom, fed_rat
     ), fng_val
 
 
-def _build_position_context(position, entry_price, c, entry_step, current_step):
+def _build_position_context(position, entry_price, c, entry_step, current_step, last_action_context=""):
     """Build position state dict for verdict AI."""
+    ctx = {}
     if position == 0:
-        return {"side": "flat"}
-    return {
-        "side": "long" if position > 0 else "short",
-        "entry_price": entry_price,
-        "current_price": c,
-        "days_held": current_step - entry_step,
-    }
+        ctx["side"] = "flat"
+    else:
+        ctx["side"] = "long" if position > 0 else "short"
+        ctx["entry_price"] = entry_price
+        ctx["current_price"] = c
+        ctx["days_held"] = current_step - entry_step
+    if last_action_context:
+        ctx["last_action_context"] = last_action_context
+    return ctx
 
 
 async def _get_action(
-    graph, snapshot, candles, i, window, equity, c, t0, position=0.0, entry_price=0.0, entry_step=0, current_step=0
+    graph,
+    snapshot,
+    candles,
+    i,
+    window,
+    equity,
+    c,
+    t0,
+    position=0.0,
+    entry_price=0.0,
+    entry_step=0,
+    current_step=0,
+    last_verdict_summary="",
 ):
     """Get trading action from ADX filter or graph."""
     from cryptotrader.state import build_initial_state
 
     adx = calc_adx(candles, i)
     if adx < ADX_THRESHOLD:
-        return "hold", 0.0, 0.05, time.time() - t0, adx
+        return "hold", 0.0, 0.05, time.time() - t0, adx, ""
 
-    position_context = _build_position_context(position, entry_price, c, entry_step, current_step)
+    position_context = _build_position_context(
+        position, entry_price, c, entry_step, current_step, last_action_context=last_verdict_summary
+    )
 
     # Use build_initial_state for consistent state construction with live path.
     # position_context is injected via extra_data; trend_context is built by the
@@ -404,6 +438,7 @@ async def _get_action(
     extra_meta = {
         "llm_verdict": True,
         "debate_rounds": _args.debate_rounds,
+        "backtest_mode": True,
     }
     if MODEL:
         extra_meta["models"] = dict.fromkeys(["tech_agent", "chain_agent", "news_agent", "macro_agent"], MODEL)
@@ -422,8 +457,12 @@ async def _get_action(
     verdict = result.get("data", {}).get("verdict", {})
     action = verdict.get("action", "hold")
     confidence = verdict.get("confidence", 0.5)
-    size_pct = _calculate_position_size(confidence, equity, c, window, False)
-    return action, confidence, size_pct, time.time() - t0, adx
+    position_scale = verdict.get("position_scale", 0.0)
+    reasoning = verdict.get("reasoning", "")
+    size_pct = _calculate_position_size(confidence, equity, c, window, False, position_scale=position_scale)
+    # Build verdict summary for next step's context (Fix 6)
+    verdict_summary = f"action={action}, confidence={confidence:.0%}, reasoning={reasoning[:120]}"
+    return action, confidence, size_pct, time.time() - t0, adx, verdict_summary
 
 
 def _process_stops(position, reversal_count, entry_price, c, date, peak_price, action):
@@ -454,13 +493,16 @@ def _process_stops(position, reversal_count, entry_price, c, date, peak_price, a
     return False, 0.0, None, new_reversal_count, peak_price
 
 
-def _should_execute_trade(action, position, stopped, step, paused_until, days_since_flip):
+def _should_execute_trade(action, position, stopped, step, paused_until, days_since_flip, last_close_step=-999):
     """Check if trade should be executed based on all conditions."""
     if stopped or step <= paused_until:
         return False
     # Close is always allowed — AI-driven risk reduction should never be blocked
     if action == "close" and position != 0:
         return True
+    # Reentry cooldown: prevent re-opening right after AI close
+    if position == 0 and MIN_REENTRY_DAYS > 0 and (step - last_close_step) < MIN_REENTRY_DAYS:
+        return False
     can_flip = days_since_flip >= MIN_HOLD_DAYS
     return (action == "long" and position <= 0 and (position == 0 or can_flip)) or (
         action == "short" and position >= 0 and (position == 0 or can_flip)
@@ -479,19 +521,33 @@ def _check_drawdown_pause(equity, position, entry_price, c, peak_equity, step):
 
 
 def _execute_pending(
-    pending_action, position, equity, open_price, entry_price, step, paused_until, last_dir_change, date
+    pending_action,
+    position,
+    equity,
+    open_price,
+    entry_price,
+    step,
+    paused_until,
+    last_dir_change,
+    date,
+    last_close_step=-999,
 ):
     """Execute a deferred pending action at current bar's open price."""
     if pending_action is None:
-        return position, entry_price, equity, [], step, last_dir_change
+        return position, entry_price, equity, [], step, last_dir_change, last_close_step
     pa_action, pa_size_pct = pending_action
     days_since_flip = step - last_dir_change
-    if not _should_execute_trade(pa_action, position, False, step, paused_until, days_since_flip):
-        return position, entry_price, equity, [], step, last_dir_change
+    if not _should_execute_trade(pa_action, position, False, step, paused_until, days_since_flip, last_close_step):
+        return position, entry_price, equity, [], step, last_dir_change, last_close_step
+    old_position = position
     position, entry_price, equity, new_trades = _execute_trade(
         pa_action, position, equity, open_price, entry_price, pa_size_pct, date
     )
-    return position, entry_price, equity, new_trades, step, step
+    new_close_step = last_close_step
+    # Track AI close for reentry cooldown
+    if pa_action == "close" and old_position != 0 and position == 0:
+        new_close_step = step
+    return position, entry_price, equity, new_trades, step, step, new_close_step
 
 
 def _get_position_str(position: float) -> str:
@@ -565,6 +621,8 @@ async def main():
     reversal_count = 0  # Consecutive days signal opposes position
     paused_until = -1  # Step until which trading is paused
     pending_action = None  # For look-ahead bias fix: signal on bar[i], execute on bar[i+1]
+    last_close_step = -999  # For reentry cooldown after AI close
+    last_verdict_summary = ""  # Last verdict context for AI memory (Fix 6)
 
     for i in range(LOOKBACK, len(candles)):
         step = i - LOOKBACK + 1
@@ -575,8 +633,25 @@ async def main():
 
         # Execute pending action from previous bar at current bar's open price
         open_price = cur[1]
-        position, entry_price, equity, new_trades, entry_step, last_direction_change = _execute_pending(
-            pending_action, position, equity, open_price, entry_price, step, paused_until, last_direction_change, date
+        (
+            position,
+            entry_price,
+            equity,
+            new_trades,
+            entry_step,
+            last_direction_change,
+            last_close_step,
+        ) = _execute_pending(
+            pending_action,
+            position,
+            equity,
+            open_price,
+            entry_price,
+            step,
+            paused_until,
+            last_direction_change,
+            date,
+            last_close_step,
         )
         if new_trades:
             trades.extend(new_trades)
@@ -600,7 +675,7 @@ async def main():
             store_data,
         )
 
-        action, confidence, size_pct, elapsed, adx = await _get_action(
+        action, confidence, size_pct, elapsed, adx, verdict_summary = await _get_action(
             graph,
             snapshot,
             candles,
@@ -613,7 +688,9 @@ async def main():
             entry_price=entry_price,
             entry_step=entry_step,
             current_step=step,
+            last_verdict_summary=last_verdict_summary,
         )
+        last_verdict_summary = verdict_summary
 
         # Process all stop checks
         stopped, pnl, trade, reversal_count, peak_price = _process_stops(

@@ -14,8 +14,6 @@ from cryptotrader.backtest.cache import CACHE_DB
 _BTC_ETH_MARKET_SHARE = 0.664
 # Fallback BTC dominance percentage when ETH market cap data is unavailable
 _BTC_DOMINANCE_FALLBACK = 56.0
-# Minimum number of cached days considered sufficient coverage (skips API fetch)
-_MIN_CACHE_COVERAGE_DAYS = 180
 
 
 def _ensure_tables():
@@ -46,13 +44,21 @@ async def fetch_fear_greed(start_date: str, end_date: str) -> dict[str, int]:
             ).fetchall()
         )
 
-    if len(cached) > _MIN_CACHE_COVERAGE_DAYS:  # good enough coverage
+    # Check coverage against actual date range, not hardcoded 180 days
+    start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
+    end_dt = datetime.fromisoformat(end_date).replace(tzinfo=UTC)
+    expected_days = (end_dt - start_dt).days
+    if len(cached) >= expected_days * 0.9:
         return cached
+
+    # Calculate limit based on how far back start_date is from today
+    days_to_today = (datetime.now(UTC) - start_dt).days
+    limit = max(400, days_to_today + 30)
 
     async with httpx.AsyncClient() as client:
         r = await client.get(
             "https://api.alternative.me/fng/",
-            params={"limit": "400", "format": "json"},
+            params={"limit": str(limit), "format": "json"},
             timeout=30,
         )
         r.raise_for_status()
@@ -255,15 +261,21 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_
 
 
 def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[str]]:
-    """Derive proxy news sentiment from recent price action.
+    """Derive proxy news sentiment from recent price action and momentum quality.
     Returns (sentiment_score -1..1, key_events list)."""
-    if idx < 7:
+    if idx < 14:
         return 0.0, []
 
-    # 7-day return as sentiment proxy
     c_now = candles[idx][4]
     c_7d = candles[max(0, idx - 7)][4]
+    c_14d = candles[max(0, idx - 14)][4]
     ret_7d = (c_now - c_7d) / c_7d
+    ret_14d = (c_now - c_14d) / c_14d
+
+    # Trend acceleration: compare recent 7d pace vs prior 7d pace
+    # If 7d return > half of 14d return, trend is accelerating
+    prior_7d_ret = ret_14d - ret_7d  # approximate return of the 7d before the recent 7d
+    accelerating = abs(ret_7d) > abs(prior_7d_ret) and ret_7d * ret_14d > 0
 
     # Volatility spike detection
     recent_returns = [
@@ -275,11 +287,17 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
     events = []
     if abs(ret_7d) > 0.10:
         events.append(f"BTC {'surged' if ret_7d > 0 else 'crashed'} {ret_7d:.1%} in 7 days")
+    if abs(ret_14d) > 0.15:
+        events.append(f"BTC 14d move: {ret_14d:+.1%} ({'accelerating' if accelerating else 'decelerating'})")
     if today_vol > avg_vol * 2:
         events.append(f"Volatility spike: {today_vol:.2%} vs avg {avg_vol:.2%}")
+    if accelerating and abs(ret_7d) > 0.05:
+        events.append(f"Momentum accelerating: 7d {ret_7d:+.1%} vs prior 7d {prior_7d_ret:+.1%}")
 
-    # Clamp sentiment to [-1, 1]
-    sentiment = max(-1.0, min(1.0, ret_7d * 5))
+    # Blend 7d return with acceleration signal for richer sentiment
+    accel_bonus = 0.15 if accelerating else -0.05
+    raw_sentiment = ret_7d * 4 + (accel_bonus if ret_7d > 0 else -accel_bonus)
+    sentiment = max(-1.0, min(1.0, raw_sentiment))
     return sentiment, events
 
 
