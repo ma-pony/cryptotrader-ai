@@ -112,6 +112,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "examples/**/*.py" = ["T201"]
 "scripts/**/*.py" = ["T201"]
 "src/cryptotrader/journal/store.py" = ["N806"]
+# reflect.py contains Chinese LLM prompts — fullwidth punctuation is intentional
+"src/cryptotrader/learning/reflect.py" = ["RUF001"]
 "src/cryptotrader/portfolio/manager.py" = ["N806"]
 "src/cli/main.py" = ["N806", "S104", "S603"]
 # state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
