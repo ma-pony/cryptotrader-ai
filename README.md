@@ -4,18 +4,16 @@ AI-powered crypto trading system using LangGraph multi-agent debate.
 
 ## Overview
 
-4 specialized AI agents (Technical, On-chain, News, Macro) independently analyze market data, then debate through cross-challenge rounds to reach consensus. A hard-coded risk gate (12 rule-based checks, no LLM) enforces position limits, loss limits, and circuit breakers. Every decision is recorded in a Git-like Decision Journal for auditability and experience-based learning.
+4 specialized AI agents (Technical, On-chain, News, Macro) independently analyze market data, then debate through cross-challenge rounds to reach consensus. A hard-coded risk gate (11 rule-based checks, no LLM) enforces position limits, loss limits, and circuit breakers. Every decision is recorded in a Git-like Decision Journal for auditability and experience-based learning.
 
 Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's think-before-act pattern) to reduce overconfidence and hallucination before outputting signals.
-
-**New**: Integrated with OKX and Binance skills for enhanced data (token security audit, real-time prices, sentiment analysis). See [SKILLS_INTEGRATION.md](SKILLS_INTEGRATION.md).
 
 ## Architecture
 
 ```
 Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
 → Cross-Challenge Debate (2-3 rounds) → Convergence Check
-→ Verdict → Risk Gate (12 checks) → Execute / Reject → Journal
+→ Verdict → Risk Gate (11 checks) → Execute / Reject → Journal
                                         ↓
                               Portfolio Write-back → Snapshot
 ```
@@ -29,7 +27,7 @@ Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
 
 ```bash
 # Install
-uv pip install -e ".[dev]"
+uv sync
 
 # Run one analysis cycle (paper trading)
 arena run --pair BTC/USDT --mode paper
@@ -44,7 +42,7 @@ arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --interval 4h
 arena journal log --limit 10
 arena journal show <hash>
 
-# Scheduler
+# Scheduler (APScheduler-based, requires scheduler.enabled=true in config)
 arena scheduler start       # periodic trading cycles
 arena scheduler status      # portfolio & position status
 
@@ -87,7 +85,6 @@ Real-time data from 5 providers with graceful degradation (works without API key
 ### Config files
 
 - `config/default.toml` — mode, models, debate params, provider API keys, scheduler, notifications
-- `config/risk.toml` — 11 risk parameters (position limits, loss limits, cooldowns)
 - `.env` — LLM API keys, DATABASE_URL, REDIS_URL
 
 ### API Keys (environment variables)
@@ -110,7 +107,7 @@ REDIS_URL=redis://localhost:6379
 
 ## Risk Gate
 
-11 rule-based checks (no LLM), all configurable in `config/risk.toml`:
+11 rule-based checks (no LLM), all configurable in `config/default.toml` under `[risk]`:
 
 | Check | What it does |
 |-------|-------------|
@@ -129,7 +126,7 @@ REDIS_URL=redis://localhost:6379
 
 ## Notifications
 
-Webhook notifications for 5 event types (configure in `config/default.toml`):
+Webhook notifications for 6 event types (configure in `config/default.toml`):
 
 | Event | Trigger |
 |-------|---------|
@@ -138,6 +135,7 @@ Webhook notifications for 5 event types (configure in `config/default.toml`):
 | `circuit_breaker` | Daily loss limit triggers circuit breaker |
 | `daily_summary` | Scheduler emits daily portfolio summary |
 | `reconcile_mismatch` | Position reconciliation detects mismatch |
+| `portfolio_stale` | Portfolio data becomes stale or unavailable |
 
 ## API Endpoints
 
@@ -156,8 +154,8 @@ src/cryptotrader/
 ├── models.py          # All data models
 ├── config.py          # TOML config loading + Pydantic validation
 ├── graph.py           # LangGraph orchestration (3 graph variants)
-├── scheduler.py       # Periodic trading cycles + daily summary
-├── notifications.py   # Webhook notifications (5 event types)
+├── scheduler.py       # APScheduler-based periodic trading cycles + daily summary
+├── notifications.py   # Webhook notifications (6 event types)
 ├── data/
 │   ├── market.py      # ccxt market data
 │   ├── onchain.py     # Aggregates 5 providers
@@ -170,7 +168,7 @@ src/cryptotrader/
 ├── execution/         # Order manager, exchange adapters (live + paper), reconciler
 ├── portfolio/         # Position tracking + equity snapshots (DB + in-memory)
 ├── journal/           # Decision commit chain + similarity search + calibration
-└── learning/          # Verbal Reinforcement from historical decisions
+└── learning/          # Verbal Reinforcement + Agent self-reflection
 src/cli/               # Typer CLI (arena command)
 src/api/               # FastAPI server
 src/dashboard/         # Streamlit dashboard
@@ -180,8 +178,9 @@ src/dashboard/         # Streamlit dashboard
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v (165 tests)
+make test             # pytest tests/ -v (288 tests)
 make lint             # ruff check src/ tests/
+make scheduler        # arena scheduler start
 ```
 
 ## License

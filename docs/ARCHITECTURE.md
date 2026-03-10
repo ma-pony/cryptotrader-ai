@@ -112,10 +112,10 @@ cryptotrader-ai/
 │   │   └── main.py            # Typer CLI（arena 命令）
 │   └── dashboard/
 │       └── app.py             # Streamlit 仪表板
-├── tests/                     # 257 个测试，70% 覆盖率
+├── tests/                     # 288 个测试，70% 覆盖率
 ├── pyproject.toml             # 项目配置 + 依赖
 ├── Makefile                   # 快捷命令
-├── docker-compose.yml         # PostgreSQL 16 + Redis 7
+├── docker-compose.yml         # PostgreSQL 16 + Redis 7 + Scheduler 服务
 └── CLAUDE.md                  # AI 编码指南
 ```
 
@@ -466,12 +466,13 @@ arena journal show abc123                        # 单条详情
 # 服务
 arena serve --port 8003                          # FastAPI 服务器
 arena dashboard                                  # Streamlit 仪表板
-arena scheduler start                            # 定时调度（默认 4h）
+arena scheduler start                            # APScheduler 定时调度（需 scheduler.enabled=true）
 arena scheduler status                           # 组合状态
 
 # 维护
 arena migrate                                    # 创建 PostgreSQL 表
 arena risk reset-breaker                         # 重置熔断器
+arena live-check                                 # 实盘就绪检查
 ```
 
 ### 9.2 FastAPI 端点
@@ -591,6 +592,8 @@ low_confidence_pct = 0.06     # position_scale 映射地板
 enabled = false
 pairs = ["BTC/USDT", "ETH/USDT"]
 interval_minutes = 240
+exchange_id = "binance"
+daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 
 [providers]               # 各数据源 API Key + 开关
 # ... 20+ 配置项

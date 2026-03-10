@@ -26,7 +26,7 @@
 
 ```bash
 # 安装
-uv pip install -e ".[dev]"
+uv sync
 
 # 运行单次分析（模拟交易）
 arena run --pair BTC/USDT --mode paper
@@ -41,7 +41,7 @@ arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --interval 4h
 arena journal log --limit 10
 arena journal show <hash>
 
-# 调度器
+# 调度器（APScheduler，需 scheduler.enabled=true）
 arena scheduler start       # 周期性交易循环
 arena scheduler status      # 持仓和仓位状态
 
@@ -84,7 +84,6 @@ arena serve --port 8003     # FastAPI 服务
 ### 配置文件
 
 - `config/default.toml` — 模式、模型、辩论参数、数据源 API Key、调度器、通知
-- `config/risk.toml` — 11 项风控参数（仓位限制、损失限制、冷却时间）
 - `.env` — LLM API Key、DATABASE_URL、REDIS_URL
 
 ### API Keys（环境变量）
@@ -107,7 +106,7 @@ REDIS_URL=redis://localhost:6379
 
 ## 风控门
 
-11 项规则检查（不依赖 LLM），全部可在 `config/risk.toml` 配置：
+11 项规则检查（不依赖 LLM），全部可在 `config/default.toml` 的 `[risk]` 段配置：
 
 | 检查项 | 功能 |
 |--------|------|
@@ -126,7 +125,7 @@ REDIS_URL=redis://localhost:6379
 
 ## 通知
 
-5 种事件类型的 Webhook 通知（在 `config/default.toml` 配置）：
+6 种事件类型的 Webhook 通知（在 `config/default.toml` 配置）：
 
 | 事件 | 触发条件 |
 |------|---------|
@@ -135,6 +134,7 @@ REDIS_URL=redis://localhost:6379
 | `circuit_breaker` | 日损失限制触发熔断 |
 | `daily_summary` | 调度器每日发送组合摘要 |
 | `reconcile_mismatch` | 仓位对账发现不一致 |
+| `portfolio_stale` | 组合数据过期或不可用 |
 
 ## API 端点
 
@@ -155,8 +155,8 @@ src/cryptotrader/
 ├── models.py          # 所有数据模型
 ├── config.py          # TOML 配置加载 + Pydantic 验证
 ├── graph.py           # LangGraph 编排（3 种图模式）
-├── scheduler.py       # 周期性交易循环 + 每日摘要
-├── notifications.py   # Webhook 通知（5 种事件）
+├── scheduler.py       # APScheduler 周期性交易循环 + 每日摘要
+├── notifications.py   # Webhook 通知（6 种事件）
 ├── data/
 │   ├── market.py      # ccxt 行情数据
 │   ├── onchain.py     # 聚合 5 个数据源
@@ -169,7 +169,7 @@ src/cryptotrader/
 ├── execution/         # 订单管理器、交易所适配器（实盘+模拟）、对账器
 ├── portfolio/         # 持仓追踪 + 权益快照（DB + 内存）
 ├── journal/           # 决策提交链 + 相似搜索 + 校准
-└── learning/          # 基于历史决策的语言强化
+└── learning/          # 语言强化 + Agent 自我反思
 src/cli/               # Typer CLI（arena 命令）
 src/api/               # FastAPI 服务
 src/dashboard/         # Streamlit 仪表盘
@@ -179,8 +179,9 @@ src/dashboard/         # Streamlit 仪表盘
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v（165 个测试）
+make test             # pytest tests/ -v（288 个测试）
 make lint             # ruff check src/ tests/
+make scheduler        # arena scheduler start
 ```
 
 ## 许可证

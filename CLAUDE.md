@@ -10,6 +10,7 @@ make test             # pytest tests/ -v
 make lint             # ruff check src/ tests/
 make run              # arena run --pair BTC/USDT --mode paper
 make serve            # arena serve --port 8003 (FastAPI)
+make scheduler        # arena scheduler start
 
 # Run a single test
 pytest tests/test_risk_gate.py -v
@@ -19,7 +20,7 @@ pytest tests/test_risk_gate.py::test_max_position -v
 arena run --pair ETH/USDT --mode paper
 arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --interval 4h
 arena journal log --limit 10
-arena scheduler start
+arena scheduler start   # requires scheduler.enabled=true in config
 arena serve --port 8003
 arena dashboard
 ```
@@ -59,13 +60,13 @@ Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
 ## Configuration
 
 - `config/default.toml` — Main config: execution mode, LLM models per agent, debate params, data provider toggles, scheduler settings
-- `config/risk.toml` — Risk gate parameters (11 thresholds)
+- `config/default.toml` `[risk]` — Risk gate parameters (11 thresholds), `[scheduler]` includes `daily_summary_hour` and `exchange_id`
 - `config/exchanges.toml.example` — Exchange API credentials template
 - `.env` — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, `REDIS_URL`
 
 ## Tech Stack
 
-Python 3.12+, uv package manager, Hatchling build system. LLM calls go through LangChain ChatOpenAI with SQLiteCache. LangGraph for orchestration. PostgreSQL + Redis for persistence/caching. Docker Compose for infra (Postgres 16, Redis 7).
+Python 3.12+, uv package manager, Hatchling build system. LLM calls go through LangChain ChatOpenAI with SQLiteCache. LangGraph for orchestration. PostgreSQL + Redis for persistence/caching. Docker Compose for infra (Postgres 16, Redis 7, scheduler service). APScheduler 3.x for periodic trading cycles.
 
 ## Data Layer
 
@@ -114,7 +115,7 @@ pytest with `asyncio_mode = "auto"`. Source path is `src/` (`pythonpath = ["src"
 
 **IMPORTANT:** Must use `uv run pytest` (Python 3.12 venv), NOT bare `pytest` (may use system Python 3.10).
 
-257 tests pass, 1 skip. 70% coverage.
+288 tests pass, 1 skip. 70% coverage.
 
 ## Lessons Learned & Common Pitfalls
 

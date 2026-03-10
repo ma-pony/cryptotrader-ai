@@ -44,7 +44,7 @@
 
 ```bash
 make lint          # uv run ruff check src/ tests/  → 必须零错误
-make test          # uv run pytest tests/ -v        → 257 pass, 1 skip
+make test          # uv run pytest tests/ -v        → 288 pass, 1 skip
 ```
 
 - **禁止 `noqa` 注释** — 遇到 C901 必须重构，遇到 F401 必须删除或 `__all__`

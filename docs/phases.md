@@ -24,7 +24,7 @@
 | ChainAgent | agents/chain.py | ✅ | 资金费率 + OI + Exchange Flow 数据注入 LLM |
 | NewsAgent | agents/news.py | ✅ | 占位 |
 | MacroAgent | agents/macro.py | ✅ | 占位 |
-| Agent 基类 | agents/base.py | ✅ | 标准 analyze() 接口 + prompt 模板 + litellm 调用 |
+| Agent 基类 | agents/base.py | ✅ | 标准 analyze() 接口 + prompt 模板 + LangChain ChatOpenAI 调用 |
 | 交叉质询 | debate/challenge.py | ✅ | Round 1 独立分析 / Round 2+ 看到他人结论后质疑 |
 | 收敛判定 | debate/convergence.py | ✅ | 分歧度计算 + 稳定性检测（变化 <10% 或达到上限） |
 | 共识生成 | debate/verdict.py | ✅ | Confidence-weighted 投票 + 分歧度仓位调节 |
@@ -178,10 +178,11 @@ arena backtest --pair BTC/USDT --start 2025-01-01 --end 2025-12-31 --interval 4h
 enabled = false
 pairs = ["BTC/USDT", "ETH/USDT"]
 interval_minutes = 240  # 每 4 小时
-timezone = "UTC"
+exchange_id = "binance"
+daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 ```
 
-- APScheduler 集成（或简单的 asyncio 定时器）
+- APScheduler 3.x 集成（已实现：IntervalTrigger + CronTrigger）
 - 每个 interval 对所有配置的 pair 运行完整 graph
 - 运行结果写入 Journal
 - 异常不中断调度，记录错误日志

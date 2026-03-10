@@ -81,5 +81,5 @@ logger.error("execution_failed", error=str(e))
 ## 依赖
 
 ```bash
-pip install structlog>=24.1
+uv add structlog
 ```
