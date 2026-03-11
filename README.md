@@ -46,7 +46,7 @@ Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
 |-------|------|------|------|
 | TechAgent | BaseAgent | OHLCV + pandas-ta indicators (RSI, MACD, SMA, BBands, ATR) | Technical pattern recognition |
 | ChainAgent | ToolAgent | OI, funding rate, exchange netflow, whale transfers, DeFi TVL | On-chain signal detection |
-| NewsAgent | ToolAgent | RSS headlines + FinBERT sentiment + CoinGecko social buzz | News & sentiment analysis |
+| NewsAgent | ToolAgent | RSS headlines + keyword sentiment + CoinGecko social buzz | News & sentiment analysis |
 | MacroAgent | BaseAgent | Fed rate, DXY, BTC dominance, Fear & Greed, ETF flows, VIX | Macro regime assessment |
 
 - **BaseAgent**: Single LLM call with structured JSON output
@@ -185,7 +185,6 @@ Real-time data from 5 providers with graceful degradation (works without API key
 |--------|------|------|
 | CoinDesk, CoinTelegraph, Decrypt | Headlines via RSS | Free |
 | CoinGecko Community API | Social buzz (Twitter followers, Reddit subs, sentiment votes) | Free |
-| FinBERT (local) | News headline sentiment scoring | Free (optional `ml` extras) |
 
 ### Macro
 
@@ -378,7 +377,7 @@ src/cryptotrader/
 │   ├── snapshot.py    # SnapshotAggregator (data collection entry point)
 │   ├── market.py      # ccxt OHLCV + ticker + funding rate + volatility
 │   ├── onchain.py     # Aggregates 5 providers (parallel fetch)
-│   ├── news.py        # RSS + FinBERT sentiment + CoinGecko social buzz
+│   ├── news.py        # RSS + keyword sentiment + CoinGecko social buzz
 │   ├── macro.py       # FRED + CoinGecko + Fear&Greed + SoSoValue ETF
 │   ├── sync.py        # Bulk historical sync (arena sync)
 │   └── providers/     # Binance, DefiLlama, CoinGlass, CryptoQuant, WhaleAlert, SoSoValue
@@ -445,7 +444,6 @@ src/dashboard/app.py   # Streamlit dashboard (overview, decisions, risk, backtes
 | API Server | FastAPI + Uvicorn |
 | Dashboard | Streamlit |
 | CLI | Typer + Rich |
-| NLP (optional) | FinBERT via transformers + torch |
 
 ## Development
 

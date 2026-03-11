@@ -1,13 +1,13 @@
-"""News sentiment collector — RSS feeds + FinBERT/keyword sentiment + social buzz.
+"""News sentiment collector — RSS feeds + keyword sentiment + social buzz.
 
 Uses unified SQLite store for caching: check cache first, only call API if stale.
+Sentiment scoring uses keyword matching — the LLM (NewsAgent) handles deeper analysis.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import threading
 
 import feedparser
 import httpx
@@ -16,74 +16,6 @@ from cryptotrader.data.store import _record_fetch, _should_fetch, cache_result, 
 from cryptotrader.models import NewsSentiment
 
 logger = logging.getLogger(__name__)
-
-# ── FinBERT sentiment (lazy-loaded, CPU-friendly, thread-safe) ──
-
-_finbert_pipeline = None
-_finbert_available: bool | None = None
-_finbert_lock = threading.Lock()
-
-
-def _get_finbert():
-    """Lazy-load FinBERT pipeline. Returns None if transformers/torch unavailable."""
-    global _finbert_pipeline, _finbert_available
-    if _finbert_available is False:
-        return None
-    if _finbert_pipeline is not None:
-        return _finbert_pipeline
-    with _finbert_lock:
-        # Double-check after acquiring lock
-        if _finbert_pipeline is not None:
-            return _finbert_pipeline
-        if _finbert_available is False:
-            return None
-        try:
-            from transformers import pipeline
-
-            _finbert_pipeline = pipeline(
-                "sentiment-analysis",
-                model="ProsusAI/finbert",
-                truncation=True,
-                max_length=512,
-            )
-            _finbert_available = True
-            logger.info("FinBERT loaded successfully")
-            return _finbert_pipeline
-        except Exception:
-            _finbert_available = False
-            logger.info("FinBERT unavailable, falling back to keyword sentiment")
-            return None
-
-
-def prewarm_finbert() -> bool:
-    """Pre-load FinBERT model at startup to avoid first-request latency.
-
-    Call this during application startup (e.g. FastAPI lifespan, CLI init).
-    Returns True if model loaded successfully, False otherwise.
-    """
-    return _get_finbert() is not None
-
-
-def _score_texts_finbert(texts: list[str]) -> float:
-    """Score texts using FinBERT. Returns -1 to +1."""
-    pipe = _get_finbert()
-    if not pipe or not texts:
-        return 0.0
-    try:
-        results = pipe(texts[:20])  # limit to 20 headlines for speed
-        score = 0.0
-        for r in results:
-            label = r["label"].lower()
-            conf = r["score"]
-            if label == "positive":
-                score += conf
-            elif label == "negative":
-                score -= conf
-        return max(-1.0, min(1.0, score / len(results)))
-    except Exception:
-        logger.debug("FinBERT scoring failed, falling back to keywords", exc_info=True)
-        return 0.0
-
 
 RSS_FEEDS = [
     "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -156,12 +88,9 @@ def _score_text(text: str) -> float:
 
 
 def _score_headlines(headlines: list[str]) -> float:
-    """Score headlines using FinBERT if available, else keyword fallback."""
+    """Score headlines using keyword sentiment."""
     if not headlines:
         return 0.0
-    finbert_score = _score_texts_finbert(headlines)
-    if finbert_score != 0.0 or _finbert_available:
-        return finbert_score
     return _score_text(" ".join(headlines))
 
 

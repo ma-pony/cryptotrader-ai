@@ -51,7 +51,7 @@
 |------|------|------|
 | TechAgent | 技术面分析师 — RSI/MACD/SMA/BB/ATR | `BaseAgent`，预计算指标后单次 LLM 调用 |
 | ChainAgent | 链上/衍生品分析师 — OI/资金费率/鲸鱼转账/DEX TVL | `ToolAgent`，可调用实时 API 工具 |
-| NewsAgent | 新闻情绪分析师 — RSS/FinBERT/社交热度 | `ToolAgent`，可搜索新闻和社交数据 |
+| NewsAgent | 新闻情绪分析师 — RSS/关键词情绪/社交热度 | `ToolAgent`，可搜索新闻和社交数据 |
 | MacroAgent | 宏观分析师 — Fed/DXY/恐惧贪婪/ETF/稳定币 | `BaseAgent`，数据预注入 |
 | Verdict AI | 首席决策者 — 评估论证质量而非投票 | 独立 LLM 调用，temperature=0.1 |
 | Risk Gate | 风控守门员 — 11 项硬规则检查 | 纯代码逻辑，无 LLM |

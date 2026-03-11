@@ -38,12 +38,12 @@ def test_backtest_result_summary_without_llm_stats():
     assert "llm_calls" not in s
 
 
-def test_prewarm_finbert():
-    """prewarm_finbert returns bool."""
-    from cryptotrader.data.news import prewarm_finbert
+def test_score_headlines_returns_float():
+    """_score_headlines returns a float."""
+    from cryptotrader.data.news import _score_headlines
 
-    result = prewarm_finbert()
-    assert isinstance(result, bool)
+    result = _score_headlines(["Bitcoin surges to new high"])
+    assert isinstance(result, float)
 
 
 def test_coingecko_fallback():

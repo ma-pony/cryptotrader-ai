@@ -38,10 +38,6 @@ async def lifespan(_app: FastAPI):
 
     setup_logging()
 
-    from cryptotrader.data.news import prewarm_finbert
-
-    if prewarm_finbert():
-        logger.info("FinBERT model pre-loaded")
     yield
     logger.info("Shutting down")
 

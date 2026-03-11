@@ -20,7 +20,6 @@
 | 数据库 | PostgreSQL 16 + SQLAlchemy | asyncpg >=0.29 |
 | 缓存 / 状态 | Redis 7 | redis >=7.3 |
 | 本地存储 | SQLite (数据 + LLM 缓存) | 内置 |
-| NLP | transformers + torch (optional) | FinBERT 情绪分析 |
 | 新闻 | feedparser (RSS) | >=6.0.12 |
 
 ## 2. 项目结构
@@ -57,7 +56,7 @@ cryptotrader-ai/
 │   │   │   ├── market.py      # MarketCollector（ccxt OHLCV/Ticker）
 │   │   │   ├── macro.py       # MacroCollector（FRED/CoinGecko/FnG/ETF）
 │   │   │   ├── onchain.py     # OnchainCollector（5 个 provider 并行）
-│   │   │   ├── news.py        # NewsCollector（RSS + FinBERT + 社交）
+│   │   │   ├── news.py        # NewsCollector（RSS + 关键词情绪 + 社交）
 │   │   │   ├── enhanced.py    # EnhancedDataProvider（OKX + 币安情绪）
 │   │   │   ├── sync.py        # 批量历史同步（arena sync）
 │   │   │   └── providers/     # 各数据源适配器
@@ -382,7 +381,6 @@ create_llm(model, temperature, timeout, json_mode)
 | CoinGecko | `api.coingecko.com` | 免费 | BTC 主导率/社交数据 |
 | alternative.me | `api.alternative.me` | 免费 | 恐惧贪婪指数 |
 | RSS | CoinDesk/CoinTelegraph/Decrypt | 免费 | 新闻标题 |
-| FinBERT | 本地模型 `ProsusAI/finbert` | — | 新闻情绪评分 |
 
 ### 6.5 数据同步（arena sync）
 

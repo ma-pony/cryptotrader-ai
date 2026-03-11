@@ -46,7 +46,7 @@
 |--------|------|------|------|
 | TechAgent | BaseAgent | OHLCV + pandas-ta 指标（RSI、MACD、SMA、BBands、ATR）| 技术形态识别 |
 | ChainAgent | ToolAgent | OI、资金费率、交易所净流量、鲸鱼转账、DeFi TVL | 链上信号检测 |
-| NewsAgent | ToolAgent | RSS 标题 + FinBERT 情绪 + CoinGecko 社交热度 | 新闻情绪分析 |
+| NewsAgent | ToolAgent | RSS 标题 + 关键词情绪 + CoinGecko 社交热度 | 新闻情绪分析 |
 | MacroAgent | BaseAgent | 利率、美元指数、BTC 主导率、恐惧贪婪、ETF 流量、VIX | 宏观环境评估 |
 
 - **BaseAgent**：单次 LLM 调用，结构化 JSON 输出
@@ -185,7 +185,6 @@ arena serve --port 8003
 |--------|------|------|
 | CoinDesk, CoinTelegraph, Decrypt | RSS 标题抓取 | 免费 |
 | CoinGecko 社区 API | 社交热度（Twitter 粉丝、Reddit 订阅、情绪投票）| 免费 |
-| FinBERT（本地模型）| 新闻标题情绪评分 | 免费（需安装 `ml` 可选依赖）|
 
 ### 宏观
 
@@ -378,7 +377,7 @@ src/cryptotrader/
 │   ├── snapshot.py    # SnapshotAggregator（数据聚合入口）
 │   ├── market.py      # ccxt OHLCV + ticker + 资金费率 + 波动率
 │   ├── onchain.py     # 聚合 5 个数据源（并行获取）
-│   ├── news.py        # RSS + FinBERT 情绪 + CoinGecko 社交热度
+│   ├── news.py        # RSS + 关键词情绪 + CoinGecko 社交热度
 │   ├── macro.py       # FRED + CoinGecko + 恐惧贪婪 + SoSoValue ETF
 │   ├── sync.py        # 批量历史同步（arena sync）
 │   └── providers/     # Binance, DefiLlama, CoinGlass, CryptoQuant, WhaleAlert, SoSoValue
@@ -445,7 +444,6 @@ src/dashboard/app.py   # Streamlit 仪表盘（概览、决策、风控、回测
 | API 服务 | FastAPI + Uvicorn |
 | 仪表盘 | Streamlit |
 | CLI | Typer + Rich |
-| NLP（可选）| FinBERT via transformers + torch |
 
 ## 开发
 
