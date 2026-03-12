@@ -23,6 +23,10 @@ arena journal log --limit 10
 arena scheduler start   # requires scheduler.enabled=true in config
 arena serve --port 8003
 arena dashboard
+arena experience distill --session {id}   # Distill experience from backtest
+arena experience show --session {id}      # Show distilled experience
+arena experience merge --session {id}     # Merge backtest experience into live
+arena experience sessions                 # List backtest sessions
 ```
 
 ## Architecture
@@ -30,27 +34,45 @@ arena dashboard
 Multi-agent crypto trading system built on LangGraph. The core pipeline:
 
 ```
-Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
-  → Cross-Challenge Debate (2-3 rounds) → Convergence Check
-  → Verdict → Risk Gate (11 checks) → Execute / Reject → Journal
+Data Collection → Verbal Reinforcement → 4 Agents (fan-out, parallel)
+  → Debate Gate (consensus/confusion check)
+    → [debate needed] Cross-Challenge Debate (2 rounds, parallel per round)
+    → [skip] straight to verdict
+  → Verdict (AI or weighted-downgrade) → Risk Gate (11 checks) → Execute / Reject → Journal
 ```
 
 **Three graph variants** in `src/cryptotrader/graph.py`:
-- `build_trading_graph()` — Full pipeline with debate loop and convergence check
+- `build_trading_graph()` — Full pipeline with debate gate, optional debate rounds, AI verdict
 - `build_lite_graph()` — Skips debate, used for backtesting
 - `build_debate_graph()` — Bull/bear adversarial debate with judge (TradingAgents-style)
 
+**Progressive Filtering** (reduces LLM calls from 13 to 4-5 when possible):
+- **Debate parallelization**: `asyncio.gather()` runs 4 agents concurrently per debate round
+- **Debate gate**: `debate_gate()` computes consensus strength; skips debate on strong consensus (`strength > 0.5`) or shared confusion (`|mean| < 0.05` + low dispersion)
+- **Verdict downgrade**: When debate skipped + position flat + no circuit breaker → `make_verdict_weighted()` (0 LLM) replaces `make_verdict_llm()` (1 LLM)
+
 **Key modules** under `src/cryptotrader/`:
 - `agents/` — 4 specialized agents (Tech, Chain, News, Macro) extending `BaseAgent`, each calls LLM via LangChain `ChatOpenAI` with structured JSON output
-- `debate/` — Cross-challenge rounds where agents revise after seeing others' analyses; also bull/bear adversarial debate with judge (`researchers.py`). Convergence checked via divergence scores
+- `debate/` — Cross-challenge rounds (parallel per round via `asyncio.gather`); bull/bear adversarial debate with judge (`researchers.py`). `convergence.py` has `compute_divergence()` and `compute_consensus_strength()` for debate gate
 - `risk/gate.py` — 11 rule-based checks (no LLM): position size, exposure, daily loss, drawdown, CVaR, correlation, cooldown, volatility, funding rate, rate limit, exchange health
 - `execution/` — `PaperExchange` (simulator) and `LiveExchange` (ccxt-based)
 - `journal/store.py` — Git-like decision commit chain in PostgreSQL (in-memory fallback)
-- `learning/verbal.py` — Verbal reinforcement: injects past decision experience into agent prompts
+- `learning/verbal.py` — Verbal reinforcement: returns regime-aware historical cases for GSSC pipeline
+- `learning/context.py` — GSSC engine: gather → select → structure experience into agent prompts
+- `learning/regime.py` — Regime tagging (`tag_regime()`) and Jaccard overlap matching
+- `learning/reflect.py` — Structured experience memory generation (ExperienceMemory JSON), incremental evolution, anti-overfitting verification
 - `backtest/engine.py` — Steps through historical candles using lite graph or SMA crossover
 - `data/` — Market (ccxt), on-chain (DefiLlama/CoinGlass/CryptoQuant/WhaleAlert), news (RSS), macro (FRED/CoinGecko/Fear&Greed)
 - `models.py` — All Pydantic/dataclass models
 - `config.py` — TOML config loading and validation
+
+**Experience Memory (GSSC pipeline)**:
+- Pipeline: `verbal.py` (regime search) + `reflect.py` (structured rules) → `context.py` (gather → select → structure) → agent prompts
+- Regime tagging: `tag_regime()` classifies snapshot into labels (high_funding, high_vol, trending_up, extreme_fear, etc.)
+- Anti-overfitting: 5-layer defense — min sample thresholds, maturity levels (observation → hypothesis → rule), regime-aware verification, LLM constraint prompts, code-verified win rates
+- Backtest isolation: backtest mode skips experience injection + reflection to prevent contamination
+- Session storage: `~/.cryptotrader/backtest_sessions/{id}/` with commits.jsonl, result.json, experience.json
+- Config: `ExperienceConfig` (replaces `ReflectionConfig`, alias kept), nested `RegimeThresholdsConfig`
 
 **Other entry points:**
 - `src/api/` — FastAPI server with routes for analyze, health, journal
@@ -59,8 +81,9 @@ Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
 
 ## Configuration
 
-- `config/default.toml` — Main config: execution mode, LLM models per agent, debate params, data provider toggles, scheduler settings
+- `config/default.toml` — Main config: execution mode, LLM models per agent, debate params (incl. `skip_debate`, `consensus_skip_threshold`, `confusion_skip_threshold`, `confusion_max_dispersion`), data provider toggles, scheduler settings
 - `config/default.toml` `[risk]` — Risk gate parameters (11 thresholds), `[scheduler]` includes `daily_summary_hour` and `exchange_id`
+- `config/default.toml` `[experience]` — Experience memory: reflection cycle, token budget, win rate tolerance, `[experience.regime_thresholds]` for regime tagging
 - `config/exchanges.toml.example` — Exchange API credentials template
 - `.env` — `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `DATABASE_URL`, `REDIS_URL`
 
@@ -86,12 +109,13 @@ Python 3.12+, uv package manager, Hatchling build system. LLM calls go through L
 - **SQLiteCache** at `~/.cryptotrader/llm_cache.db` — exact-match caching on `(prompt, llm_string)`
 - `acompletion_with_fallback()` kept as backward-compat wrapper (converts dict messages → LangChain messages)
 
-**LLM call sites** (9 total across 6 files):
+**LLM call sites** (10 total across 7 files, reduced to 4-5 by progressive filtering):
 - `agents/base.py` — BaseAgent.analyze() (create_llm, temp=0.2, json_mode), ToolAgent.analyze() (_create_chat_model)
-- `debate/verdict.py` — AI verdict (create_llm, temp=0.1, json_mode)
+- `debate/verdict.py` — AI verdict (create_llm, temp=0.1, json_mode); skipped when verdict downgraded to weighted
 - `debate/researchers.py` — Bull/bear (create_llm, temp=0.3), judge (create_llm, temp=0.1, json_mode)
-- `nodes/debate.py` — Cross-challenge debate (create_llm, temp=0.3, json_mode)
+- `nodes/debate.py` — Cross-challenge debate (create_llm, temp=0.3, json_mode); parallel via `asyncio.gather`, skipped when debate gate triggers
 - `agents/langchain_agents.py` — Supervisor agents (_create_chat_model)
+- `learning/reflect.py` — Agent self-reflection (create_llm, temp=0.3, json_mode)
 - `graph_supervisor.py` — Supervisor graph (uses langchain_agents)
 
 **Key: `deepseek-reasoner`** returns content in `additional_kwargs['reasoning_content']`. `extract_content()` handles this.
@@ -115,7 +139,7 @@ pytest with `asyncio_mode = "auto"`. Source path is `src/` (`pythonpath = ["src"
 
 **IMPORTANT:** Must use `uv run pytest` (Python 3.12 venv), NOT bare `pytest` (may use system Python 3.10).
 
-288 tests pass, 1 skip. 70% coverage.
+347 tests pass, 1 skip.
 
 ## Lessons Learned & Common Pitfalls
 
@@ -138,6 +162,19 @@ pytest with `asyncio_mode = "auto"`. Source path is `src/` (`pythonpath = ["src"
 - **Thread safety**: `PaperExchange` uses `threading.Lock` for portfolio state. Always lock when reading/writing positions.
 - **Redis fallback**: If Redis was configured but is unavailable, system rejects trades conservatively. This is intentional.
 - **Config caching**: `load_config()` is cached after first call. Don't expect config changes mid-run.
+
+### Experience Memory
+- **Token estimation**: CJK text averages ~1.5 chars/token (not 4). Use `_estimate_tokens()` in `context.py` for mixed content.
+- **Regime-aware verification**: `_verify_rules()` must filter records by the rule's `conditions.regime_tags` before computing empirical rate. Global win rates are meaningless for regime-specific rules.
+- **Merge stats**: When merging rules (backtest → live), always do weighted average on `rate`: `(rate_a * n_a + rate_b * n_b) / total`.
+- **Case regime tags**: `_packets_from_cases()` must tag cases with `tag_regime()` from snapshot_summary, otherwise all cases score equally in regime-aware selection.
+- **`conditions.regime_tags` safety**: LLM may return `"high_vol"` (string) instead of `["high_vol"]` (list). Always validate with `isinstance` check.
+
+### Progressive Filtering
+- **Debate gate confusion vs disagreement**: Low `|mean_score|` alone doesn't distinguish confusion from disagreement. Must also check `dispersion < confusion_max_dispersion` — high dispersion means agents strongly disagree (debate needed), low dispersion means shared uncertainty (debate useless).
+- **Verdict downgrade safety**: Only downgrade to weighted when ALL conditions met: debate skipped + position flat + no circuit breaker. Redis unavailable → conservative, keep AI verdict.
+- **`position_context` nullability**: `state["data"].get("position_context")` can be `None` (not just missing). Use `or {}` pattern, not `get(..., {})`.
+- **Debate parallelization**: Each agent in a debate round sees a snapshot of others' analyses from round start (not mid-round updates), so `asyncio.gather` is safe. Use `return_exceptions=True` to preserve originals on failure.
 
 ### Code Quality Rules
 - **禁止 `noqa` 注释** — 不允许用 noqa 跳过 lint 检查。遇到 C901 复杂度警告时，必须重构函数（提取子函数）而不是添加 noqa。遇到 F401 未使用导入时，要么删除导入，要么确保在 `__all__` 中声明为再导出。

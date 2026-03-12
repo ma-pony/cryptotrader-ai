@@ -67,7 +67,13 @@
       "Bash(docker ps:*)",
       "Bash(docker exec:*)",
       "Bash(git:*)",
-      "Bash(pip index:*)"
+      "Bash(pip index:*)",
+      "WebFetch(domain:datawhalechina.github.io)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(printf n\\\\ny\\\\ny\\\\ny\\\\n:*)",
+      "Bash(printf y\\\\n:*)",
+      "Bash(printf y\\\\ny\\\\n:*)",
+      "Bash(printf n\\\\ny\\\\n:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
