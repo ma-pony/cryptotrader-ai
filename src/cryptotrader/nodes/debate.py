@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
@@ -32,49 +33,110 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "r
 "key_factors": [...], "risk_flags": [...], "new_findings": "cross-domain insight from other agents' data"}}"""
 
 
-async def debate_round(state: ArenaState) -> dict:
-    """One round of cross-challenge debate between agents."""
-    from cryptotrader.config import load_config as _load_config
+async def _debate_one_agent(
+    agent_id: str,
+    analysis: dict,
+    others: dict[str, dict],
+    pair: str,
+    model: str,
+) -> tuple[str, dict]:
+    """Single agent's debate response — extracted for parallel execution."""
     from cryptotrader.debate.challenge import build_challenge_prompt
     from cryptotrader.debate.verdict import _extract_json
+
+    prompt = build_challenge_prompt(agent_id, pair, analysis, others)
+    role_label = _DEBATE_ROLES.get(agent_id, agent_id)
+    system = DEBATE_SYSTEM.format(role=role_label)
+    try:
+        llm = create_llm(model=model, temperature=0.3, json_mode=True)
+        lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
+        resp = await llm.ainvoke(lc_msgs)
+        text = extract_content(resp)
+        data = _extract_json(text)
+        merged = dict(analysis)
+        merged.update(
+            {
+                "direction": data.get("direction", analysis["direction"]),
+                "confidence": float(data.get("confidence", analysis["confidence"])),
+                "reasoning": data.get("reasoning", analysis["reasoning"]),
+                "key_factors": data.get("key_factors", analysis.get("key_factors", [])),
+                "risk_flags": data.get("risk_flags", analysis.get("risk_flags", [])),
+                "new_findings": data.get("new_findings", ""),
+            }
+        )
+        return agent_id, merged
+    except Exception as e:
+        logger.warning("Debate round LLM call failed for %s: %s", agent_id, e)
+        return agent_id, analysis
+
+
+async def debate_round(state: ArenaState) -> dict:
+    """One round of cross-challenge debate between agents (parallel)."""
+    from cryptotrader.config import load_config as _load_config
 
     analyses = state["data"].get("analyses", {})
     _dcfg = _load_config()
     _default_debate_model = _dcfg.models.debate or _dcfg.models.fallback
     model = state["metadata"].get("debate_model", _default_debate_model)
-    updated: dict[str, Any] = {}
 
-    for agent_id, analysis in analyses.items():
+    tasks = []
+    agent_ids = list(analyses.keys())
+    for agent_id in agent_ids:
+        analysis = analyses[agent_id]
         others = {k: v for k, v in analyses.items() if k != agent_id}
-        prompt = build_challenge_prompt(agent_id, state["metadata"]["pair"], analysis, others)
-        role_label = _DEBATE_ROLES.get(agent_id, agent_id)
-        system = DEBATE_SYSTEM.format(role=role_label)
-        try:
-            llm = create_llm(model=model, temperature=0.3, json_mode=True)
-            lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
-            resp = await llm.ainvoke(lc_msgs)
-            text = extract_content(resp)
-            data = _extract_json(text)
-            merged = dict(analysis)
-            merged.update(
-                {
-                    "direction": data.get("direction", analysis["direction"]),
-                    "confidence": float(data.get("confidence", analysis["confidence"])),
-                    "reasoning": data.get("reasoning", analysis["reasoning"]),
-                    "key_factors": data.get("key_factors", analysis.get("key_factors", [])),
-                    "risk_flags": data.get("risk_flags", analysis.get("risk_flags", [])),
-                    "new_findings": data.get("new_findings", ""),
-                }
-            )
-            updated[agent_id] = merged
-        except Exception as e:
-            logger.warning("Debate round LLM call failed for %s: %s", agent_id, e)
-            updated[agent_id] = analysis
+        tasks.append(_debate_one_agent(agent_id, analysis, others, state["metadata"]["pair"], model))
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    updated: dict[str, Any] = {}
+    for i, result in enumerate(results):
+        aid = agent_ids[i]
+        if isinstance(result, Exception):
+            logger.warning("Debate gather failed for %s: %s", aid, result)
+            updated[aid] = analyses[aid]
+        else:
+            updated[result[0]] = result[1]
 
     return {
         "data": {"analyses": updated},
         "debate_round": state["debate_round"] + 1,
     }
+
+
+async def debate_gate(state: ArenaState) -> dict:
+    """Compute consensus metrics; set debate_skipped flag."""
+    from cryptotrader.config import load_config as _load_config
+    from cryptotrader.debate.convergence import compute_consensus_strength, compute_divergence
+
+    analyses = state["data"].get("analyses", {})
+    strength, mean_score = compute_consensus_strength(analyses)
+    dispersion = compute_divergence(analyses)
+    config = _load_config().debate
+
+    skip = False
+    reason = ""
+    if not config.skip_debate:
+        pass
+    elif strength > config.consensus_skip_threshold:
+        skip = True
+        reason = f"strong consensus (strength={strength:.3f})"
+    elif abs(mean_score) < config.confusion_skip_threshold and dispersion < config.confusion_max_dispersion:
+        # Low mean + low dispersion = shared confusion (all agents uncertain)
+        # Low mean + high dispersion = disagreement (debate needed)
+        skip = True
+        reason = f"shared confusion (|mean|={abs(mean_score):.3f}, dispersion={dispersion:.3f})"
+
+    if skip:
+        logger.info("Debate SKIPPED: %s", reason)
+
+    return {"data": {"debate_skipped": skip, "debate_skip_reason": reason}}
+
+
+def debate_gate_router(state: ArenaState) -> str:
+    """Route to 'debate' or 'skip' based on debate gate result."""
+    if state["data"].get("debate_skipped"):
+        return "skip"
+    return "debate"
 
 
 async def check_stability(state: ArenaState) -> dict:
