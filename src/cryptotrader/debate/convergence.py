@@ -12,6 +12,22 @@ def compute_divergence(analyses: dict[str, dict]) -> float:
     return statistics.pstdev(values)
 
 
+def compute_consensus_strength(analyses: dict[str, dict]) -> tuple[float, float]:
+    """Return (consensus_strength, mean_score).
+
+    consensus_strength = abs(mean_score) * (1 - pstdev)
+    - Strong consensus (same direction + low dispersion) → high value
+    - Shared confusion (weak direction + low dispersion) → low abs(mean_score)
+    """
+    scores = [a["confidence"] * _DIR_MAP.get(a["direction"], 0.0) for a in analyses.values()]
+    if len(scores) < 2:
+        return 0.0, 0.0
+    mean_score = sum(scores) / len(scores)
+    dispersion = statistics.pstdev(scores)
+    strength = abs(mean_score) * (1 - dispersion)
+    return strength, mean_score
+
+
 def check_convergence(
     divergence_scores: list[float],
     current_divergence: float,

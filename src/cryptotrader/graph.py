@@ -23,6 +23,8 @@ from cryptotrader.nodes.debate import (
     bull_bear_debate,
     check_stability,
     convergence_router,
+    debate_gate,
+    debate_gate_router,
     debate_round,
     judge_verdict,
 )
@@ -43,6 +45,8 @@ __all__ = [
     "check_stop_loss",
     "collect_snapshot",
     "convergence_router",
+    "debate_gate",
+    "debate_gate_router",
     "debate_round",
     "enrich_verdict_context",
     "journal_rejection",
@@ -140,9 +144,9 @@ def _stop_loss_router(state: ArenaState) -> str:
 
 
 def _build_full_graph(config: dict | None = None) -> Any:
-    """Full pipeline: agents → 2 fixed debate rounds → AI verdict → risk gate → execute.
+    """Full pipeline: agents → debate gate → (optional) 2 debate rounds → AI verdict → risk gate → execute.
 
-    Phase 4C: Fixed 2 debate rounds instead of convergence-seeking loop.
+    Debate gate skips debate on strong consensus or shared confusion.
     Agents are encouraged to maintain disagreement when data supports it.
     """
     graph = StateGraph(ArenaState)
@@ -155,6 +159,7 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("chain_agent", chain_analyze)
     graph.add_node("news_agent", news_analyze)
     graph.add_node("macro_agent", macro_analyze)
+    graph.add_node("debate_gate", debate_gate)
     graph.add_node("debate_round_1", debate_round)
     graph.add_node("debate_round_2", debate_round)
     graph.add_node("enrich_context", enrich_verdict_context)
@@ -181,12 +186,17 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_edge("inject_experience", "chain_agent")
     graph.add_edge("inject_experience", "news_agent")
     graph.add_edge("inject_experience", "macro_agent")
-    # Fan-in to first debate round
-    graph.add_edge("tech_agent", "debate_round_1")
-    graph.add_edge("chain_agent", "debate_round_1")
-    graph.add_edge("news_agent", "debate_round_1")
-    graph.add_edge("macro_agent", "debate_round_1")
-    # Fixed 2 rounds — no convergence-seeking
+    # Fan-in to debate gate — decides whether to skip debate
+    graph.add_edge("tech_agent", "debate_gate")
+    graph.add_edge("chain_agent", "debate_gate")
+    graph.add_edge("news_agent", "debate_gate")
+    graph.add_edge("macro_agent", "debate_gate")
+    # Conditional: debate or skip straight to enrich_context
+    graph.add_conditional_edges(
+        "debate_gate",
+        debate_gate_router,
+        {"debate": "debate_round_1", "skip": "enrich_context"},
+    )
     graph.add_edge("debate_round_1", "debate_round_2")
     graph.add_edge("debate_round_2", "enrich_context")
     graph.add_edge("enrich_context", "verdict")
