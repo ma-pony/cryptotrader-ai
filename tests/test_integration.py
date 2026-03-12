@@ -574,13 +574,13 @@ class TestVerbalLearning:
 
         store = JournalStore(None)
         result = await get_experience(store, {"funding_rate": 0.0001, "volatility": 0.02})
-        assert result == ""
+        assert result == []
 
     @pytest.mark.asyncio
-    async def test_with_history_returns_text(self):
+    async def test_with_history_returns_cases(self):
         from cryptotrader.journal.commit import build_commit
         from cryptotrader.journal.store import JournalStore
-        from cryptotrader.learning.verbal import get_experience
+        from cryptotrader.learning.verbal import format_experience_text, get_experience
         from cryptotrader.models import TradeVerdict
 
         store = JournalStore(None)
@@ -598,9 +598,11 @@ class TestVerbalLearning:
         await store.commit(commit)
         await store.update_pnl(commit.hash, 200.0, "Caught the trend early")
 
-        result = await get_experience(store, {"funding_rate": 0.0001, "volatility": 0.02})
-        assert "BTC/USDT" in result
-        assert "Caught the trend early" in result
+        cases = await get_experience(store, {"funding_rate": 0.0001, "volatility": 0.02})
+        assert len(cases) > 0
+        text = await format_experience_text(cases)
+        assert "BTC/USDT" in text
+        assert "Caught the trend early" in text
 
 
 # ── Full Pipeline Integration Test ──

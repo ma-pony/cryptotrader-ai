@@ -64,19 +64,23 @@ def test_load_skill_tool_not_found():
 
 
 @patch("cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock)
-def test_load_past_experience_tool(mock_get_exp):
+@patch("cryptotrader.learning.verbal.format_experience_text", new_callable=AsyncMock)
+def test_load_past_experience_tool(mock_format, mock_get_exp):
     from cryptotrader.agents.tools import load_past_experience
 
-    mock_get_exp.return_value = "Past: BTC went up after similar pattern"
+    mock_get_exp.return_value = [MagicMock()]
+    mock_format.return_value = "Past: BTC went up after similar pattern"
     result = load_past_experience.invoke("BTC bullish breakout")
     assert "BTC" in result
 
 
 @patch("cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock)
-def test_load_past_experience_empty(mock_get_exp):
+@patch("cryptotrader.learning.verbal.format_experience_text", new_callable=AsyncMock)
+def test_load_past_experience_empty(mock_format, mock_get_exp):
     from cryptotrader.agents.tools import load_past_experience
 
-    mock_get_exp.return_value = ""
+    mock_get_exp.return_value = []
+    mock_format.return_value = ""
     result = load_past_experience.invoke("unknown context")
     assert "No relevant past experience" in result
 

@@ -122,7 +122,7 @@ async def update_past_pnl(state: ArenaState) -> dict:
 
 
 async def verbal_reinforcement(state: ArenaState) -> dict:
-    """Inject past experience + per-agent bias corrections + reflections into agent context."""
+    """Inject past experience + per-agent bias corrections + structured experience memory."""
     import asyncio
 
     from cryptotrader.config import load_config
@@ -133,14 +133,27 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
     )
     from cryptotrader.journal.store import JournalStore
     from cryptotrader.learning.reflect import load_reflections, maybe_reflect
+    from cryptotrader.learning.regime import tag_regime
     from cryptotrader.learning.verbal import get_experience
 
+    config = load_config()
     db_url = state["metadata"].get("database_url")
     store = JournalStore(db_url)
     summary = state["data"].get("snapshot_summary", {})
-    experience = await get_experience(store, summary)
+    is_backtest = state["metadata"].get("backtest_mode", False)
 
-    # Phase 4D: Detect biases and generate per-agent corrections + verdict calibration
+    # Tag current regime
+    regime_tags = tag_regime(summary, config.experience.regime_thresholds)
+
+    # Fetch historical cases (regime-aware)
+    historical_cases = await get_experience(
+        store,
+        summary,
+        regime_tags=regime_tags,
+        thresholds=config.experience.regime_thresholds,
+    )
+
+    # Detect biases and generate per-agent corrections + verdict calibration
     agent_corrections: dict[str, str] = {}
     verdict_calibration = ""
     try:
@@ -150,29 +163,31 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
     except Exception:
         logger.debug("Bias detection failed, continuing without calibration", exc_info=True)
 
-    # Load existing agent reflections (fast SQLite read)
-    agent_reflections: dict[str, str] = {}
+    # Load structured experience memory (fast SQLite read)
+    experience_memory = {}
     try:
-        agent_reflections = await load_reflections()
+        experience_memory = await load_reflections()
     except Exception:
-        logger.debug("Failed to load agent reflections", exc_info=True)
+        logger.debug("Failed to load experience memory", exc_info=True)
 
     # Maybe trigger background reflection (fire-and-forget, doesn't block trading)
-    config = load_config()
+    # Skip during backtest to avoid contamination
     cycle_count = state["metadata"].get("cycle_count", 0)
-    if config.reflection.enabled and cycle_count > 0:
+    if config.experience.enabled and cycle_count > 0 and not is_backtest:
         try:
-            task = asyncio.ensure_future(maybe_reflect(store, cycle_count, config.reflection))
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(maybe_reflect(store, cycle_count, config.experience))
             task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         except Exception:
             logger.debug("Failed to schedule reflection", exc_info=True)
 
     return {
         "data": {
-            "experience": experience,
+            "regime_tags": regime_tags,
+            "historical_cases": historical_cases,
+            "experience_memory": experience_memory,
             "agent_corrections": agent_corrections,
             "verdict_calibration": verdict_calibration,
-            "agent_reflections": agent_reflections,
         }
     }
 

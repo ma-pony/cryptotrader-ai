@@ -463,7 +463,7 @@ class BacktestEngine:
             engine="paper",
             snapshot=snapshot,
             config=self._cached_config,
-            extra_metadata={"llm_verdict": self.use_llm},
+            extra_metadata={"llm_verdict": self.use_llm, "backtest_mode": True},
             extra_data={"position_context": pos_ctx},
         )
         initial["max_debate_rounds"] = self._cached_config.debate.max_rounds

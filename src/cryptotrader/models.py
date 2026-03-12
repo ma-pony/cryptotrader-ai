@@ -185,6 +185,35 @@ class Order:
 # ── Decision Journal Models (Section 8.2) ──
 
 
+# ── Experience Memory Models ──
+
+
+@dataclass
+class ExperienceRule:
+    """A single distilled experience rule from historical trading analysis."""
+
+    pattern: str
+    category: str  # "success_pattern" | "forbidden_zone"
+    conditions: dict[str, list[str]] = field(default_factory=dict)  # {"regime_tags": [...]}
+    rate: float = 0.0  # win_rate or loss_rate
+    sample_count: int = 0
+    maturity: str = "observation"  # "observation" | "hypothesis" | "rule"
+    reason: str = ""
+    regime_count: int = 1
+    source: str = "live"  # "live" | "backtest" | "manual"
+    source_session: str = ""  # backtest session ID
+
+
+@dataclass
+class ExperienceMemory:
+    """Structured experience memory for an agent."""
+
+    success_patterns: list[ExperienceRule] = field(default_factory=list)
+    forbidden_zones: list[ExperienceRule] = field(default_factory=list)
+    strategic_insights: list[str] = field(default_factory=list)
+    updated_at: str = ""
+
+
 @dataclass
 class DecisionCommit:
     hash: str

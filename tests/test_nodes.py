@@ -170,9 +170,7 @@ async def test_verbal_reinforcement():
     state = _base_state()
 
     with (
-        patch(
-            "cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock, return_value="Past: bullish worked"
-        ),
+        patch("cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock, return_value=[]),
         patch("cryptotrader.journal.calibrate.detect_biases", new_callable=AsyncMock, return_value={}),
         patch(
             "cryptotrader.journal.calibrate.generate_per_agent_corrections",
@@ -185,7 +183,8 @@ async def test_verbal_reinforcement():
     ):
         result = await verbal_reinforcement(state)
 
-    assert "experience" in result["data"]
+    assert "historical_cases" in result["data"]
+    assert "regime_tags" in result["data"]
     assert result["data"]["agent_corrections"] == {"tech_agent": "OVERCONFIDENT"}
     assert result["data"]["verdict_calibration"] == "calibrate: reduce overconfidence"
 

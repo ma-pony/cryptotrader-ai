@@ -5,8 +5,35 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from cryptotrader.config import RegimeThresholdsConfig
     from cryptotrader.journal.store import JournalStore
     from cryptotrader.models import DecisionCommit
+
+
+async def search_by_regime(
+    store: JournalStore,
+    regime_tags: list[str],
+    thresholds: RegimeThresholdsConfig,
+    limit: int = 5,
+) -> list[DecisionCommit]:
+    """Search journal for commits matching current regime tags (Jaccard overlap).
+
+    Fetches recent commits, tags each one's snapshot_summary with regime labels,
+    and returns top matches sorted by Jaccard overlap.
+    """
+    from cryptotrader.learning.regime import regime_overlap, tag_regime
+
+    if not regime_tags:
+        return []
+    recent = await store.log(limit=200)
+    scored: list[tuple[float, DecisionCommit]] = []
+    for dc in recent:
+        dc_tags = tag_regime(dc.snapshot_summary or {}, thresholds)
+        overlap = regime_overlap(regime_tags, dc_tags)
+        if overlap > 0:
+            scored.append((overlap, dc))
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [dc for _, dc in scored[:limit]]
 
 
 async def search_similar(

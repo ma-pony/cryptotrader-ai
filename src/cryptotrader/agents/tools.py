@@ -33,21 +33,25 @@ def load_past_experience(context: str) -> str:
     Returns: Summary of similar past decisions and their results.
     """
     from cryptotrader.journal.store import JournalStore
-    from cryptotrader.learning.verbal import get_experience
+    from cryptotrader.learning.verbal import format_experience_text, get_experience
 
     db_url = os.environ.get("DATABASE_URL")
     store = JournalStore(db_url)
+
+    async def _fetch() -> str:
+        cases = await get_experience(store, {"context": context})
+        return await format_experience_text(cases)
+
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
     if loop and loop.is_running():
-        # Already inside an event loop — run synchronously via new thread
         import concurrent.futures
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
-            experience = pool.submit(asyncio.run, get_experience(store, {"context": context})).result()
+            experience = pool.submit(asyncio.run, _fetch()).result()
     else:
-        experience = asyncio.run(get_experience(store, {"context": context}))
+        experience = asyncio.run(_fetch())
     return experience if experience else "No relevant past experience found."

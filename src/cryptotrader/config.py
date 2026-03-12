@@ -41,6 +41,10 @@ class DebateConfig:
     max_rounds: int = 3
     convergence_threshold: float = 0.1
     divergence_hold_threshold: float = 0.7
+    skip_debate: bool = True
+    consensus_skip_threshold: float = 0.5
+    confusion_skip_threshold: float = 0.05
+    confusion_max_dispersion: float = 0.2
 
 
 # ── Data ──
@@ -128,16 +132,39 @@ class BacktestConfig:
     position_sizing: BacktestPositionSizingConfig = field(default_factory=BacktestPositionSizingConfig)
 
 
-# ── Reflection ──
+# ── Regime thresholds ──
 
 
 @dataclass
-class ReflectionConfig:
+class RegimeThresholdsConfig:
+    high_funding: float = 0.0003
+    negative_funding: float = -0.0001
+    high_vol: float = 0.025
+    low_vol: float = 0.010
+    trending_up: float = 0.05
+    trending_down: float = -0.05
+    extreme_fear_fng: int = 25
+    extreme_greed_fng: int = 75
+
+
+# ── Experience (replaces Reflection) ──
+
+
+@dataclass
+class ExperienceConfig:
     enabled: bool = True
     every_n_cycles: int = 20
     min_commits_required: int = 10
     lookback_commits: int = 30
     model: str = ""  # empty = use models.analysis
+    token_budget_pct: float = 0.30
+    verify_win_rate_tolerance: float = 0.15
+    regime_thresholds: RegimeThresholdsConfig = field(default_factory=RegimeThresholdsConfig)
+
+
+# ── Reflection (deprecated alias) ──
+
+ReflectionConfig = ExperienceConfig
 
 
 # ── Execution ──
@@ -255,13 +282,18 @@ class AppConfig:
     data: DataConfig = field(default_factory=DataConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
-    reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
+    experience: ExperienceConfig = field(default_factory=ExperienceConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     infrastructure: InfrastructureConfig = field(default_factory=InfrastructureConfig)
     exchanges: ExchangesConfig = field(default_factory=ExchangesConfig)
+
+    @property
+    def reflection(self) -> ExperienceConfig:
+        """Deprecated alias for experience config."""
+        return self.experience
 
 
 # ── TOML loading ──
@@ -287,6 +319,16 @@ def _merge(target: dict, source: dict) -> dict:
         else:
             target[k] = v
     return target
+
+
+def _build_experience_config(toml_data: dict) -> ExperienceConfig:
+    """Build ExperienceConfig from TOML, supporting both [experience] and legacy [reflection]."""
+    raw = dict(toml_data.get("experience", toml_data.get("reflection", {})))
+    regime_raw = raw.pop("regime_thresholds", {})
+    return ExperienceConfig(
+        **raw,
+        regime_thresholds=RegimeThresholdsConfig(**regime_raw),
+    )
 
 
 def _build_config(toml_data: dict) -> AppConfig:
@@ -335,7 +377,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         data=DataConfig(**toml_data.get("data", {})),
         risk=risk,
         backtest=backtest,
-        reflection=ReflectionConfig(**toml_data.get("reflection", {})),
+        experience=_build_experience_config(toml_data),
         scheduler=SchedulerConfig(**toml_data.get("scheduler", {})),
         providers=providers,
         execution=ExecutionConfig(**toml_data.get("execution", {})),

@@ -270,7 +270,7 @@ class BaseAgent:
             parts.append("⚠ DATA QUALITY WARNINGS:\n" + "\n".join(f"  - {w}" for w in warnings))
 
         if experience:
-            parts.append(f"Past experience:\n{experience}")
+            parts.append(experience)
         return "\n".join(parts)
 
     def _parse_response(self, response_text: str, pair: str) -> AgentAnalysis:

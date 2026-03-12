@@ -2,7 +2,7 @@
 
 import pytest
 
-from cryptotrader.config import AppConfig, ProvidersConfig, load_config
+from cryptotrader.config import AppConfig, ExperienceConfig, ProvidersConfig, RegimeThresholdsConfig, load_config
 
 
 def test_providers_config_with_credentials():
@@ -44,6 +44,36 @@ def test_load_config_integration():
 
     assert hasattr(config, "providers")
     assert config.providers.max_acceptable_risk == "MEDIUM"
+
+
+def test_experience_config_parsed():
+    """Test experience config is parsed from TOML."""
+    config = load_config()
+
+    assert hasattr(config, "experience")
+    assert isinstance(config.experience, ExperienceConfig)
+    assert config.experience.enabled is True
+    assert config.experience.every_n_cycles == 20
+    assert config.experience.token_budget_pct == 0.30
+    assert config.experience.verify_win_rate_tolerance == 0.15
+
+
+def test_regime_thresholds_parsed():
+    """Test regime thresholds are parsed as nested config."""
+    config = load_config()
+
+    rt = config.experience.regime_thresholds
+    assert isinstance(rt, RegimeThresholdsConfig)
+    assert rt.high_funding == 0.0003
+    assert rt.negative_funding == -0.0001
+    assert rt.high_vol == 0.025
+    assert rt.extreme_fear_fng == 25
+
+
+def test_reflection_backward_compat():
+    """Test config.reflection property still works as alias."""
+    config = load_config()
+    assert config.reflection is config.experience
 
 
 if __name__ == "__main__":

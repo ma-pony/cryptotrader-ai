@@ -491,5 +491,216 @@ async def _live_check(exchange_id: str):
         raise typer.Exit(1)
 
 
+# ── Experience subcommands ──
+
+experience_app = typer.Typer(help="Experience memory commands")
+app.add_typer(experience_app, name="experience")
+
+
+@experience_app.command("distill")
+def experience_distill(
+    session: str = typer.Argument(..., help="Backtest session ID"),
+):
+    """Distill experience from a backtest session."""
+    asyncio.run(_experience_distill(session))
+
+
+async def _experience_distill(session_id: str):
+    from cryptotrader.backtest.session import load_commits, save_experience
+    from cryptotrader.learning.reflect import run_agent_reflection
+
+    commits_raw = load_commits(session_id)
+    if not commits_raw:
+        console.print(f"[red]No commits found for session {session_id}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"[bold]Distilling experience from {len(commits_raw)} commits...[/bold]")
+
+    results = {}
+    agent_ids = ("tech_agent", "chain_agent", "news_agent", "macro_agent")
+
+    for agent_id in agent_ids:
+        records = _extract_agent_records(commits_raw, agent_id)
+        if len(records) < 3:
+            console.print(f"  [dim]{agent_id}: skipped (only {len(records)} records)[/dim]")
+            continue
+        memory = await run_agent_reflection(agent_id, records, model="")
+        results[agent_id] = memory
+        console.print(
+            f"  [green]{agent_id}[/green]: {len(memory.success_patterns)} patterns, {len(memory.forbidden_zones)} zones"
+        )
+
+    save_experience(session_id, results)
+    console.print(f"[green]Experience saved to session {session_id}[/green]")
+
+
+def _extract_agent_records(commits_raw: list[dict], agent_id: str) -> list[dict]:
+    """Extract agent records from raw commit dicts for reflection."""
+    records = []
+    for c in commits_raw:
+        analyses = c.get("analyses", {})
+        agent_data = analyses.get(agent_id)
+        if not agent_data:
+            continue
+        pnl = c.get("pnl")
+        if pnl is None:
+            continue
+        verdict = c.get("verdict", {})
+        summary = c.get("snapshot_summary", {})
+        records.append(
+            {
+                "date": c.get("timestamp", ""),
+                "direction": agent_data.get("direction", "neutral"),
+                "confidence": agent_data.get("confidence", 0.5),
+                "reasoning": agent_data.get("reasoning", ""),
+                "key_factors": agent_data.get("key_factors", []),
+                "pnl": pnl,
+                "verdict_action": verdict.get("action", "hold"),
+                "price": summary.get("price", 0),
+                "volatility": summary.get("volatility", 0),
+                "funding_rate": summary.get("funding_rate", 0),
+            }
+        )
+    return records
+
+
+@experience_app.command("show")
+def experience_show(
+    session: str = typer.Argument(..., help="Backtest session ID"),
+):
+    """Show distilled experience for a backtest session."""
+    from pathlib import Path
+
+    path = Path.home() / ".cryptotrader" / "backtest_sessions" / session / "experience.json"
+    if not path.exists():
+        console.print(f"[red]No experience found for session {session}. Run 'arena experience distill' first.[/red]")
+        raise typer.Exit(1)
+    data = _load_json_file(path)
+    console.print_json(data=data)
+
+
+@experience_app.command("merge")
+def experience_merge(
+    session: str = typer.Argument(..., help="Backtest session ID to merge"),
+):
+    """Merge backtest experience into live memory."""
+    asyncio.run(_experience_merge(session))
+
+
+async def _experience_merge(session_id: str):
+    from pathlib import Path
+
+    from cryptotrader.learning.reflect import load_reflections, save_reflection
+    from cryptotrader.models import ExperienceMemory, ExperienceRule
+
+    path = Path.home() / ".cryptotrader" / "backtest_sessions" / session_id / "experience.json"
+    if not path.exists():
+        console.print(f"[red]No experience found for session {session_id}[/red]")
+        raise typer.Exit(1)
+
+    data = _load_json_file(path)
+    existing = await load_reflections()
+
+    for agent_id, mem_data in data.items():
+        bt_mem = ExperienceMemory(
+            success_patterns=[
+                ExperienceRule(**{**r, "source": "backtest", "source_session": session_id})
+                for r in mem_data.get("success_patterns", [])
+            ],
+            forbidden_zones=[
+                ExperienceRule(**{**r, "source": "backtest", "source_session": session_id})
+                for r in mem_data.get("forbidden_zones", [])
+            ],
+            strategic_insights=mem_data.get("strategic_insights", []),
+        )
+
+        live_mem = existing.get(agent_id, ExperienceMemory())
+        merged = _merge_memories(live_mem, bt_mem)
+        await save_reflection(
+            Path.home() / ".cryptotrader" / "agent_reflections.db",
+            agent_id,
+            merged,
+        )
+        console.print(
+            f"  [green]{agent_id}[/green]: merged ({len(merged.success_patterns)} patterns, "
+            f"{len(merged.forbidden_zones)} zones)"
+        )
+
+    console.print("[green]Backtest experience merged into live memory[/green]")
+
+
+def _load_json_file(path) -> dict:
+    """Load JSON file synchronously."""
+    import json
+
+    with open(path) as f:
+        return json.load(f)
+
+
+def _merge_memories(live, bt):
+    """Merge backtest experience into live memory (additive)."""
+    from cryptotrader.models import ExperienceMemory
+
+    merged_patterns = list(live.success_patterns)
+    for rule in bt.success_patterns:
+        existing = _find_similar_rule(merged_patterns, rule)
+        if existing:
+            _merge_rule_stats(existing, rule)
+        else:
+            merged_patterns.append(rule)
+
+    merged_zones = list(live.forbidden_zones)
+    for rule in bt.forbidden_zones:
+        existing = _find_similar_rule(merged_zones, rule)
+        if existing:
+            _merge_rule_stats(existing, rule)
+        else:
+            merged_zones.append(rule)
+
+    merged_insights = list(live.strategic_insights)
+    for insight in bt.strategic_insights:
+        if insight not in merged_insights:
+            merged_insights.append(insight)
+
+    return ExperienceMemory(
+        success_patterns=merged_patterns,
+        forbidden_zones=merged_zones,
+        strategic_insights=merged_insights,
+    )
+
+
+def _merge_rule_stats(existing, incoming):
+    """Merge incoming rule stats into existing rule (weighted average rate)."""
+    total = existing.sample_count + incoming.sample_count
+    if total > 0:
+        existing.rate = (existing.rate * existing.sample_count + incoming.rate * incoming.sample_count) / total
+    existing.sample_count = total
+    existing.regime_count += 1
+
+
+def _find_similar_rule(rules, target):
+    """Find a rule with the same pattern text."""
+    for r in rules:
+        if r.pattern == target.pattern:
+            return r
+    return None
+
+
+@experience_app.command("sessions")
+def experience_sessions():
+    """List backtest sessions."""
+    from cryptotrader.backtest.session import list_sessions
+
+    sessions = list_sessions()
+    if not sessions:
+        console.print("[dim]No backtest sessions found.[/dim]")
+        return
+    table = Table(title="Backtest Sessions")
+    table.add_column("Session ID", style="cyan")
+    for s in sessions:
+        table.add_row(s)
+    console.print(table)
+
+
 if __name__ == "__main__":
     app()

@@ -1,21 +1,29 @@
-"""Tests for agent self-reflection system."""
+"""Tests for agent self-reflection system (structured experience memory)."""
 
 from __future__ import annotations
 
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from cryptotrader.config import ReflectionConfig
+from cryptotrader.config import ExperienceConfig, ReflectionConfig
 from cryptotrader.learning.reflect import (
+    _assign_maturity,
     _build_reflection_prompt,
     _format_commit_for_agent,
+    _verify_rules,
     load_reflections,
     maybe_reflect,
     save_reflection,
 )
-from cryptotrader.models import AgentAnalysis, DecisionCommit, TradeVerdict
+from cryptotrader.models import (
+    AgentAnalysis,
+    DecisionCommit,
+    ExperienceMemory,
+    ExperienceRule,
+    TradeVerdict,
+)
 
 
 def _make_commit(
@@ -73,15 +81,17 @@ def _make_commit(
 
 
 async def test_load_save_reflections():
-    """Write → read → verify content matches."""
+    """Write → read → verify content matches (structured ExperienceMemory)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "reflections.db"
-        await save_reflection(db_path, "tech_agent", "Memo: RSI oversold works best in high-vol")
-        await save_reflection(db_path, "chain_agent", "Memo: Whale alerts are noisy")
+        mem1 = ExperienceMemory(strategic_insights=["RSI oversold works best in high-vol"])
+        mem2 = ExperienceMemory(strategic_insights=["Whale alerts are noisy"])
+        await save_reflection(db_path, "tech_agent", mem1)
+        await save_reflection(db_path, "chain_agent", mem2)
 
         result = await load_reflections(db_path)
-        assert result["tech_agent"] == "Memo: RSI oversold works best in high-vol"
-        assert result["chain_agent"] == "Memo: Whale alerts are noisy"
+        assert "RSI oversold works best in high-vol" in result["tech_agent"].strategic_insights
+        assert "Whale alerts are noisy" in result["chain_agent"].strategic_insights
         assert len(result) == 2
 
 
@@ -97,12 +107,22 @@ async def test_save_reflection_upsert():
     """Second save overwrites the first (upsert behavior)."""
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "reflections.db"
-        await save_reflection(db_path, "tech_agent", "Old memo")
-        await save_reflection(db_path, "tech_agent", "New memo")
+        await save_reflection(db_path, "tech_agent", ExperienceMemory(strategic_insights=["Old"]))
+        await save_reflection(db_path, "tech_agent", ExperienceMemory(strategic_insights=["New"]))
 
         result = await load_reflections(db_path)
-        assert result["tech_agent"] == "New memo"
+        assert result["tech_agent"].strategic_insights == ["New"]
         assert len(result) == 1
+
+
+async def test_save_reflection_legacy_str():
+    """Save with legacy string format still works."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "reflections.db"
+        await save_reflection(db_path, "tech_agent", "Legacy memo text")
+
+        result = await load_reflections(db_path)
+        assert "Legacy memo text" in result["tech_agent"].strategic_insights
 
 
 async def test_format_commit_for_agent():
@@ -147,7 +167,6 @@ async def test_build_reflection_prompt():
     assert "MACD" in user
     assert "direction=bullish" in user
     assert "pnl=+2.50" in user
-    assert "策略备忘录" in user
 
 
 async def test_maybe_reflect_skips_when_not_due():
@@ -170,7 +189,6 @@ async def test_maybe_reflect_skips_when_disabled():
 async def test_maybe_reflect_skips_insufficient_data():
     """Reflection is skipped when not enough commits with PnL."""
     store = AsyncMock()
-    # Return commits without PnL
     store.log.return_value = [_make_commit(pnl=None) for _ in range(5)]
     config = ReflectionConfig(every_n_cycles=20, min_commits_required=10)
 
@@ -182,14 +200,17 @@ async def test_maybe_reflect_skips_insufficient_data():
 
 @patch("cryptotrader.learning.reflect.run_agent_reflection")
 async def test_maybe_reflect_runs_and_saves(mock_reflect):
-    """Full reflection cycle: LLM is called for each agent, results saved to SQLite."""
-    mock_reflect.return_value = "Test memo: signal X works well"
+    """Full reflection cycle: LLM is called for each agent, results saved."""
+    mock_reflect.return_value = ExperienceMemory(
+        success_patterns=[ExperienceRule(pattern="RSI oversold", category="success_pattern", rate=0.7, sample_count=5)],
+        strategic_insights=["Watch RSI divergence"],
+    )
 
     store = AsyncMock()
     commits = [_make_commit(pnl=float(i)) for i in range(15)]
     store.log.return_value = commits
 
-    config = ReflectionConfig(every_n_cycles=20, min_commits_required=10)
+    config = ExperienceConfig(every_n_cycles=20, min_commits_required=10)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "reflections.db"
@@ -199,12 +220,12 @@ async def test_maybe_reflect_runs_and_saves(mock_reflect):
         assert len(result) == 4
         for agent_id in ("tech_agent", "chain_agent", "news_agent", "macro_agent"):
             assert agent_id in result
-            assert result[agent_id] == "Test memo: signal X works well"
+            assert isinstance(result[agent_id], ExperienceMemory)
 
         # Verify persisted to SQLite
         loaded = await load_reflections(db_path)
         assert len(loaded) == 4
-        assert loaded["tech_agent"] == "Test memo: signal X works well"
+        assert isinstance(loaded["tech_agent"], ExperienceMemory)
 
 
 @patch("cryptotrader.learning.reflect.run_agent_reflection")
@@ -212,19 +233,19 @@ async def test_maybe_reflect_partial_failure(mock_reflect):
     """If one agent's reflection fails, others still succeed."""
     call_count = 0
 
-    async def side_effect(agent_id, records, model):
+    async def side_effect(agent_id, records, model, existing_memory=None):
         nonlocal call_count
         call_count += 1
         if agent_id == "chain_agent":
             raise RuntimeError("LLM timeout")
-        return f"Memo for {agent_id}"
+        return ExperienceMemory(strategic_insights=[f"Memo for {agent_id}"])
 
     mock_reflect.side_effect = side_effect
 
     store = AsyncMock()
     store.log.return_value = [_make_commit(pnl=float(i)) for i in range(15)]
 
-    config = ReflectionConfig(every_n_cycles=20, min_commits_required=10)
+    config = ExperienceConfig(every_n_cycles=20, min_commits_required=10)
 
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "reflections.db"
@@ -236,13 +257,202 @@ async def test_maybe_reflect_partial_failure(mock_reflect):
         assert "tech_agent" in result
 
 
-async def test_reflection_injected_in_experience():
-    """Verify _run_agent correctly injects reflection memo into experience."""
-    from unittest.mock import MagicMock
+async def test_verify_rules_rejects_drift():
+    """Rules with rate drifting too far from empirical data are rejected."""
+    records = [
+        {
+            "direction": "bullish",
+            "pnl": 1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-01",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+        },
+        {
+            "direction": "bullish",
+            "pnl": -1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-02",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+        },
+    ]
+    rules = [
+        ExperienceRule(pattern="test", category="success_pattern", rate=0.95, sample_count=10),
+    ]
+    # Empirical win rate = 0.5 (1 win, 1 loss), claimed 0.95 → drift = 0.45 > 0.15 tolerance
+    verified = _verify_rules(rules, records, tolerance=0.15)
+    assert len(verified) == 0
 
+
+async def test_verify_rules_keeps_valid():
+    """Rules with rate close to empirical data are kept."""
+    records = [
+        {
+            "direction": "bullish",
+            "pnl": 1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-01",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+        },
+        {
+            "direction": "bullish",
+            "pnl": 1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-02",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+        },
+    ]
+    rules = [
+        ExperienceRule(pattern="test", category="success_pattern", rate=0.9, sample_count=10),
+    ]
+    # Empirical win rate = 1.0, claimed 0.9 → drift = 0.1 < 0.15 tolerance
+    verified = _verify_rules(rules, records, tolerance=0.15)
+    assert len(verified) == 1
+
+
+async def test_verify_rules_regime_filtered():
+    """Verification filters records by regime conditions before computing rate."""
+    # Records with high volatility (>0.025) have positive PnL
+    # Records with normal volatility have negative PnL
+    records = [
+        {
+            "pnl": 1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-01",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.03,
+            "funding_rate": 0.001,
+            "direction": "bullish",
+        },
+        {
+            "pnl": 1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-02",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.04,
+            "funding_rate": 0.001,
+            "direction": "bullish",
+        },
+        {
+            "pnl": -1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-03",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.015,
+            "funding_rate": 0.001,
+            "direction": "bullish",
+        },
+    ]
+    # Rule claims 90% win rate in high_vol regime
+    # Regime-filtered records (vol > 0.025): 2 wins, 0 losses → empirical = 1.0
+    # drift = |0.9 - 1.0| = 0.1 < 0.15 → keep
+    rules = [
+        ExperienceRule(
+            pattern="test",
+            category="success_pattern",
+            rate=0.9,
+            sample_count=10,
+            conditions={"regime_tags": ["high_vol"]},
+        ),
+    ]
+    verified = _verify_rules(rules, records, tolerance=0.15)
+    assert len(verified) == 1
+
+
+async def test_verify_rules_forbidden_zone():
+    """Forbidden zone verification uses loss_rate (1 - win_rate)."""
+    records = [
+        {
+            "pnl": -1.0,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-01",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+            "direction": "bullish",
+        },
+        {
+            "pnl": -0.5,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-02",
+            "verdict_action": "long",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+            "direction": "bearish",
+        },
+        {
+            "pnl": 0.5,
+            "key_factors": [],
+            "confidence": 0.7,
+            "reasoning": "x",
+            "date": "2024-01-03",
+            "verdict_action": "hold",
+            "price": 50000,
+            "volatility": 0.02,
+            "funding_rate": 0.001,
+            "direction": "bullish",
+        },
+    ]
+    # Forbidden zone claims 70% loss rate
+    # Empirical: win_rate = 1/3, loss_rate = 2/3 ≈ 0.667
+    # drift = |0.70 - 0.667| = 0.033 < 0.15 → keep
+    rules = [
+        ExperienceRule(pattern="danger", category="forbidden_zone", rate=0.70, sample_count=10),
+    ]
+    verified = _verify_rules(rules, records, tolerance=0.15)
+    assert len(verified) == 1
+
+
+async def test_assign_maturity():
+    """Maturity assignment based on sample_count and regime_count."""
+    obs = _assign_maturity(ExperienceRule(pattern="x", category="success_pattern", sample_count=5, regime_count=1))
+    assert obs.maturity == "observation"
+
+    hyp = _assign_maturity(ExperienceRule(pattern="x", category="success_pattern", sample_count=15, regime_count=1))
+    assert hyp.maturity == "hypothesis"
+
+    rule = _assign_maturity(ExperienceRule(pattern="x", category="success_pattern", sample_count=35, regime_count=3))
+    assert rule.maturity == "rule"
+
+
+async def test_reflection_injected_in_experience():
+    """Verify _run_agent correctly uses GSSC pipeline for experience injection."""
     from cryptotrader.models import AgentAnalysis
 
-    # Build a minimal mock analysis result
     mock_analysis = AgentAnalysis(
         agent_id="tech_agent",
         pair="BTC/USDT",
@@ -254,12 +464,20 @@ async def test_reflection_injected_in_experience():
     mock_agent_cls = MagicMock()
     mock_agent_cls.return_value.analyze = AsyncMock(return_value=mock_analysis)
 
+    mem = ExperienceMemory(
+        success_patterns=[
+            ExperienceRule(pattern="RSI divergence works", category="success_pattern", rate=0.8, sample_count=20)
+        ],
+        strategic_insights=["Watch RSI divergence"],
+    )
+
     state = {
         "data": {
             "snapshot": MagicMock(pair="BTC/USDT"),
-            "experience": "Historical context here",
+            "experience_memory": {"tech_agent": mem},
+            "historical_cases": [],
             "agent_corrections": {},
-            "agent_reflections": {"tech_agent": "My strategy memo: watch RSI divergence"},
+            "regime_tags": ["high_vol"],
         },
         "metadata": {
             "models": {},
@@ -272,9 +490,8 @@ async def test_reflection_injected_in_experience():
 
         await tech_analyze(state)
 
-    # Check that analyze was called with experience containing the reflection
+    # Check that analyze was called with structured experience
     call_args = mock_agent_cls.return_value.analyze.call_args
     experience_arg = call_args[0][1]  # second positional arg
-    assert "Strategy memo (your own prior self-reflection):" in experience_arg
-    assert "watch RSI divergence" in experience_arg
-    assert "Historical context here" in experience_arg
+    assert "RSI divergence works" in experience_arg
+    assert "Watch RSI divergence" in experience_arg

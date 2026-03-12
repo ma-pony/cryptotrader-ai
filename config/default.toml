@@ -27,6 +27,10 @@ fallback = "deepseek-chat"
 max_rounds = 3
 convergence_threshold = 0.1
 divergence_hold_threshold = 0.7
+skip_debate = true
+consensus_skip_threshold = 0.5
+confusion_skip_threshold = 0.05
+confusion_max_dispersion = 0.2
 
 [data]
 default_timeframe = "1h"
@@ -77,12 +81,24 @@ high_confidence_pct = 0.35    # ceiling for position_scale mapping
 medium_confidence_pct = 0.12  # legacy fallback (confidence >= 0.6)
 low_confidence_pct = 0.06     # floor for position_scale mapping
 
-[reflection]
+[experience]
 enabled = true
 every_n_cycles = 20
 min_commits_required = 10
 lookback_commits = 30
 model = ""
+token_budget_pct = 0.30
+verify_win_rate_tolerance = 0.15
+
+[experience.regime_thresholds]
+high_funding = 0.0003
+negative_funding = -0.0001
+high_vol = 0.025
+low_vol = 0.010
+trending_up = 0.05
+trending_down = -0.05
+extreme_fear_fng = 25
+extreme_greed_fng = 75
 
 [scheduler]
 enabled = false
