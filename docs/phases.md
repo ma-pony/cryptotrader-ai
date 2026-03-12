@@ -94,7 +94,7 @@
 
 ---
 
-## Phase 3: 实盘就绪（预计 2-3 周）
+## Phase 3: 实盘就绪 ✅ (已完成)
 
 ### 目标
 系统可以在真实交易所上运行，有持久化存储、回测验证、定时调度和基础监控。
@@ -403,7 +403,7 @@ model = "gpt-4o-mini"
 ```
 Phase 1 ✅  最小闭环        52 files, 11 tests   → 能跑通一次完整流程
 Phase 2 ✅  完整智能层      57 files, 51 tests   → 真实数据源 + API 服务
-Phase 3     实盘就绪        ~80 files, ~120 tests → 持久化 + 回测 + 实盘 + Dashboard
+Phase 3 ✅  实盘就绪        ~90 files, 347 tests → 持久化 + 回测 + 实盘 + 调度 + 经验记忆
 Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 + 社区
 ```
 
@@ -411,15 +411,15 @@ Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 
 
 | 债务 | 引入阶段 | 计划解决 | 说明 |
 |------|---------|---------|------|
-| JournalStore 纯内存 | Phase 1 | Phase 3 | 重启丢失所有决策记录 |
-| Portfolio 硬编码 | Phase 1 | Phase 3 | 每次运行独立，无持仓追踪 |
-| Redis 未实际连接 | Phase 1 | Phase 3 | 冷却/频率限制不生效 |
-| 新闻情绪关键词匹配 | Phase 2 | Phase 4 | 准确率有限，升级到 FinBERT |
-| 无回测验证 | Phase 2 | Phase 3 | 无法量化策略表现 |
-| LiveExchange 未验证 | Phase 1 | Phase 3 | 需 testnet 实测 |
-| 无定时调度 | Phase 2 | Phase 3 | 需手动触发 |
-| 无通知机制 | Phase 2 | Phase 3 | 交易/告警无法推送 |
-| Agent 等权 | Phase 2 | Phase 3+ | 需积累历史数据后校准 |
+| JournalStore 纯内存 | Phase 1 | ✅ 已解决 | PostgreSQL + 内存降级双模式 |
+| Portfolio 硬编码 | Phase 1 | ✅ 已解决 | PortfolioManager 完整持仓追踪 |
+| Redis 未实际连接 | Phase 1 | ✅ 已解决 | RedisStateManager 含保守降级 fallback |
+| 新闻情绪关键词匹配 | Phase 2 | 已更新 | FinBERT 已移除，情绪分析委托给 NewsAgent LLM；关键词匹配作为数据层 fallback 保留 |
+| 无回测验证 | Phase 2 | ✅ 已解决 | BacktestEngine 含完整回测 + 经验蒸馏 |
+| LiveExchange 未验证 | Phase 1 | ✅ 已解决 | 生产级加固：重试、熔断、凭证系统 |
+| 无定时调度 | Phase 2 | ✅ 已解决 | APScheduler 3.x（IntervalTrigger + CronTrigger） |
+| 无通知机制 | Phase 2 | ✅ 已解决 | Webhook 通知（交易/拒绝/熔断/对账/每日摘要） |
+| Agent 等权 | Phase 2 | 部分解决 | 校准系统已存在（calibrate.py），依赖历史数据积累 |
 
 ---
 

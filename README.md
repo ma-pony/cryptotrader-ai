@@ -4,7 +4,7 @@ AI-powered crypto trading system using LangGraph multi-agent debate.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-347%20passed-brightgreen.svg)]()
 
 ## Overview
 
@@ -14,12 +14,12 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 
 ### Key Features
 
-- **Multi-agent debate** — 4 agents analyze independently, then cross-challenge each other over 2-3 rounds
-- **Three graph modes** — Full debate pipeline, lite (backtest), bull/bear adversarial with judge
+- **Multi-agent debate** — 4 agents analyze independently, then cross-challenge each other over 2-3 rounds; debate gate skips debate on consensus or confusion for progressive filtering
+- **Three graph modes** — Full debate pipeline with debate gate, lite (backtest), bull/bear adversarial with judge
 - **11-check risk gate** — Pure rules, no LLM: position limits, CVaR, correlation, circuit breakers
 - **Decision journal** — Git-like immutable commit chain with similarity search and calibration
 - **Verbal reinforcement** — Past decisions injected into agent prompts for experience-based learning
-- **Agent self-reflection** — Periodic LLM-driven strategy memos based on historical accuracy
+- **Structured experience memory** — GSSC pipeline (gather → select → structure) with regime-aware retrieval, ExperienceRule/ExperienceMemory JSON, and 5-layer anti-overfitting defense
 - **Backtesting engine** — Historical simulation with realistic cost modeling and no look-ahead bias
 - **Live trading ready** — ccxt-based exchange adapters with retry, precision, and timeout handling
 - **APScheduler automation** — Periodic trading cycles with daily portfolio summaries
@@ -28,15 +28,16 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 ## Architecture
 
 ```
-Data Collection → Verbal Reinforcement → 4 Agents (fan-out)
-  → Cross-Challenge Debate (2-3 rounds) → Convergence Check
+Data Collection → Verbal Reinforcement → 4 Agents (fan-out, parallel)
+  → Debate Gate → [skip] → Enrich Context → Verdict
+                → [debate] → 2 Debate Rounds (parallel per round)
   → Verdict → Risk Gate (11 checks) → Execute / Reject → Journal
-                                          ↓
-                                Portfolio Write-back → Snapshot
+                                        ↓
+                              Portfolio Write-back → Snapshot
 ```
 
 **Three graph variants:**
-- `build_trading_graph()` — Full pipeline with debate loop and convergence check
+- `build_trading_graph()` — Full pipeline with debate gate (skip on consensus/confusion), 2 debate rounds, AI verdict with downgrade
 - `build_lite_graph()` — Skips debate, used for backtesting
 - `build_debate_graph()` — Bull/bear adversarial debate with judge (TradingAgents-style)
 
@@ -56,15 +57,18 @@ Every agent's system prompt includes a **5-point pre-signal checklist**: contrad
 
 ### How Debate Works
 
-1. **Round 1**: All 4 agents analyze independently
-2. **Round 2-3**: Each agent sees all others' analyses and must justify holding or revising their position with specific data points
-3. **Convergence check**: Divergence score (population stdev of `confidence × direction`) tracked per round; stops when relative change < 10% or max rounds reached
-4. **Verdict**: Single LLM at temperature 0.1 sees all agent outputs, position context (FLAT/LONG/SHORT, entry price, unrealized PnL), price trend, and risk constraints → outputs `{action, confidence, position_scale, reasoning, thesis, invalidation}`
+1. **Round 1**: All 4 agents analyze independently (parallel)
+2. **Debate Gate**: Evaluates divergence; skips debate if agents already show consensus (divergence < `consensus_skip_threshold`) or confusion (divergence < `confusion_max_dispersion` with low confidence); otherwise proceeds to debate
+3. **Round 2-3**: Each agent sees all others' analyses and must justify holding or revising their position with specific data points (parallel per round)
+4. **Convergence check**: Divergence score (population stdev of `confidence × direction`) tracked per round; stops when relative change < 10% or max rounds reached
+5. **Verdict**: Single LLM at temperature 0.1 sees all agent outputs, position context (FLAT/LONG/SHORT, entry price, unrealized PnL), price trend, and risk constraints → outputs `{action, confidence, position_scale, reasoning, thesis, invalidation}`
 
 ### Learning System
 
-- **Verbal reinforcement**: `search_similar()` finds up to 3 past decisions matching current funding rate, volatility, and price trend direction (within 50% tolerance). Injected as "Past experience" into prompts
-- **Agent reflection**: Every N cycles (default 20), each agent writes a 3-5 point strategy memo analyzing which signals were predictive vs misleading. Memos persist to SQLite and are prepended to future system prompts
+- **Verbal reinforcement**: `search_by_regime()` retrieves past decisions matching current regime tags via Jaccard overlap. Regime labels (high_funding, high_vol, trending_up, extreme_fear, etc.) are computed by `tag_regime()` from the data snapshot
+- **GSSC pipeline**: `context.py` implements gather → select → structure: collects regime-matched cases and structured rules, scores by relevance, fits within token budget, and injects as structured context into agent prompts
+- **Structured experience memory**: `reflect.py` generates `ExperienceMemory` JSON (success_patterns, forbidden_zones, strategic_insights) with `ExperienceRule` entries per pattern. Rules carry maturity levels (observation → hypothesis → rule) and empirical win rates
+- **Anti-overfitting 5-layer defense**: minimum sample thresholds, maturity gating, regime-aware verification (win rates computed only within matching regime), LLM constraint prompts, code-verified win rates
 - **Calibration**: Per-agent accuracy tracking with bias detection (overconfidence, directional lean, neutral-defaulting). Corrections injected into verdict prompt
 
 ## Quickstart
@@ -164,6 +168,10 @@ arena serve --port 8003
 | `arena migrate` | Create PostgreSQL tables |
 | `arena risk reset-breaker` | Reset circuit breaker |
 | `arena live-check --exchange binance` | Pre-flight check for live trading |
+| `arena experience distill --session {id}` | Distill experience from backtest |
+| `arena experience show --session {id}` | Show distilled experience |
+| `arena experience merge --session {id}` | Merge backtest experience into live |
+| `arena experience sessions` | List backtest sessions |
 
 ## Data Sources
 
@@ -232,6 +240,10 @@ fallback = "deepseek-chat"
 [debate]
 max_rounds = 3
 convergence_threshold = 0.1
+skip_debate = true
+consensus_skip_threshold = 0.5
+confusion_skip_threshold = 0.05
+confusion_max_dispersion = 0.2
 
 [risk]
 max_stop_loss_pct = 0.05
@@ -249,7 +261,7 @@ interval_minutes = 240
 exchange_id = "binance"
 daily_summary_hour = 0    # UTC hour (0-23)
 
-[reflection]
+[experience]
 enabled = true
 every_n_cycles = 20
 ```
@@ -415,10 +427,13 @@ src/cryptotrader/
 │   ├── search.py      # Similarity search (funding rate, volatility, trend)
 │   └── calibrate.py   # Per-agent accuracy tracking + bias detection
 ├── learning/
-│   ├── verbal.py      # Verbal reinforcement (historical experience injection)
-│   └── reflect.py     # Agent self-reflection (periodic strategy memos)
+│   ├── verbal.py      # Verbal reinforcement (regime-aware historical case retrieval)
+│   ├── reflect.py     # Structured experience memory (ExperienceRule JSON generation)
+│   ├── context.py     # GSSC engine (gather → select → structure → inject)
+│   └── regime.py      # Regime tagging (tag_regime) + Jaccard overlap matching
 └── backtest/
     ├── engine.py      # BacktestEngine (LLM + SMA modes)
+    ├── session.py     # Backtest session storage (commits, results, experience)
     ├── cache.py       # OHLCV SQLite cache
     ├── historical_data.py  # FnG, funding rate, FRED, futures volume
     └── result.py      # BacktestResult metrics
@@ -440,7 +455,7 @@ src/dashboard/app.py   # Streamlit dashboard (overview, decisions, risk, backtes
 | Scheduling | APScheduler 3.x |
 | Database | PostgreSQL 16 + SQLAlchemy 2.0 async |
 | Cache / State | Redis 7 |
-| Local Storage | SQLite (data store + LLM cache + reflections) |
+| Local Storage | SQLite (data store + LLM cache + experience memory) |
 | API Server | FastAPI + Uvicorn |
 | Dashboard | Streamlit |
 | CLI | Typer + Rich |
@@ -449,7 +464,7 @@ src/dashboard/app.py   # Streamlit dashboard (overview, decisions, risk, backtes
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v (288 tests)
+make test             # pytest tests/ -v (347 tests)
 make lint             # ruff check src/ tests/
 make format           # ruff format src/ tests/
 make scheduler        # arena scheduler start
@@ -469,7 +484,7 @@ arena sync             # Sync historical data
 
 - **Zero lint errors**: `ruff check src/ tests/` must pass with zero errors
 - **No `noqa` comments**: Refactor instead of suppressing (C901 threshold = 10)
-- **288 tests**, 1 skip, 70% coverage
+- **347 tests**, 1 skip, 70% coverage
 - **Async tests**: `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed
 - **Must use `uv run pytest`** (Python 3.12 venv), not bare `pytest`
 

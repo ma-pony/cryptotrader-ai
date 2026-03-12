@@ -8,7 +8,8 @@
 |------|----------|
 | LLM 调用失败 | Agent 返回 `is_mock=True, confidence=0.1, direction=neutral` |
 | 全部 Agent mock | Verdict 强制 `hold`，不交易 |
-| Redis 不可用 | 降级到内存状态管理，跳过 Redis 依赖检查 |
+| Redis 不可用 | 若 Redis 已配置但不可用，保守拒绝交易（而非跳过）；若从未配置，降级到内存状态管理 |
+| 辩论门控跳过 | `debate_skipped=True` 写入 state，Verdict 可能降级为 weighted 投票 |
 | PostgreSQL 不可用 | 降级到内存日志（最多 10,000 条） |
 | 交易所 API 超时 | LiveExchange 3 次重试，指数退避 |
 | 余额不足 | PaperExchange 返回 `failed`，不抛异常 |
@@ -21,6 +22,10 @@
 | 决策 | 原因 |
 |------|------|
 | 固定 2 轮辩论（非动态收敛） | 动态收敛会人为趋同，2 轮允许真实分歧 |
+| 辩论门控：强共识或共同困惑时跳过辩论 | 将 LLM 调用从 13 次减少到 4-5 次，无质量损失 |
+| 困惑 vs 分歧：离散度阈值区分 | 低均值 + 低离散度 = 困惑（跳过）；低均值 + 高离散度 = 分歧（辩论） |
+| 辩论跳过 + 置信度平坦 + 无熔断 → Verdict 降级为加权投票 | 可安全节省 1 次 LLM 调用 |
+| 辩论轮次内各 Agent 并行执行（asyncio.gather） | 每轮延迟降低 4 倍 |
 | `close` 动作豁免全部风控 | 减仓是降低风险，不应被风控阻断 |
 | position_scale 连续映射 | 三档离散映射丢失 AI 的精细判断 |
 | ToolAgent 回测跳过工具 | 避免前视偏差 + 减少无效 HTTP 超时 |
@@ -44,7 +49,7 @@
 
 ```bash
 make lint          # uv run ruff check src/ tests/  → 必须零错误
-make test          # uv run pytest tests/ -v        → 288 pass, 1 skip
+make test          # uv run pytest tests/ -v        → 347 pass, 1 skip
 ```
 
 - **禁止 `noqa` 注释** — 遇到 C901 必须重构，遇到 F401 必须删除或 `__all__`

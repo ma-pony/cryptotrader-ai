@@ -47,6 +47,7 @@ cryptotrader-ai/
 │   │   │   └── langchain_agents.py  # Supervisor 模式（备选）
 │   │   ├── backtest/
 │   │   │   ├── engine.py      # BacktestEngine（LLM + SMA 模式）
+│   │   │   ├── session.py     # 回测 Session 存储（commits/results/experience）
 │   │   │   ├── cache.py       # OHLCV SQLite 缓存
 │   │   │   ├── historical_data.py  # FnG/资金费率/BTC 主导率/FRED/期货量
 │   │   │   └── result.py      # BacktestResult 数据类
@@ -81,12 +82,14 @@ cryptotrader-ai/
 │   │   │   ├── search.py      # 相似条件搜索
 │   │   │   └── calibrate.py   # 偏差检测 + 校正生成
 │   │   ├── learning/
-│   │   │   ├── verbal.py      # 言语强化（历史经验注入）
-│   │   │   └── reflect.py     # Agent 自我反思（LLM 策略备忘录）
+│   │   │   ├── verbal.py      # 语言强化（Regime-aware 历史案例检索）
+│   │   │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
+│   │   │   ├── context.py     # GSSC 引擎（gather → select → structure）
+│   │   │   └── regime.py      # Regime 标签 + Jaccard 匹配
 │   │   ├── nodes/             # LangGraph 节点
 │   │   │   ├── agents.py      # 4 Agent fan-out
 │   │   │   ├── data.py        # 数据收集 + PnL 更新 + 趋势上下文
-│   │   │   ├── debate.py      # 辩论轮次 + 收敛路由
+│   │   │   ├── debate.py      # 辩论轮次（轮内并行）+ 辩论门控 + 收敛路由
 │   │   │   ├── verdict.py     # Verdict + 风控检查
 │   │   │   ├── execution.py   # 下单 + 止损 + 仓位更新
 │   │   │   └── journal.py     # 日志记录
@@ -111,7 +114,7 @@ cryptotrader-ai/
 │   │   └── main.py            # Typer CLI（arena 命令）
 │   └── dashboard/
 │       └── app.py             # Streamlit 仪表板
-├── tests/                     # 288 个测试，70% 覆盖率
+├── tests/                     # 347 个测试，70% 覆盖率
 ├── pyproject.toml             # 项目配置 + 依赖
 ├── Makefile                   # 快捷命令
 ├── docker-compose.yml         # PostgreSQL 16 + Redis 7 + Scheduler 服务
@@ -279,6 +282,8 @@ class ArenaState(TypedDict):
 | `trend_context` | `dict` | enrich_context | 价格趋势信息 |
 | `order` | `dict` | place_order | 订单信息 |
 | `stop_loss_triggered` | `bool` | check_stop_loss | 止损触发 |
+| `debate_skipped` | `bool` | debate_gate | 辩论是否被跳过 |
+| `debate_skip_reason` | `str` | debate_gate | 跳过原因 |
 
 ### `metadata` 字典中的关键 key
 
@@ -321,10 +326,12 @@ create_llm(model, temperature, timeout, json_mode)
 | `run_debate()` Bull | debate 模型 | 0.3 | 牛方论证 |
 | `run_debate()` Bear | debate 模型 | 0.3 | 熊方论证 |
 | `judge_debate()` | debate 模型 | 0.1 | 法官裁决 |
-| `debate_round()` | debate 模型 | 0.3 | 交叉辩论 |
+| `debate_round()` | debate 模型 | 0.3 | 交叉辩论（4 个 Agent 经 asyncio.gather 并行执行） |
 | `langchain_agents.py` | supervisor 模型 | 0.2 | 备选 supervisor |
 | `graph_supervisor.py` | supervisor 模型 | — | 备选 supervisor |
 | `learning/reflect.py` | reflection 模型 | 0.3 | Agent 自我反思 |
+
+**辩论门控**：`debate_gate` 节点在进入辩论轮次前评估共识强度与混沌程度。当所有 Agent 已达高度共识（`consensus_skip_threshold`）或市场信号过于混乱无法辩论（`confusion_skip_threshold` + `confusion_max_dispersion`），辩论轮次将被完全跳过，直接进入 Verdict 阶段，节省 LLM 调用开销。
 
 **JSON 解析**：所有 LLM 输出经 `_extract_json()` 平衡括号提取，处理 markdown fence 和额外文本。
 
@@ -560,6 +567,23 @@ fallback = "deepseek-chat"
 max_rounds = 3
 convergence_threshold = 0.1
 divergence_hold_threshold = 0.7
+skip_debate = true                    # 辩论门控
+consensus_skip_threshold = 0.5       # 共识强度阈值
+confusion_skip_threshold = 0.05      # 迷茫阈值
+confusion_max_dispersion = 0.2       # 迷茫最大离散度
+
+[experience]
+reflection_cycle = 5                 # 每 N 轮触发一次反思
+token_budget = 2000                  # 经验注入 token 上限
+win_rate_tolerance = 0.10            # 验证容忍误差
+
+[experience.regime_thresholds]
+high_funding = 0.001
+high_vol = 0.05
+trending_up = 0.03
+trending_down = -0.03
+extreme_fear = 25
+extreme_greed = 75
 
 [risk]
 max_stop_loss_pct = 0.05

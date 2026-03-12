@@ -128,21 +128,25 @@ Jesse (6k⭐)                      NOFX (10.5k⭐)
     └─────────┴───────┬───────┴─────────┘
                       ▼
             ┌──────────────────┐
-            │ Cross-Challenge  │  ← Phase B: 交叉质询
-            │ (每个 Agent 质疑  │    Agent 能看到其他人的分析
-            │  其他 Agent 结论) │    基于数据分歧辩论
-            └────────┬─────────┘
-                     ▼
-            ┌──────────────────┐
-            │   Convergence    │  ← 稳定性检测
-            │   Check          │    direction+confidence 变化 < 阈值?
+            │   Debate Gate    │  ← 渐进式过滤
+            │ (共识/迷茫检测)    │    强共识或共同迷茫时跳过辩论
             └───┬──────────┬───┘
-          stable│          │continue (≤3轮)
-                ▼          └──→ 回到 Cross-Challenge
-        ┌──────────────┐
-        │   Verdict    │  ← 加权共识 + 分歧度计算
-        │              │    分歧度本身作为仓位调节信号
-        └──────┬───────┘
+          skip  │          │debate
+                ▼          ▼
+        ┌──────────┐  ┌──────────────────┐
+        │ Enrich   │  │ Cross-Challenge  │  ← 轮内并行
+        │ Context  │  │ (2 轮辩论)        │
+        └────┬─────┘  └────────┬─────────┘
+             │                 ▼
+             │           ┌──────────┐
+             │           │ Enrich   │
+             │           │ Context  │
+             └─────┬─────┘
+                   ▼
+            ┌──────────────┐
+            │   Verdict    │  ← 加权共识 + 分歧度计算
+            │              │    分歧度本身作为仓位调节信号
+            └──────┬───────┘
                ▼
         ┌──────────────┐
         │  Risk Gate   │  ← 11 项硬检查，纯规则
@@ -212,8 +216,10 @@ def build_trading_graph(config: dict) -> StateGraph:
     graph.add_node("macro_agent", macro_analyze)
 
     # ── 辩论 ──
-    graph.add_node("cross_challenge", debate_round)
-    graph.add_node("check_convergence", check_stability)
+    graph.add_node("debate_gate", debate_gate)      # 渐进式过滤：强共识/共同迷茫时跳过
+    graph.add_node("debate_round_1", debate_round)
+    graph.add_node("debate_round_2", debate_round)
+    graph.add_node("enrich_context", enrich_context)
 
     # ── 决策 + 执行 ──
     graph.add_node("verdict", make_verdict)
@@ -231,18 +237,22 @@ def build_trading_graph(config: dict) -> StateGraph:
     graph.add_edge("inject_experience", "news_agent")
     graph.add_edge("inject_experience", "macro_agent")
 
-    # fan-in: 所有分析完成后进入辩论
-    graph.add_edge("tech_agent", "cross_challenge")
-    graph.add_edge("chain_agent", "cross_challenge")
-    graph.add_edge("news_agent", "cross_challenge")
-    graph.add_edge("macro_agent", "cross_challenge")
+    # fan-in: 所有分析完成后进入 debate_gate（渐进式过滤）
+    graph.add_edge("tech_agent", "debate_gate")
+    graph.add_edge("chain_agent", "debate_gate")
+    graph.add_edge("news_agent", "debate_gate")
+    graph.add_edge("macro_agent", "debate_gate")
 
-    # 辩论循环
-    graph.add_edge("cross_challenge", "check_convergence")
-    graph.add_conditional_edges("check_convergence", convergence_router, {
-        "converged": "verdict",
-        "continue": "cross_challenge",
+    # debate_gate 条件路由：跳过辩论 or 进入两轮辩论
+    graph.add_conditional_edges("debate_gate", debate_gate_router, {
+        "debate": "debate_round_1",
+        "skip": "enrich_context",
     })
+
+    # 两轮辩论后汇入 enrich_context，enrich_context → verdict
+    graph.add_edge("debate_round_1", "debate_round_2")
+    graph.add_edge("debate_round_2", "enrich_context")
+    graph.add_edge("enrich_context", "verdict")
 
     # 风控门控
     graph.add_edge("verdict", "risk_gate")
@@ -404,34 +414,48 @@ def make_verdict(state: ArenaState) -> TradeVerdict:
     )
 ```
 
-### 4.6 Verbal Reinforcement（经验反哺，来自 FinCon NeurIPS 2024）
+### 4.6 Verbal Reinforcement + GSSC 经验管道（来自 FinCon NeurIPS 2024）
 
-Decision Journal 不只是被动记录——每次决策前，检索相似市场条件下的历史经验，注入 Agent prompt。
+Decision Journal 不只是被动记录——每次决策前，通过 GSSC 管道（Gather → Select → Structure）将历史经验注入 Agent prompt。
+
+**管道三阶段**：
+1. **Gather**（`verbal.py`）：对当前市场快照做 Regime 标签（`tag_regime()`），通过 `search_by_regime()` 检索语义相似的历史决策案例（Jaccard 重叠匹配）
+2. **Select**（`context.py`）：按 regime 相关度打分，在 token 预算内选出最优 case 包；同时加载 `reflect.py` 生成的结构化 `ExperienceMemory`（success_patterns / forbidden_zones / strategic_insights）
+3. **Structure**（`context.py`）：将 cases + rules 格式化为 Markdown，注入各 Agent prompt
 
 ```python
+# learning/verbal.py — Regime-aware 历史案例检索
 def verbal_reinforcement(state: ArenaState) -> dict:
     snapshot = state["data"]["snapshot"]
 
-    # 从 Decision Journal 检索相似市场条件
-    similar_commits = journal.search_similar(
-        funding_rate=snapshot.market.funding_rate,
-        exchange_flow=snapshot.onchain.exchange_netflow,
-        volatility=snapshot.market.volatility,
-        limit=3,
+    # 1. Regime 标签（tag_regime 返回离散标签集合）
+    regime_tags = tag_regime(snapshot)
+
+    # 2. Regime-aware 历史案例检索（Jaccard 重叠 > 阈值）
+    historical_cases = journal.search_by_regime(
+        regime_tags=regime_tags,
+        limit=config.experience.verbal_cases,
     )
 
-    # 提取语言化经验
-    experiences = []
-    for commit in similar_commits:
-        outcome = "盈利" if commit.pnl > 0 else "亏损"
-        experiences.append(
-            f"[{commit.timestamp.date()}] 类似市场条件下决策{commit.verdict.action}，"
-            f"结果{outcome} {commit.pnl:.1%}。"
-            f"复盘：{commit.retrospective}"
-        )
+    # 3. 加载结构化经验记忆（ExperienceMemory JSON）
+    experience_memory = load_experience_memory()
 
-    return {"data": {"experience": "\n".join(experiences)}}
+    return {
+        "data": {
+            "regime_tags": regime_tags,
+            "historical_cases": historical_cases,
+            "experience_memory": experience_memory,
+        }
+    }
+
+# learning/context.py — GSSC 引擎（注入 Agent prompt）
+def structure_experience(cases, memory, regime_tags, token_budget) -> str:
+    packets = gather_packets(cases, memory)           # Gather
+    selected = select_packets(packets, regime_tags, token_budget)  # Select
+    return format_for_prompt(selected)                # Structure
 ```
+
+**反思与记忆生成**（`reflect.py`）：每 N 次决策后，LLM 从 Journal 提炼 `ExperienceRule`（pattern / conditions / rate / maturity），存入 `experience_json` 列。支持增量演化和五层防过拟合机制（最小样本、成熟度、Regime 过滤、LLM 约束、代码校验胜率）。
 
 ### 4.7 模型分级策略
 
@@ -443,7 +467,7 @@ def verbal_reinforcement(state: ArenaState) -> dict:
 | **单次决策总计** | | | **~$0.10** |
 | **月成本（日级3次×30天）** | | | **~$9** |
 
-通过 litellm 统一接口，按 Agent 配置不同模型。
+通过 LangChain ChatOpenAI 统一接口，按 Agent 配置不同模型。`create_llm()` 工厂自动处理 fallback 和缓存。
 
 ---
 
@@ -1025,7 +1049,10 @@ cryptotrader-ai/
 │       │
 │       ├── learning/          # 经验学习
 │       │   ├── __init__.py
-│       │   └── verbal.py      # Verbal Reinforcement
+│       │   ├── verbal.py      # 语言强化（Regime-aware 历史案例检索）
+│       │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
+│       │   ├── context.py     # GSSC 引擎（gather → select → structure）
+│       │   └── regime.py      # Regime 标签（tag_regime + Jaccard 匹配）
 │       │
 │       ├── graph.py           # LangGraph 主编排
 │       ├── models.py          # 全局数据模型
@@ -1071,7 +1098,7 @@ cryptotrader-ai/
 | 组件 | 选型 | 版本 | 理由 |
 |------|------|------|------|
 | Agent 编排 | LangGraph | ≥0.2 | 状态机+并行+条件循环，TradingAgents/ai-hedge-fund 验证 |
-| LLM 统一接口 | litellm | latest | 100+ provider，按 Agent 配模型 |
+| LLM 统一接口 | LangChain ChatOpenAI | ≥0.3 | `create_llm()` 工厂，自动 fallback + SQLiteCache，按 Agent 配模型 |
 | 交易 | ccxt | ≥4.0 | 100+ 交易所统一接口 |
 | API 框架 | FastAPI | ≥0.115 | 异步，自动文档，Pydantic v2 |
 | ORM | SQLAlchemy 2.0 | async | Decision Journal 存储 |

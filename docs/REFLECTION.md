@@ -1,6 +1,8 @@
-# Agent 反思优化系统 — 设计文档
+# 经验记忆系统（Experience Memory）— 设计文档
 
 > 每个 Agent 定期回顾自己的历史分析 + 实际结果，通过 LLM 生成策略备忘录，实现自我优化。
+
+> **注意**：本文档描述的是原始反思系统设计（reflect.py）。系统已在此基础上大幅增强，新增了 GSSC pipeline（gather → select → structure）、Regime-aware 搜索，以及结构化经验记忆（ExperienceRule / ExperienceMemory）。最新架构请参阅 CLAUDE.md。
 
 ---
 
@@ -8,18 +10,23 @@
 
 ### 1.1 现有学习机制
 
-系统已有两个学习层：
+系统已有四个学习层：
 
 | 机制 | 文件 | 作用 | 局限 |
 |------|------|------|------|
-| 言语强化 | `learning/verbal.py` | 搜索 3 条相似历史条件，共享经验注入 | 所有 Agent 共享相同经验，无法个性化 |
+| 言语强化 | `learning/verbal.py` | 搜索相似历史条件（Regime-aware），共享经验注入 | 所有 Agent 共享相同经验，无法个性化 |
 | 统计校准 | `journal/calibrate.py` | 检测过度自信、方向偏好、准确率，生成校准警告 | 只能告诉 Agent "你有 bullish bias"，无法告诉它"你在低波动时期持续误判 RSI 超卖信号" |
+| 自我反思 | `learning/reflect.py` | LLM 深度分析：哪些信号有效/误导，生成结构化 ExperienceMemory | 每 20 个周期运行一次，非实时 |
+| GSSC Pipeline | `learning/context.py` | Gather → Select → Structure：Regime-aware 条件化检索，CJK-aware Token 预算控制，结构化注入 Agent Prompt | 需积累足够历史数据后效果最佳 |
 
-### 1.2 缺失能力
+### 1.2 能力增强（当前状态）
 
-- **没有 LLM 驱动的深度反思** -- Agent 无法回顾"我当时为什么判断错了"、"哪些信号实际有效"
-- **校准只有定量统计，没有定性分析** -- 知道准确率 40%，但不知道错在哪里
-- **经验是共享的，不是个性化的** -- Tech Agent 和 Macro Agent 看到同样的历史经验
+系统已引入结构化经验记忆，新增模型 `ExperienceRule` 和 `ExperienceMemory`：
+
+- **`ExperienceRule`**：封装单条经验规则，含 pattern（触发条件）、conditions（regime_tags + 量化门槛）、rate（验证胜率）、maturity（observation → hypothesis → rule 成熟度）、source（backtest / live）
+- **`ExperienceMemory`**：结构化容器，含 success_patterns（成功模式规则列表）、forbidden_zones（禁止区规则列表）、strategic_insights（策略洞察）
+- **GSSC Pipeline**（`context.py`）：Regime-aware gather → 相关性 select → 结构化 structure，输出注入 Agent Prompt；CJK-aware Token 估算（`_estimate_tokens()`）
+- **Regime Tagging**（`regime.py`）：`tag_regime()` 将市场快照分类为离散标签（high_funding / high_vol / trending_up / extreme_fear 等），`regime_overlap()` 计算 Jaccard 相似度
 
 ### 1.3 目标
 
@@ -34,9 +41,10 @@
 每 N 个交易周期（默认 20，即 ~3.3 天 @ 4h 间隔），对 4 个 Agent 各执行一次 LLM 反思调用：
 
 - **输入**：该 Agent 最近 30 条有 PnL 结果的历史分析（direction, confidence, reasoning, key_factors + 实际 PnL + 当时市场环境）
-- **输出**：3-5 条策略备忘录（哪些信号有效、哪些误导、什么偏差需要纠正）
-- **持久化**：SQLite `~/.cryptotrader/agent_reflections.db`（复用现有 `~/.cryptotrader/` 模式）
-- **注入**：下次分析时作为 `"Strategy memo (your own prior self-reflection):"` 追加到 experience 末尾
+- **输出**：结构化 `ExperienceMemory` JSON（success_patterns / forbidden_zones / strategic_insights，每条规则含 rate / maturity / conditions）
+- **持久化**：Journal 数据库 `experience_json` 列（从 SQLite `agent_reflections.db` 迁移到 DB-backed 存储）
+- **注入**：通过 GSSC Pipeline（`context.py`）按 Regime 条件化检索，注入 Agent Prompt
+- **防过拟合五层防线**：最小样本阈值 → maturity 等级（observation/hypothesis/rule）→ Regime-aware 验证 → LLM 约束 Prompt → 代码验证胜率
 
 ### 2.2 数据流
 
@@ -174,24 +182,45 @@ CREATE TABLE IF NOT EXISTS agent_reflections (
 
 ```toml
 # config/default.toml
-[reflection]
-enabled = true              # 是否启用反思系统
+[experience]
+enabled = true              # 是否启用反思系统（原 [reflection]，向后兼容别名保留）
 every_n_cycles = 20          # 每 N 个交易周期执行一次反思
 min_commits_required = 10    # 至少需要多少条有 PnL 的 commit 才执行
 lookback_commits = 30        # 从 journal 取最近多少条 commit
 model = ""                   # 空 = 用 models.analysis
+token_budget = 2000          # GSSC pipeline 注入 Agent Prompt 的 token 上限
+win_rate_tolerance = 0.1     # 防过拟合：验证胜率允许偏差
+
+[experience.regime_thresholds]
+high_funding = 0.001         # 资金费率高于此值 → high_funding 标签
+high_vol = 0.04              # 波动率高于此值 → high_vol 标签
+extreme_fear = 25            # FnG 指数低于此值 → extreme_fear 标签
+extreme_greed = 75           # FnG 指数高于此值 → extreme_greed 标签
 ```
 
 ### 5.2 数据类
 
 ```python
 @dataclass
-class ReflectionConfig:
+class RegimeThresholdsConfig:
+    high_funding: float = 0.001
+    high_vol: float = 0.04
+    extreme_fear: int = 25
+    extreme_greed: int = 75
+
+@dataclass
+class ExperienceConfig:
     enabled: bool = True
     every_n_cycles: int = 20
     min_commits_required: int = 10
     lookback_commits: int = 30
     model: str = ""  # 空 = use models.analysis
+    token_budget: int = 2000
+    win_rate_tolerance: float = 0.1
+    regime_thresholds: RegimeThresholdsConfig = field(default_factory=RegimeThresholdsConfig)
+
+# 向后兼容别名（ReflectionConfig → ExperienceConfig）
+ReflectionConfig = ExperienceConfig
 ```
 
 ---

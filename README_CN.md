@@ -4,7 +4,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-288%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-347%20passed-brightgreen.svg)]()
 
 ## 概述
 
@@ -14,12 +14,12 @@
 
 ### 核心特性
 
-- **多智能体辩论** — 4 个智能体独立分析后，经 2-3 轮交叉质疑达成共识
-- **三种图模式** — 完整辩论流程、轻量回测、多空对抗+评委
+- **多智能体辩论** — 4 个智能体独立分析后，经辩论门控渐进过滤：共识或迷茫时跳过辩论，否则进入 2-3 轮并行交叉质疑
+- **三种图模式** — 完整辩论流程（含辩论门控）、轻量回测、多空对抗+评委
 - **11 项风控检查** — 纯规则，零 LLM：仓位限制、CVaR、相关性、熔断器
 - **决策日志链** — 类 Git 不可变提交链，支持相似搜索和校准分析
 - **语言强化** — 将历史决策经验注入智能体 prompt，实现经验学习
-- **智能体自我反思** — 定期 LLM 驱动的策略备忘录，基于历史准确率分析
+- **结构化经验记忆** — GSSC 流水线（汇集→选择→结构化）将历史经验注入智能体 prompt，含 regime 感知搜索和防过拟合五层防线
 - **回测引擎** — 历史模拟，含真实成本建模和防前视偏差
 - **实盘就绪** — 基于 ccxt 的交易所适配器，带重试、精度处理和超时控制
 - **APScheduler 自动化** — 周期性交易循环 + 每日组合摘要
@@ -29,14 +29,15 @@
 
 ```
 数据采集 → 语言强化注入 → 4 智能体（并行）
-  → 交叉挑战辩论（2-3 轮）→ 收敛检查
+  → 辩论门控 → [跳过] → 上下文丰富 → 裁决
+             → [辩论] → 2 轮辩论（轮内并行）
   → 裁决 → 风控门（11 项检查）→ 执行 / 拒绝 → 日志记录
-                                    ↓
-                          持仓回写 → 快照保存
+                                  ↓
+                        持仓回写 → 快照保存
 ```
 
 **三种图模式：**
-- `build_trading_graph()` — 完整流程，含辩论循环和收敛检查
+- `build_trading_graph()` — 完整流程，含辩论门控（共识/迷茫时跳过辩论）、2 轮辩论、AI 裁决可降级
 - `build_lite_graph()` — 跳过辩论，用于回测
 - `build_debate_graph()` — 多空对抗辩论 + 评委（TradingAgents 风格）
 
@@ -57,14 +58,17 @@
 ### 辩论流程
 
 1. **第 1 轮**：4 个智能体独立分析
-2. **第 2-3 轮**：每个智能体看到其他人的分析结果，必须用具体数据点支持自己保持或修改立场
-3. **收敛检查**：每轮计算分歧度（`confidence × direction` 的总体标准差），相对变化 < 10% 或达到最大轮数时停止
-4. **裁决**：单个 LLM（temperature=0.1）综合所有智能体输出、持仓上下文（空仓/多头/空头、入场价、浮动盈亏）、价格趋势和风控约束 → 输出 `{action, confidence, position_scale, reasoning, thesis, invalidation}`
+2. **辩论门控**：评估智能体共识程度；达成共识或极度迷茫时跳过辩论直接进入裁决，否则进入辩论轮次
+3. **第 2-3 轮（轮内并行）**：每个智能体看到其他人的分析结果，必须用具体数据点支持自己保持或修改立场
+4. **收敛检查**：每轮计算分歧度（`confidence × direction` 的总体标准差），相对变化 < 10% 或达到最大轮数时停止
+5. **裁决**：单个 LLM（temperature=0.1）综合所有智能体输出、持仓上下文（空仓/多头/空头、入场价、浮动盈亏）、价格趋势和风控约束 → 输出 `{action, confidence, position_scale, reasoning, thesis, invalidation}`
 
 ### 学习系统
 
-- **语言强化**：`search_similar()` 在日志中查找最多 3 条匹配当前资金费率、波动率和价格趋势方向的历史决策（50% 容差），作为"过往经验"注入 prompt
-- **智能体反思**：每 N 个周期（默认 20），每个智能体撰写 3-5 点策略备忘录，分析哪些信号有效、哪些误导。备忘录持久化到 SQLite，在后续分析中注入系统提示
+- **GSSC 流水线**：`verbal.py`（regime 感知搜索）+ `reflect.py`（结构化规则生成）→ `context.py`（汇集 → 选择 → 结构化）→ 注入智能体 prompt
+- **Regime 感知搜索**：`tag_regime()` 将当前快照分类为离散标签（high_funding、high_vol、trending_up、extreme_fear 等），通过 Jaccard 重叠度检索最相关的历史案例
+- **结构化经验记忆**：LLM 将历史案例提炼为 `ExperienceMemory`（成功模式、禁止区域、战略洞见），支持增量演化和 maturity 分级（observation → hypothesis → rule）
+- **防过拟合五层防线**：最小样本阈值、maturity 分级、regime 感知验证、LLM 约束 prompt、代码核验胜率
 - **校准分析**：逐智能体准确率追踪 + 偏差检测（过度自信、方向偏好、中性默认）。校正信息注入裁决 prompt
 
 ## 快速开始
@@ -164,6 +168,10 @@ arena serve --port 8003
 | `arena migrate` | 创建 PostgreSQL 表 |
 | `arena risk reset-breaker` | 重置熔断器 |
 | `arena live-check --exchange binance` | 实盘就绪检查 |
+| `arena experience sessions` | 列出所有回测会话 |
+| `arena experience distill --session {id}` | 从回测会话提炼经验记忆 |
+| `arena experience show --session {id}` | 查看已提炼的经验记忆 |
+| `arena experience merge --session {id}` | 将回测经验合并入实盘记忆 |
 
 ## 数据源
 
@@ -232,6 +240,8 @@ fallback = "deepseek-chat"
 [debate]
 max_rounds = 3
 convergence_threshold = 0.1
+gate_consensus_threshold = 0.8   # 分歧度低于此值时跳过辩论（共识）
+gate_confusion_threshold = 0.05  # 分歧度高于此值时跳过辩论（迷茫）
 
 [risk]
 max_stop_loss_pct = 0.05
@@ -249,9 +259,19 @@ interval_minutes = 240
 exchange_id = "binance"
 daily_summary_hour = 0    # UTC 小时（0-23）
 
-[reflection]
+[experience]
 enabled = true
 every_n_cycles = 20
+token_budget = 2000              # 注入 prompt 的 token 上限
+win_rate_tolerance = 0.10        # 规则胜率容差（防过拟合验证）
+
+[experience.regime_thresholds]
+high_funding = 0.01
+high_vol = 0.05
+trending_up = 0.03
+trending_down = -0.03
+extreme_fear = 25
+extreme_greed = 75
 ```
 
 ### 环境变量
@@ -415,10 +435,13 @@ src/cryptotrader/
 │   ├── search.py      # 相似搜索（资金费率、波动率、趋势）
 │   └── calibrate.py   # 逐智能体准确率追踪 + 偏差检测
 ├── learning/
-│   ├── verbal.py      # 语言强化（历史经验注入）
-│   └── reflect.py     # 智能体自我反思（周期性策略备忘录）
+│   ├── verbal.py      # 语言强化（regime 感知历史案例检索）
+│   ├── reflect.py     # 结构化经验记忆生成（ExperienceMemory JSON）
+│   ├── context.py     # GSSC 引擎（汇集→选择→结构化，CJK 感知 token 估算）
+│   └── regime.py      # regime 标签（tag_regime）+ Jaccard 重叠度匹配
 └── backtest/
     ├── engine.py      # BacktestEngine（LLM + SMA 模式）
+    ├── session.py     # 回测会话存储（commits.jsonl + result.json + experience.json）
     ├── cache.py       # OHLCV SQLite 缓存
     ├── historical_data.py  # FnG、资金费率、FRED、期货成交量
     └── result.py      # BacktestResult 指标
@@ -440,7 +463,7 @@ src/dashboard/app.py   # Streamlit 仪表盘（概览、决策、风控、回测
 | 调度 | APScheduler 3.x |
 | 数据库 | PostgreSQL 16 + SQLAlchemy 2.0 async |
 | 缓存/状态 | Redis 7 |
-| 本地存储 | SQLite（数据存储 + LLM 缓存 + 反思备忘录）|
+| 本地存储 | SQLite（数据存储 + LLM 缓存 + 经验记忆）|
 | API 服务 | FastAPI + Uvicorn |
 | 仪表盘 | Streamlit |
 | CLI | Typer + Rich |
@@ -449,7 +472,7 @@ src/dashboard/app.py   # Streamlit 仪表盘（概览、决策、风控、回测
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v（288 个测试）
+make test             # pytest tests/ -v（347 个测试）
 make lint             # ruff check src/ tests/
 make format           # ruff format src/ tests/
 make scheduler        # arena scheduler start
@@ -469,7 +492,7 @@ arena sync             # 同步历史数据
 
 - **零 lint 错误**：`ruff check src/ tests/` 必须零错误通过
 - **禁止 `noqa` 注释**：遇到 C901 必须重构（阈值 = 10）
-- **288 个测试**，1 个跳过，70% 覆盖率
+- **347 个测试**，1 个跳过，70% 覆盖率
 - **异步测试**：`asyncio_mode = "auto"` — 无需 `@pytest.mark.asyncio`
 - **必须用 `uv run pytest`**（Python 3.12 venv），不要用裸 `pytest`
 
