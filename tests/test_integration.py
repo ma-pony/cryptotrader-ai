@@ -62,7 +62,6 @@ def sample_snapshot(sample_ohlcv):
         ),
         news=NewsSentiment(
             headlines=["Bitcoin surges past 50k", "ETF approval expected"],
-            sentiment_score=0.6,
             key_events=["ETF approval expected"],
         ),
         macro=MacroData(

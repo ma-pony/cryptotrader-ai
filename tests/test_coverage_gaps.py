@@ -1,49 +1,6 @@
 """Tests for previously untested pure functions."""
 
-from cryptotrader.data.news import _score_headlines, _score_text
 from cryptotrader.journal.search import _within_range
-
-# ── News sentiment scoring ──
-
-
-def test_score_text_positive():
-    assert _score_text("Bitcoin rally surge breakout") > 0
-
-
-def test_score_text_negative():
-    assert _score_text("crypto crash plunge hack ban") < 0
-
-
-def test_score_text_neutral():
-    assert _score_text("the weather is nice today") == 0.0
-
-
-def test_score_text_mixed():
-    score = _score_text("rally crash")
-    assert score == 0.0  # 1 pos, 1 neg → balanced
-
-
-def test_score_text_empty():
-    assert _score_text("") == 0.0
-
-
-# ── Headline scoring ──
-
-
-def test_score_headlines_positive():
-    score = _score_headlines(["Bitcoin rally surge breakout"])
-    assert score > 0
-
-
-def test_score_headlines_empty():
-    assert _score_headlines([]) == 0.0
-
-
-def test_score_headlines_multiple():
-    score = _score_headlines(["Bitcoin rally", "crypto crash"])
-    # Mixed headlines → near zero
-    assert -0.5 <= score <= 0.5
-
 
 # ── Journal search similarity ──
 

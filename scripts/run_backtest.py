@@ -12,7 +12,7 @@ import pandas as pd
 
 from cryptotrader.backtest.cache import fetch_historical
 from cryptotrader.backtest.historical_data import (
-    derive_news_sentiment,
+    derive_news_events,
     fetch_btc_dominance,
     fetch_fear_greed,
     fetch_fred_series,
@@ -299,17 +299,15 @@ def _calculate_mtm(position: float, equity: float, entry_price: float, c: float)
     return equity
 
 
-def _build_news(sd, symbol, date_str, c, fng_val, fallback_sentiment, fallback_events):
-    """Build NewsSentiment from store data or fallback to price-derived proxy."""
+def _build_news(sd, symbol, date_str, c, fng_val, fallback_events):
+    """Build NewsSentiment from store data or fallback to price-derived events."""
     news_data = sd.get(f"news_headlines_{symbol.lower()}", {}).get(date_str, {})
     if news_data and isinstance(news_data, dict) and news_data.get("headlines"):
         return NewsSentiment(
             headlines=news_data["headlines"][:10],
-            sentiment_score=news_data.get("sentiment_score", 0.0),
             key_events=news_data.get("key_events", []),
         )
     return NewsSentiment(
-        sentiment_score=fallback_sentiment,
         key_events=fallback_events,
         headlines=[f"BTC at ${c:,.0f}, Fear&Greed={fng_val}"],
     )
@@ -324,7 +322,7 @@ def _build_snapshot(candles, i, ts, c, v, window, fng, funding, btc_dom, fed_rat
     dom_val = btc_dom.get(date_str, 0.0)
     fed_val = fed_rate.get(date_str, 0.0)
     dxy_val = dxy.get(date_str, 0.0)
-    sentiment, events = derive_news_sentiment(candles, i)
+    events = derive_news_events(candles, i)
     fv = fut_vol.get(date_str, {})
     fut_volume = fv.get("volume", 0.0)
     vol_20d = []
@@ -378,7 +376,7 @@ def _build_snapshot(candles, i, ts, c, v, window, fng, funding, btc_dom, fed_rat
                 "has_defi_tvl": defi_tvl > 0,
             },
         ),
-        news=_build_news(sd, symbol, date_str, c, fng_val, sentiment, events),
+        news=_build_news(sd, symbol, date_str, c, fng_val, events),
         macro=MacroData(
             fear_greed_index=fng_val,
             btc_dominance=dom_val,

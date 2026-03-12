@@ -1,4 +1,4 @@
-.PHONY: install test run serve lint format pre-commit-install pre-commit-run
+.PHONY: install test run serve lint format pre-commit-install pre-commit-run scheduler
 
 install:
 	uv pip install -e ".[dev]"
@@ -23,3 +23,6 @@ pre-commit-install:
 
 pre-commit-run:
 	pre-commit run --all-files
+
+scheduler:
+	arena scheduler start

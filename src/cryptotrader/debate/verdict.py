@@ -210,7 +210,7 @@ async def make_verdict_ai(
     analyses: dict[str, dict],
     constraints: dict | None = None,
     calibration: str = "",
-    model: str = "gpt-4o",
+    model: str = "",
     position_context: dict | None = None,
     trend_context: dict | None = None,
 ) -> TradeVerdict:
@@ -238,7 +238,7 @@ AGENT ANALYSES:
 {agent_reports}"""
 
     try:
-        llm = create_llm(model=model, temperature=0.1, timeout=120, json_mode=True)
+        llm = create_llm(model=model, temperature=0.1, json_mode=True)
         messages = [SystemMessage(content=VERDICT_PROMPT), HumanMessage(content=user_msg)]
         resp = await llm.ainvoke(messages)
         text = extract_content(resp)

@@ -17,11 +17,12 @@ class CVaRCheck:
 
     def __init__(self, config: LossConfig) -> None:
         self._max_cvar = config.max_cvar_95
+        self._min_returns = config.cvar_min_returns
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         returns = portfolio.get("returns_60d", [])
-        if len(returns) < 20:
-            return CheckResult(passed=True, reason="Insufficient data for CVaR (need 20+ returns)")
+        if len(returns) < self._min_returns:
+            return CheckResult(passed=True, reason=f"Insufficient data for CVaR (need {self._min_returns}+ returns)")
         var_95 = np.percentile(returns, 5)
         cvar = float(np.mean([r for r in returns if r <= var_95]))
         if abs(cvar) > self._max_cvar:

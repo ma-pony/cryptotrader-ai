@@ -53,8 +53,13 @@ class LiveExchange:
             await self._exchange.load_markets()
             self._markets_loaded = True
 
-    async def _retry(self, coro_fn, *args, attempts: int = 3):
+    async def _retry(self, coro_fn, *args, attempts: int | None = None):
         import ccxt
+
+        if attempts is None:
+            from cryptotrader.config import load_config
+
+            attempts = load_config().execution.retry_attempts
 
         _fatal = (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.BadSymbol, ccxt.InsufficientFunds)
         for i in range(attempts):
@@ -107,11 +112,14 @@ class LiveExchange:
             float(price) if order.order_type == "limit" else None,
         )
 
-        # Order timeout: cancel after 30s if not filled
+        # Order timeout: cancel if not filled
         if result.get("status") != "closed":
             order_id = result.get("id")
             if order_id:
-                result = await self._wait_or_cancel(order_id, order.pair, wait_seconds=30)
+                from cryptotrader.config import load_config
+
+                wait_s = load_config().execution.order_wait_seconds
+                result = await self._wait_or_cancel(order_id, order.pair, wait_seconds=wait_s)
 
         return result
 

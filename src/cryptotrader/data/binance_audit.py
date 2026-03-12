@@ -67,7 +67,10 @@ class BinanceAudit:
         buy_tax = float(result.get("buyTax") or 0)
         sell_tax = float(result.get("sellTax") or 0)
 
-        if buy_tax > 10 or sell_tax > 10:
+        from cryptotrader.config import load_config
+
+        tax_threshold = load_config().providers.token_tax_threshold
+        if buy_tax > tax_threshold or sell_tax > tax_threshold:
             issues.append(f"High tax: buy={buy_tax}%, sell={sell_tax}%")
             risk_level = "HIGH"
 

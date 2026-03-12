@@ -15,14 +15,15 @@ class VolatilityGate:
 
     def __init__(self, config: VolatilityConfig) -> None:
         self._threshold = config.flash_crash_threshold
+        self._lookback = config.flash_crash_lookback
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         prices = portfolio.get("recent_prices", [])
         if len(prices) < 2:
             return CheckResult(passed=True)
-        # Use recent window (last 10 candles) for flash crash detection,
+        # Use recent window for flash crash detection,
         # not global peak which triggers false positives during normal downtrends
-        lookback = min(10, len(prices))
+        lookback = min(self._lookback, len(prices))
         recent = prices[-lookback:]
         peak = max(recent)
         current = prices[-1]

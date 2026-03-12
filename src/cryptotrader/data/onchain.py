@@ -9,6 +9,31 @@ from cryptotrader.models import OnchainData
 
 logger = logging.getLogger(__name__)
 
+_BTC_STORE_SOURCES = [
+    "btc_tx_count",
+    "btc_active_addresses",
+    "btc_avg_fee",
+    "btc_difficulty",
+]
+
+
+def _load_btc_network_metrics() -> dict[str, float]:
+    """Load BTC network health metrics from the local SQLite store."""
+    from cryptotrader.data.store import get_latest
+
+    result: dict[str, float] = {}
+    try:
+        for source in _BTC_STORE_SOURCES:
+            latest = get_latest(source, limit=1)
+            if not latest:
+                continue
+            val = latest[0][1]
+            if isinstance(val, int | float):
+                result[source] = float(val)
+    except Exception:
+        logger.debug("Failed to load BTC network metrics from store", exc_info=True)
+    return result
+
 
 class OnchainCollector:
     def __init__(self, providers_config=None):
@@ -98,6 +123,8 @@ class OnchainCollector:
             }
         )
 
+        btc_metrics = _load_btc_network_metrics()
+
         return OnchainData(
             exchange_netflow=netflow if isinstance(netflow, float) else 0.0,
             whale_transfers=whales if isinstance(whales, list) else [],
@@ -105,5 +132,9 @@ class OnchainCollector:
             liquidations_24h=liq,
             defi_tvl=tvl_data.get("defi_tvl", 0.0),
             defi_tvl_change_7d=tvl_data.get("defi_tvl_change_7d", 0.0),
+            btc_tx_count=btc_metrics.get("btc_tx_count", 0.0),
+            btc_active_addresses=btc_metrics.get("btc_active_addresses", 0.0),
+            btc_avg_fee_usd=btc_metrics.get("btc_avg_fee", 0.0),
+            btc_difficulty=btc_metrics.get("btc_difficulty", 0.0),
             data_quality=quality,
         )

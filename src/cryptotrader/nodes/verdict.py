@@ -158,7 +158,7 @@ def _get_notifier(state: ArenaState) -> Any:
         from cryptotrader.notifications import Notifier
 
         cfg = load_config().notifications
-        _notifier_instance = Notifier(cfg.webhook_url, cfg.enabled, cfg.events)
+        _notifier_instance = Notifier(cfg.webhook_url, cfg.enabled, cfg.events, cfg.webhook_timeout)
     return _notifier_instance
 
 
@@ -175,7 +175,9 @@ def _merge_returns(pm_returns: list[float], ohlcv_returns: list[float], min_coun
 
 async def _fetch_exchange_total(state: ArenaState) -> float:
     """Query exchange balance and return total USDT value (best-effort)."""
-    exchange_id = state["metadata"].get("exchange_id", "binance")
+    from cryptotrader.config import load_config as _lc
+
+    exchange_id = state["metadata"].get("exchange_id") or _lc().exchange_id
     try:
         exchange = _get_or_create_live_exchange(exchange_id)
         if exchange is None:
@@ -246,7 +248,9 @@ async def _measure_api_latency(state: ArenaState) -> int:
         return 100
     import time
 
-    exchange_id = state["metadata"].get("exchange_id", "binance")
+    from cryptotrader.config import load_config as _lc2
+
+    exchange_id = state["metadata"].get("exchange_id") or _lc2().exchange_id
     try:
         exchange = _get_or_create_live_exchange(exchange_id)
         if exchange is None:
@@ -267,10 +271,10 @@ async def risk_check(state: ArenaState) -> dict:
     from cryptotrader.risk.gate import RiskGate
     from cryptotrader.risk.state import RedisStateManager
 
+    config = load_config()
     redis_url = state["metadata"].get("redis_url")
     cache_key = redis_url or "_default"
     if cache_key not in _risk_gate_cache:
-        config = load_config()
         redis_state = RedisStateManager(redis_url)
         _risk_gate_cache[cache_key] = RiskGate(config.risk, redis_state)
     gate = _risk_gate_cache[cache_key]
@@ -320,7 +324,7 @@ async def risk_check(state: ArenaState) -> dict:
     portfolio = state["data"].get(
         "portfolio",
         {
-            "total_value": pm_data["total_value"] if has_real_portfolio else 10000,
+            "total_value": pm_data["total_value"] if has_real_portfolio else config.backtest.initial_capital,
             "positions": pm_data.get("positions", {}),
             "daily_pnl": daily_pnl,
             "drawdown": drawdown,

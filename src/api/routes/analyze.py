@@ -9,8 +9,8 @@ router = APIRouter()
 
 
 class AnalyzeRequest(BaseModel):
-    pair: str = "BTC/USDT"
-    exchange: str = "binance"
+    pair: str = ""
+    exchange: str = ""
     mode: str = "paper"
     graph_mode: str = "full"
 
@@ -32,6 +32,10 @@ async def analyze(req: AnalyzeRequest):
     from cryptotrader.graph import build_debate_graph, build_lite_graph, build_trading_graph
 
     config = load_config()
+    if not req.pair:
+        req.pair = config.scheduler.pairs[0] if config.scheduler.pairs else "BTC/USDT"
+    if not req.exchange:
+        req.exchange = config.exchange_id
     builders = {
         "full": build_trading_graph,
         "lite": build_lite_graph,

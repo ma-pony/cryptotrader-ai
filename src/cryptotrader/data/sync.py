@@ -1019,32 +1019,18 @@ async def sync_coinpaprika_global() -> int:
 
 def _score_news_daily(
     daily: dict[str, list[str]],
-    positive: set,
-    negative: set,
-    daily_sentiments: dict[str, list[float]] | None = None,
 ) -> list[tuple]:
-    """Score daily headline groups into store records."""
+    """Group daily headlines into store records."""
     event_words = {"sec", "etf", "hack", "ban", "approval", "record", "regulation", "lawsuit"}
     records = []
     for date_str in sorted(daily.keys()):
         headlines = daily[date_str]
-        # Use API sentiment if available, else keyword fallback
-        api_scores = (daily_sentiments or {}).get(date_str, [])
-        if api_scores:
-            score = sum(api_scores) / len(api_scores)
-        else:
-            words = set(" ".join(headlines).lower().split())
-            pos = len(words & positive)
-            neg = len(words & negative)
-            total = pos + neg
-            score = (pos - neg) / total if total else 0.0
         key_events = [h for h in headlines if any(w in h.lower() for w in event_words)]
         records.append(
             (
                 date_str,
                 {
                     "headlines": headlines[:15],
-                    "sentiment_score": round(score, 3),
                     "key_events": key_events[:5],
                     "article_count": len(headlines),
                 },
@@ -1141,8 +1127,6 @@ async def sync_cryptocompare_news(symbol: str = "BTC", days: int = 365, api_key:
     if not _should_fetch(source_key):
         return count_records(data_key)
 
-    from cryptotrader.data.news import NEGATIVE, POSITIVE
-
     try:
         to_ts = int(datetime.now(UTC).timestamp())
         cutoff = int((datetime.now(UTC) - timedelta(days=days)).timestamp())
@@ -1150,7 +1134,7 @@ async def sync_cryptocompare_news(symbol: str = "BTC", days: int = 365, api_key:
         # ~2 pages/day with API key (100 articles/page), ~10 pages/day without
         max_pages = days * 2 + 10 if api_key else days // 5 + 10
         async with httpx.AsyncClient(timeout=15) as client:
-            daily, daily_sentiments = await _fetch_coindesk_pages(
+            daily, _daily_sentiments = await _fetch_coindesk_pages(
                 client,
                 symbol,
                 to_ts,
@@ -1159,7 +1143,7 @@ async def sync_cryptocompare_news(symbol: str = "BTC", days: int = 365, api_key:
                 api_key=api_key,
             )
 
-        records = _score_news_daily(daily, POSITIVE, NEGATIVE, daily_sentiments)
+        records = _score_news_daily(daily)
         if records:
             store_batch(data_key, records)
         _record_fetch(source_key)

@@ -29,7 +29,8 @@ def _get_exchange(state: ArenaState, pair: str):
     from cryptotrader.config import load_config
     from cryptotrader.execution.exchange import LiveExchange
 
-    exchange_id = state["metadata"].get("exchange_id", "binance")
+    config = load_config()
+    exchange_id = state["metadata"].get("exchange_id") or config.exchange_id
     if exchange_id in _live_exchanges:
         return _live_exchanges[exchange_id], None  # cached — don't close
 
@@ -204,7 +205,9 @@ async def place_order(state: ArenaState) -> dict:
         )
     else:
         scale = verdict.get("position_scale", 1.0)
-        total = state["data"].get("portfolio", {}).get("total_value", 10000)
+        from cryptotrader.config import load_config as _lc_exec
+
+        total = state["data"].get("portfolio", {}).get("total_value") or _lc_exec().backtest.initial_capital
         max_single_pct = state["metadata"].get("max_single_pct", 0.1)
         amount = (total * max_single_pct * scale) / price
         order = Order(

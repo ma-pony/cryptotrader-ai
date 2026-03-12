@@ -31,25 +31,29 @@ class BacktestEngine:
         start: str,
         end: str,
         interval: str = "4h",
-        initial_capital: float = 10000,
+        initial_capital: float | None = None,
         use_llm: bool = True,
-        slippage_bps: float = 5.0,
-        fee_bps: float = 10.0,
-        position_pct: float = 0.1,
-        lookback: int = 60,
+        slippage_bps: float | None = None,
+        fee_bps: float | None = None,
+        position_pct: float | None = None,
+        lookback: int | None = None,
     ):
+        from cryptotrader.config import load_config
+
+        bt_cfg = load_config().backtest
+
         self.pair = pair
         self.start = start
         self.end = end
         self.start_ms = int(datetime.fromisoformat(start).replace(tzinfo=UTC).timestamp() * 1000)
         self.end_ms = int(datetime.fromisoformat(end).replace(tzinfo=UTC).timestamp() * 1000)
         self.interval = interval
-        self.capital = initial_capital
+        self.capital = initial_capital if initial_capital is not None else bt_cfg.initial_capital
         self.use_llm = use_llm
-        self.slippage_bps = slippage_bps  # basis points
-        self.fee_bps = fee_bps  # basis points
-        self.position_pct = position_pct
-        self.lookback = lookback
+        self.slippage_bps = slippage_bps if slippage_bps is not None else bt_cfg.slippage_base * 10000
+        self.fee_bps = fee_bps if fee_bps is not None else bt_cfg.fee_bps
+        self.position_pct = position_pct if position_pct is not None else bt_cfg.default_position_pct
+        self.lookback = lookback if lookback is not None else bt_cfg.lookback
         # Cache config once to avoid re-parsing TOML per candle
         self._config = None
         # LLM usage tracking
@@ -345,7 +349,7 @@ class BacktestEngine:
         return "hold"
 
     def _build_snapshot(self, window: list[list], ts: int, candle_idx: int) -> DataSnapshot:
-        from cryptotrader.backtest.historical_data import derive_news_sentiment
+        from cryptotrader.backtest.historical_data import derive_news_events
 
         df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
         cur = window[-1]
@@ -375,8 +379,8 @@ class BacktestEngine:
         avg_vol = sum(vol_20d) / len(vol_20d) if vol_20d else max(fut_volume, 1)
         vol_ratio = fut_volume / avg_vol if avg_vol > 0 else 1.0
 
-        # News sentiment derived from price action
-        sentiment, events = derive_news_sentiment(self._candles, candle_idx)
+        # Key events derived from price action (sentiment analysis delegated to LLM)
+        events = derive_news_events(self._candles, candle_idx)
 
         # Extended data from unified store
         etf = self._etf_flows.get(date_str, {})
@@ -417,7 +421,6 @@ class BacktestEngine:
                 },
             ),
             news=NewsSentiment(
-                sentiment_score=sentiment,
                 key_events=events,
                 headlines=[f"BTC at ${cur[4]:,.0f}, Fear&Greed={fng_val}"],
             ),

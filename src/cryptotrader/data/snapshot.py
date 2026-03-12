@@ -25,7 +25,7 @@ class SnapshotAggregator:
     async def collect(
         self,
         pair: str,
-        exchange_id: str = "binance",
+        exchange_id: str = "",
         timeframe: str = "1h",
         limit: int = 100,
         date: str | None = None,

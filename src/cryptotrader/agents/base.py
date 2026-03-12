@@ -56,10 +56,22 @@ def _init_cache() -> None:
 # ── Unified LLM factory ──
 
 
+def _build_llm_kwargs(model: str, temperature: float, timeout: int, llm_cfg) -> dict[str, Any]:
+    """Build kwargs dict for ChatOpenAI constructor."""
+    kwargs: dict[str, Any] = {"model": model, "temperature": temperature, "timeout": timeout}
+    if llm_cfg.base_url:
+        kwargs["base_url"] = llm_cfg.base_url
+    if llm_cfg.api_key:
+        kwargs["api_key"] = llm_cfg.api_key
+    if model in llm_cfg.streaming_models:
+        kwargs["streaming"] = True
+    return kwargs
+
+
 def create_llm(
     model: str,
-    temperature: float = 0.2,
-    timeout: int = 120,
+    temperature: float | None = None,
+    timeout: int | None = None,
     json_mode: bool = False,
     *,
     with_fallback: bool = True,
@@ -76,42 +88,27 @@ def create_llm(
     cfg = load_config()
     llm_cfg = cfg.llm
 
+    # Resolve None temperature/timeout to config defaults
+    if temperature is None:
+        temperature = llm_cfg.default_temperature
+    if timeout is None:
+        timeout = llm_cfg.timeout
+
     # Resolve empty model to config default
     if not model:
         model = cfg.models.analysis or cfg.models.fallback
     if not model:
         raise ValueError("No LLM model configured — set models.analysis or models.fallback in config/default.toml")
 
-    kwargs: dict[str, Any] = {
-        "model": model,
-        "temperature": temperature,
-        "timeout": timeout,
-    }
-    if llm_cfg.base_url:
-        kwargs["base_url"] = llm_cfg.base_url
-    if llm_cfg.api_key:
-        kwargs["api_key"] = llm_cfg.api_key
-    # Note: response_format is NOT passed — many models (e.g. gpt-5.4)
-    # don't support it. JSON output enforced via prompts + _extract_json().
-
-    # Some models require streaming via third-party proxy restrictions
-    if model in llm_cfg.streaming_models:
-        kwargs["streaming"] = True
-
+    kwargs = _build_llm_kwargs(model, temperature, timeout, llm_cfg)
     llm = ChatOpenAI(**kwargs)
 
     # Add fallback model
     if with_fallback:
         fallback_model = cfg.models.fallback
         if fallback_model and fallback_model != model:
-            fallback_kwargs = dict(kwargs)
-            fallback_kwargs["model"] = fallback_model
-            # Reset streaming for fallback — it has its own streaming requirements
-            fallback_kwargs.pop("streaming", None)
-            if fallback_model in llm_cfg.streaming_models:
-                fallback_kwargs["streaming"] = True
-            fallback_llm = ChatOpenAI(**fallback_kwargs)
-            llm = llm.with_fallbacks([fallback_llm])
+            fallback_kwargs = _build_llm_kwargs(fallback_model, temperature, timeout, llm_cfg)
+            llm = llm.with_fallbacks([ChatOpenAI(**fallback_kwargs)])
 
     return llm
 
@@ -152,8 +149,8 @@ async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
     Accepts OpenAI-format kwargs and returns AIMessage.
     """
     messages = kwargs.pop("messages", [])
-    temperature = kwargs.pop("temperature", 0.2)
-    timeout = kwargs.pop("timeout", 120)
+    temperature = kwargs.pop("temperature", None)
+    timeout = kwargs.pop("timeout", None)
     response_format = kwargs.pop("response_format", None)
     json_mode = response_format is not None and response_format.get("type") == "json_object"
 
@@ -217,7 +214,7 @@ class BaseAgent:
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
         try:
-            llm = create_llm(model=self._resolve_model(), temperature=0.2, timeout=120, json_mode=True)
+            llm = create_llm(model=self._resolve_model(), json_mode=True)
             messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
             response = await llm.ainvoke(messages)
             text = extract_content(response)
@@ -265,7 +262,7 @@ class BaseAgent:
         warnings = []
         if snapshot.onchain.open_interest == 0 and snapshot.onchain.exchange_netflow == 0:
             warnings.append("On-chain data unavailable (no API keys configured). Do NOT infer from missing data.")
-        if snapshot.news.sentiment_score == 0 and not snapshot.news.headlines:
+        if not snapshot.news.headlines:
             warnings.append("News sentiment unavailable. Do NOT assume neutral sentiment from missing data.")
         if hasattr(snapshot, "macro") and snapshot.macro.fed_rate == 0 and snapshot.macro.dxy == 0:
             warnings.append("Macro data unavailable (FRED/DXY). Do NOT infer from zero values — they are missing.")
@@ -364,7 +361,7 @@ class ToolAgent(BaseAgent):
         try:
             from langchain.agents import create_agent
 
-            llm = _create_chat_model(self.model, temperature=0.2)
+            llm = _create_chat_model(self.model)
             agent = create_agent(llm, tools=self.tools, system_prompt=system)
 
             result = await agent.ainvoke(

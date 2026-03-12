@@ -38,12 +38,11 @@ def test_backtest_result_summary_without_llm_stats():
     assert "llm_calls" not in s
 
 
-def test_score_headlines_returns_float():
-    """_score_headlines returns a float."""
-    from cryptotrader.data.news import _score_headlines
+def test_coingecko_ids_has_btc():
+    """CoinGecko ID mapping includes BTC."""
+    from cryptotrader.data.news import _COINGECKO_IDS
 
-    result = _score_headlines(["Bitcoin surges to new high"])
-    assert isinstance(result, float)
+    assert _COINGECKO_IDS["BTC"] == "bitcoin"
 
 
 def test_coingecko_fallback():

@@ -189,7 +189,7 @@ async def run_agent_reflection(
 
     system_prompt, user_prompt = _build_reflection_prompt(agent_id, records)
 
-    llm = create_llm(model=model, temperature=0.3, timeout=120)
+    llm = create_llm(model=model, temperature=0.3)
 
     from langchain_core.messages import HumanMessage, SystemMessage
 

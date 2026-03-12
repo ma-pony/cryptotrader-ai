@@ -50,7 +50,7 @@ async def debate_round(state: ArenaState) -> dict:
         role_label = _DEBATE_ROLES.get(agent_id, agent_id)
         system = DEBATE_SYSTEM.format(role=role_label)
         try:
-            llm = create_llm(model=model, temperature=0.3, timeout=120, json_mode=True)
+            llm = create_llm(model=model, temperature=0.3, json_mode=True)
             lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
             resp = await llm.ainvoke(lc_msgs)
             text = extract_content(resp)

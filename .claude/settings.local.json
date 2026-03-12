@@ -66,7 +66,8 @@
       "Bash(kill %1:*)",
       "Bash(docker ps:*)",
       "Bash(docker exec:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "Bash(pip index:*)"
     ]
   },
   "enableAllProjectMcpServers": true,

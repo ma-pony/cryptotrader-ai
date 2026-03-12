@@ -47,18 +47,20 @@ async def _fetch_fred(series: str, api_key: str, date: str | None = None) -> flo
     return 0.0
 
 
-async def _fetch_fear_greed(date: str | None = None) -> int:
+async def _fetch_fear_greed(date: str | None = None) -> tuple[int, list[int]]:
+    """Fetch Fear & Greed index.  Returns (latest_value, last_7_values)."""
     cached = get_cached_or_none("fear_greed", date)
     if cached is not None:
-        return int(cached) if isinstance(cached, int | float) else 50
+        latest = int(cached) if isinstance(cached, int | float) else 50
+        return latest, []
 
     # Backtest mode: no live API call for historical data
     if date is not None:
-        return 50
+        return 50, []
 
     try:
         async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get("https://api.alternative.me/fng/?limit=1")
+            r = await c.get("https://api.alternative.me/fng/?limit=7")
             r.raise_for_status()
             data = r.json().get("data", [])
             if data:
@@ -69,10 +71,11 @@ async def _fetch_fear_greed(date: str | None = None) -> int:
                 if ts:
                     fg_date = datetime.fromtimestamp(int(ts), tz=UTC).strftime("%Y-%m-%d")
                 cache_result("fear_greed", val, date=fg_date)
-                return val
+                history = [int(d["value"]) for d in data]
+                return val, history
     except Exception:
         logger.warning("Fear & Greed fetch failed", exc_info=True)
-    return 50
+    return 50, []
 
 
 async def _fetch_btc_dominance(date: str | None = None) -> float:
@@ -103,13 +106,24 @@ class MacroCollector:
     @staticmethod
     def _load_store_supplements() -> dict[str, float]:
         """Load supplementary data from unified SQLite store (best-effort)."""
-        result = {"vix": 0.0, "sp500": 0.0, "stablecoin": 0.0, "hashrate": 0.0}
+        result = {
+            "vix": 0.0,
+            "sp500": 0.0,
+            "stablecoin": 0.0,
+            "hashrate": 0.0,
+            "yield_curve": 0.0,
+            "m2_supply": 0.0,
+            "cpi": 0.0,
+        }
         try:
             for source, key in [
                 ("fred_VIXCLS", "vix"),
                 ("fred_SP500", "sp500"),
                 ("stablecoin_total_supply", "stablecoin"),
                 ("btc_hashrate", "hashrate"),
+                ("fred_T10Y2Y", "yield_curve"),
+                ("fred_WM2NS", "m2_supply"),
+                ("fred_CPIAUCSL", "cpi"),
             ]:
                 latest = get_latest(source, limit=1)
                 if not latest:
@@ -138,9 +152,12 @@ class MacroCollector:
         async def _noop_dict():
             return {}
 
+        async def _noop_fear_greed():
+            return 50, []
+
         fed_task = _fetch_fred("DFF", fred_key, date) if (fred_on and fred_key) else _noop_float()
         dxy_task = _fetch_fred("DTWEXBGS", fred_key, date) if (fred_on and fred_key) else _noop_float()
-        fg_task = _fetch_fear_greed(date)
+        fg_task = _fetch_fear_greed(date) if True else _noop_fear_greed()
         dom_task = _fetch_btc_dominance(date) if coingecko_on else _noop_float()
 
         if sosovalue_on and soso_key:
@@ -150,13 +167,19 @@ class MacroCollector:
         else:
             etf_task = _noop_dict()
 
-        fed_rate, dxy, fear_greed, btc_dom, etf_data = await asyncio.gather(
+        fed_rate, dxy, fg_result, btc_dom, etf_data = await asyncio.gather(
             fed_task,
             dxy_task,
             fg_task,
             dom_task,
             etf_task,
         )
+
+        # Unpack Fear & Greed result (latest value + 7-day history)
+        if isinstance(fg_result, tuple):
+            fear_greed, fear_greed_history = fg_result
+        else:
+            fear_greed, fear_greed_history = int(fg_result), []
 
         supplements = self._load_store_supplements()
 
@@ -165,11 +188,16 @@ class MacroCollector:
             dxy=dxy,
             btc_dominance=btc_dom,
             fear_greed_index=fear_greed,
+            fear_greed_history=fear_greed_history,
             etf_daily_net_inflow=etf_data.get("dailyNetInflow", 0.0),
             etf_total_net_assets=etf_data.get("totalNetAssets", 0.0),
             etf_cum_net_inflow=etf_data.get("cumNetInflow", 0.0),
+            etf_top_flows=etf_data.get("topEtfFlows", []),
             vix=supplements["vix"],
             sp500=supplements["sp500"],
             stablecoin_total_supply=supplements["stablecoin"],
             btc_hashrate=supplements["hashrate"],
+            yield_curve=supplements["yield_curve"],
+            m2_supply=supplements["m2_supply"],
+            cpi=supplements["cpi"],
         )

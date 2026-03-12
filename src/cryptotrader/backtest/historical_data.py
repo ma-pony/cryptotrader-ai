@@ -260,11 +260,13 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_
     return cached
 
 
-def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[str]]:
-    """Derive proxy news sentiment from recent price action and momentum quality.
-    Returns (sentiment_score -1..1, key_events list)."""
+def derive_news_events(candles: list[list], idx: int) -> list[str]:
+    """Derive key market events from recent price action and momentum.
+
+    Returns factual event descriptions for the LLM to interpret.
+    """
     if idx < 14:
-        return 0.0, []
+        return []
 
     c_now = candles[idx][4]
     c_7d = candles[max(0, idx - 7)][4]
@@ -273,8 +275,7 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
     ret_14d = (c_now - c_14d) / c_14d
 
     # Trend acceleration: compare recent 7d pace vs prior 7d pace
-    # If 7d return > half of 14d return, trend is accelerating
-    prior_7d_ret = ret_14d - ret_7d  # approximate return of the 7d before the recent 7d
+    prior_7d_ret = ret_14d - ret_7d
     accelerating = abs(ret_7d) > abs(prior_7d_ret) and ret_7d * ret_14d > 0
 
     # Volatility spike detection
@@ -294,11 +295,7 @@ def derive_news_sentiment(candles: list[list], idx: int) -> tuple[float, list[st
     if accelerating and abs(ret_7d) > 0.05:
         events.append(f"Momentum accelerating: 7d {ret_7d:+.1%} vs prior 7d {prior_7d_ret:+.1%}")
 
-    # Blend 7d return with acceleration signal for richer sentiment
-    accel_bonus = 0.15 if accelerating else -0.05
-    raw_sentiment = ret_7d * 4 + (accel_bonus if ret_7d > 0 else -accel_bonus)
-    sentiment = max(-1.0, min(1.0, raw_sentiment))
-    return sentiment, events
+    return events
 
 
 async def fetch_futures_volume(symbol: str, start_date: str, end_date: str) -> dict[str, dict]:

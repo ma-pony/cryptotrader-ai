@@ -11,9 +11,12 @@ logger = logging.getLogger(__name__)
 
 
 class Notifier:
-    def __init__(self, webhook_url: str = "", enabled: bool = True, events: list[str] | None = None):
+    def __init__(
+        self, webhook_url: str = "", enabled: bool = True, events: list[str] | None = None, webhook_timeout: int = 5
+    ):
         self._url = webhook_url
         self._enabled = enabled and bool(webhook_url)
+        self._timeout = webhook_timeout
         _default_events = [
             "trade",
             "rejection",
@@ -28,7 +31,7 @@ class Notifier:
         if not self._enabled or event not in self._events:
             return
         try:
-            async with httpx.AsyncClient(timeout=5) as client:
+            async with httpx.AsyncClient(timeout=self._timeout) as client:
                 await client.post(self._url, json={"event": event, **data})
         except Exception as e:
             logger.warning("Notification failed: %s", e)

@@ -4,11 +4,14 @@
 [app]
 mode = "standalone"    # standalone | api
 engine = "paper"       # paper | live
+exchange_id = "binance"  # default exchange for market data
 
 [llm]
 # Unified LLM API endpoint — all models go through the same gateway
 api_key = ""
 base_url = ""          # e.g. "http://localhost:3000/v1" or your proxy
+default_temperature = 0.2
+timeout = 120
 
 [models]
 analysis = "deepseek-chat"
@@ -35,11 +38,13 @@ max_stop_loss_pct = 0.05
 [risk.position]
 max_single_pct = 0.10
 max_total_exposure_pct = 0.50
+max_correlated_positions = 2
 
 [risk.loss]
 max_daily_loss_pct = 0.03
 max_drawdown_pct = 0.10
 max_cvar_95 = 0.05
+cvar_min_returns = 20
 
 [risk.cooldown]
 same_pair_minutes = 60
@@ -48,6 +53,7 @@ post_loss_minutes = 120
 [risk.volatility]
 flash_crash_threshold = 0.05
 funding_rate_threshold = 0.005
+flash_crash_lookback = 10
 
 [risk.exchange]
 max_api_latency_ms = 2000
@@ -60,8 +66,11 @@ max_trades_per_day = 20
 [backtest]
 initial_capital = 10000
 slippage_base = 0.0005
+fee_bps = 10.0
 sma_fast = 20
 sma_slow = 50
+lookback = 60
+default_position_pct = 0.1
 
 [backtest.position_sizing]
 high_confidence_pct = 0.35    # ceiling for position_scale mapping
@@ -80,6 +89,7 @@ enabled = false
 pairs = ["BTC/USDT", "ETH/USDT"]
 interval_minutes = 240
 exchange_id = "binance"
+daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 
 [providers]
 coinglass_api_key = ""
@@ -103,10 +113,17 @@ binance_audit_enabled = true
 binance_sentiment_enabled = true
 enforce_token_security = true
 max_acceptable_risk = "MEDIUM"
+token_tax_threshold = 10
+
+[execution]
+order_wait_seconds = 30
+retry_attempts = 3
+graph_timeout_s = 300
 
 [notifications]
 webhook_url = ""
 enabled = true
+webhook_timeout = 5
 events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary", "portfolio_stale"]
 
 [exchanges.binance]

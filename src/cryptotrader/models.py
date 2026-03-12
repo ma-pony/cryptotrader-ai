@@ -31,8 +31,22 @@ class OnchainData:
     liquidations_24h: dict[str, float] = field(default_factory=dict)
     defi_tvl: float = 0.0
     defi_tvl_change_7d: float = 0.0
+    btc_tx_count: float = 0.0
+    btc_active_addresses: float = 0.0
+    btc_avg_fee_usd: float = 0.0
+    btc_difficulty: float = 0.0
     # Track which providers returned real data vs fallback zeros
     data_quality: dict[str, bool] = field(default_factory=dict)
+
+
+@dataclass
+class NewsArticle:
+    """A single news article with title, summary, and metadata."""
+
+    title: str = ""
+    summary: str = ""  # Lead paragraph or body excerpt (max ~500 chars)
+    source: str = ""  # e.g. "coindesk", "cointelegraph"
+    published: str = ""  # ISO date or human-readable date string
 
 
 @dataclass
@@ -41,6 +55,7 @@ class NewsSentiment:
     sentiment_score: float = 0.0
     key_events: list[str] = field(default_factory=list)
     social_buzz: float = 0.0
+    articles: list[NewsArticle] = field(default_factory=list)
 
 
 @dataclass
@@ -56,6 +71,11 @@ class MacroData:
     sp500: float = 0.0
     stablecoin_total_supply: float = 0.0
     btc_hashrate: float = 0.0
+    yield_curve: float = 0.0
+    m2_supply: float = 0.0
+    cpi: float = 0.0
+    etf_top_flows: list[dict] = field(default_factory=list)
+    fear_greed_history: list[int] = field(default_factory=list)
 
 
 @dataclass

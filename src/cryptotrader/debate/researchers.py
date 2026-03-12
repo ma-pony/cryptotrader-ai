@@ -74,7 +74,7 @@ async def run_debate(
         bull_msgs.append({"role": "user", "content": bull_prompt})
 
         try:
-            llm = create_llm(model=model, temperature=0.3, timeout=120)
+            llm = create_llm(model=model, temperature=0.3)
             lc_msgs = [SystemMessage(content=BULL_SYSTEM), HumanMessage(content=bull_prompt)]
             resp = await llm.ainvoke(lc_msgs)
             bull_arg = extract_content(resp)
@@ -87,7 +87,7 @@ async def run_debate(
         bear_prompt = f"Analyst reports:\n{reports}\n\n{REBUTTAL_TEMPLATE.format(opponent_argument=bull_arg)}"
 
         try:
-            llm = create_llm(model=model, temperature=0.3, timeout=120)
+            llm = create_llm(model=model, temperature=0.3)
             lc_msgs = [SystemMessage(content=BEAR_SYSTEM), HumanMessage(content=bear_prompt)]
             resp = await llm.ainvoke(lc_msgs)
             bear_arg = extract_content(resp)
@@ -133,7 +133,7 @@ async def judge_debate(
 ) -> dict:
     """Research manager judges the debate. Returns {action, confidence, reasoning}."""
     try:
-        llm = create_llm(model=model, temperature=0.1, timeout=120, json_mode=True)
+        llm = create_llm(model=model, temperature=0.1, json_mode=True)
         lc_msgs = [
             SystemMessage(content=JUDGE_PROMPT.format(pair=pair)),
             HumanMessage(content=debate["full_debate"]),

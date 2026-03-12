@@ -130,22 +130,20 @@ async def get_defi_tvl() -> str:
 
 @tool
 async def search_crypto_news(query: str, limit: int = 10) -> str:
-    """Search recent crypto news headlines from CoinDesk, CoinTelegraph, Decrypt.
+    """Search recent crypto news articles from CoinDesk, CoinTelegraph, Decrypt.
 
-    Returns headlines with keyword sentiment score.
+    Returns articles with title, summary, source, and key events.
     Args:
         query: Search keyword (e.g. "BTC", "ethereum", "SEC")
-        limit: Max headlines to return (default 10)
+        limit: Max articles to return (default 10)
     """
     from cryptotrader.data.news import NewsCollector
 
     collector = NewsCollector()
-    headlines, score, key_events = await collector._collect_rss(query.lower())
+    articles = await collector._collect_rss(query.lower())
     return json.dumps(
         {
-            "headlines": headlines[:limit],
-            "sentiment_score": round(score, 3),
-            "key_events": key_events,
+            "articles": [{"title": a.title, "summary": a.summary, "source": a.source} for a in articles[:limit]],
             "query": query,
         }
     )

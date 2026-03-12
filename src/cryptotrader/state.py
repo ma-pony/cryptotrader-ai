@@ -36,7 +36,7 @@ def build_initial_state(
     pair: str,
     *,
     engine: str = "paper",
-    exchange_id: str = "binance",
+    exchange_id: str = "",
     timeframe: str | None = None,
     ohlcv_limit: int | None = None,
     snapshot: DataSnapshot | None = None,
@@ -72,7 +72,7 @@ def build_initial_state(
     metadata: dict[str, Any] = {
         "pair": pair,
         "engine": engine,
-        "exchange_id": exchange_id,
+        "exchange_id": exchange_id or config.exchange_id,
         "timeframe": timeframe if timeframe is not None else config.data.default_timeframe,
         "ohlcv_limit": ohlcv_limit if ohlcv_limit is not None else config.data.ohlcv_limit,
         "analysis_model": config.models.analysis,

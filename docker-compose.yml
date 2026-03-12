@@ -61,6 +61,21 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  scheduler:
+    build: .
+    command: arena scheduler start
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
+      REDIS_URL: redis://redis:6379
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:

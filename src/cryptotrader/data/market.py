@@ -22,7 +22,7 @@ class MarketCollector:
     async def collect(
         self,
         pair: str,
-        exchange_id: str = "binance",
+        exchange_id: str = "",
         timeframe: str = "1h",
         limit: int = 100,
         date: str | None = None,
@@ -32,6 +32,11 @@ class MarketCollector:
         Args:
             date: If provided, use date-specific store lookup (backtest mode).
         """
+        if not exchange_id:
+            from cryptotrader.config import load_config
+
+            exchange_id = load_config().exchange_id
+
         # Check OHLCV cache first
         ohlcv_key = f"ohlcv_{pair.replace('/', '_')}_{timeframe}"
         cached_ohlcv = get_cached_or_none(ohlcv_key, date=date)

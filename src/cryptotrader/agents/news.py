@@ -29,7 +29,7 @@ ROLE = (
     "the edge is gone.\n"
     "- Single-headline bias: Am I anchoring on one dramatic headline while ignoring 9 neutral ones? One headline "
     "rarely justifies confidence above 0.6.\n"
-    "- Contrarian check: Is sentiment score at an extreme (>0.5 or <-0.5)? Extremes are contrarian signals — "
+    "- Contrarian check: Is overall sentiment at an extreme? Extremes are contrarian signals — "
     "euphoria precedes drops, panic precedes bounces.\n"
     "- Noise filter: Is this a genuine narrative shift (regulation, hack, ETF decision) or recycled FUD/hype? "
     "If recycled, it's noise — say so and lower confidence."
@@ -45,11 +45,24 @@ class NewsAgent(ToolAgent):
     def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
         base = super()._build_prompt(snapshot, experience)
         n = snapshot.news
-        headlines_str = "\n".join(f"  - {h}" for h in n.headlines[:10]) if n.headlines else "  (none available)"
+        # Show full articles (title + summary) if available, else fall back to headlines
+        if n.articles:
+            articles_parts = []
+            for a in n.articles[:10]:
+                entry = f"  [{a.source}] {a.title}"
+                if a.summary:
+                    entry += f"\n    {a.summary}"
+                if a.published:
+                    entry += f"\n    Published: {a.published}"
+                articles_parts.append(entry)
+            articles_str = "\n".join(articles_parts)
+        elif n.headlines:
+            articles_str = "\n".join(f"  - {h}" for h in n.headlines[:10])
+        else:
+            articles_str = "  (none available)"
         events_str = "\n".join(f"  - {e}" for e in n.key_events[:5]) if n.key_events else "  (none)"
         news = (
-            f"Headlines (initial snapshot):\n{headlines_str}\n"
-            f"Sentiment score: {n.sentiment_score:.3f} (-1=bearish, +1=bullish)\n"
+            f"News articles (initial snapshot):\n{articles_str}\n"
             f"Key events:\n{events_str}\n"
             f"Social buzz: {n.social_buzz}"
         )

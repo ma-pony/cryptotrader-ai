@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from cryptotrader.models import CheckResult, TradeVerdict
+
+if TYPE_CHECKING:
+    from cryptotrader.config import PositionConfig
 
 # Known high-correlation pairs (>0.85 historical correlation)
 _CORRELATED_GROUPS: list[set[str]] = [
@@ -24,7 +29,9 @@ def _find_group(symbol: str) -> set[str] | None:
 
 class CorrelationCheck:
     name = "correlation"
-    max_correlated_positions: int = 2
+
+    def __init__(self, config: PositionConfig) -> None:
+        self._max_correlated = config.max_correlated_positions
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
         if verdict.action == "hold":
@@ -45,7 +52,7 @@ class CorrelationCheck:
             if pos_symbol.upper() in group and amount != 0:
                 correlated_count += 1
 
-        if correlated_count >= self.max_correlated_positions:
+        if correlated_count >= self._max_correlated:
             return CheckResult(
                 passed=False,
                 reason=f"Already {correlated_count} correlated positions in group {group}",

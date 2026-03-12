@@ -33,7 +33,7 @@ class RiskGate:
             DailyLossLimit(config.loss, redis_state, post_loss_minutes=config.cooldown.post_loss_minutes),
             DrawdownLimit(config.loss, redis_state),
             CVaRCheck(config.loss),
-            CorrelationCheck(),
+            CorrelationCheck(config.position),
             CooldownCheck(config.cooldown, redis_state),
             VolatilityGate(config.volatility),
             FundingRateGate(config.volatility),

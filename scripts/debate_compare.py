@@ -17,7 +17,7 @@ TEST_DATES = ["2025-10-10", "2025-09-25"]
 
 
 async def build_snapshot(candles, fng, funding, btc_dom, fed, dxy, target_date):
-    from cryptotrader.backtest.historical_data import derive_news_sentiment
+    from cryptotrader.backtest.historical_data import derive_news_events
     from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 
     target_ts = int(datetime.strptime(target_date, "%Y-%m-%d").replace(tzinfo=UTC).timestamp() * 1000)
@@ -25,9 +25,9 @@ async def build_snapshot(candles, fng, funding, btc_dom, fed, dxy, target_date):
     if idx is None:
         return None, None
     window = candles[max(0, idx - LOOKBACK) : idx + 1]
-    ts, o, h, low, c, v = candles[idx]
+    ts, _o, _h, _low, c, v = candles[idx]
     df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
-    sentiment, events = derive_news_sentiment(candles, idx)
+    events = derive_news_events(candles, idx)
     date_str = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
     return DataSnapshot(
         timestamp=datetime.fromtimestamp(ts / 1000, tz=UTC),
@@ -42,7 +42,6 @@ async def build_snapshot(candles, fng, funding, btc_dom, fed, dxy, target_date):
         ),
         onchain=OnchainData(),
         news=NewsSentiment(
-            sentiment_score=sentiment,
             key_events=events,
             headlines=[f"BTC at ${c:,.0f}, Fear&Greed={fng.get(date_str, 50)}"],
         ),

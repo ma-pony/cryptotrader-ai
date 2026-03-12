@@ -14,6 +14,8 @@ class LLMConfig:
     api_key: str = ""
     base_url: str = ""
     streaming_models: list[str] = field(default_factory=list)
+    default_temperature: float = 0.2
+    timeout: int = 120
 
 
 # ── Model names ──
@@ -57,6 +59,7 @@ class DataConfig:
 class PositionConfig:
     max_single_pct: float = 0.10
     max_total_exposure_pct: float = 0.50
+    max_correlated_positions: int = 2
 
 
 @dataclass
@@ -64,6 +67,7 @@ class LossConfig:
     max_daily_loss_pct: float = 0.03
     max_drawdown_pct: float = 0.10
     max_cvar_95: float = 0.05
+    cvar_min_returns: int = 20
 
 
 @dataclass
@@ -76,6 +80,7 @@ class CooldownConfig:
 class VolatilityConfig:
     flash_crash_threshold: float = 0.05
     funding_rate_threshold: float = 0.005
+    flash_crash_lookback: int = 10
 
 
 @dataclass
@@ -115,8 +120,11 @@ class BacktestPositionSizingConfig:
 class BacktestConfig:
     initial_capital: float = 10000
     slippage_base: float = 0.0005
+    fee_bps: float = 10.0
     sma_fast: int = 20
     sma_slow: int = 50
+    lookback: int = 60
+    default_position_pct: float = 0.1
     position_sizing: BacktestPositionSizingConfig = field(default_factory=BacktestPositionSizingConfig)
 
 
@@ -132,6 +140,16 @@ class ReflectionConfig:
     model: str = ""  # empty = use models.analysis
 
 
+# ── Execution ──
+
+
+@dataclass
+class ExecutionConfig:
+    order_wait_seconds: int = 30
+    retry_attempts: int = 3
+    graph_timeout_s: int = 300
+
+
 # ── Scheduler ──
 
 
@@ -141,6 +159,7 @@ class SchedulerConfig:
     pairs: list[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
     interval_minutes: int = 240
     exchange_id: str = "binance"
+    daily_summary_hour: int = 0
 
 
 # ── Providers ──
@@ -169,6 +188,7 @@ class ProvidersConfig:
     binance_sentiment_enabled: bool = True
     enforce_token_security: bool = True
     max_acceptable_risk: str = "MEDIUM"
+    token_tax_threshold: int = 10
 
     def has_okx_credentials(self) -> bool:
         return all([self.okx_api_key, self.okx_secret_key, self.okx_passphrase])
@@ -181,6 +201,7 @@ class ProvidersConfig:
 class NotificationsConfig:
     webhook_url: str = ""
     enabled: bool = True
+    webhook_timeout: int = 5
     events: list[str] = field(
         default_factory=lambda: ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]
     )
@@ -227,6 +248,7 @@ class InfrastructureConfig:
 class AppConfig:
     mode: str = "standalone"
     engine: str = "paper"
+    exchange_id: str = "binance"
     llm: LLMConfig = field(default_factory=LLMConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
     debate: DebateConfig = field(default_factory=DebateConfig)
@@ -236,6 +258,7 @@ class AppConfig:
     reflection: ReflectionConfig = field(default_factory=ReflectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
+    execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
     infrastructure: InfrastructureConfig = field(default_factory=InfrastructureConfig)
     exchanges: ExchangesConfig = field(default_factory=ExchangesConfig)
@@ -305,6 +328,7 @@ def _build_config(toml_data: dict) -> AppConfig:
     return AppConfig(
         mode=app.get("mode", "standalone"),
         engine=app.get("engine", "paper"),
+        exchange_id=app.get("exchange_id", "binance"),
         llm=LLMConfig(**llm),
         models=ModelConfig(**toml_data.get("models", {})),
         debate=DebateConfig(**toml_data.get("debate", {})),
@@ -314,6 +338,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         reflection=ReflectionConfig(**toml_data.get("reflection", {})),
         scheduler=SchedulerConfig(**toml_data.get("scheduler", {})),
         providers=providers,
+        execution=ExecutionConfig(**toml_data.get("execution", {})),
         notifications=NotificationsConfig(**toml_data.get("notifications", {})),
         infrastructure=InfrastructureConfig(**toml_data.get("infrastructure", {})),
         exchanges=exchanges,

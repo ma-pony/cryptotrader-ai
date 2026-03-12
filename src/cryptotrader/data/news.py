@@ -1,7 +1,7 @@
-"""News sentiment collector — RSS feeds + keyword sentiment + social buzz.
+"""News collector — RSS feeds + social buzz.
 
 Uses unified SQLite store for caching: check cache first, only call API if stale.
-Sentiment scoring uses keyword matching — the LLM (NewsAgent) handles deeper analysis.
+Raw headlines are passed to the LLM (NewsAgent) for sentiment analysis.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import feedparser
 import httpx
 
 from cryptotrader.data.store import _record_fetch, _should_fetch, cache_result, get_cached_or_none
-from cryptotrader.models import NewsSentiment
+from cryptotrader.models import NewsArticle, NewsSentiment
 
 logger = logging.getLogger(__name__)
 
@@ -22,42 +22,6 @@ RSS_FEEDS = [
     "https://cointelegraph.com/rss",
     "https://decrypt.co/feed",
 ]
-
-POSITIVE = {
-    "bullish",
-    "surge",
-    "rally",
-    "soar",
-    "gain",
-    "rise",
-    "jump",
-    "breakout",
-    "adoption",
-    "approval",
-    "partnership",
-    "upgrade",
-    "record",
-    "high",
-    "buy",
-}
-NEGATIVE = {
-    "bearish",
-    "crash",
-    "plunge",
-    "drop",
-    "fall",
-    "dump",
-    "hack",
-    "ban",
-    "fraud",
-    "lawsuit",
-    "sell",
-    "fear",
-    "risk",
-    "loss",
-    "decline",
-    "sec",
-}
 
 # CoinGecko coin ID mapping for social buzz lookup
 _COINGECKO_IDS = {
@@ -76,22 +40,6 @@ _COINGECKO_IDS = {
     "ATOM": "cosmos",
     "LTC": "litecoin",
 }
-
-
-def _score_text(text: str) -> float:
-    """Keyword-based sentiment score (-1 to +1)."""
-    words = set(text.lower().split())
-    pos = len(words & POSITIVE)
-    neg = len(words & NEGATIVE)
-    total = pos + neg
-    return (pos - neg) / total if total else 0.0
-
-
-def _score_headlines(headlines: list[str]) -> float:
-    """Score headlines using keyword sentiment."""
-    if not headlines:
-        return 0.0
-    return _score_text(" ".join(headlines))
 
 
 async def _fetch_social_buzz(symbol: str, date: str | None = None) -> float:
@@ -138,6 +86,23 @@ async def _fetch_social_buzz(symbol: str, date: str | None = None) -> float:
         return 0.0
 
 
+_MAX_SUMMARY_LEN = 500  # Truncate article body/summary to avoid prompt bloat
+
+
+def _strip_html(text: str) -> str:
+    """Remove HTML tags from text (simple regex, no dependency)."""
+    import re
+
+    return re.sub(r"<[^>]+>", "", text).strip()
+
+
+def _truncate(text: str, max_len: int = _MAX_SUMMARY_LEN) -> str:
+    """Truncate text to max_len, appending '...' if truncated."""
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rsplit(" ", 1)[0] + "..."
+
+
 class NewsCollector:
     async def collect(self, pair: str, date: str | None = None) -> NewsSentiment:
         symbol = pair.split("/")[0]
@@ -150,39 +115,48 @@ class NewsCollector:
 
         if cached_rss is not None and isinstance(cached_rss, dict):
             headlines = cached_rss.get("headlines", [])
-            score = cached_rss.get("score", 0.0)
             key_events = cached_rss.get("key_events", [])
+            articles = [NewsArticle(**a) for a in cached_rss.get("articles", [])]
         elif date is not None:
             # Backtest mode: no live API call
-            headlines, score, key_events = [], 0.0, []
+            headlines, key_events, articles = [], [], []
         elif not _should_fetch(rss_rate_key):
             # Rate-limited globally; no new fetch for any symbol right now
-            headlines, score, key_events = [], 0.0, []
+            headlines, key_events, articles = [], [], []
         else:
             # Fetch from RSS and CryptoCompare in parallel, merge results
             rss_task = self._collect_rss(symbol.lower())
             cc_task = self._collect_cryptocompare(symbol)
-            (rss_headlines, rss_score, rss_events), cc_headlines = await asyncio.gather(rss_task, cc_task)
+            rss_result, cc_articles = await asyncio.gather(rss_task, cc_task)
 
-            # Merge: RSS headlines first, then CryptoCompare (deduplicated)
-            seen = set(rss_headlines)
-            merged = list(rss_headlines)
-            for h in cc_headlines:
-                if h not in seen:
-                    merged.append(h)
-                    seen.add(h)
+            # Merge: RSS articles first, then CryptoCompare (deduplicated by title)
+            seen: set[str] = set()
+            articles: list[NewsArticle] = []
+            for a in [*rss_result, *cc_articles]:
+                if a.title not in seen:
+                    articles.append(a)
+                    seen.add(a.title)
 
-            # Re-score merged headlines
-            headlines = merged[:15]
-            score = _score_headlines(headlines) if headlines else rss_score
+            articles = articles[:15]
+            headlines = [a.title for a in articles]
             key_events = [
-                h for h in headlines if any(w in h.lower() for w in ("sec", "etf", "hack", "ban", "approval", "record"))
+                a.title
+                for a in articles
+                if any(w in a.title.lower() for w in ("sec", "etf", "hack", "ban", "approval", "record"))
             ][:5]
-            if not key_events:
-                key_events = rss_events
 
-            if headlines:
-                cache_result(rss_store_key, {"headlines": headlines, "score": score, "key_events": key_events})
+            if articles:
+                cache_result(
+                    rss_store_key,
+                    {
+                        "headlines": headlines,
+                        "key_events": key_events,
+                        "articles": [
+                            {"title": a.title, "summary": a.summary, "source": a.source, "published": a.published}
+                            for a in articles
+                        ],
+                    },
+                )
             _record_fetch(rss_rate_key)
 
         # Fetch social buzz (with its own caching)
@@ -190,35 +164,55 @@ class NewsCollector:
 
         return NewsSentiment(
             headlines=headlines,
-            sentiment_score=round(score, 3),
             key_events=key_events,
             social_buzz=social_buzz,
+            articles=articles,
         )
 
-    async def _collect_rss(self, symbol: str) -> tuple[list[str], float, list[str]]:
-        all_headlines: list[str] = []
+    async def _collect_rss(self, symbol: str) -> list[NewsArticle]:
+        """Fetch articles from RSS feeds, extracting title + summary + metadata."""
+        all_entries: list[NewsArticle] = []
+        source_map = {
+            "coindesk.com": "CoinDesk",
+            "cointelegraph.com": "CoinTelegraph",
+            "decrypt.co": "Decrypt",
+        }
         for url in RSS_FEEDS:
+            source = next((v for k, v in source_map.items() if k in url), "RSS")
             try:
                 feed = await asyncio.to_thread(feedparser.parse, url)
-                all_headlines.extend(e.get("title", "") for e in feed.entries[:15])
+                for e in feed.entries[:15]:
+                    title = e.get("title", "")
+                    if not title:
+                        continue
+                    summary = _strip_html(e.get("summary", "") or e.get("description", "") or "")
+                    published = e.get("published", "")
+                    all_entries.append(
+                        NewsArticle(
+                            title=title,
+                            summary=_truncate(summary),
+                            source=source,
+                            published=published,
+                        )
+                    )
             except Exception:
                 logger.warning("RSS fetch failed: %s", url, exc_info=True)
 
-        if not all_headlines:
-            return [], 0.0, []
+        if not all_entries:
+            return []
 
-        relevant = [h for h in all_headlines if symbol in h.lower() or "crypto" in h.lower() or "bitcoin" in h.lower()]
-        if not relevant:
-            relevant = all_headlines[:10]
-
-        score = _score_headlines(relevant)
-        key_events = [
-            h for h in relevant if any(w in h.lower() for w in ("sec", "etf", "hack", "ban", "approval", "record"))
+        relevant = [
+            a
+            for a in all_entries
+            if symbol in a.title.lower() or "crypto" in a.title.lower() or "bitcoin" in a.title.lower()
         ]
-        return relevant[:10], score, key_events[:5]
+        if not relevant:
+            relevant = all_entries[:10]
 
-    async def _collect_cryptocompare(self, symbol: str) -> list[str]:
-        """Fetch latest news from CoinDesk/CryptoCompare."""
+        return relevant[:10]
+
+    async def _collect_cryptocompare(self, symbol: str) -> list[NewsArticle]:
+        """Fetch latest news from CoinDesk/CryptoCompare with full article content."""
         try:
             from cryptotrader.config import load_config
 
@@ -238,14 +232,34 @@ class NewsCollector:
                         params={"lang": "EN", "categories": symbol.upper()},
                     )
                 resp.raise_for_status()
-                body = resp.json()
-                if body.get("Response") == "Error":
+                resp_body = resp.json()
+                if resp_body.get("Response") == "Error":
                     return []
-                articles = body.get("Data", [])
-                if not isinstance(articles, list):
+                raw_articles = resp_body.get("Data", [])
+                if not isinstance(raw_articles, list):
                     return []
+
                 title_key = "TITLE" if api_key else "title"
-                return [a[title_key] for a in articles[:20] if a.get(title_key)]
+                body_key = "BODY" if api_key else "body"
+                source_key = "source" if not api_key else "SOURCE"
+                result: list[NewsArticle] = []
+                for a in raw_articles[:20]:
+                    title = a.get(title_key, "")
+                    if not title:
+                        continue
+                    body = _strip_html(a.get(body_key, "") or "")
+                    source_name = a.get(source_key, "") or ""
+                    if isinstance(source_name, dict):
+                        source_name = source_name.get("name", "")
+                    result.append(
+                        NewsArticle(
+                            title=title,
+                            summary=_truncate(body),
+                            source=str(source_name) or "CryptoCompare",
+                            published="",
+                        )
+                    )
+                return result
         except Exception:
             logger.debug("News fetch failed", exc_info=True)
             return []
