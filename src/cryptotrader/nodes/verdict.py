@@ -66,6 +66,29 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
     return constraints
 
 
+async def _should_downgrade_to_weighted(state: ArenaState) -> bool:
+    """Check if verdict can safely use weighted average instead of AI.
+
+    Safe when: position is flat AND no circuit breaker active.
+    """
+    # 1. Position flat?
+    pos = state["data"].get("position_context") or {}
+    if pos.get("side", "flat") != "flat":
+        return False
+    # 2. No circuit breaker?
+    redis_url = state["metadata"].get("redis_url")
+    try:
+        from cryptotrader.risk.state import RedisStateManager
+
+        rsm = RedisStateManager(redis_url)
+        if await rsm.is_circuit_breaker_active():
+            return False
+    except Exception:
+        logger.debug("Redis unavailable for downgrade check, keeping AI verdict", exc_info=True)
+        return False
+    return True
+
+
 async def make_verdict(state: ArenaState) -> dict:
     """Generate trading verdict via AI or weighted-average fallback."""
     from cryptotrader.debate.verdict import make_verdict_llm, make_verdict_weighted
@@ -97,8 +120,14 @@ async def make_verdict(state: ArenaState) -> dict:
             }
         }
     use_llm_verdict = state["metadata"].get("llm_verdict", True)
+    debate_skipped = state["data"].get("debate_skipped", False)
 
-    if use_llm_verdict:
+    if use_llm_verdict and debate_skipped and await _should_downgrade_to_weighted(state):
+        logger.info("Verdict downgraded to weighted (debate skipped, flat, no circuit breaker)")
+        scores = state.get("divergence_scores") or [0.0]
+        threshold = state["metadata"].get("divergence_hold_threshold", 0.7)
+        verdict = make_verdict_weighted(analyses, scores[-1] if scores else 0.0, threshold)
+    elif use_llm_verdict:
         from cryptotrader.config import load_config as _load_config
 
         _cfg = _load_config()
