@@ -212,10 +212,49 @@ async def test_volatility_pass(verdict, portfolio):
 
 
 @pytest.mark.asyncio
-async def test_volatility_flash_crash(verdict):
+async def test_volatility_flash_crash_blocks_long(verdict):
+    """Flash crash blocks long (catching falling knife)."""
     c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
     r = await c.evaluate(verdict, {"recent_prices": [100, 99, 98, 97, 93]})
     assert not r.passed
+    assert "blocking long" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_volatility_flash_crash_allows_short():
+    """Flash crash allows short (going with the trend)."""
+    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
+    short_verdict = TradeVerdict(action="short", confidence=0.7, position_scale=0.05)
+    r = await c.evaluate(short_verdict, {"recent_prices": [100, 99, 98, 97, 93]})
+    assert r.passed
+
+
+@pytest.mark.asyncio
+async def test_volatility_flash_crash_allows_close():
+    """Flash crash allows close (risk-reducing action)."""
+    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
+    close_verdict = TradeVerdict(action="close", confidence=0.7, position_scale=0.0)
+    r = await c.evaluate(close_verdict, {"recent_prices": [100, 99, 98, 97, 93]})
+    assert r.passed
+
+
+@pytest.mark.asyncio
+async def test_volatility_spike_blocks_short():
+    """Rapid spike blocks short (shorting into a spike)."""
+    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
+    short_verdict = TradeVerdict(action="short", confidence=0.7, position_scale=0.05)
+    r = await c.evaluate(short_verdict, {"recent_prices": [93, 94, 95, 97, 100]})
+    assert not r.passed
+    assert "blocking short" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_volatility_spike_allows_long():
+    """Rapid spike allows long (going with the trend)."""
+    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
+    long_verdict = TradeVerdict(action="long", confidence=0.7, position_scale=0.05)
+    r = await c.evaluate(long_verdict, {"recent_prices": [93, 94, 95, 97, 100]})
+    assert r.passed
 
 
 @pytest.mark.asyncio

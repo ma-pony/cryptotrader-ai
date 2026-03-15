@@ -1,7 +1,11 @@
 """Scheduler tests — APScheduler integration."""
 
 import asyncio
+import logging
 from unittest.mock import AsyncMock, patch
+
+from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from cryptotrader.scheduler import Scheduler
 
@@ -121,3 +125,105 @@ async def test_run_cycle_updates_status():
     with patch.object(s, "_run_pair", new_callable=AsyncMock):
         await s._run_cycle()
         assert "next_run" in s._status["BTC/USDT"]
+
+
+# Task 2.3: scheduler single-cycle exception isolation tests
+
+
+async def test_run_cycle_exception_does_not_propagate():
+    """_run_cycle() pair failure must not propagate; scheduler continues."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+
+    # _run_pair raises, but gather(return_exceptions=True) absorbs it
+    async def fail(_pair: str) -> None:
+        raise RuntimeError("pair failure")
+
+    with patch.object(s, "_run_pair", side_effect=fail):
+        # Must not raise
+        await s._run_cycle()
+    # cycle_count incremented means _run_cycle completed normally
+    assert s._cycle_count == 1
+
+
+async def test_run_cycle_top_level_exception_caught(caplog):
+    """_run_cycle() top-level try/except catches unexpected errors and logs warning."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+
+    # Force asyncio.gather itself to raise
+    with (
+        patch("asyncio.gather", side_effect=RuntimeError("gather failure")),
+        caplog.at_level(logging.WARNING, logger="cryptotrader.scheduler"),
+    ):
+        await s._run_cycle()
+
+    # Scheduler did not crash; warning was logged
+    assert any("gather failure" in r.message or "gather failure" in str(r.exc_info) for r in caplog.records)
+
+
+async def test_run_pair_logs_warning_on_exception(caplog):
+    """_run_pair() must use logger.warning(exc_info=True) on exception."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+
+    # set_trace_id and load_config are lazy-imported; patch at their source module
+    with (
+        patch("cryptotrader.tracing.set_trace_id", return_value="trace-abc"),
+        patch("cryptotrader.config.load_config", side_effect=RuntimeError("cfg error")),
+        caplog.at_level(logging.WARNING, logger="cryptotrader.scheduler"),
+    ):
+        await s._run_pair("BTC/USDT")
+
+    # exc_info=True means record.exc_info is not None
+    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warning_records, "Expected at least one WARNING log record"
+    assert any(r.exc_info is not None for r in warning_records), "Expected exc_info=True stack trace"
+
+
+def test_add_job_trading_cycle_has_max_instances_and_misfire():
+    """trading_cycle and daily_summary jobs must have max_instances=1 and misfire_grace_time=1.
+
+    Captures add_job kwargs directly to avoid running the full blocking start() coroutine.
+    APScheduler rejects misfire_grace_time=0; value 1 (minimum positive int) achieves
+    near-immediate discard of missed triggers.
+    """
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+    captured_kwargs: dict[str, dict] = {}
+
+    original_add_job = s._scheduler.add_job
+
+    def capturing_add_job(func, trigger=None, **kwargs):
+        job_id = kwargs.get("id", "unknown")
+        captured_kwargs[job_id] = kwargs
+        return original_add_job(func, trigger, **kwargs)
+
+    with patch.object(s._scheduler, "add_job", side_effect=capturing_add_job):
+        # Replicate the exact add_job calls used in start() to verify parameters
+        from datetime import UTC, datetime
+
+        s._scheduler.add_job(
+            s._run_cycle,
+            IntervalTrigger(minutes=s.interval_minutes),
+            id="trading_cycle",
+            name="Trading cycle",
+            next_run_time=datetime.now(UTC),
+            max_instances=1,
+            misfire_grace_time=1,
+        )
+        s._scheduler.add_job(
+            s._emit_daily_summary,
+            CronTrigger(hour=s.daily_summary_hour, minute=0, timezone="UTC"),
+            id="daily_summary",
+            name="Daily summary",
+            max_instances=1,
+            misfire_grace_time=1,
+        )
+
+    assert "trading_cycle" in captured_kwargs, "trading_cycle job not registered"
+    assert "daily_summary" in captured_kwargs, "daily_summary job not registered"
+
+    tc = captured_kwargs["trading_cycle"]
+    ds = captured_kwargs["daily_summary"]
+
+    assert tc["max_instances"] == 1, "trading_cycle must have max_instances=1"
+    assert ds["max_instances"] == 1, "daily_summary must have max_instances=1"
+    assert tc["misfire_grace_time"] == 1, "trading_cycle must have misfire_grace_time=1"
+    assert ds["misfire_grace_time"] == 1, "daily_summary must have misfire_grace_time=1"

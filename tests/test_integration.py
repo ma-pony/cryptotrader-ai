@@ -200,7 +200,8 @@ class TestMalformedLLMOutput:
             result = await TechAgent(model="test").analyze(sample_snapshot)
 
         assert result.direction == "neutral"
-        assert result.confidence == 0.5
+        assert result.confidence == 0.1
+        assert result.is_mock is True
 
 
 # ── Risk Gate Integration Tests ──

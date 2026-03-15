@@ -19,7 +19,7 @@ def test_exchange_credentials_config():
     assert cfg.get("binance") is None
 
 
-def test_live_credentials_empty_raises():
+async def test_live_credentials_empty_raises():
     """_get_exchange raises RuntimeError for live mode with empty credentials."""
     from cryptotrader.nodes.execution import _get_exchange, _live_exchanges
 
@@ -43,7 +43,7 @@ def test_live_credentials_empty_raises():
         patch("cryptotrader.config.load_config", return_value=mock_config),
         pytest.raises(RuntimeError, match="No credentials configured"),
     ):
-        _get_exchange(state, "BTC/USDT")
+        await _get_exchange(state, "BTC/USDT")
 
 
 def test_live_exchange_sandbox_keyword_only():
@@ -148,14 +148,18 @@ async def test_cold_start_live_reject():
     }
 
     mock_pm = MagicMock()
-    mock_pm.get_portfolio = AsyncMock(return_value={"total_value": 0, "positions": {}})
     mock_pm.get_daily_pnl = AsyncMock(return_value=0.0)
     mock_pm.get_drawdown = AsyncMock(return_value=0.0)
     mock_pm.get_returns = AsyncMock(return_value=[])
 
     with (
         patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
-        patch("cryptotrader.nodes.verdict._fetch_exchange_total", new_callable=AsyncMock, return_value=0.0),
+        # Exchange returns 0 balance -- patch the canonical location in portfolio.manager
+        patch(
+            "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+            new_callable=AsyncMock,
+            return_value={"total_value": 0, "positions": {}, "cash": 0},
+        ),
     ):
         result = await risk_check(state)
 
@@ -191,21 +195,24 @@ async def test_cold_start_live_uses_exchange_balance():
     }
 
     mock_pm = MagicMock()
-    mock_pm.get_portfolio = AsyncMock(return_value={"total_value": 0, "positions": {}})
     mock_pm.get_daily_pnl = AsyncMock(return_value=0.0)
     mock_pm.get_drawdown = AsyncMock(return_value=0.0)
     mock_pm.get_returns = AsyncMock(return_value=[])
 
     with (
         patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
-        # Exchange has 8000 USDT
-        patch("cryptotrader.nodes.verdict._fetch_exchange_total", new_callable=AsyncMock, return_value=8000.0),
+        # Exchange has 8000 USDT -- patch the canonical location in portfolio.manager
+        patch(
+            "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+            new_callable=AsyncMock,
+            return_value={"total_value": 8000.0, "positions": {}, "cash": 8000.0},
+        ),
         patch("cryptotrader.nodes.verdict._measure_api_latency", new_callable=AsyncMock, return_value=100),
     ):
         result = await risk_check(state)
 
     rg = result["data"]["risk_gate"]
-    # Should NOT be rejected — exchange has balance
+    # Should NOT be rejected -- exchange has balance
     assert rg["rejected_by"] != "portfolio_unknown"
 
 

@@ -46,7 +46,8 @@ async def test_debate_gate_strong_consensus_skips():
     with patch("cryptotrader.config.load_config", return_value=_mock_config()):
         result = await debate_gate(state)
     assert result["data"]["debate_skipped"] is True
-    assert "strong consensus" in result["data"]["debate_skip_reason"]
+    # debate_skip_reason is the structured tag written into state for Dashboard observability
+    assert result["data"]["debate_skip_reason"] == "consensus"
 
 
 @pytest.mark.asyncio
@@ -62,7 +63,8 @@ async def test_debate_gate_shared_confusion_skips():
     with patch("cryptotrader.config.load_config", return_value=_mock_config()):
         result = await debate_gate(state)
     assert result["data"]["debate_skipped"] is True
-    assert "shared confusion" in result["data"]["debate_skip_reason"]
+    # debate_skip_reason is the structured tag written into state for Dashboard observability
+    assert result["data"]["debate_skip_reason"] == "confusion"
 
 
 @pytest.mark.asyncio

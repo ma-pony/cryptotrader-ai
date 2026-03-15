@@ -306,6 +306,8 @@ async def test_place_order_long_paper():
     )
 
     mock_exchange = MagicMock()
+    mock_exchange.get_balance = AsyncMock(return_value={"USDT": 10000.0})
+    mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "filled", "filled": 0.02, "price": 50000})
 
     # Inject mock into per-pair cache
@@ -635,6 +637,8 @@ async def test_place_order_short():
     )
 
     mock_exchange = MagicMock()
+    mock_exchange.get_balance = AsyncMock(return_value={"USDT": 10000.0})
+    mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "filled", "filled": 0.01, "price": 50000})
 
     _paper_exchanges["BTC/USDT"] = mock_exchange
@@ -657,6 +661,8 @@ async def test_place_order_partial_fill():
     )
 
     mock_exchange = MagicMock()
+    mock_exchange.get_balance = AsyncMock(return_value={"USDT": 10000.0})
+    mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "partially_filled", "filled": 0.005, "price": 50100})
 
     _paper_exchanges["BTC/USDT"] = mock_exchange
@@ -681,6 +687,8 @@ async def test_place_order_rejected():
     )
 
     mock_exchange = MagicMock()
+    mock_exchange.get_balance = AsyncMock(return_value={"USDT": 10000.0})
+    mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "rejected"})
 
     _paper_exchanges["BTC/USDT"] = mock_exchange

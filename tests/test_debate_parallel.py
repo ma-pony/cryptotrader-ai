@@ -55,7 +55,7 @@ async def test_debate_one_agent_success():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=response_json))
     with patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm):
-        aid, result = await _debate_one_agent("tech_agent", analysis, others, "BTC/USDT", "test")
+        aid, result = await _debate_one_agent("tech_agent", analysis, others, "BTC/USDT", "test", 60)
     assert aid == "tech_agent"
     assert result["confidence"] == 0.85
     assert result["new_findings"] == "cross-domain"
@@ -69,7 +69,7 @@ async def test_debate_one_agent_failure_returns_original():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM timeout"))
     with patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm):
-        aid, result = await _debate_one_agent("tech_agent", analysis, others, "BTC/USDT", "test")
+        aid, result = await _debate_one_agent("tech_agent", analysis, others, "BTC/USDT", "test", 60)
     assert aid == "tech_agent"
     assert result == analysis
 
@@ -96,6 +96,7 @@ async def test_debate_round_runs_parallel():
     ):
         mock_cfg.return_value.models.debate = "test"
         mock_cfg.return_value.models.fallback = "fallback"
+        mock_cfg.return_value.models.timeout_seconds = 60
         result = await debate_round(state)
 
     assert len(result["data"]["analyses"]) == 4
@@ -130,6 +131,7 @@ async def test_debate_round_partial_failure():
     ):
         mock_cfg.return_value.models.debate = "test"
         mock_cfg.return_value.models.fallback = "fallback"
+        mock_cfg.return_value.models.timeout_seconds = 60
         result = await debate_round(state)
 
     # All 4 agents should have results (3 updated + 1 original)
