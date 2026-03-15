@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import copy
+import logging
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 # ── LLM gateway ──
 
@@ -31,6 +36,7 @@ class ModelConfig:
     news_agent: str = "gemini-3.1-pro"
     macro_agent: str = "gemini-3.1-pro"
     fallback: str = "deepseek-chat"
+    timeout_seconds: int = 60
 
 
 # ── Debate ──
@@ -296,6 +302,155 @@ class AppConfig:
         return self.experience
 
 
+# ── Configuration validation ──
+
+
+class ConfigurationError(ValueError):
+    """Raised when AppConfig contains an invalid field value at startup.
+
+    Attributes:
+        field_path: Dot-separated path to the offending field (e.g. "risk.loss.max_daily_loss_pct").
+        expected: Human-readable description of the expected constraint (e.g. "value in (0, 1)").
+    """
+
+    def __init__(self, *, field_path: str, expected: str) -> None:
+        self.field_path = field_path
+        self.expected = expected
+        super().__init__(f"Configuration error: {field_path!r} — {expected}")
+
+
+def validate_config(cfg: AppConfig) -> None:
+    """Validate critical AppConfig constraints.  Raises ConfigurationError on violation.
+
+    Checked constraints:
+      - risk.loss.max_daily_loss_pct ∈ (0, 1)
+      - risk.position.max_single_pct ∈ (0, 1)
+      - debate.consensus_skip_threshold ∈ (0, 1)
+      - models.fallback is non-empty (after strip)
+    """
+    _check_open_unit_interval(cfg.risk.loss.max_daily_loss_pct, "risk.loss.max_daily_loss_pct")
+    _check_open_unit_interval(cfg.risk.position.max_single_pct, "risk.position.max_single_pct")
+    _check_open_unit_interval(cfg.debate.consensus_skip_threshold, "debate.consensus_skip_threshold")
+    if not cfg.models.fallback.strip():
+        raise ConfigurationError(
+            field_path="models.fallback",
+            expected="non-empty string (model name must be specified)",
+        )
+
+
+def _check_open_unit_interval(value: float, field_path: str) -> None:
+    """Assert that *value* is strictly inside the open interval (0, 1)."""
+    if not (0.0 < value < 1.0):
+        raise ConfigurationError(
+            field_path=field_path,
+            expected=f"value in open interval (0, 1), got {value!r}",
+        )
+
+
+# ── Environment variable overrides ──
+
+_ENV_PREFIX = "CRYPTOTRADER_"
+
+
+def _coerce_value(raw: str) -> bool | int | float | str:
+    """Coerce an environment variable string to the most appropriate Python type.
+
+    Rules (in order):
+    - "true" / "false" (case-insensitive) -> bool
+    - Pure integer string -> int
+    - Numeric string with decimal point -> float
+    - Anything else -> str (unchanged)
+    """
+    lower = raw.strip().lower()
+    if lower == "true":
+        return True
+    if lower == "false":
+        return False
+    try:
+        return int(raw)
+    except ValueError:
+        pass
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    return raw
+
+
+def _resolve_nested(data: dict, parts: list[str]) -> tuple[dict, str]:
+    """Navigate (and create if missing) nested dict nodes; return (leaf_dict, leaf_key)."""
+    node = data
+    for part in parts[:-1]:
+        if part not in node or not isinstance(node[part], dict):
+            node[part] = {}
+        node = node[part]  # type: ignore[assignment]
+    return node, parts[-1]
+
+
+def _adapt_numeric_type(value: bool | int | float | str, original: object) -> bool | int | float | str:
+    """Ensure numeric type consistency when the original TOML value is numeric."""
+    if isinstance(original, float) and isinstance(value, int) and not isinstance(value, bool):
+        return float(value)
+    orig_is_plain_int = isinstance(original, int) and not isinstance(original, bool)
+    if orig_is_plain_int and isinstance(value, float) and value == int(value):
+        return int(value)
+    return value
+
+
+def apply_env_overrides(toml_data: dict[str, object]) -> dict[str, object]:
+    """Merge CRYPTOTRADER_* environment variables into toml_data and return a new dict.
+
+    The original dict is never mutated (deep-copied first).
+
+    Key-path rules:
+      - Strip the CRYPTOTRADER_ prefix.
+      - Split the remainder on double-underscore (__) to form the nested path.
+      - Convert each path segment to lowercase.
+      - Single underscores are allowed inside key names.
+
+    Example:
+      CRYPTOTRADER_RISK__LOSS__MAX_DAILY_LOSS_PCT=0.03
+      -> result["risk"]["loss"]["max_daily_loss_pct"] = 0.03
+
+    Type conversion (via _coerce_value):
+      "true"/"false" -> bool, integer strings -> int, decimal strings -> float, else str.
+
+    If the original TOML value is numeric but the env var string cannot be parsed as a
+    number (coercion falls back to str), a logger.warning is emitted and the key is
+    skipped (original value preserved).
+
+    Priority: environment variables > local.toml > default.toml.
+    """
+    result = copy.deepcopy(toml_data)
+
+    for key, raw_value in os.environ.items():
+        if not key.startswith(_ENV_PREFIX):
+            continue
+
+        path_str = key[len(_ENV_PREFIX) :]
+        parts = [p.lower() for p in path_str.split("__")]
+
+        value = _coerce_value(raw_value)
+
+        node, leaf_key = _resolve_nested(result, parts)
+        original_value = node.get(leaf_key)
+
+        # If the original TOML value is numeric but we could only produce a str,
+        # the env var is not parseable as a number -> warn and skip.
+        if isinstance(original_value, int | float) and not isinstance(original_value, bool) and isinstance(value, str):
+            logger.warning(
+                "Env var %s value %r cannot be parsed as %s; skipping key",
+                key,
+                raw_value,
+                type(original_value).__name__,
+            )
+            continue
+
+        node[leaf_key] = _adapt_numeric_type(value, original_value)
+
+    return result
+
+
 # ── TOML loading ──
 
 _CONFIG_SEARCH_PATHS = [
@@ -410,8 +565,11 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
             with open(local_path, "rb") as f:
                 local_data = tomllib.load(f)
             _merge(toml_data, local_data)
+        # Apply CRYPTOTRADER_* environment variable overrides (highest priority)
+        toml_data = apply_env_overrides(toml_data)
         _cached_config = _build_config(toml_data)
     else:
         _cached_config = AppConfig()
 
+    validate_config(_cached_config)
     return _cached_config

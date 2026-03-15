@@ -14,14 +14,15 @@ default_temperature = 0.2
 timeout = 120
 
 [models]
-analysis = "deepseek-chat"
-debate = "deepseek-chat"
-verdict = "deepseek-reasoner"
-tech_agent = "deepseek-reasoner"
-chain_agent = "deepseek-chat"
-news_agent = "deepseek-chat"
-macro_agent = "deepseek-chat"
-fallback = "deepseek-chat"
+analysis = "glm-5"
+debate = "glm-5"
+verdict = "glm-5"
+tech_agent = "glm-5"
+chain_agent = "glm-5"
+news_agent = "glm-5"
+macro_agent = "glm-5"
+fallback = "glm-5"
+timeout_seconds = 60    # 单次 LLM 调用超时上限（秒），超时后以空结果降级
 
 [debate]
 max_rounds = 3
