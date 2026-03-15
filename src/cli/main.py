@@ -22,6 +22,10 @@ def _setup():
 
     setup_logging()
 
+    from cryptotrader.otel import setup_otel
+
+    setup_otel()
+
 
 @app.command()
 def run(
@@ -104,8 +108,11 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
             "divergence_scores": [],
         }
 
+        from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
+
         try:
-            result = await graph.ainvoke(initial)
+            result, node_trace = await run_graph_traced(graph, initial)
+            add_timing_to_trace(node_trace)
         except Exception as exc:
             if mode == "live":
                 console.print(f"[red]ERROR: {exc}[/red]")
@@ -113,24 +120,37 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
                 raise typer.Exit(1) from None
             raise
 
-        verdict = result.get("data", {}).get("verdict", {})
-        risk = result.get("data", {}).get("risk_gate", {})
-        order = result.get("data", {}).get("order")
+        _print_result(pair, result, node_trace)
 
-        table = Table(title=f"Decision Summary — {pair}")
-        table.add_column("Field", style="cyan")
-        table.add_column("Value", style="green")
-        table.add_row("Pair", pair)
-        table.add_row("Action", verdict.get("action", "N/A"))
-        table.add_row("Confidence", f"{verdict.get('confidence', 0):.2%}")
-        table.add_row("Divergence", f"{verdict.get('divergence', 0):.2%}")
-        table.add_row("Position Scale", f"{verdict.get('position_scale', 0):.2%}")
-        table.add_row("Risk Gate", "PASS" if risk.get("passed") else f"REJECT: {risk.get('reason', '')}")
-        if order:
-            table.add_row(
-                "Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}"
-            )
-        console.print(table)
+
+def _print_result(pair: str, result: dict, node_trace: list[dict]):
+    """Print node trace and decision summary tables."""
+    from rich.table import Table
+
+    verdict = result.get("data", {}).get("verdict", {})
+    risk = result.get("data", {}).get("risk_gate", {})
+    order = result.get("data", {}).get("order")
+
+    trace_table = Table(title="Graph Node Trace")
+    trace_table.add_column("Node", style="cyan")
+    trace_table.add_column("Duration", style="yellow")
+    trace_table.add_column("Output", style="white")
+    for t in node_trace:
+        trace_table.add_row(t["node"], f"{t['duration_ms']}ms", t["summary"][:120])
+    console.print(trace_table)
+
+    table = Table(title=f"Decision Summary — {pair}")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Pair", pair)
+    table.add_row("Action", verdict.get("action", "N/A"))
+    table.add_row("Confidence", f"{verdict.get('confidence', 0):.2%}")
+    table.add_row("Divergence", f"{verdict.get('divergence', 0):.2%}")
+    table.add_row("Position Scale", f"{verdict.get('position_scale', 0):.2%}")
+    table.add_row("Risk Gate", "PASS" if risk.get("passed") else f"REJECT: {risk.get('reason', '')}")
+    if order:
+        table.add_row("Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}")
+    console.print(table)
 
 
 # ── Journal subcommands ──
@@ -407,7 +427,14 @@ def _check_credentials(config, exchange_id: str) -> tuple[str, bool, str]:
     if creds and creds.api_key and creds.secret:
         sandbox_note = " (SANDBOX)" if creds.sandbox else ""
         return ("Credentials", True, f"{exchange_id}{sandbox_note}")
-    return ("Credentials", False, f"No credentials for {exchange_id}")
+    missing = []
+    if creds is None or not creds.api_key:
+        missing.append("api_key")
+    if creds is None or not creds.secret:
+        missing.append("secret")
+    fields = ", ".join(missing) if missing else "api_key/secret"
+    hint = f"config/local.toml [exchanges.{exchange_id}]"
+    return ("Credentials", False, f"No credentials for {exchange_id} — {fields} missing. Set in {hint}")
 
 
 async def _check_exchange_api(config, exchange_id: str) -> tuple[str, bool, str]:
@@ -700,6 +727,69 @@ def experience_sessions():
     for s in sessions:
         table.add_row(s)
     console.print(table)
+
+
+# ── Portfolio subcommands ──
+
+portfolio_app = typer.Typer(help="Portfolio management commands")
+app.add_typer(portfolio_app, name="portfolio")
+
+
+@portfolio_app.command("show")
+def portfolio_show():
+    """Show current portfolio (cash + positions)."""
+    asyncio.run(_portfolio_show())
+
+
+async def _portfolio_show():
+    from cryptotrader.config import load_config
+    from cryptotrader.portfolio.manager import PortfolioManager
+
+    cfg = load_config()
+    pm = PortfolioManager(cfg.infrastructure.database_url)
+    p = await pm.get_portfolio()
+
+    table = Table(title="Portfolio")
+    table.add_column("Item", style="cyan")
+    table.add_column("Value", justify="right")
+    table.add_row("Cash (USDT)", f"${p.get('cash', 0):,.2f}")
+    positions = p.get("positions", {})
+    for pair, pos in positions.items():
+        amount = pos["amount"]
+        avg_price = pos["avg_price"]
+        side = "Long" if amount > 0 else "Short"
+        table.add_row(
+            f"{pair} ({side})",
+            f"{abs(amount):.6f} @ ${avg_price:,.2f} = ${abs(amount) * avg_price:,.2f}",
+        )
+    table.add_row("Total Value", f"[bold]${p['total_value']:,.2f}[/bold]")
+    console.print(table)
+
+
+@portfolio_app.command("reset")
+def portfolio_reset(
+    confirm: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation")] = False,
+    capital: Annotated[float, typer.Option("--capital", "-c", help="Initial cash")] = 10000.0,
+):
+    """Reset portfolio to initial state (delete positions + snapshots, set cash)."""
+    if not confirm:
+        typer.confirm(
+            f"This will delete all positions and snapshots, set cash to ${capital:,.2f}. Continue?",
+            abort=True,
+        )
+    asyncio.run(_portfolio_reset(capital))
+
+
+async def _portfolio_reset(capital: float):
+    from cryptotrader.config import load_config
+    from cryptotrader.portfolio.manager import PortfolioManager
+
+    cfg = load_config()
+    pm = PortfolioManager(cfg.infrastructure.database_url)
+    await pm.reset("default")
+    await pm.update_cash("default", capital)
+    await pm.snapshot("default", capital, capital)
+    console.print(f"[green]Portfolio reset. Cash: ${capital:,.2f}[/green]")
 
 
 if __name__ == "__main__":

@@ -48,15 +48,18 @@ async def analyze(req: AnalyzeRequest):
     else:
         graph = builders.get(req.graph_mode, build_trading_graph)()
     from cryptotrader.state import build_initial_state
+    from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
 
-    result = await graph.ainvoke(
+    result, node_trace = await run_graph_traced(
+        graph,
         build_initial_state(
             req.pair,
             engine=req.mode,
             exchange_id=req.exchange,
             config=config,
-        )
+        ),
     )
+    add_timing_to_trace(node_trace)
 
     verdict = result.get("data", {}).get("verdict", {})
     analyses = result.get("data", {}).get("analyses", {})

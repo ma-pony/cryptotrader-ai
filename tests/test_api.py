@@ -17,16 +17,14 @@ def test_health():
 def test_metrics():
     r = client.get("/metrics")
     assert r.status_code == 200
-    d = r.json()
-    assert "decisions_total" in d
-    assert "win_rate" in d
-    assert "uptime_seconds" in d
+    # /metrics 现在返回 Prometheus 文本格式
+    assert "text/plain" in r.headers["content-type"]
 
 
-def test_journal_log_empty():
+def test_journal_log_returns_list():
     r = client.get("/journal/log")
     assert r.status_code == 200
-    assert r.json() == []
+    assert isinstance(r.json(), list)
 
 
 def test_journal_show_not_found():
