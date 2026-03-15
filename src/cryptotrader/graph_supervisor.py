@@ -1,5 +1,11 @@
 """Supervisor pattern graph builder following LangChain official docs.
 
+EXPERIMENTAL -- not enabled in the main trading path.
+This module implements an alternative supervisor-pattern graph (build_supervisor_graph)
+as a research prototype.  The production pipeline uses build_trading_graph() from
+graph.py, which runs agents in parallel and applies the debate gate/verdict/risk flow.
+This module is kept for comparison and future experimentation only.
+
 This implements the supervisor pattern from:
 https://docs.langchain.com/oss/python/langchain/multi-agent/subagents-personal-assistant
 """

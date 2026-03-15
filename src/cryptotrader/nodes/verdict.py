@@ -5,15 +5,20 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import structlog
+
+from cryptotrader.metrics import get_metrics_collector
 from cryptotrader.state import ArenaState
+from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
+_structlog = structlog.get_logger(__name__)
 
 
 async def _gather_risk_constraints(state: ArenaState) -> dict:
     """Collect current risk constraints for injection into verdict prompt."""
     from cryptotrader.config import load_config
-    from cryptotrader.portfolio.manager import PortfolioManager
+    from cryptotrader.portfolio.manager import PortfolioManager, read_portfolio_from_exchange
     from cryptotrader.risk.state import RedisStateManager
 
     config = load_config()
@@ -22,17 +27,21 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
         "max_drawdown_pct": config.risk.loss.max_drawdown_pct,
     }
 
-    # Portfolio state
-    db_url = state["metadata"].get("database_url")
-    pm = PortfolioManager(db_url)
+    # Portfolio state — read from exchange (source of truth)
     try:
-        pm_data = await pm.get_portfolio()
+        exchange_portfolio = await read_portfolio_from_exchange(state)
+        total = exchange_portfolio["total_value"] if exchange_portfolio else 0
+
+        # Historical metrics from DB snapshots
+        db_url = state["metadata"].get("database_url")
+        pm = PortfolioManager(db_url)
         daily_pnl = await pm.get_daily_pnl()
         drawdown = await pm.get_drawdown()
-        total = pm_data.get("total_value", 0)
+
         if total > 0:
-            positions = pm_data.get("positions", {})
-            current_exposure = sum(abs(p.get("amount", 0) * p.get("avg_price", 0)) for p in positions.values())
+            positions = exchange_portfolio.get("positions", {}) if exchange_portfolio else {}
+            price = state["data"].get("snapshot_summary", {}).get("price", 0)
+            current_exposure = sum(abs(p.get("amount", 0)) * price for p in positions.values())
             max_exp = config.risk.position.max_total_exposure_pct
             constraints["remaining_exposure_pct"] = max(0.0, max_exp - current_exposure / total)
             daily_loss_budget = config.risk.loss.max_daily_loss_pct
@@ -89,6 +98,7 @@ async def _should_downgrade_to_weighted(state: ArenaState) -> bool:
     return True
 
 
+@node_logger()
 async def make_verdict(state: ArenaState) -> dict:
     """Generate trading verdict via AI or weighted-average fallback."""
     from cryptotrader.debate.verdict import make_verdict_llm, make_verdict_weighted
@@ -106,6 +116,7 @@ async def make_verdict(state: ArenaState) -> dict:
         from cryptotrader.debate.verdict import TradeVerdict
 
         verdict = TradeVerdict(action="hold", confidence=0.0, reasoning="All agents failed — no real data")
+        get_metrics_collector().inc_verdict(action=verdict.action)
         return {
             "data": {
                 "verdict": {
@@ -116,24 +127,32 @@ async def make_verdict(state: ArenaState) -> dict:
                     "reasoning": verdict.reasoning,
                     "thesis": "",
                     "invalidation": "",
+                    "verdict_source": "hold_all_mock",
                 }
             }
         }
     use_llm_verdict = state["metadata"].get("llm_verdict", True)
     debate_skipped = state["data"].get("debate_skipped", False)
+    verdict_source: str
 
     if use_llm_verdict and debate_skipped and await _should_downgrade_to_weighted(state):
         logger.info("Verdict downgraded to weighted (debate skipped, flat, no circuit breaker)")
         scores = state.get("divergence_scores") or [0.0]
         threshold = state["metadata"].get("divergence_hold_threshold", 0.7)
         verdict = make_verdict_weighted(analyses, scores[-1] if scores else 0.0, threshold)
+        verdict_source = "weighted"
     elif use_llm_verdict:
         from cryptotrader.config import load_config as _load_config
 
         _cfg = _load_config()
         _default_model = _cfg.models.verdict or _cfg.models.fallback
         model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", _default_model))
-        constraints = await _gather_risk_constraints(state)
+        # In backtest mode, use constraints constructed by BacktestEngine from its own
+        # state variables (equity, position, peak) instead of querying PortfolioManager/Redis
+        if state["metadata"].get("backtest_mode"):
+            constraints = state["data"].get("backtest_constraints", {})
+        else:
+            constraints = await _gather_risk_constraints(state)
         calibration = state["data"].get("verdict_calibration", "")
         position_context = state["data"].get("position_context")
         trend_context = state["data"].get("trend_context")
@@ -145,10 +164,12 @@ async def make_verdict(state: ArenaState) -> dict:
             position_context=position_context,
             trend_context=trend_context,
         )
+        verdict_source = "ai"
     else:
         scores = state.get("divergence_scores") or [0.0]
         threshold = state["metadata"].get("divergence_hold_threshold", 0.7)
         verdict = make_verdict_weighted(analyses, scores[-1], threshold)
+        verdict_source = "weighted"
 
     logger.info(
         "Verdict: action=%s confidence=%.2f scale=%.2f divergence=%.2f | %s",
@@ -158,6 +179,8 @@ async def make_verdict(state: ArenaState) -> dict:
         verdict.divergence,
         verdict.reasoning[:120],
     )
+    # Metrics instrumentation: ct_verdict_total[action] (req 9.5)
+    get_metrics_collector().inc_verdict(action=verdict.action)
     return {
         "data": {
             "verdict": {
@@ -168,6 +191,7 @@ async def make_verdict(state: ArenaState) -> dict:
                 "reasoning": verdict.reasoning,
                 "thesis": verdict.thesis,
                 "invalidation": verdict.invalidation,
+                "verdict_source": verdict_source,
             }
         }
     }
@@ -200,48 +224,6 @@ def _merge_returns(pm_returns: list[float], ohlcv_returns: list[float], min_coun
     # Pad with OHLCV returns at the front
     needed = min_count - len(pm_returns)
     return ohlcv_returns[:needed] + pm_returns
-
-
-async def _fetch_exchange_total(state: ArenaState) -> float:
-    """Query exchange balance and return total USDT value (best-effort)."""
-    from cryptotrader.config import load_config as _lc
-
-    exchange_id = state["metadata"].get("exchange_id") or _lc().exchange_id
-    try:
-        exchange = _get_or_create_live_exchange(exchange_id)
-        if exchange is None:
-            return 0.0
-        bal = await exchange.get_balance()
-        return bal.get("USDT", 0.0)
-    except Exception:
-        logger.warning("Exchange balance query failed", exc_info=True)
-        return 0.0
-
-
-def _get_or_create_live_exchange(exchange_id: str):
-    """Get cached live exchange, or create one from config if needed."""
-    from cryptotrader.nodes.execution import _live_exchanges
-
-    if exchange_id in _live_exchanges:
-        return _live_exchanges[exchange_id]
-
-    from cryptotrader.config import load_config
-    from cryptotrader.execution.exchange import LiveExchange
-
-    config = load_config()
-    creds = config.exchanges.get(exchange_id)
-    if creds is None or not creds.api_key or not creds.secret:
-        return None
-
-    live_exchange = LiveExchange(
-        exchange_id,
-        creds.api_key,
-        creds.secret,
-        sandbox=creds.sandbox,
-        passphrase=creds.passphrase,
-    )
-    _live_exchanges[exchange_id] = live_exchange
-    return live_exchange
 
 
 def _extract_ohlcv_returns(state: ArenaState) -> tuple[list[float], list[float]]:
@@ -277,13 +259,11 @@ async def _measure_api_latency(state: ArenaState) -> int:
         return 100
     import time
 
-    from cryptotrader.config import load_config as _lc2
+    from cryptotrader.nodes.execution import _get_exchange
 
-    exchange_id = state["metadata"].get("exchange_id") or _lc2().exchange_id
+    pair = state["metadata"].get("pair", "BTC/USDT")
     try:
-        exchange = _get_or_create_live_exchange(exchange_id)
-        if exchange is None:
-            return 100
+        exchange, _ = await _get_exchange(state, pair)
         t0 = time.monotonic()
         await exchange.get_balance()
         return int((time.monotonic() - t0) * 1000)
@@ -292,6 +272,7 @@ async def _measure_api_latency(state: ArenaState) -> int:
         return 100
 
 
+@node_logger()
 async def risk_check(state: ArenaState) -> dict:
     """Run all risk gate checks on the verdict."""
     from cryptotrader.config import load_config
@@ -311,50 +292,56 @@ async def risk_check(state: ArenaState) -> dict:
     vd = state["data"]["verdict"]
     verdict = TradeVerdict(**vd)
 
-    recent_prices, returns_daily = _extract_ohlcv_returns(state)
+    # In backtest mode, portfolio is pre-built by the engine — skip exchange queries
+    pre_built_portfolio = state["data"].get("portfolio")
+    if pre_built_portfolio:
+        portfolio = pre_built_portfolio
+    else:
+        recent_prices, returns_daily = _extract_ohlcv_returns(state)
 
-    # Load real portfolio state
-    db_url = state["metadata"].get("database_url")
-    pm = PortfolioManager(db_url)
-    try:
-        pm_data = await pm.get_portfolio()
-        daily_pnl = await pm.get_daily_pnl()
-        drawdown = await pm.get_drawdown()
-        pm_returns = await pm.get_returns()
-    except Exception:
-        logger.debug("Portfolio data fetch failed, using defaults", exc_info=True)
-        pm_data = {"total_value": 0, "positions": {}}
-        daily_pnl = 0.0
-        drawdown = 0.0
-        pm_returns = []
+        # Read portfolio from exchange (source of truth)
+        from cryptotrader.portfolio.manager import read_portfolio_from_exchange
 
-    has_real_portfolio = pm_data.get("total_value", 0) > 0
-    engine = state["metadata"].get("engine", "paper")
+        exchange_portfolio = await read_portfolio_from_exchange(state)
 
-    # Live mode: if local portfolio is empty, query exchange for real balance
-    if engine == "live" and not has_real_portfolio:
-        exchange_total = await _fetch_exchange_total(state)
-        if exchange_total > 0:
-            pm_data["total_value"] = exchange_total
-            has_real_portfolio = True
-        else:
+        # Historical metrics from DB snapshots (PnL, drawdown, returns)
+        db_url = state["metadata"].get("database_url")
+        pm = PortfolioManager(db_url)
+        try:
+            daily_pnl = await pm.get_daily_pnl()
+            drawdown = await pm.get_drawdown()
+            pm_returns = await pm.get_returns()
+        except Exception:
+            logger.debug("Portfolio snapshot data fetch failed", exc_info=True)
+            daily_pnl = 0.0
+            drawdown = 0.0
+            pm_returns = []
+
+        if exchange_portfolio and exchange_portfolio.get("total_value", 0) > 0:
+            total_value = exchange_portfolio["total_value"]
+            positions = exchange_portfolio.get("positions", {})
+        elif state["metadata"].get("engine") == "live":
+            # Live mode: exchange returned 0 — reject to prevent trading with unknown portfolio
+            logger.warning("Exchange returned 0 total_value in live mode — rejecting")
             return {
                 "data": {
                     "risk_gate": {
                         "passed": False,
                         "rejected_by": "portfolio_unknown",
-                        "reason": "Live mode: no portfolio data — local DB empty and exchange balance query failed.",
+                        "reason": "Exchange returned 0 balance — cannot trade safely",
                     }
                 }
             }
+        else:
+            # Paper mode fallback: use initial capital from config
+            total_value = config.backtest.initial_capital
+            positions = {}
 
-    api_latency_ms = await _measure_api_latency(state)
-
-    portfolio = state["data"].get(
-        "portfolio",
-        {
-            "total_value": pm_data["total_value"] if has_real_portfolio else config.backtest.initial_capital,
-            "positions": pm_data.get("positions", {}),
+        api_latency_ms = await _measure_api_latency(state)
+        portfolio = {
+            "total_value": total_value,
+            "positions": positions,
+            "cash": exchange_portfolio.get("cash", 0) if exchange_portfolio else 0,
             "daily_pnl": daily_pnl,
             "drawdown": drawdown,
             "returns_60d": _merge_returns(pm_returns, returns_daily),
@@ -362,19 +349,31 @@ async def risk_check(state: ArenaState) -> dict:
             "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
             "api_latency_ms": api_latency_ms,
             "pair": state["metadata"]["pair"],
-        },
-    )
+        }
+
     result = await gate.check(verdict, portfolio)
 
     if result.passed:
         logger.info("Risk gate PASSED for %s (action=%s)", state["metadata"]["pair"], verdict.action)
     else:
+        # Structured rejection log with required fields: check_name, reason summary (req 9.4).
+        # The reason string from each RiskCheck already embeds current_value/threshold details
+        # (e.g. "Funding rate 0.001 exceeds threshold 0.0002"), so structlog fields carry
+        # all the context needed for alerting and log-based metrics.
+        _structlog.warning(
+            "risk_gate_rejected",
+            pair=state["metadata"]["pair"],
+            check_name=result.rejected_by or "unknown",
+            reason=result.reason or "",
+        )
         logger.warning(
-            "Risk gate REJECTED for %s: %s — %s",
+            "Risk gate REJECTED for %s: check_name=%s reason=%s",
             state["metadata"]["pair"],
             result.rejected_by,
             result.reason,
         )
+        # Metrics instrumentation: ct_risk_rejected_total[check_name] (req 9.5)
+        get_metrics_collector().inc_risk_rejected(check_name=result.rejected_by or "unknown")
 
     # Fire circuit_breaker notification if triggered
     if not result.passed and result.rejected_by == "daily_loss_limit" and "Circuit breaker" in (result.reason or ""):

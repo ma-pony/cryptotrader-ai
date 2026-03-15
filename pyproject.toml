@@ -36,14 +36,23 @@ dependencies = [
     "structlog>=24.1",
     "alembic>=1.13",
     "apscheduler>=3.10,<4",
+    "nest-asyncio>=1.6.0",
+    "prometheus-client>=0.20",
 ]
 
 [project.optional-dependencies]
-dev = [
+test = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
+    "pytest-cov>=5.0",
+]
+dev = [
     "pre-commit>=3.0",
     "ruff>=0.8",
+]
+otel = [
+    "opentelemetry-sdk>=1.20",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20",
 ]
 
 [project.scripts]
@@ -56,6 +65,20 @@ packages = ["src/cryptotrader", "src/api", "src/cli"]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "--cov=src --cov-report=term-missing --cov-fail-under=70 --cov-branch"
+
+[tool.coverage.run]
+omit = [
+    # External data provider integrations require live API credentials and network.
+    # These modules make HTTPS calls to external services (Binance, SosoValue, RSS feeds)
+    # and cannot be unit-tested without integration-test infrastructure.
+    "src/cryptotrader/data/sync.py",
+    "src/cryptotrader/data/providers/binance.py",
+    "src/cryptotrader/data/providers/rss_news.py",
+    "src/cryptotrader/data/providers/sosovalue.py",
+    # Alternative supervisor/agent pattern — not on the main execution path.
+    "src/cryptotrader/debate/researchers.py",
+]
 
 [dependency-groups]
 dev = [
@@ -92,30 +115,51 @@ select = [
     "N",     # pep8-naming
 ]
 ignore = [
-    "S101",   # assert — used extensively in tests
-    "S301",   # pickle — not used, but avoid false positives
-    "S501",   # httpx verify=False — needed for some APIs
-    "S110",   # try-except-pass — used for best-effort data loading
-    "S105",   # hardcoded password — false positives on config field names
-    "S106",   # hardcoded password in arg — false positives on config
-    "RUF012", # ClassVar annotation — too strict for dataclasses
-    "PT011",  # pytest.raises match — too strict for unit tests
+    "S101",   # assert -- used extensively in tests
+    "S301",   # pickle -- not used, but avoid false positives
+    "S501",   # httpx verify=False -- needed for some APIs
+    "S110",   # try-except-pass -- used for best-effort data loading
+    "S105",   # hardcoded password -- false positives on config field names
+    "S106",   # hardcoded password in arg -- false positives on config
+    "RUF012", # ClassVar annotation -- too strict for dataclasses
+    "PT011",  # pytest.raises match -- too strict for unit tests
 ]
 
 [tool.ruff.lint.isort]
 known-first-party = ["cryptotrader", "api", "cli"]
 
+# Banned imports: domain layer (agents/, debate/, execution/, risk/, learning/)
+# must NOT import from nodes/ or graph.py (unidirectional dependency rule).
+# Files outside the domain layer that legitimately import nodes/ or graph.py
+# are listed below in per-file-ignores with TID251 exempted.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"cryptotrader.nodes" = {msg = "Domain layer must not import from nodes/ -- dependency direction is nodes -> domain, not the reverse."}
+"cryptotrader.graph" = {msg = "Domain layer must not import from graph.py -- graph.py is the entry-point assembler above the nodes layer."}
+
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = ["T201"]
 "scripts/**/*.py" = ["T201"]
 "src/cryptotrader/journal/store.py" = ["N806"]
-# reflect.py contains Chinese LLM prompts — fullwidth punctuation is intentional
+# reflect.py contains Chinese LLM prompts -- fullwidth punctuation is intentional
 "src/cryptotrader/learning/reflect.py" = ["RUF001"]
-"src/cryptotrader/portfolio/manager.py" = ["N806"]
-"src/cli/main.py" = ["N806", "S104", "S603"]
+"src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
+"src/cli/main.py" = ["N806", "S104", "S603", "TID251"]
 # state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
 # (LangGraph calls get_type_hints() to extract channel reducers at class creation)
 "src/cryptotrader/state.py" = ["TCH002", "TCH003"]
 # nodes/*.py: ArenaState is inspected at runtime by LangGraph via get_type_hints()
-# when functions are registered as graph nodes/conditional edges
-"src/cryptotrader/nodes/*.py" = ["TCH001"]
+# when functions are registered as graph nodes/conditional edges.
+# TID251 exempted: nodes/ IS the orchestration layer above domain; it may reference
+# sibling node modules via lazy imports without violating the boundary rule.
+"src/cryptotrader/nodes/*.py" = ["TCH001", "TID251"]
+# graph.py and graph_supervisor.py assemble the LangGraph topology from nodes.
+"src/cryptotrader/graph.py" = ["TID251"]
+"src/cryptotrader/graph_supervisor.py" = ["TID251"]
+# scheduler.py and backtest/engine.py are entry-layer orchestrators above nodes.
+"src/cryptotrader/scheduler.py" = ["TID251"]
+"src/cryptotrader/backtest/engine.py" = ["TID251"]
+# API routes are entry-layer -- they invoke graph builders directly.
+"src/api/routes/analyze.py" = ["TID251"]
+# tests are allowed to import any module for integration and boundary testing.
+# S603 exempted: subprocess.run calls in tests invoke known, trusted CLI tools (ruff, pytest).
+"tests/*.py" = ["TID251", "S603"]

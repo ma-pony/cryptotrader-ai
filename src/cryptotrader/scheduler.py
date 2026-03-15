@@ -28,13 +28,17 @@ class Scheduler:
         # Startup reconciliation for live mode
         await self._startup_reconcile()
 
-        # Register trading cycle job — runs immediately, then every interval_minutes
+        # Register trading cycle job -- runs immediately, then every interval_minutes
+        # max_instances=1: prevents overlap when previous cycle is still running
+        # misfire_grace_time=1: discard missed triggers after 1s instead of catching up
         self._scheduler.add_job(
             self._run_cycle,
             IntervalTrigger(minutes=self.interval_minutes),
             id="trading_cycle",
             name="Trading cycle",
             next_run_time=datetime.now(UTC),
+            max_instances=1,
+            misfire_grace_time=1,
         )
 
         # Register daily summary job — cron at configured hour UTC
@@ -43,6 +47,8 @@ class Scheduler:
             CronTrigger(hour=self.daily_summary_hour, minute=0, timezone="UTC"),
             id="daily_summary",
             name="Daily summary",
+            max_instances=1,
+            misfire_grace_time=1,
         )
 
         # Signal handlers for graceful shutdown
@@ -92,12 +98,15 @@ class Scheduler:
 
     async def _run_cycle(self) -> None:
         """Single trading cycle — run all pairs concurrently."""
-        tasks = [self._run_pair(p) for p in self.pairs]
-        await asyncio.gather(*tasks, return_exceptions=True)
-        self._cycle_count += 1
-        for p in self.pairs:
-            next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
-            self._status[p]["next_run"] = next_run.isoformat()
+        try:
+            tasks = [self._run_pair(p) for p in self.pairs]
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._cycle_count += 1
+            for p in self.pairs:
+                next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
+                self._status[p]["next_run"] = next_run.isoformat()
+        except Exception:
+            logger.warning("Unexpected error in trading cycle", exc_info=True)
 
     async def _close_live_exchanges(self) -> None:
         from cryptotrader.nodes.execution import _live_exchanges
@@ -122,7 +131,7 @@ class Scheduler:
             from cryptotrader.nodes.execution import _get_exchange
 
             dummy_state = {"metadata": {"engine": "live", "exchange_id": config.scheduler.exchange_id}, "data": {}}
-            exchange, _ = _get_exchange(dummy_state, self.pairs[0])
+            exchange, _ = await _get_exchange(dummy_state, self.pairs[0])
             reconciler = Reconciler(exchange)
             orphans = await reconciler.detect_orphans(set())
             if orphans:
@@ -169,9 +178,14 @@ class Scheduler:
                 config=config,
                 extra_metadata={"cycle_count": self._cycle_count},
             )
+            from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
+
             graph_timeout = config.execution.graph_timeout_s
             try:
-                result = await asyncio.wait_for(graph.ainvoke(initial), timeout=graph_timeout)
+                result, node_trace = await asyncio.wait_for(run_graph_traced(graph, initial), timeout=graph_timeout)
+                add_timing_to_trace(node_trace)
+                for t in node_trace:
+                    logger.info("Node %s [%dms]: %s", t["node"], t["duration_ms"], t["summary"][:120])
             except TimeoutError:
                 logger.error("Scheduler timed out after %ds for pair %s", graph_timeout, pair)
                 self._status[pair]["last_error"] = f"timeout after {graph_timeout}s"
@@ -195,7 +209,7 @@ class Scheduler:
             )
 
         except Exception as e:
-            logger.error("Scheduler error for %s: %s", pair, e)
+            logger.warning("Scheduler error for pair %s", pair, exc_info=True)
             self._status[pair]["last_error"] = str(e)
 
     async def _emit_daily_summary(self) -> None:

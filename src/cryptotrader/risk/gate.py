@@ -56,8 +56,25 @@ class RiskGate:
                 reason="Redis configured but unreachable — cannot verify risk state",
             )
 
+        failed: GateResult | None = None
         for c in self._checks:
-            result = await c.evaluate(verdict, portfolio)
-            if not result.passed:
-                return GateResult(passed=False, rejected_by=c.name, reason=result.reason)
-        return GateResult(passed=True)
+            try:
+                result = await c.evaluate(verdict, portfolio)
+            except Exception:
+                logger.warning(
+                    "Risk check %s raised an unexpected exception; treating as check_error",
+                    c.name,
+                    exc_info=True,
+                )
+                if failed is None:
+                    failed = GateResult(
+                        passed=False,
+                        rejected_by=c.name,
+                        reason=f"check_error: {c.name} raised an unexpected exception",
+                    )
+                continue
+
+            if not result.passed and failed is None:
+                failed = GateResult(passed=False, rejected_by=c.name, reason=result.reason)
+
+        return failed if failed is not None else GateResult(passed=True)

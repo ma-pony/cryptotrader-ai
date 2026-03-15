@@ -7,8 +7,64 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal
 
+from pydantic import BaseModel, field_validator
+
 if TYPE_CHECKING:
     import pandas as pd
+
+# ── External API Response Schema Models (Section 7.3) ──
+
+_NEWS_TITLE_MAX_LEN = 2000
+
+
+class NewsHeadlineResponse(BaseModel):
+    """Pydantic schema for validating a single news headline from external APIs.
+
+    Enforces non-empty title and maximum length constraints so that malformed
+    or injected payloads are rejected before reaching the LLM pipeline.
+    """
+
+    title: str
+    source: str = ""
+    published: str = ""
+
+    @field_validator("title")
+    @classmethod
+    def title_must_be_non_empty(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("title must not be empty or whitespace-only")
+        if len(stripped) > _NEWS_TITLE_MAX_LEN:
+            raise ValueError(f"title length {len(stripped)} exceeds maximum {_NEWS_TITLE_MAX_LEN}")
+        return stripped
+
+
+class OnchainMetricResponse(BaseModel):
+    """Pydantic schema for validating a single on-chain metric from external APIs.
+
+    Enforces non-empty metric_name and non-negative value so that corrupted
+    or structurally invalid provider responses are rejected at ingestion.
+    """
+
+    metric_name: str
+    value: float
+    source: str = ""
+
+    @field_validator("metric_name")
+    @classmethod
+    def metric_name_must_be_non_empty(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("metric_name must not be empty or whitespace-only")
+        return stripped
+
+    @field_validator("value")
+    @classmethod
+    def value_must_be_non_negative(cls, v: float) -> float:
+        if v < 0:
+            raise ValueError(f"value must be >= 0, got {v}")
+        return v
+
 
 # ── Data Layer Models (Section 5.2) ──
 
@@ -118,6 +174,7 @@ class TradeVerdict:
     reasoning: str = ""
     thesis: str = ""
     invalidation: str = ""
+    verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -182,6 +239,29 @@ class Order:
             raise ValueError(f"Order price must be >= 0, got {self.price}")
 
 
+# ── Observability Value Objects ──
+
+
+@dataclass
+class ConsensusMetrics:
+    """Snapshot of debate_gate consensus computation for a single decision cycle."""
+
+    strength: float  # abs(mean_score) * (1 - pstdev)
+    mean_score: float  # mean of all agent scores
+    dispersion: float  # standard deviation of agent scores
+    skip_threshold: float  # consensus_skip_threshold from config
+    confusion_threshold: float  # confusion_skip_threshold from config
+
+
+@dataclass
+class NodeTraceEntry:
+    """Execution trace record for a single pipeline node."""
+
+    node: str
+    duration_ms: int
+    summary: str  # node output summary, max 200 chars
+
+
 # ── Decision Journal Models (Section 8.2) ──
 
 
@@ -234,3 +314,9 @@ class DecisionCommit:
     pnl: float | None = None
     retrospective: str | None = None
     trace_id: str | None = None
+    # Observability fields (tasks 1.2)
+    consensus_metrics: ConsensusMetrics | None = None
+    verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
+    experience_memory: dict[str, Any] = field(default_factory=dict)
+    node_trace: list[NodeTraceEntry] = field(default_factory=list)
+    debate_skip_reason: str = ""

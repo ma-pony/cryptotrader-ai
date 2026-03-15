@@ -10,6 +10,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.agents.base import create_llm, extract_content
 from cryptotrader.state import ArenaState
+from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,7 @@ async def _debate_one_agent(
     others: dict[str, dict],
     pair: str,
     model: str,
+    timeout_seconds: float,
 ) -> tuple[str, dict]:
     """Single agent's debate response — extracted for parallel execution."""
     from cryptotrader.debate.challenge import build_challenge_prompt
@@ -50,7 +52,7 @@ async def _debate_one_agent(
     try:
         llm = create_llm(model=model, temperature=0.3, json_mode=True)
         lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
-        resp = await llm.ainvoke(lc_msgs)
+        resp = await asyncio.wait_for(llm.ainvoke(lc_msgs), timeout=timeout_seconds)
         text = extract_content(resp)
         data = _extract_json(text)
         merged = dict(analysis)
@@ -65,11 +67,19 @@ async def _debate_one_agent(
             }
         )
         return agent_id, merged
-    except Exception as e:
-        logger.warning("Debate round LLM call failed for %s: %s", agent_id, e)
+    except TimeoutError:
+        logger.warning(
+            "LLM timeout for debate agent %s after %ss — keeping original analysis",
+            agent_id,
+            timeout_seconds,
+        )
+        return agent_id, analysis
+    except Exception:
+        logger.warning("Debate round LLM call failed for %s — keeping original analysis", agent_id, exc_info=True)
         return agent_id, analysis
 
 
+@node_logger()
 async def debate_round(state: ArenaState) -> dict:
     """One round of cross-challenge debate between agents (parallel)."""
     from cryptotrader.config import load_config as _load_config
@@ -78,13 +88,14 @@ async def debate_round(state: ArenaState) -> dict:
     _dcfg = _load_config()
     _default_debate_model = _dcfg.models.debate or _dcfg.models.fallback
     model = state["metadata"].get("debate_model", _default_debate_model)
+    timeout_seconds: float = _dcfg.models.timeout_seconds
 
     tasks = []
     agent_ids = list(analyses.keys())
     for agent_id in agent_ids:
         analysis = analyses[agent_id]
         others = {k: v for k, v in analyses.items() if k != agent_id}
-        tasks.append(_debate_one_agent(agent_id, analysis, others, state["metadata"]["pair"], model))
+        tasks.append(_debate_one_agent(agent_id, analysis, others, state["metadata"]["pair"], model, timeout_seconds))
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
@@ -92,7 +103,12 @@ async def debate_round(state: ArenaState) -> dict:
     for i, result in enumerate(results):
         aid = agent_ids[i]
         if isinstance(result, Exception):
-            logger.warning("Debate gather failed for %s: %s", aid, result)
+            logger.warning(
+                "Debate gather exception for %s: %r — keeping original analysis",
+                aid,
+                result,
+                exc_info=result,
+            )
             updated[aid] = analyses[aid]
         else:
             updated[result[0]] = result[1]
@@ -103,6 +119,7 @@ async def debate_round(state: ArenaState) -> dict:
     }
 
 
+@node_logger()
 async def debate_gate(state: ArenaState) -> dict:
     """Compute consensus metrics; set debate_skipped flag."""
     from cryptotrader.config import load_config as _load_config
@@ -126,10 +143,34 @@ async def debate_gate(state: ArenaState) -> dict:
         skip = True
         reason = f"shared confusion (|mean|={abs(mean_score):.3f}, dispersion={dispersion:.3f})"
 
+    # Normalize skip reason to a structured value for Dashboard observability
+    if skip and strength > config.consensus_skip_threshold:
+        skip_reason_tag = "consensus"
+    elif skip:
+        skip_reason_tag = "confusion"
+    else:
+        skip_reason_tag = ""
+
     if skip:
         logger.info("Debate SKIPPED: %s", reason)
+        # Metrics instrumentation: ct_debate_skipped_total (req 9.5)
+        from cryptotrader.metrics import get_metrics_collector
 
-    return {"data": {"debate_skipped": skip, "debate_skip_reason": reason}}
+        get_metrics_collector().inc_debate_skipped()
+
+    return {
+        "data": {
+            "debate_skipped": skip,
+            "debate_skip_reason": skip_reason_tag,
+            "consensus_metrics": {
+                "strength": strength,
+                "mean_score": mean_score,
+                "dispersion": dispersion,
+                "skip_threshold": config.consensus_skip_threshold,
+                "confusion_threshold": config.confusion_skip_threshold,
+            },
+        }
+    }
 
 
 def debate_gate_router(state: ArenaState) -> str:
@@ -139,6 +180,7 @@ def debate_gate_router(state: ArenaState) -> str:
     return "debate"
 
 
+@node_logger()
 async def check_stability(state: ArenaState) -> dict:
     """Compute divergence score after a debate round."""
     from cryptotrader.debate.convergence import compute_divergence
@@ -167,6 +209,7 @@ def convergence_router(state: ArenaState) -> str:
     return "continue"
 
 
+@node_logger()
 async def bull_bear_debate(state: ArenaState) -> dict:
     """Run bull/bear adversarial debate."""
     from cryptotrader.config import load_config as _load_config
@@ -181,6 +224,7 @@ async def bull_bear_debate(state: ArenaState) -> dict:
     return {"data": {"debate": debate}}
 
 
+@node_logger()
 async def judge_verdict(state: ArenaState) -> dict:
     """Judge evaluates bull/bear debate and issues verdict."""
     from cryptotrader.config import load_config as _load_config

@@ -5,7 +5,13 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from cryptotrader.portfolio.manager import read_portfolio_from_exchange
 from cryptotrader.state import ArenaState
+from cryptotrader.tracing import node_logger
+
+# Re-export for callers that already import read_portfolio_from_exchange
+# from this module (e.g. external scripts and tests written before task 8.1).
+__all__ = ["read_portfolio_from_exchange"]
 
 logger = logging.getLogger(__name__)
 
@@ -16,14 +22,15 @@ _paper_exchanges: dict[str, Any] = {}
 _live_exchanges: dict[str, Any] = {}
 
 
-def _get_exchange(state: ArenaState, pair: str):
+async def _get_exchange(state: ArenaState, pair: str):
     """Get exchange instance (paper or live) for the given pair."""
     from cryptotrader.execution.simulator import PaperExchange
 
     engine = state["metadata"].get("engine", "paper")
     if engine == "paper":
         if pair not in _paper_exchanges:
-            _paper_exchanges[pair] = PaperExchange()
+            balances, positions = await _load_balances_from_db(state)
+            _paper_exchanges[pair] = PaperExchange(initial_balances=balances, initial_positions=positions)
         return _paper_exchanges[pair], None
 
     from cryptotrader.config import load_config
@@ -34,7 +41,6 @@ def _get_exchange(state: ArenaState, pair: str):
     if exchange_id in _live_exchanges:
         return _live_exchanges[exchange_id], None  # cached — don't close
 
-    config = load_config()
     creds = config.exchanges.get(exchange_id)
     if creds is None or not creds.api_key or not creds.secret:
         raise RuntimeError(
@@ -51,6 +57,40 @@ def _get_exchange(state: ArenaState, pair: str):
     )
     _live_exchanges[exchange_id] = live_exchange
     return live_exchange, None  # cached — don't close
+
+
+async def _load_balances_from_db(
+    state: ArenaState,
+) -> tuple[dict[str, float] | None, dict[str, dict[str, float]] | None]:
+    """Load saved balances and positions from DB to initialize PaperExchange.
+
+    Returns (balances, positions) — both None if no saved state.
+    """
+    db_url = state["metadata"].get("database_url")
+    if not db_url:
+        return None, None
+    try:
+        from cryptotrader.portfolio.manager import PortfolioManager
+
+        pm = PortfolioManager(db_url)
+        portfolio = await pm.get_portfolio()
+        cash = portfolio.get("cash", 0.0)
+        positions = portfolio.get("positions", {})
+        if cash == 0 and not positions:
+            return None, None  # No saved state, use default
+        balances: dict[str, float] = {"USDT": cash}
+        pos_data: dict[str, dict[str, float]] = {}
+        for pair, pos in positions.items():
+            asset = pair.split("/")[0]
+            amount = pos.get("amount", 0.0)
+            if amount != 0:
+                balances[asset] = amount
+                avg_price = pos.get("avg_price", 0.0)
+                pos_data[pair] = {"amount": amount, "avg_price": avg_price}
+        return balances, pos_data if pos_data else None
+    except Exception:
+        logger.debug("Failed to load balances from DB for PaperExchange", exc_info=True)
+        return None, None
 
 
 async def _update_trade_tracking(state: ArenaState, pair: str):
@@ -71,71 +111,107 @@ async def _update_trade_tracking(state: ArenaState, pair: str):
             logger.warning("Trade tracking update failed", exc_info=True)
 
 
-async def _update_portfolio(state: ArenaState, order, filled_amount: float, filled_price: float) -> bool:
-    """Update portfolio after successful trade. Returns True on success."""
-    pair = order.pair
+async def _update_portfolio(
+    state: ArenaState, order, _filled_amount: float, filled_price: float, exchange=None
+) -> bool:
+    """Sync portfolio from exchange after trade. Exchange is the source of truth."""
     db_url = state["metadata"].get("database_url")
+    if exchange is None:
+        logger.warning("No exchange available for portfolio sync")
+        return False
     try:
         from cryptotrader.portfolio.manager import PortfolioManager
 
         pm = PortfolioManager(db_url)
-        portfolio = await pm.get_portfolio()
-        existing = portfolio.get("positions", {}).get(pair, {})
-        old_amount = existing.get("amount", 0.0)
-        old_price = existing.get("avg_price", 0.0)
-
-        if order.side == "buy":
-            new_amount = old_amount + filled_amount
-            new_price = (
-                ((old_amount * old_price) + (filled_amount * filled_price)) / new_amount
-                if new_amount > 0
-                else filled_price
-            )
-        else:
-            new_amount = old_amount - filled_amount
-            new_price = old_price if new_amount > 0 else 0.0
-
-        await pm.update_position("default", pair, new_amount, new_price)
-        total = sum(p["amount"] * p["avg_price"] for p in (await pm.get_portfolio()).get("positions", {}).values())
-        await pm.snapshot("default", total)
+        await _sync_portfolio_from_exchange(pm, exchange, order.pair, filled_price)
         return True
     except Exception:
-        logger.warning("Portfolio write-back failed for %s", pair, exc_info=True)
+        logger.warning("Portfolio sync failed for %s", order.pair, exc_info=True)
         return False
 
 
+async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_price: float) -> None:
+    """Read actual balances from exchange and persist to DB.
+
+    Exchange.get_balance() returns {asset: amount} — this is the single source
+    of truth for both paper and live trading.
+    """
+    balances = await exchange.get_balance()
+    cash = balances.pop("USDT", 0.0)
+
+    # Persist cash
+    await pm.update_cash("default", cash)
+
+    # Persist each non-zero asset as a position
+    # For the just-traded pair, use fill price. For others, keep existing avg_price.
+    old_portfolio = await pm.get_portfolio()
+    old_positions = old_portfolio.get("positions", {})
+
+    total_pos_value = 0.0
+    seen_pairs = set()
+
+    for asset, amount in balances.items():
+        if amount == 0:
+            continue
+        pair = f"{asset}/USDT"
+        seen_pairs.add(pair)
+
+        # Determine price: use fill price for just-traded pair, else keep old avg_price
+        old_pos = old_positions.get(pair, {})
+        if pair == traded_pair:
+            price = current_price
+        elif old_pos.get("avg_price", 0) > 0:
+            price = old_pos["avg_price"]
+        else:
+            price = current_price  # new position, use current price
+
+        await pm.update_position("default", pair, amount, price)
+        total_pos_value += abs(amount) * price
+
+    # Clear positions that are no longer on the exchange
+    for pair in old_positions:
+        if pair not in seen_pairs:
+            await pm.update_position("default", pair, 0.0, 0.0)
+
+    total = cash + total_pos_value
+    await pm.snapshot("default", total, cash)
+
+
+@node_logger()
 async def check_stop_loss(state: ArenaState) -> dict:
     """Check existing positions for stop-loss conditions before new analysis.
 
     Triggers automatic exit when:
     - Unrealized loss exceeds max_stop_loss_pct (default 5%)
-    - Position held longer than max_hold_bars (default 30 bars)
     """
-    from cryptotrader.portfolio.manager import PortfolioManager
-
     pair = state["metadata"]["pair"]
     price = state["data"].get("snapshot_summary", {}).get("price", 0)
     if not price:
         return {"data": {}}
 
-    db_url = state["metadata"].get("database_url")
-    pm = PortfolioManager(db_url)
+    # Read position from exchange (source of truth)
     try:
-        portfolio = await pm.get_portfolio()
+        exchange_portfolio = await read_portfolio_from_exchange(state)
     except Exception:
-        logger.debug("Portfolio fetch failed, skipping stop-loss check", exc_info=True)
+        logger.debug("Exchange portfolio fetch failed, skipping stop-loss check", exc_info=True)
         return {"data": {}}
 
-    pos = portfolio.get("positions", {}).get(pair)
+    if not exchange_portfolio:
+        return {"data": {}}
+
+    pos = exchange_portfolio.get("positions", {}).get(pair)
     if not pos or not isinstance(pos, dict):
         return {"data": {}}
 
     amount = pos.get("amount", 0)
-    avg_price = pos.get("avg_price", 0)
-    if amount == 0 or avg_price <= 0:
+    if amount == 0:
         return {"data": {}}
 
-    # Calculate unrealized PnL
+    avg_price = pos.get("avg_price", 0)
+    if avg_price <= 0:
+        return {"data": {}}
+
+    # Calculate unrealized PnL from exchange position data
     pnl_pct = (price - avg_price) / avg_price if amount > 0 else (avg_price - price) / avg_price
 
     from cryptotrader.config import load_config
@@ -169,11 +245,68 @@ async def check_stop_loss(state: ArenaState) -> dict:
     return {"data": {}}
 
 
+async def _build_close_order(pair: str, price: float, state: ArenaState):
+    """Build an order to flatten an existing position (reads from exchange)."""
+    from cryptotrader.models import Order
+
+    try:
+        exchange_portfolio = await read_portfolio_from_exchange(state)
+        pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {})
+        pos_amount = pos.get("amount", 0)
+    except Exception:
+        logger.debug("Exchange portfolio fetch for close failed", exc_info=True)
+        pos_amount = 0
+    if pos_amount == 0:
+        return None
+    return Order(pair=pair, side="sell" if pos_amount > 0 else "buy", amount=abs(pos_amount), price=price)
+
+
+async def _build_entry_order(verdict: dict, pair: str, price: float, state: ArenaState):
+    """Build an order for new entry or add-to-position (加仓).
+
+    Mirrors backtest logic: compute target_size from scale, subtract existing position.
+    """
+    from cryptotrader.config import load_config as _lc_exec
+    from cryptotrader.models import Order
+
+    scale = verdict.get("position_scale", 1.0)
+    config = _lc_exec()
+
+    # Read total portfolio value from exchange (source of truth)
+    exchange_portfolio = await read_portfolio_from_exchange(state)
+    total = exchange_portfolio["total_value"] if exchange_portfolio else 0
+    if not total or total <= 0:
+        logger.warning("No portfolio total_value available, cannot size order")
+        return None
+    max_single_pct = state["metadata"].get("max_single_pct", config.risk.position.max_single_pct)
+    target_amount = (total * max_single_pct * scale) / price
+    side = "buy" if verdict["action"] == "long" else "sell"
+
+    # Check existing position from exchange — if already holding same direction, only order the delta
+    existing_amount = 0.0
+    try:
+        pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {})
+        existing_amount = pos.get("amount", 0.0)
+    except Exception:
+        logger.debug("Position sizing from exchange failed", exc_info=True)
+
+    if side == "buy" and existing_amount > 0:
+        amount = max(0.0, target_amount - existing_amount)
+    elif side == "sell" and existing_amount < 0:
+        amount = max(0.0, target_amount - abs(existing_amount))
+    else:
+        amount = target_amount
+
+    if amount < 1e-12:
+        logger.info("Position already at or above target scale, skipping order")
+        return None
+    return Order(pair=pair, side=side, amount=amount, price=price)
+
+
+@node_logger()
 async def place_order(state: ArenaState) -> dict:
     """Place order via exchange (paper or live)."""
-    from cryptotrader.models import Order
     from cryptotrader.nodes.verdict import _get_notifier
-    from cryptotrader.portfolio.manager import PortfolioManager
 
     verdict = state["data"]["verdict"]
     if verdict["action"] == "hold":
@@ -184,40 +317,14 @@ async def place_order(state: ArenaState) -> dict:
     if price <= 0:
         return {"data": {"order": None}}
 
-    # Handle close action — flatten the current position
     if verdict["action"] == "close":
-        db_url = state["metadata"].get("database_url")
-        pm = PortfolioManager(db_url)
-        try:
-            portfolio = await pm.get_portfolio()
-            pos = portfolio.get("positions", {}).get(pair, {})
-            pos_amount = pos.get("amount", 0)
-        except Exception:
-            logger.debug("Portfolio fetch for close failed", exc_info=True)
-            pos_amount = 0
-        if pos_amount == 0:
-            return {"data": {"order": None}}
-        order = Order(
-            pair=pair,
-            side="sell" if pos_amount > 0 else "buy",
-            amount=abs(pos_amount),
-            price=price,
-        )
+        order = await _build_close_order(pair, price, state)
     else:
-        scale = verdict.get("position_scale", 1.0)
-        from cryptotrader.config import load_config as _lc_exec
+        order = await _build_entry_order(verdict, pair, price, state)
+    if order is None:
+        return {"data": {"order": None}}
 
-        total = state["data"].get("portfolio", {}).get("total_value") or _lc_exec().backtest.initial_capital
-        max_single_pct = state["metadata"].get("max_single_pct", 0.1)
-        amount = (total * max_single_pct * scale) / price
-        order = Order(
-            pair=pair,
-            side="buy" if verdict["action"] == "long" else "sell",
-            amount=amount,
-            price=price,
-        )
-
-    exchange, _ = _get_exchange(state, pair)
+    exchange, _ = await _get_exchange(state, pair)
 
     from cryptotrader.execution.order import OrderManager
     from cryptotrader.models import OrderStatus
@@ -252,7 +359,7 @@ async def place_order(state: ArenaState) -> dict:
         "status": status.value if hasattr(status, "value") else str(status),
     }
 
-    portfolio_ok = await _update_portfolio(state, order, filled_amount, filled_price)
+    portfolio_ok = await _update_portfolio(state, order, filled_amount, filled_price, exchange)
 
     # Fire-and-forget notifications
     try:

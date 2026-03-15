@@ -9,7 +9,7 @@ from datetime import datetime
 from typing import Any
 
 from cryptotrader.db import get_async_session, get_engine
-from cryptotrader.models import DecisionCommit
+from cryptotrader.models import ConsensusMetrics, DecisionCommit, NodeTraceEntry
 
 logger = logging.getLogger(__name__)
 
@@ -52,18 +52,48 @@ def _sa_models():
         pnl = Column(Float, nullable=True)
         retrospective = Column(Text, nullable=True)
         trace_id = Column(String(36), nullable=True, index=True)
+        # Observability columns (task 1.3)
+        consensus_metrics = Column(JSONB, nullable=True, default=None)
+        verdict_source = Column(String(20), nullable=False, default="ai")
+        experience_memory = Column(JSONB, nullable=True, default=None)
+        node_trace = Column(JSONB, nullable=False, default=[])
+        debate_skip_reason = Column(String(500), nullable=False, default="")
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
 
 
+_OBSERVABILITY_COLUMNS = [
+    # (column_name, DDL_type, DEFAULT_clause)
+    ("consensus_metrics", "JSONB", "DEFAULT NULL"),
+    ("verdict_source", "VARCHAR(20)", "NOT NULL DEFAULT 'ai'"),
+    ("experience_memory", "JSONB", "DEFAULT NULL"),
+    ("node_trace", "JSONB", "NOT NULL DEFAULT '[]'"),
+    ("debate_skip_reason", "VARCHAR(500)", "NOT NULL DEFAULT ''"),
+]
+
+
 async def _ensure_tables(database_url: str) -> None:
-    """Create journal schema on first call per database URL."""
+    """Create journal schema on first call per database URL.
+
+    For PostgreSQL, also issues ALTER TABLE ADD COLUMN IF NOT EXISTS for each
+    new observability column so that existing deployments are migrated online
+    without downtime.  SQLite (used in tests) gets all columns via CREATE TABLE.
+    """
     if database_url not in _table_ready:
         Base, _ = _sa_models()
         engine = await get_engine(database_url)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            # Online migration: add new columns to pre-existing PostgreSQL tables.
+            dialect = conn.dialect.name
+            if dialect == "postgresql":
+                for col_name, col_type, col_default in _OBSERVABILITY_COLUMNS:
+                    await conn.execute(
+                        __import__("sqlalchemy").text(
+                            f"ALTER TABLE decision_commits ADD COLUMN IF NOT EXISTS {col_name} {col_type} {col_default}"
+                        )
+                    )
         _table_ready.add(database_url)
 
 
@@ -127,6 +157,10 @@ class JournalStore:
                 except (ValueError, KeyError):
                     od["status"] = OrderStatus.PENDING
             order = Order(**od)
+        # Observability fields — None-safe deserialization
+        cm_data = d.get("consensus_metrics")
+        consensus_metrics = ConsensusMetrics(**cm_data) if cm_data else None
+        node_trace = [NodeTraceEntry(**e) for e in (d.get("node_trace") or [])]
         return DecisionCommit(
             hash=d["hash"],
             parent_hash=d.get("parent_hash"),
@@ -146,6 +180,11 @@ class JournalStore:
             pnl=d.get("pnl"),
             retrospective=d.get("retrospective"),
             trace_id=d.get("trace_id"),
+            consensus_metrics=consensus_metrics,
+            verdict_source=d.get("verdict_source", "ai"),
+            experience_memory=d.get("experience_memory") or {},
+            node_trace=node_trace,
+            debate_skip_reason=d.get("debate_skip_reason", ""),
         )
 
     def _dc_to_row_dict(self, dc: DecisionCommit) -> dict[str, Any]:
@@ -169,6 +208,12 @@ class JournalStore:
             "pnl": dc.pnl,
             "retrospective": dc.retrospective,
             "trace_id": dc.trace_id,
+            # Observability fields (task 1.3)
+            "consensus_metrics": d.get("consensus_metrics"),
+            "verdict_source": dc.verdict_source,
+            "experience_memory": d.get("experience_memory") or None,
+            "node_trace": d.get("node_trace", []),
+            "debate_skip_reason": dc.debate_skip_reason,
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:
@@ -193,6 +238,11 @@ class JournalStore:
                 except (ValueError, KeyError):
                     od["status"] = OrderStatus.PENDING
             order = Order(**od)
+        # Observability fields — None-safe deserialization for old rows (NULL columns)
+        cm_data = getattr(row, "consensus_metrics", None)
+        consensus_metrics = ConsensusMetrics(**cm_data) if cm_data else None
+        node_trace_data = getattr(row, "node_trace", None) or []
+        node_trace = [NodeTraceEntry(**e) for e in node_trace_data]
         return DecisionCommit(
             hash=row.hash,
             parent_hash=row.parent_hash,
@@ -212,6 +262,11 @@ class JournalStore:
             pnl=row.pnl,
             retrospective=row.retrospective,
             trace_id=getattr(row, "trace_id", None),
+            consensus_metrics=consensus_metrics,
+            verdict_source=getattr(row, "verdict_source", None) or "ai",
+            experience_memory=getattr(row, "experience_memory", None) or {},
+            node_trace=node_trace,
+            debate_skip_reason=getattr(row, "debate_skip_reason", None) or "",
         )
 
     async def commit(self, dc: DecisionCommit) -> None:

@@ -1,5 +1,11 @@
 """Agent implementations using LangChain's official create_agent() API.
 
+EXPERIMENTAL -- not enabled in the main trading path.
+This module provides the specialized sub-agents (tech/chain/macro) and the
+supervisor agent used by graph_supervisor.py.  It is a research prototype and
+is NOT wired into the production pipeline (build_trading_graph in graph.py).
+The main path uses the fan-out parallel agents in nodes/agents.py instead.
+
 This module follows the supervisor pattern from LangChain docs:
 https://docs.langchain.com/oss/python/langchain/multi-agent/subagents-personal-assistant
 """

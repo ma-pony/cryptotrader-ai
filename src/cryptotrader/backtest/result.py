@@ -14,6 +14,7 @@ class BacktestResult:
     win_rate: float = 0.0
     trades: list[dict] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
+    decisions: list[dict] = field(default_factory=list)
     llm_calls: int = 0
     llm_tokens: int = 0
 

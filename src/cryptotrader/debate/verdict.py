@@ -54,11 +54,13 @@ VERDICT_PROMPT = """You are the chief decision-maker for a crypto trading system
 analyzed the market. You must evaluate the QUALITY of their arguments — not just count votes.
 
 ACTIONS:
-- "long": Open or maintain a long position.
-- "short": Open or maintain a short position.
+- "long": Open a new long OR add to existing long. Use position_scale to control size.
+  When already LONG, returning "long" with a higher scale = add to position (加仓).
+- "short": Open a new short OR add to existing short. Use position_scale to control size.
+  When already SHORT, returning "short" with a higher scale = add to position (加仓).
 - "close": Close current position (LONG or SHORT) and go flat. Use this when the trade thesis
   is invalidated or risk/reward no longer justifies holding. This is NOT failure — it is risk management.
-- "hold": Stay in current state (flat stays flat, position stays open with unchanged conviction).
+- "hold": Stay in current state without changes (flat stays flat, position stays open at current size).
 
 Your job:
 1. Read the POSITION STATE — you must know if you are FLAT, LONG, or SHORT.
@@ -76,17 +78,19 @@ WHEN FLAT — ENTRY DECISIONS:
 - Stay flat ONLY when agents are evenly split AND price shows no clear trend.
 - Both long and short entries are valid. In a clear downtrend with bearish agents → open SHORT.
 
-WHEN IN POSITION — THINK THROUGH:
-- What is the current unrealized P&L? Is this a normal pullback for this asset's volatility,
-  or is the trade thesis actually broken?
-- BTC typically has 5-10% intraday/multi-day swings even in strong trends. A drawdown alone
-  is not evidence the trade was wrong.
-- Consider: Has the TREND reversed (not just pulled back)? Have the agents changed their view?
+WHEN IN POSITION — YOU HAVE THREE OPTIONS:
+1. "hold" — Maintain position at current size. Use when thesis is intact but conviction unchanged.
+2. Same direction (e.g., "long" while LONG) — ADD TO POSITION (加仓). Use when conviction
+   increases. Set position_scale to desired target (must be higher than current to add).
+3. "close" — Exit entirely. Use when thesis is invalidated or risk/reward no longer justifies holding.
+4. Opposite direction (e.g., "short" while LONG) — REVERSE position. Only with strong evidence.
+
+POSITION MANAGEMENT PRINCIPLES:
+- What is the current unrealized P&L? Is this a normal pullback or is the thesis broken?
+- BTC typically has 5-10% swings even in strong trends. A drawdown alone is not evidence the trade was wrong.
 - Weigh the cost of closing vs holding: closing locks in a loss AND costs fees to re-enter later.
-  If you recently closed a position and are considering re-entering at a similar price,
-  think carefully about what has materially changed.
-- To REVERSE (close + reopen opposite), output the opposite direction directly (e.g., "short"
-  while LONG). Only do this with strong evidence for the opposite direction.
+- Add to winners: if trend strengthens and agents increase conviction, scale up with a higher position_scale.
+- Cut losers: if trend reverses or agents flip direction, close promptly.
 
 RISK AWARENESS (context, not rules):
 - The system has a catastrophic stop-loss at 8% as a safety net outside your control.

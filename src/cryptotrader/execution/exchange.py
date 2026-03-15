@@ -23,6 +23,8 @@ class ExchangeAdapter(Protocol):
 
     async def get_balance(self) -> dict[str, float]: ...
 
+    async def get_positions(self) -> dict[str, dict[str, Any]]: ...
+
     async def fetch_open_orders(self) -> list[dict[str, Any]]: ...
 
     async def close(self) -> None: ...
@@ -144,6 +146,47 @@ class LiveExchange:
     async def get_balance(self) -> dict[str, float]:
         bal = await self._retry(self._exchange.fetch_balance)
         return {k: float(v) for k, v in bal.get("total", {}).items() if float(v) > 0}
+
+    async def get_positions(self) -> dict[str, dict[str, Any]]:
+        """Fetch open positions from exchange.
+
+        Returns: {pair: {"amount": float, "side": str, "avg_price": float,
+                         "unrealized_pnl": float, "liquidation_price": float | None}}
+        """
+        await self._ensure_markets()
+        positions: dict[str, dict[str, Any]] = {}
+        try:
+            raw = await self._retry(self._exchange.fetch_positions)
+            for p in raw:
+                contracts = float(p.get("contracts", 0) or 0)
+                if contracts == 0:
+                    continue
+                symbol = p.get("symbol", "")
+                side = p.get("side", "long")
+                amount = contracts if side == "long" else -contracts
+                positions[symbol] = {
+                    "amount": amount,
+                    "side": side,
+                    "avg_price": float(p.get("entryPrice", 0) or 0),
+                    "unrealized_pnl": float(p.get("unrealizedPnl", 0) or 0),
+                    "liquidation_price": float(p["liquidationPrice"]) if p.get("liquidationPrice") else None,
+                }
+        except Exception:
+            # Spot exchanges don't support fetchPositions — derive from balance
+            logger.debug("fetchPositions not available, deriving from balance", exc_info=True)
+            bal = await self.get_balance()
+            for asset, amount in bal.items():
+                if asset == "USDT" or amount == 0:
+                    continue
+                pair = f"{asset}/USDT"
+                positions[pair] = {
+                    "amount": amount,
+                    "side": "long" if amount > 0 else "short",
+                    "avg_price": 0.0,  # Not available from spot balance
+                    "unrealized_pnl": 0.0,
+                    "liquidation_price": None,
+                }
+        return positions
 
     async def fetch_open_orders(self) -> list[dict[str, Any]]:
         await self._ensure_markets()

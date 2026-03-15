@@ -36,6 +36,7 @@ from cryptotrader.state import ArenaState, merge_dicts
 __all__ = [
     "ArenaState",
     "_risk_gate_cache",
+    "build_backtest_graph",
     "build_debate_graph",
     "build_lite_graph",
     "build_trading_graph",
@@ -73,7 +74,7 @@ def build_trading_graph(config: dict | None = None) -> Any:
 
 
 def build_lite_graph(config: dict | None = None) -> Any:
-    """Lightweight graph for backtesting: skip debate, go straight to verdict."""
+    """Lightweight graph: skip debate, no risk gate. Used for quick testing only."""
     graph = StateGraph(ArenaState)
 
     graph.add_node("collect_data", collect_snapshot)
@@ -99,6 +100,56 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_edge("macro_agent", "enrich_context")
     graph.add_edge("enrich_context", "verdict")
     graph.add_edge("verdict", END)
+
+    return graph.compile()
+
+
+def build_backtest_graph(config: dict | None = None) -> Any:
+    """Backtest graph: mirrors full pipeline (debate gate + risk gate) but no execution/journal.
+
+    Pipeline: collect_data → update_pnl → inject_experience → 4 agents (parallel)
+      → debate_gate → [debate] 2 rounds / [skip] → enrich_context → verdict → risk_gate → END
+
+    The backtest engine handles stop-loss, execution, and journaling internally.
+    Nodes that depend on external services (PM, Redis) are guarded by backtest_mode checks.
+    """
+    graph = StateGraph(ArenaState)
+
+    graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("update_pnl", update_past_pnl)
+    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tech_agent", tech_analyze)
+    graph.add_node("chain_agent", chain_analyze)
+    graph.add_node("news_agent", news_analyze)
+    graph.add_node("macro_agent", macro_analyze)
+    graph.add_node("debate_gate", debate_gate)
+    graph.add_node("debate_round_1", debate_round)
+    graph.add_node("debate_round_2", debate_round)
+    graph.add_node("enrich_context", enrich_verdict_context)
+    graph.add_node("verdict", make_verdict)
+    graph.add_node("risk_gate", risk_check)
+
+    graph.add_edge(START, "collect_data")
+    graph.add_edge("collect_data", "update_pnl")
+    graph.add_edge("update_pnl", "inject_experience")
+    graph.add_edge("inject_experience", "tech_agent")
+    graph.add_edge("inject_experience", "chain_agent")
+    graph.add_edge("inject_experience", "news_agent")
+    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("tech_agent", "debate_gate")
+    graph.add_edge("chain_agent", "debate_gate")
+    graph.add_edge("news_agent", "debate_gate")
+    graph.add_edge("macro_agent", "debate_gate")
+    graph.add_conditional_edges(
+        "debate_gate",
+        debate_gate_router,
+        {"debate": "debate_round_1", "skip": "enrich_context"},
+    )
+    graph.add_edge("debate_round_1", "debate_round_2")
+    graph.add_edge("debate_round_2", "enrich_context")
+    graph.add_edge("enrich_context", "verdict")
+    graph.add_edge("verdict", "risk_gate")
+    graph.add_edge("risk_gate", END)
 
     return graph.compile()
 

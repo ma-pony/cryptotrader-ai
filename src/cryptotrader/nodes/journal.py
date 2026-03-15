@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from cryptotrader.state import ArenaState
+from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ async def _get_portfolio_snapshot(state: ArenaState) -> dict:
         return {}
 
 
+@node_logger()
 async def journal_trade(state: ArenaState) -> dict:
     """Journal a successful trade."""
     try:
@@ -98,6 +100,11 @@ async def journal_trade(state: ArenaState) -> dict:
             slippage=slippage,
             portfolio_after=portfolio_after,
             trace_id=get_trace_id(),
+            consensus_metrics=state["data"].get("consensus_metrics"),
+            verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),
+            experience_memory=state["data"].get("experience_memory", {}),
+            node_trace=state["data"].get("node_trace", []),
+            debate_skip_reason=state["data"].get("debate_skip_reason", ""),
         )
         await store.commit(commit)
         logger.info(
@@ -116,6 +123,7 @@ async def journal_trade(state: ArenaState) -> dict:
         return {"data": {"journal_hash": None}}
 
 
+@node_logger()
 async def journal_rejection(state: ArenaState) -> dict:
     """Journal a risk-gate rejection."""
     try:
@@ -152,6 +160,11 @@ async def journal_rejection(state: ArenaState) -> dict:
             order=None,
             parent_hash=parent_hash,
             trace_id=get_trace_id(),
+            consensus_metrics=state["data"].get("consensus_metrics"),
+            verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),
+            experience_memory=state["data"].get("experience_memory", {}),
+            node_trace=state["data"].get("node_trace", []),
+            debate_skip_reason=state["data"].get("debate_skip_reason", ""),
         )
         await store.commit(commit)
         logger.info(

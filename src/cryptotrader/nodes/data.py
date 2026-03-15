@@ -2,11 +2,30 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 
 from cryptotrader.state import ArenaState
+from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
+
+
+def _compute_snapshot_hash(summary: dict) -> str:
+    """Compute SHA256 hash over the four key snapshot fields.
+
+    Only price, funding_rate, volatility, and orderbook_imbalance are hashed;
+    these are the fields whose changes warrant fresh agent analysis.
+    """
+    key_fields = {
+        "price": summary.get("price"),
+        "funding_rate": summary.get("funding_rate"),
+        "volatility": summary.get("volatility"),
+        "orderbook_imbalance": summary.get("orderbook_imbalance"),
+    }
+    payload = json.dumps(key_fields, sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()
 
 
 def _calc_price_change_7d(snapshot) -> float | None:
@@ -35,6 +54,7 @@ def _calc_price_change_7d(snapshot) -> float | None:
     return (closes[-1] - past) / past
 
 
+@node_logger()
 async def collect_snapshot(state: ArenaState) -> dict:
     """Collect market snapshot or reuse pre-provided one (backtest)."""
     if state.get("data", {}).get("snapshot"):
@@ -50,7 +70,8 @@ async def collect_snapshot(state: ArenaState) -> dict:
         price_change_7d = _calc_price_change_7d(snapshot)
         if price_change_7d is not None:
             summary["price_change_7d"] = price_change_7d
-        return {"data": {"snapshot_summary": summary}}
+        snapshot_hash = _compute_snapshot_hash(summary)
+        return {"data": {"snapshot_summary": summary, "snapshot_hash": snapshot_hash}}
 
     from cryptotrader.config import load_config
     from cryptotrader.data.snapshot import SnapshotAggregator
@@ -73,9 +94,11 @@ async def collect_snapshot(state: ArenaState) -> dict:
     price_change_7d = _calc_price_change_7d(snapshot)
     if price_change_7d is not None:
         summary["price_change_7d"] = price_change_7d
-    return {"data": {"snapshot": snapshot, "snapshot_summary": summary}}
+    snapshot_hash = _compute_snapshot_hash(summary)
+    return {"data": {"snapshot": snapshot, "snapshot_summary": summary, "snapshot_hash": snapshot_hash}}
 
 
+@node_logger()
 async def update_past_pnl(state: ArenaState) -> dict:
     """Back-fill PnL for recent trades that haven't been evaluated yet.
 
@@ -84,6 +107,10 @@ async def update_past_pnl(state: ArenaState) -> dict:
     This closes the feedback loop so calibration has data to work with.
     """
     from cryptotrader.journal.store import JournalStore
+
+    # Skip in backtest mode — no real journal to update, and would corrupt live data
+    if state["metadata"].get("backtest_mode"):
+        return {"data": {}}
 
     db_url = state["metadata"].get("database_url")
     store = JournalStore(db_url)
@@ -121,10 +148,9 @@ async def update_past_pnl(state: ArenaState) -> dict:
     return {"data": {}}
 
 
+@node_logger()
 async def verbal_reinforcement(state: ArenaState) -> dict:
     """Inject past experience + per-agent bias corrections + structured experience memory."""
-    import asyncio
-
     from cryptotrader.config import load_config
     from cryptotrader.journal.calibrate import (
         detect_biases,
@@ -145,41 +171,48 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
     # Tag current regime
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)
 
-    # Fetch historical cases (regime-aware)
-    historical_cases = await get_experience(
-        store,
-        summary,
-        regime_tags=regime_tags,
-        thresholds=config.experience.regime_thresholds,
-    )
-
-    # Detect biases and generate per-agent corrections + verdict calibration
+    # Skip experience injection, bias detection, and reflection in backtest mode
+    # to prevent look-ahead bias (live journal contains future data relative to backtest candle)
+    historical_cases: list = []
     agent_corrections: dict[str, str] = {}
     verdict_calibration = ""
-    try:
-        biases = await detect_biases(store, days=30)
-        agent_corrections = generate_per_agent_corrections(biases)
-        verdict_calibration = generate_verdict_calibration(biases)
-    except Exception:
-        logger.debug("Bias detection failed, continuing without calibration", exc_info=True)
+    experience_memory: dict = {}
 
-    # Load structured experience memory (fast SQLite read)
-    experience_memory = {}
-    try:
-        experience_memory = await load_reflections()
-    except Exception:
-        logger.debug("Failed to load experience memory", exc_info=True)
+    if not is_backtest:
+        # Fetch historical cases (regime-aware)
+        historical_cases = await get_experience(
+            store,
+            summary,
+            regime_tags=regime_tags,
+            thresholds=config.experience.regime_thresholds,
+        )
 
-    # Maybe trigger background reflection (fire-and-forget, doesn't block trading)
-    # Skip during backtest to avoid contamination
-    cycle_count = state["metadata"].get("cycle_count", 0)
-    if config.experience.enabled and cycle_count > 0 and not is_backtest:
+        # Detect biases and generate per-agent corrections + verdict calibration
         try:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(maybe_reflect(store, cycle_count, config.experience))
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            biases = await detect_biases(store, days=30)
+            agent_corrections = generate_per_agent_corrections(biases)
+            verdict_calibration = generate_verdict_calibration(biases)
         except Exception:
-            logger.debug("Failed to schedule reflection", exc_info=True)
+            logger.debug("Bias detection failed, continuing without calibration", exc_info=True)
+
+        # Load structured experience memory (fast SQLite read)
+        try:
+            experience_memory = await load_reflections()
+        except Exception:
+            logger.debug("Failed to load experience memory", exc_info=True)
+
+        # Maybe trigger background reflection (fire-and-forget, doesn't block trading)
+        cycle_count = state["metadata"].get("cycle_count", 0)
+        if config.experience.enabled and cycle_count > 0:
+            try:
+                from cryptotrader.task_registry import add_background_task
+
+                add_background_task(
+                    maybe_reflect(store, cycle_count, config.experience),
+                    name="reflect",
+                )
+            except Exception:
+                logger.debug("Failed to schedule reflection", exc_info=True)
 
     return {
         "data": {
@@ -244,12 +277,14 @@ async def _build_position_from_portfolio(pair: str, price: float, db_url: str | 
             "side": "long" if amount > 0 else "short",
             "entry_price": avg_price,
             "current_price": price,
+            "amount": abs(amount),
         }
     except Exception:
         logger.debug("Portfolio fetch for position context failed", exc_info=True)
         return {"side": "flat"}
 
 
+@node_logger()
 async def enrich_verdict_context(state: ArenaState) -> dict:
     """Build position_context and trend_context for the verdict node.
 

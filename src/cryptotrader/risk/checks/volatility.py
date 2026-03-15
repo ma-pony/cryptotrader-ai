@@ -26,10 +26,24 @@ class VolatilityGate:
         lookback = min(self._lookback, len(prices))
         recent = prices[-lookback:]
         peak = max(recent)
+        trough = min(recent)
         current = prices[-1]
         drop = (peak - current) / peak if peak > 0 else 0
-        if drop > self._threshold:
-            return CheckResult(passed=False, reason=f"Flash crash detected: {drop:.2%} drop in last {lookback} candles")
+        spike = (current - trough) / trough if trough > 0 else 0
+
+        # Directional: only block counter-trend entries (catching falling knives / shorting spikes)
+        # Going WITH the trend is safe — the gate protects against reversal entries
+        # "close" is always allowed — it reduces risk, never increases it
+        if drop > self._threshold and verdict.action == "long":
+            return CheckResult(
+                passed=False,
+                reason=f"Flash crash detected: {drop:.2%} drop in last {lookback} candles (blocking long)",
+            )
+        if spike > self._threshold and verdict.action == "short":
+            return CheckResult(
+                passed=False,
+                reason=f"Rapid spike detected: {spike:.2%} rise in last {lookback} candles (blocking short)",
+            )
         return CheckResult(passed=True)
 
 

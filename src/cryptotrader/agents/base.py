@@ -14,16 +14,19 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
 from cryptotrader.models import AgentAnalysis, DataSnapshot
+from cryptotrader.security import sanitize_input
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 _logger = logging.getLogger(__name__)
 logger = _logger
+_structlog = structlog.get_logger(__name__)
 
 # Funding rate thresholds shared with debate/verdict.py
 FUNDING_RATE_HIGH = 0.0003  # above → crowded long
@@ -56,7 +59,9 @@ def _init_cache() -> None:
 # ── Unified LLM factory ──
 
 
-def _build_llm_kwargs(model: str, temperature: float, timeout: int, llm_cfg) -> dict[str, Any]:
+def _build_llm_kwargs(
+    model: str, temperature: float, timeout: int, llm_cfg, *, json_mode: bool = False
+) -> dict[str, Any]:
     """Build kwargs dict for ChatOpenAI constructor."""
     kwargs: dict[str, Any] = {"model": model, "temperature": temperature, "timeout": timeout}
     if llm_cfg.base_url:
@@ -65,6 +70,8 @@ def _build_llm_kwargs(model: str, temperature: float, timeout: int, llm_cfg) -> 
         kwargs["api_key"] = llm_cfg.api_key
     if model in llm_cfg.streaming_models:
         kwargs["streaming"] = True
+    if json_mode:
+        kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
     return kwargs
 
 
@@ -82,6 +89,7 @@ def create_llm(
     consistent configuration, caching, and fallback behavior.
     """
     from cryptotrader.config import load_config
+    from cryptotrader.metrics import get_metrics_collector
 
     _init_cache()
 
@@ -100,14 +108,17 @@ def create_llm(
     if not model:
         raise ValueError("No LLM model configured — set models.analysis or models.fallback in config/default.toml")
 
-    kwargs = _build_llm_kwargs(model, temperature, timeout, llm_cfg)
+    kwargs = _build_llm_kwargs(model, temperature, timeout, llm_cfg, json_mode=json_mode)
     llm = ChatOpenAI(**kwargs)
+
+    # Metrics instrumentation: ct_llm_calls_total[model, node=create_llm] (req 9.5)
+    get_metrics_collector().inc_llm_calls(model=model, node="create_llm")
 
     # Add fallback model
     if with_fallback:
         fallback_model = cfg.models.fallback
         if fallback_model and fallback_model != model:
-            fallback_kwargs = _build_llm_kwargs(fallback_model, temperature, timeout, llm_cfg)
+            fallback_kwargs = _build_llm_kwargs(fallback_model, temperature, timeout, llm_cfg, json_mode=json_mode)
             llm = llm.with_fallbacks([ChatOpenAI(**fallback_kwargs)])
 
     return llm
@@ -143,6 +154,37 @@ def extract_content(response: AIMessage | Any) -> str:
     return str(response)
 
 
+def log_llm_usage(response: Any, *, caller: str) -> None:
+    """记录 LLM 调用的 token 消耗到结构化日志。
+
+    从 AIMessage.usage_metadata 中提取 input_tokens, output_tokens, model_name,
+    并通过 structlog 以 llm_usage 事件命名空间记录, 支持后续按时间窗口汇总成本报告。
+
+    Args:
+        response: LLM 调用返回的 AIMessage 对象.
+        caller: 调用方标识 (如 agent_id 或函数名), 用于日志定位.
+    """
+    if not isinstance(response, AIMessage):
+        return
+
+    usage = response.usage_metadata
+    if not usage:
+        return
+
+    input_tokens: int = usage.get("input_tokens", 0)
+    output_tokens: int = usage.get("output_tokens", 0)
+    model_name: str = (response.response_metadata or {}).get("model_name", "unknown")
+
+    _structlog.info(
+        "llm_usage",
+        caller=caller,
+        model_name=model_name,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        total_tokens=input_tokens + output_tokens,
+    )
+
+
 async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
     """Unified LLM call via LangChain with automatic fallback.
 
@@ -156,7 +198,9 @@ async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
 
     llm = create_llm(model=model, temperature=temperature, timeout=timeout, json_mode=json_mode)
     lc_messages = _to_langchain_messages(messages)
-    return await llm.ainvoke(lc_messages)
+    response = await llm.ainvoke(lc_messages)
+    log_llm_usage(response, caller="acompletion_with_fallback")
+    return response
 
 
 ANALYSIS_FRAMEWORK = """
@@ -217,6 +261,7 @@ class BaseAgent:
             llm = create_llm(model=self._resolve_model(), json_mode=True)
             messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
             response = await llm.ainvoke(messages)
+            log_llm_usage(response, caller=self.agent_id)
             text = extract_content(response)
             return self._parse_response(text, snapshot.pair)
         except Exception:
@@ -258,6 +303,13 @@ class BaseAgent:
             )
         if snapshot.onchain.open_interest > 0:
             parts.append(f"Open interest: {snapshot.onchain.open_interest:,.0f}")
+        # News headlines — apply sanitize_input() to each external headline before
+        # embedding into the prompt (req 7.5: prompt injection defence).
+        # Internal system prompts (role_description, ANALYSIS_FRAMEWORK) are NOT sanitized.
+        if snapshot.news.headlines:
+            safe_headlines = [sanitize_input(h) for h in snapshot.news.headlines]
+            parts.append("News headlines:\n" + "\n".join(f"  - {h}" for h in safe_headlines if h))
+
         # Data quality warnings — tell agents when sources are empty
         warnings = []
         if snapshot.onchain.open_interest == 0 and snapshot.onchain.exchange_netflow == 0:
@@ -279,13 +331,15 @@ class BaseAgent:
 
             data = _extract_json(response_text)
         except (ValueError, json.JSONDecodeError):
-            logger.warning("Failed to parse LLM response for %s", self.agent_id)
+            logger.warning("Failed to parse LLM response for %s: %.200s", self.agent_id, response_text)
             return AgentAnalysis(
                 agent_id=self.agent_id,
                 pair=pair,
                 direction="neutral",
-                confidence=0.5,
-                reasoning=response_text[:500],
+                confidence=0.1,
+                reasoning=f"Parse failure — raw: {response_text[:300]}",
+                is_mock=True,
+                data_sufficiency="low",
             )
         # Standard fields
         standard = {

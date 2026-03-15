@@ -52,7 +52,9 @@ class BacktestEngine:
         self.use_llm = use_llm
         self.slippage_bps = slippage_bps if slippage_bps is not None else bt_cfg.slippage_base * 10000
         self.fee_bps = fee_bps if fee_bps is not None else bt_cfg.fee_bps
-        self.position_pct = position_pct if position_pct is not None else bt_cfg.default_position_pct
+        # Use risk.position.max_single_pct for consistency with live execution
+        risk_cfg = load_config().risk.position
+        self.position_pct = position_pct if position_pct is not None else risk_cfg.max_single_pct
         self.lookback = lookback if lookback is not None else bt_cfg.lookback
         # Cache config once to avoid re-parsing TOML per candle
         self._config = None
@@ -93,45 +95,85 @@ class BacktestEngine:
             return price + slip + fee
         return price - slip - fee
 
-    def _execute_pending_action(
-        self, pending_action: str, position: float, entry_price: float, equity: float, exec_price: float, ts: int
+    def _close_position(
+        self, position: float, entry_price: float, equity: float, exec_price: float, ts: int
     ) -> tuple[float, float, float, list[dict]]:
-        """Execute pending action and return updated position, entry_price, equity, and new trades."""
+        """Close current position and return updated state."""
         trades = []
-        if pending_action == "close" and position != 0:
-            if position > 0:
-                fill = self._apply_costs(exec_price, "sell")
-                pnl = (fill - entry_price) * position
-                trades.append({"side": "ai_close_long", "price": fill, "pnl": pnl, "ts": ts})
-            else:
-                fill = self._apply_costs(exec_price, "buy")
-                pnl = (entry_price - fill) * abs(position)
-                trades.append({"side": "ai_close_short", "price": fill, "pnl": pnl, "ts": ts})
-            equity += pnl
-            position = 0.0
-            entry_price = 0.0
-        elif pending_action == "long" and position <= 0:
-            if position < 0:  # close short
-                fill = self._apply_costs(exec_price, "buy")
-                pnl = (entry_price - fill) * abs(position)
-                equity += pnl
-                trades.append({"side": "close_short", "price": fill, "pnl": pnl, "ts": ts})
-            fill = self._apply_costs(exec_price, "buy")
-            size = equity * self.position_pct / fill
-            position = size
-            entry_price = fill
-            trades.append({"side": "buy", "price": fill, "amount": size, "ts": ts})
-        elif pending_action == "short" and position >= 0:
-            if position > 0:  # close long
-                fill = self._apply_costs(exec_price, "sell")
-                pnl = (fill - entry_price) * position
-                equity += pnl
-                trades.append({"side": "close_long", "price": fill, "pnl": pnl, "ts": ts})
+        if position > 0:
             fill = self._apply_costs(exec_price, "sell")
-            size = equity * self.position_pct / fill
-            position = -size
-            entry_price = fill
-            trades.append({"side": "sell", "price": fill, "amount": size, "ts": ts})
+            pnl = (fill - entry_price) * position
+            trades.append({"side": "ai_close_long", "price": fill, "pnl": pnl, "ts": ts})
+        elif position < 0:
+            fill = self._apply_costs(exec_price, "buy")
+            pnl = (entry_price - fill) * abs(position)
+            trades.append({"side": "ai_close_short", "price": fill, "pnl": pnl, "ts": ts})
+        else:
+            return 0.0, 0.0, equity, trades
+        return 0.0, 0.0, equity + pnl, trades
+
+    def _open_or_add_long(
+        self, position: float, entry_price: float, equity: float, exec_price: float, ts: int, scale: float
+    ) -> tuple[float, float, list[dict]]:
+        """Open new long or add to existing long position."""
+        fill = self._apply_costs(exec_price, "buy")
+        target_size = equity * self.position_pct * scale / fill
+        if target_size <= position + 1e-12:
+            return position, entry_price, []
+        delta = target_size - position
+        new_entry = (entry_price * position + fill * delta) / target_size if position > 0 else fill
+        return target_size, new_entry, [{"side": "buy", "price": fill, "amount": delta, "ts": ts}]
+
+    def _open_or_add_short(
+        self, position: float, entry_price: float, equity: float, exec_price: float, ts: int, scale: float
+    ) -> tuple[float, float, list[dict]]:
+        """Open new short or add to existing short position."""
+        fill = self._apply_costs(exec_price, "sell")
+        target_size = equity * self.position_pct * scale / fill
+        abs_pos = abs(position)
+        if target_size <= abs_pos + 1e-12:
+            return position, entry_price, []
+        delta = target_size - abs_pos
+        new_entry = (entry_price * abs_pos + fill * delta) / target_size if position < 0 else fill
+        return -target_size, new_entry, [{"side": "sell", "price": fill, "amount": delta, "ts": ts}]
+
+    def _execute_pending_action(
+        self,
+        pending_action: str,
+        position: float,
+        entry_price: float,
+        equity: float,
+        exec_price: float,
+        ts: int,
+        position_scale: float = 1.0,
+    ) -> tuple[float, float, float, list[dict]]:
+        """Execute pending action and return updated position, entry_price, equity, and new trades.
+
+        Supports: new entry, add to position (加仓), close, and reverse.
+        """
+        trades: list[dict] = []
+        if pending_action == "close" and position != 0:
+            position, entry_price, equity, trades = self._close_position(position, entry_price, equity, exec_price, ts)
+        elif pending_action == "long":
+            if position < 0:  # close short first
+                position, entry_price, equity, close_trades = self._close_position(
+                    position, entry_price, equity, exec_price, ts
+                )
+                trades.extend(close_trades)
+            position, entry_price, open_trades = self._open_or_add_long(
+                position, entry_price, equity, exec_price, ts, position_scale
+            )
+            trades.extend(open_trades)
+        elif pending_action == "short":
+            if position > 0:  # close long first
+                position, entry_price, equity, close_trades = self._close_position(
+                    position, entry_price, equity, exec_price, ts
+                )
+                trades.extend(close_trades)
+            position, entry_price, open_trades = self._open_or_add_short(
+                position, entry_price, equity, exec_price, ts, position_scale
+            )
+            trades.extend(open_trades)
         return position, entry_price, equity, trades
 
     def _mark_to_market(self, position: float, equity: float, entry_price: float, current_price: float) -> float:
@@ -168,7 +210,11 @@ class BacktestEngine:
             fetch_futures_volume,
         )
 
-        self._candles = await fetch_historical(self.pair, self.interval, self.start_ms, self.end_ms)
+        # Fetch extra lookback candles before start so that the first bar in the trading
+        # range already has a full history window for SMA / snapshot construction.
+        tf_ms = _TF_MS.get(self.interval, 3_600_000)
+        lookback_ms = self.lookback * tf_ms
+        self._candles = await fetch_historical(self.pair, self.interval, self.start_ms - lookback_ms, self.end_ms)
 
         symbol = self.pair.split("/")[0]
         logger.info("Fetching historical macro data for %s...", self.pair)
@@ -273,15 +319,19 @@ class BacktestEngine:
         entry_price = 0.0
         equity_curve = [equity]
         trades: list[dict] = []
+        decisions: list[dict] = []
         peak = equity
 
-        from cryptotrader.graph import build_lite_graph
+        from cryptotrader.graph import build_backtest_graph
 
-        graph = build_lite_graph() if self.use_llm else None
+        graph = build_backtest_graph() if self.use_llm else None
 
         lookback = self.lookback
 
         pending_action: str | None = None
+        pending_scale: float = 1.0
+
+        max_stop_loss_pct = self._cached_config.risk.max_stop_loss_pct
 
         for i in range(lookback, len(candles)):
             window = candles[max(0, i - lookback) : i + 1]
@@ -292,47 +342,128 @@ class BacktestEngine:
             if c is None or c <= 0:
                 continue
 
+            # Per-bar decision record
+            bar_decision: dict = {
+                "ts": ts,
+                "price": c,
+                "open": o,
+                "position_before": position,
+                "entry_price": entry_price,
+                "equity": equity,
+            }
+
+            stop_loss_triggered = False
+            # Stop-loss check — mirror live graph's check_stop_loss node
+            # Skip if AI already requested close (avoid redundant override + confusing logs)
+            if position != 0 and entry_price > 0 and pending_action != "close":
+                pnl_pct = (c - entry_price) / entry_price if position > 0 else (entry_price - c) / entry_price
+                if pnl_pct < -max_stop_loss_pct:
+                    pending_action = "close"
+                    pending_scale = 1.0
+                    stop_loss_triggered = True
+                    logger.info(
+                        "Backtest stop-loss: %.2f%% loss (threshold: %.2f%%)",
+                        pnl_pct * 100,
+                        -max_stop_loss_pct * 100,
+                    )
+            bar_decision["stop_loss_triggered"] = stop_loss_triggered
+
             # Execute pending action from PREVIOUS bar's signal at current bar's open
             # This eliminates look-ahead bias: signal on bar[i-1], fill on bar[i] open
+            executed_action = None
             if pending_action is not None:
+                executed_action = pending_action
                 exec_price = o if (o is not None and o > 0) else c
                 position, entry_price, equity, new_trades = self._execute_pending_action(
-                    pending_action, position, entry_price, equity, exec_price, ts
+                    pending_action, position, entry_price, equity, exec_price, ts, pending_scale
                 )
                 trades.extend(new_trades)
                 pending_action = None
+                pending_scale = 1.0
+            bar_decision["executed_action"] = executed_action
 
             # Generate signal on current bar (will be executed on NEXT bar)
+            analyses = {}
+            verdict = {}
+            risk_gate = {}
+            debate_skipped = False
+            original_action = "hold"
+            node_trace: list[dict] = []
             if graph and self.use_llm:
                 snapshot = self._build_snapshot(window, ts, i)
-                result = await self._run_graph(graph, snapshot, position, entry_price)
-                verdict = result.get("data", {}).get("verdict", {})
-                action = verdict.get("action", "hold")
-                confidence = verdict.get("confidence", 0.5)
-                # Dynamic position sizing based on AI confidence
-                ps = self._cached_config.backtest.position_sizing
-                if confidence >= 0.8:
-                    self.position_pct = ps.high_confidence_pct
-                elif confidence >= 0.6:
-                    self.position_pct = ps.medium_confidence_pct
-                else:
-                    self.position_pct = ps.low_confidence_pct
+                result = await self._run_graph(graph, snapshot, position, entry_price, equity, peak)
+                node_trace = result.pop("_node_trace", [])
+                data = result.get("data", {})
+                verdict = data.get("verdict", {})
+                analyses = data.get("analyses", {})
+                risk_gate = data.get("risk_gate", {})
+                debate_skipped = data.get("debate_skipped", False)
+                original_action = verdict.get("action", "hold")
+                action = original_action
+                # Check risk gate — reject trade if risk gate failed
+                if not risk_gate.get("passed", True) and action != "hold":
+                    logger.info(
+                        "Backtest risk gate rejected: %s — %s",
+                        risk_gate.get("rejected_by", "unknown"),
+                        risk_gate.get("reason", ""),
+                    )
+                    action = "hold"
             else:
                 action = self._simple_signal(window)
+                original_action = action
 
             if action != "hold":
                 pending_action = action
+                pending_scale = verdict.get("position_scale", 1.0)
 
             # Mark to market at close
             mtm = self._mark_to_market(position, equity, entry_price, c)
             equity_curve.append(mtm)
             peak = max(peak, mtm)
 
+            # Record decision details
+            bar_decision.update(
+                {
+                    "position_after": position,
+                    "equity_after": mtm,
+                    "analyses": {
+                        k: {
+                            "direction": v.get("direction", ""),
+                            "confidence": v.get("confidence", 0),
+                            "data_sufficiency": v.get("data_sufficiency", ""),
+                        }
+                        for k, v in analyses.items()
+                    },
+                    "debate_skipped": debate_skipped,
+                    "verdict": {
+                        "action": verdict.get("action", "hold"),
+                        "confidence": verdict.get("confidence", 0),
+                        "position_scale": verdict.get("position_scale", 0),
+                        "reasoning": verdict.get("reasoning", ""),
+                        "thesis": verdict.get("thesis", ""),
+                    },
+                    "risk_gate": {
+                        "passed": risk_gate.get("passed", True),
+                        "rejected_by": risk_gate.get("rejected_by", ""),
+                        "reason": risk_gate.get("reason", ""),
+                    },
+                    "final_action": action
+                    if action != "hold"
+                    else ("hold" if original_action == "hold" else "rejected"),
+                    "pending_action": pending_action,
+                    "node_trace": [
+                        {"node": t["node"], "summary": t["summary"], "duration_ms": t["duration_ms"]}
+                        for t in node_trace
+                    ],
+                }
+            )
+            decisions.append(bar_decision)
+
         # Close any open position at end
         equity, final_trades = self._close_final_position(position, entry_price, equity, candles[-1][4], candles[-1][0])
         trades.extend(final_trades)
 
-        return self._compute_result(equity, equity_curve, trades)
+        return self._compute_result(equity, equity_curve, trades, decisions)
 
     def _simple_signal(self, window: list[list]) -> str:
         closes = [c[4] for c in window]
@@ -445,18 +576,59 @@ class BacktestEngine:
         snapshot: DataSnapshot,
         position: float = 0.0,
         entry_price: float = 0.0,
+        equity: float = 0.0,
+        peak: float = 0.0,
     ) -> dict:
         from cryptotrader.state import build_initial_state
 
         # Build position context so verdict has position awareness
+        # Mirror the format used by _build_position_from_portfolio() in live mode
+        current_price = snapshot.market.ticker.get("last", 0)
         if position == 0:
             pos_ctx = {"side": "flat"}
         else:
             pos_ctx = {
                 "side": "long" if position > 0 else "short",
                 "entry_price": entry_price,
-                "current_price": snapshot.market.ticker.get("last", 0),
+                "current_price": current_price,
+                "amount": abs(position),
             }
+
+        # Construct risk constraints from backtest state variables
+        # (live mode queries PortfolioManager/Redis, but backtest has its own equity tracking)
+        risk_cfg = self._cached_config.risk
+        position_value = abs(position * entry_price) if position != 0 else 0.0
+        exposure_pct = position_value / equity if equity > 0 else 0.0
+        max_exp = risk_cfg.position.max_total_exposure_pct
+        drawdown_current = (peak - equity) / peak if peak > 0 else 0.0
+        backtest_constraints = {
+            "max_position_pct": risk_cfg.position.max_single_pct,
+            "max_drawdown_pct": risk_cfg.loss.max_drawdown_pct,
+            "remaining_exposure_pct": max(0.0, max_exp - exposure_pct),
+            "daily_loss_remaining_pct": risk_cfg.loss.max_daily_loss_pct,
+            "drawdown_current": drawdown_current,
+        }
+        # Add market conditions if available
+        summary = snapshot.market
+        if hasattr(summary, "funding_rate") and summary.funding_rate is not None:
+            backtest_constraints["funding_rate"] = summary.funding_rate
+        if hasattr(summary, "volatility") and summary.volatility is not None:
+            backtest_constraints["volatility"] = summary.volatility
+
+        # Build portfolio dict for risk gate (mirrors what risk_check() builds in live mode)
+        recent_closes = snapshot.market.ohlcv["close"].dropna().tolist() if snapshot.market.ohlcv is not None else []
+        positions = {self.pair: {"amount": position, "avg_price": entry_price}} if position != 0 else {}
+        portfolio = {
+            "total_value": equity,
+            "positions": positions,
+            "daily_pnl": 0.0,
+            "drawdown": drawdown_current,
+            "returns_60d": [],
+            "recent_prices": recent_closes[-60:],
+            "funding_rate": snapshot.market.funding_rate or 0,
+            "api_latency_ms": 100,
+            "pair": self.pair,
+        }
 
         initial = build_initial_state(
             self.pair,
@@ -464,12 +636,25 @@ class BacktestEngine:
             snapshot=snapshot,
             config=self._cached_config,
             extra_metadata={"llm_verdict": self.use_llm, "backtest_mode": True},
-            extra_data={"position_context": pos_ctx},
+            extra_data={
+                "position_context": pos_ctx,
+                "backtest_constraints": backtest_constraints,
+                "portfolio": portfolio,
+            },
         )
         initial["max_debate_rounds"] = self._cached_config.debate.max_rounds
-        return await graph.ainvoke(initial)
 
-    def _compute_result(self, equity: float, curve: list[float], trades: list[dict]) -> BacktestResult:
+        from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
+
+        final_state, node_trace = await run_graph_traced(graph, initial)
+        add_timing_to_trace(node_trace)
+        # Attach trace to result for dashboard display
+        final_state["_node_trace"] = node_trace
+        return final_state
+
+    def _compute_result(
+        self, equity: float, curve: list[float], trades: list[dict], decisions: list[dict] | None = None
+    ) -> BacktestResult:
         total_return = (equity - self.capital) / self.capital
         # Sharpe
         if len(curve) > 1:
@@ -504,6 +689,7 @@ class BacktestEngine:
             win_rate=win_rate,
             trades=trades,
             equity_curve=curve,
+            decisions=decisions or [],
             llm_calls=self._llm_calls,
             llm_tokens=self._llm_tokens,
         )
