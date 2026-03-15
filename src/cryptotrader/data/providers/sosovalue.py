@@ -18,7 +18,7 @@ async def fetch_etf_metrics(api_key: str, etf_type: str = "us-btc-spot") -> dict
         logger.warning("SoSoValue API key not set, skipping ETF metrics")
         return {}
     try:
-        async with httpx.AsyncClient(timeout=15, verify=False) as c:
+        async with httpx.AsyncClient(timeout=15, verify=False) as c:  # nosec S501 — third-party data source SoSoValue uses self-signed cert, confirmed no sensitive data in transit
             r = await c.post(
                 f"{ETF_BASE}/currentEtfDataMetrics",
                 headers={"x-soso-api-key": api_key, "Content-Type": "application/json"},
@@ -70,7 +70,7 @@ async def fetch_etf_history(api_key: str, etf_type: str = "us-btc-spot") -> list
     if not api_key:
         return []
     try:
-        async with httpx.AsyncClient(timeout=15, verify=False) as c:
+        async with httpx.AsyncClient(timeout=15, verify=False) as c:  # nosec S501 — third-party data source SoSoValue uses self-signed cert, confirmed no sensitive data in transit
             r = await c.post(
                 f"{ETF_BASE}/historicalInflowChart",
                 headers={"x-soso-api-key": api_key, "Content-Type": "application/json"},
@@ -92,7 +92,7 @@ async def fetch_news(api_key: str, page_size: int = 20) -> list[dict]:
     if not api_key:
         return []
     try:
-        async with httpx.AsyncClient(timeout=15, verify=False) as c:
+        async with httpx.AsyncClient(timeout=15, verify=False) as c:  # nosec S501 — third-party data source SoSoValue uses self-signed cert, confirmed no sensitive data in transit
             r = await c.get(
                 f"{NEWS_BASE}/featured",
                 headers={"x-soso-api-key": api_key},

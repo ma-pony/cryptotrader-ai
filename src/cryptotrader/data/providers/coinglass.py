@@ -5,6 +5,9 @@ from __future__ import annotations
 import logging
 
 import httpx
+from pydantic import ValidationError
+
+from cryptotrader.models import OnchainMetricResponse
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +27,12 @@ async def fetch_derivatives(api_key: str | None = None, symbol: str = "BTC") -> 
             r.raise_for_status()
             data = r.json().get("data", [])
             if data:
-                result["open_interest"] = float(data[0].get("openInterest", 0))
+                raw_oi = float(data[0].get("openInterest", 0))
+                try:
+                    validated = OnchainMetricResponse(metric_name="open_interest", value=raw_oi, source="coinglass")
+                    result["open_interest"] = validated.value
+                except ValidationError as exc:
+                    logger.warning("CoinGlass open_interest schema validation failed, skipping: %s", exc)
 
             r2 = await c.get(f"{BASE}/liquidation_history", params={"symbol": symbol})
             r2.raise_for_status()
@@ -34,6 +42,9 @@ async def fetch_derivatives(api_key: str | None = None, symbol: str = "BTC") -> 
                     "long": float(liq[0].get("longLiquidationUsd", 0)),
                     "short": float(liq[0].get("shortLiquidationUsd", 0)),
                 }
+    except ValidationError:
+        # Already logged above; re-raise would swallow real errors
+        pass
     except Exception:
         logger.warning("CoinGlass fetch failed", exc_info=True)
     return result

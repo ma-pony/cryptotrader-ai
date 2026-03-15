@@ -11,9 +11,10 @@ import logging
 
 import feedparser
 import httpx
+from pydantic import ValidationError
 
 from cryptotrader.data.store import _record_fetch, _should_fetch, cache_result, get_cached_or_none
-from cryptotrader.models import NewsArticle, NewsSentiment
+from cryptotrader.models import NewsArticle, NewsHeadlineResponse, NewsSentiment
 
 logger = logging.getLogger(__name__)
 
@@ -244,8 +245,11 @@ class NewsCollector:
                 source_key = "source" if not api_key else "SOURCE"
                 result: list[NewsArticle] = []
                 for a in raw_articles[:20]:
-                    title = a.get(title_key, "")
-                    if not title:
+                    raw_title = a.get(title_key, "")
+                    try:
+                        validated = NewsHeadlineResponse(title=raw_title)
+                    except ValidationError as exc:
+                        logger.warning("News headline schema validation failed, skipping row: %s", exc)
                         continue
                     body = _strip_html(a.get(body_key, "") or "")
                     source_name = a.get(source_key, "") or ""
@@ -253,7 +257,7 @@ class NewsCollector:
                         source_name = source_name.get("name", "")
                     result.append(
                         NewsArticle(
-                            title=title,
+                            title=validated.title,
                             summary=_truncate(body),
                             source=str(source_name) or "CryptoCompare",
                             published="",
