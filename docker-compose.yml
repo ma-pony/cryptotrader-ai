@@ -27,7 +27,7 @@ services:
       timeout: 5s
       retries: 5
 
-  app:
+  api:
     build: .
     ports:
       - "8003:8003"
@@ -35,14 +35,29 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
       REDIS_URL: redis://redis:6379
       API_KEY: ${API_KEY:-}
+      # Disable Swagger UI and ReDoc in production to prevent schema leakage (Req 7.6)
+      DOCS_ENABLED: "false"
     env_file:
       - .env
+    volumes:
+      - ctdata:/home/appuser/.cryptotrader
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
 
   dashboard:
     build: .
@@ -54,12 +69,19 @@ services:
       - .env
     ports:
       - "8501:8501"
+    volumes:
+      - ctdata:/home/appuser/.cryptotrader
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
 
   scheduler:
     build: .
@@ -69,13 +91,21 @@ services:
       REDIS_URL: redis://redis:6379
     env_file:
       - .env
+    volumes:
+      - ctdata:/home/appuser/.cryptotrader
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "1.0"
 
 volumes:
   pgdata:
   redisdata:
+  ctdata:
