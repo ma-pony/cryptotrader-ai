@@ -23,24 +23,27 @@ def _build_positions_table(positions: dict[str, dict[str, Any]]) -> list[dict[st
     """Transform positions dict into a list of rows for st.table().
 
     Args:
-        positions: Mapping of pair -> {"amount": float, "avg_price": float}.
+        positions: Mapping of pair -> {"amount": float, "avg_price": float, ...}.
 
     Returns:
-        List of dicts with keys: Pair, Direction, Amount, Avg Price.
+        List of dicts with keys: Pair, Direction, Amount, Avg Price, Unrealized PnL.
     """
     rows = []
     for pair, pos in positions.items():
         amount = pos.get("amount", 0.0)
         avg_price = pos.get("avg_price", 0.0)
-        direction = "Long" if amount >= 0 else "Short"
-        rows.append(
-            {
-                "Pair": pair,
-                "Direction": direction,
-                "Amount": abs(amount),
-                "Avg Price": avg_price,
-            }
-        )
+        side = pos.get("side", "long" if amount >= 0 else "short")
+        direction = "Long" if side == "long" else "Short"
+        unrealized_pnl = pos.get("unrealized_pnl", 0.0)
+        row: dict[str, Any] = {
+            "Pair": pair,
+            "Direction": direction,
+            "Amount": abs(amount),
+            "Avg Price": f"${avg_price:,.2f}" if avg_price else "N/A",
+        }
+        if unrealized_pnl:
+            row["Unrealized PnL"] = f"${unrealized_pnl:,.2f}"
+        rows.append(row)
     return rows
 
 
@@ -151,7 +154,9 @@ def render() -> None:
     # ---------------------------------------------------------------------------
     # Positions table
     # ---------------------------------------------------------------------------
-    st.subheader("Current Positions")
+    source = portfolio.get("source", "database")
+    source_label = "Exchange API" if source == "exchange" else "Database"
+    st.subheader(f"Current Positions ({source_label})")
     positions = portfolio.get("positions", {})
     if positions:
         rows = _build_positions_table(positions)

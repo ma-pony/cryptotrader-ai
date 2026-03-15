@@ -112,20 +112,66 @@ def run_async(coro):
 
 @st.cache_data(ttl=10)
 def load_portfolio(db_url: str | None) -> dict[str, Any]:
-    """Load portfolio summary from PortfolioManager.
+    """Load portfolio from exchange (live source of truth), fallback to DB.
 
-    DB exceptions propagate to the caller.
+    Tries exchange API first for accurate position data. Falls back to
+    PortfolioManager (DB) when exchange credentials are not configured.
 
     Args:
         db_url: Database URL or None for in-memory mode.
 
     Returns:
-        Portfolio summary dict with keys: account_id, positions, cash, total_value.
+        Portfolio summary dict with keys: positions, cash, total_value.
     """
+    return run_async(_load_portfolio_async(db_url))
+
+
+async def _load_portfolio_async(db_url: str | None) -> dict[str, Any]:
+    """Load portfolio, preferring exchange API over DB."""
+    # Try exchange first
+    try:
+        from cryptotrader.config import load_config
+        from cryptotrader.execution.exchange import LiveExchange
+
+        config = load_config()
+        exchange_id = config.exchange_id
+        creds = config.exchanges.get(exchange_id)
+        if creds and creds.api_key and creds.secret:
+            ex = LiveExchange(
+                exchange_id,
+                creds.api_key,
+                creds.secret,
+                sandbox=creds.sandbox,
+                passphrase=creds.passphrase,
+            )
+            try:
+                positions = await ex.get_positions()
+                balances = await ex.get_balance()
+                cash = balances.get("USDT", 0.0)
+                # Calculate total position value from exchange data
+                total_pos_value = 0.0
+                for pos in positions.values():
+                    amount = abs(pos.get("amount", 0))
+                    avg_price = pos.get("avg_price", 0.0)
+                    total_pos_value += amount * avg_price
+                return {
+                    "positions": positions,
+                    "cash": cash,
+                    "total_value": cash + total_pos_value,
+                    "source": "exchange",
+                }
+            finally:
+                await ex.close()
+    except Exception:
+        logger.debug("Exchange portfolio read failed, falling back to DB", exc_info=True)
+
+    # Fallback to DB
     from cryptotrader.portfolio.manager import PortfolioManager
 
     pm = PortfolioManager(database_url=db_url)
-    return run_async(pm.get_portfolio())
+    result = await pm.get_portfolio()
+    result["source"] = "database"
+    return result
 
 
 # ---------------------------------------------------------------------------
