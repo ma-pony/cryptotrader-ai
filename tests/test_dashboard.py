@@ -6,17 +6,19 @@ from unittest.mock import MagicMock, patch
 
 
 def test_run_helper():
-    """Test the _run async helper executes coroutines correctly."""
+    """Test the run_async helper (moved from app._run to data_loader.run_async)."""
 
     async def _coro():
         return 42
 
-    # Import the helper by importing the module with st mocked
+    # run_async lives in data_loader now; import it with st mocked
     with patch.dict("sys.modules", {"streamlit": MagicMock()}):
+        import sys
         from importlib import import_module
 
-        mod = import_module("dashboard.app")
-        assert mod._run(_coro()) == 42
+        sys.modules.pop("dashboard.data_loader", None)
+        mod = import_module("dashboard.data_loader")
+        assert mod.run_async(_coro()) == 42
 
 
 def test_backtest_result_summary_with_llm_stats():
