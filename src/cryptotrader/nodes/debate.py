@@ -50,7 +50,7 @@ async def _debate_one_agent(
     role_label = _DEBATE_ROLES.get(agent_id, agent_id)
     system = DEBATE_SYSTEM.format(role=role_label)
     try:
-        llm = create_llm(model=model, temperature=0.3, json_mode=True)
+        llm = create_llm(model=model, temperature=0.3)
         lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
         resp = await asyncio.wait_for(llm.ainvoke(lc_msgs), timeout=timeout_seconds)
         text = extract_content(resp)
@@ -125,19 +125,49 @@ async def debate_gate(state: ArenaState) -> dict:
     from cryptotrader.config import load_config as _load_config
     from cryptotrader.debate.convergence import compute_consensus_strength, compute_divergence
 
-    analyses = state["data"].get("analyses", {})
-    strength, mean_score = compute_consensus_strength(analyses)
-    dispersion = compute_divergence(analyses)
+    raw_analyses = state["data"].get("analyses", {})
+    # Filter out mock analyses — they carry no real signal and pollute consensus metrics
+    # (mock: confidence=0.0/0.1, direction=neutral → drags mean toward 0, fakes "confusion")
+    analyses = {k: v for k, v in raw_analyses.items() if not v.get("is_mock", False)}
+
     config = _load_config().debate
+
+    # Not enough real agents to evaluate consensus — force debate unconditionally
+    if len(analyses) < 2:
+        strength, mean_score = compute_consensus_strength(raw_analyses)
+        dispersion = compute_divergence(raw_analyses)
+        logger.info("< 2 real agents (%d/%d) — forcing debate", len(analyses), len(raw_analyses))
+        return {
+            "data": {
+                "debate_skipped": False,
+                "debate_skip_reason": "",
+                "consensus_metrics": {
+                    "strength": strength,
+                    "mean_score": mean_score,
+                    "dispersion": dispersion,
+                    "skip_threshold": config.consensus_skip_threshold,
+                    "confusion_threshold": config.confusion_skip_threshold,
+                },
+            }
+        }
+
+    try:
+        strength, mean_score = compute_consensus_strength(analyses)
+        dispersion = compute_divergence(analyses)
+    except Exception:
+        logger.warning("Failed to compute consensus metrics — forcing debate", exc_info=True)
+        strength, mean_score, dispersion = 0.0, 0.0, 1.0
 
     skip = False
     reason = ""
-    if not config.skip_debate:
-        pass
-    elif strength > config.consensus_skip_threshold:
+    if config.skip_debate and strength > config.consensus_skip_threshold:
         skip = True
         reason = f"strong consensus (strength={strength:.3f})"
-    elif abs(mean_score) < config.confusion_skip_threshold and dispersion < config.confusion_max_dispersion:
+    elif (
+        config.skip_debate
+        and abs(mean_score) < config.confusion_skip_threshold
+        and dispersion < config.confusion_max_dispersion
+    ):
         # Low mean + low dispersion = shared confusion (all agents uncertain)
         # Low mean + high dispersion = disagreement (debate needed)
         skip = True

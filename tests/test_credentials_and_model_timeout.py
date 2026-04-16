@@ -26,10 +26,10 @@ from cryptotrader.config import (
 
 
 def test_model_config_has_timeout_seconds():
-    """ModelConfig must have timeout_seconds field with default value 60."""
+    """ModelConfig must have timeout_seconds field with default value 90."""
     cfg = ModelConfig()
     assert hasattr(cfg, "timeout_seconds")
-    assert cfg.timeout_seconds == 60
+    assert cfg.timeout_seconds == 90
 
 
 def test_model_config_timeout_seconds_is_int():
@@ -52,10 +52,10 @@ def test_build_config_parses_model_timeout():
 
 
 def test_build_config_model_timeout_default():
-    """_build_config uses default 60 when TOML lacks timeout_seconds."""
+    """_build_config uses default 90 when TOML lacks timeout_seconds."""
     toml_data = {"models": {"fallback": "gpt-4o-mini"}}
     cfg = _build_config(toml_data)
-    assert cfg.models.timeout_seconds == 60
+    assert cfg.models.timeout_seconds == 90
 
 
 # -- live-check credential detection --

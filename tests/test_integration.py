@@ -189,12 +189,29 @@ class TestChainAgentPrompt:
 class TestMalformedLLMOutput:
     @pytest.mark.asyncio
     async def test_agent_parse_malformed_json(self, sample_snapshot):
-        """Agent should gracefully handle non-JSON LLM output."""
+        """Agent should use regex fallback for non-JSON LLM output with directional signal."""
         from langchain_core.messages import AIMessage
 
         from cryptotrader.agents.tech import TechAgent
 
         resp = AIMessage(content="I think the market is bullish but I can't format JSON")
+
+        with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=resp):
+            result = await TechAgent(model="test").analyze(sample_snapshot)
+
+        # Regex fallback extracts "bullish" from the text — flagged as mock
+        assert result.direction == "bullish"
+        assert result.confidence == 0.3  # default when no confidence found
+        assert result.is_mock is True
+
+    @pytest.mark.asyncio
+    async def test_agent_parse_no_signal(self, sample_snapshot):
+        """Agent should return mock for completely unparseable output."""
+        from langchain_core.messages import AIMessage
+
+        from cryptotrader.agents.tech import TechAgent
+
+        resp = AIMessage(content="Here is some random text with no signal at all")
 
         with patch("langchain_openai.ChatOpenAI.ainvoke", new_callable=AsyncMock, return_value=resp):
             result = await TechAgent(model="test").analyze(sample_snapshot)

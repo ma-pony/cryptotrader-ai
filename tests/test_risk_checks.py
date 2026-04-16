@@ -77,16 +77,14 @@ async def test_max_position_pass(verdict, portfolio):
 
 
 @pytest.mark.asyncio
-async def test_max_position_fail(portfolio):
-    # position_scale is clamped to [0,1] by the model; test over-limit via existing position.
-    # existing BTC/USDT position = 2000, total = 10000 → existing_pct = 0.20.
-    # new_trade_pct = max_single_pct(0.10) * scale(1.0) = 0.10.
-    # combined = 0.30 > 0.10 → should fail.
+async def test_max_position_always_passes(portfolio):
+    """MaxPositionSize always passes — scale is clamped to [0,1] by TradeVerdict,
+    so target can never exceed max_pct. Execution layer handles delta."""
     portfolio_with_pair = {**portfolio, "pair": "BTC/USDT"}
     v = TradeVerdict(action="long", position_scale=1.0)
     c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
     r = await c.evaluate(v, portfolio_with_pair)
-    assert not r.passed
+    assert r.passed
 
 
 @pytest.mark.asyncio
@@ -109,6 +107,49 @@ async def test_total_exposure_fail(verdict):
     c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
     r = await c.evaluate(verdict, {"total_value": 10000, "positions": {"A": 4000}})
     assert not r.passed
+    assert "Projected" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_hold_always_passes():
+    """Hold action should pass even with high exposure (no new position added)."""
+    hold = TradeVerdict(action="hold", confidence=0.7, position_scale=0.0)
+    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
+    r = await c.evaluate(hold, {"total_value": 10000, "positions": {"A": 9000}})
+    assert r.passed
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_close_always_passes():
+    """Close action should pass even with high exposure (reducing position)."""
+    close = TradeVerdict(action="close", confidence=0.7, position_scale=0.0)
+    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
+    r = await c.evaluate(close, {"total_value": 10000, "positions": {"A": 9000}})
+    assert r.passed
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_projected_blocks():
+    """New trade that would push total exposure over limit should be blocked."""
+    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.90)
+    # max_single_pct=0.50, scale=0.90 → projected_new=0.45
+    # existing=0.20, projected_total=0.65 > max=0.50
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
+    assert not r.passed
+    assert "existing 20.00%" in r.reason
+    assert "new 45.00%" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_projected_passes():
+    """New trade within budget should pass."""
+    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.10)
+    # max_single_pct=0.10, scale=0.10 → projected_new=0.01
+    # existing=0.20, projected_total=0.21 < max=0.50
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50))
+    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
+    assert r.passed
 
 
 # ── Loss checks ──
@@ -349,6 +390,7 @@ async def test_rate_limit_fail_hourly(verdict):
 
 @pytest.mark.asyncio
 async def test_max_position_dict_format(verdict):
+    """MaxPositionSize always passes — delta logic is in execution layer."""
     c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
     portfolio = {
         "total_value": 10000,
@@ -356,5 +398,4 @@ async def test_max_position_dict_format(verdict):
         "pair": "BTC/USDT",
     }
     r = await c.evaluate(verdict, portfolio)
-    # existing = 0.02 * 50000 = 1000 (10%), new = 0.5% → combined 10.5% > 10%
-    assert not r.passed
+    assert r.passed

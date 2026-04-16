@@ -8,20 +8,11 @@ from datetime import UTC, datetime
 
 import pandas as pd
 
-from cryptotrader.backtest.cache import fetch_historical
+from cryptotrader.backtest.cache import _TF_MS, fetch_historical
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 
 logger = logging.getLogger(__name__)
-
-_TF_MS = {
-    "1m": 60_000,
-    "5m": 300_000,
-    "15m": 900_000,
-    "1h": 3_600_000,
-    "4h": 14_400_000,
-    "1d": 86_400_000,
-}
 
 
 class BacktestEngine:
@@ -86,6 +77,17 @@ class BacktestEngine:
 
             self._config = load_config()
         return self._config
+
+    def _prepare_run(self) -> None:
+        """Pre-run setup: disable LLM cache in AI mode, clear stale exchange caches."""
+        from cryptotrader.nodes.execution import clear_paper_exchanges
+
+        clear_paper_exchanges(backtest_only=True)
+
+        if self.use_llm:
+            from cryptotrader.agents.base import disable_llm_cache
+
+            disable_llm_cache()
 
     def _apply_costs(self, price: float, side: str) -> float:
         """Apply slippage and fees to get realistic fill price."""
@@ -309,6 +311,19 @@ class BacktestEngine:
                 cache[date] = self._extract_numeric(data)
 
     async def run(self) -> BacktestResult:
+        self._prepare_run()
+        try:
+            return await self._run_backtest()
+        finally:
+            from cryptotrader.journal.store import JournalStore
+
+            JournalStore.clear_backtest_memory()
+            if self.use_llm:
+                from cryptotrader.agents.base import restore_llm_cache
+
+                restore_llm_cache()
+
+    async def _run_backtest(self) -> BacktestResult:
         await self._fetch_historical_data()
         candles = self._candles
         if not candles:
@@ -635,7 +650,9 @@ class BacktestEngine:
             engine="paper",
             snapshot=snapshot,
             config=self._cached_config,
-            extra_metadata={"llm_verdict": self.use_llm, "backtest_mode": True},
+            # Explicit sentinel — consumer must treat "DISABLED" as "no Redis".
+            # Prevents accidental fallback to live Redis if None is treated as "use default".
+            extra_metadata={"llm_verdict": self.use_llm, "backtest_mode": True, "redis_url": "DISABLED"},
             extra_data={
                 "position_context": pos_ctx,
                 "backtest_constraints": backtest_constraints,

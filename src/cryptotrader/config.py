@@ -36,7 +36,7 @@ class ModelConfig:
     news_agent: str = "gemini-3.1-pro"
     macro_agent: str = "gemini-3.1-pro"
     fallback: str = "deepseek-chat"
-    timeout_seconds: int = 60
+    timeout_seconds: int = 90
 
 
 # ── Debate ──

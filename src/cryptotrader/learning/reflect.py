@@ -393,7 +393,7 @@ async def run_agent_reflection(
     system_prompt = _build_evolution_system_prompt(agent_id, existing_memory)
     user_prompt = _build_evolution_user_prompt(agent_id, records, existing_memory)
 
-    llm = create_llm(model=model, temperature=0.3, json_mode=True)
+    llm = create_llm(model=model, temperature=0.3)
 
     response = await llm.ainvoke(
         [

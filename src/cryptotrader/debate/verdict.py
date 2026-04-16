@@ -235,7 +235,10 @@ AGENT ANALYSES:
 {agent_reports}"""
 
     try:
-        llm = create_llm(model=model, temperature=0.1, json_mode=True)
+        # json_mode=False: response_format causes LangChain to strip stream=true,
+        # breaking streaming for providers that only support streaming.
+        # JSON output is enforced via prompt ("Output ONLY JSON") + _extract_json().
+        llm = create_llm(model=model, temperature=0.1)
         messages = [SystemMessage(content=VERDICT_PROMPT), HumanMessage(content=user_msg)]
         resp = await llm.ainvoke(messages)
         text = extract_content(resp)

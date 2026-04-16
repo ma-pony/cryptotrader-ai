@@ -133,7 +133,7 @@ async def judge_debate(
 ) -> dict:
     """Research manager judges the debate. Returns {action, confidence, reasoning}."""
     try:
-        llm = create_llm(model=model, temperature=0.1, json_mode=True)
+        llm = create_llm(model=model, temperature=0.1)
         lc_msgs = [
             SystemMessage(content=JUDGE_PROMPT.format(pair=pair)),
             HumanMessage(content=debate["full_debate"]),

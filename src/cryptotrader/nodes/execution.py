@@ -15,11 +15,33 @@ __all__ = ["read_portfolio_from_exchange"]
 
 logger = logging.getLogger(__name__)
 
-# Per-pair PaperExchange cache to prevent cross-pair balance contamination
-_paper_exchanges: dict[str, Any] = {}
+# Per-pair PaperExchange cache to prevent cross-pair balance contamination.
+# Key: (pair, is_backtest) tuple. Call clear_paper_exchanges() between backtest runs.
+_paper_exchanges: dict[tuple[str, bool], Any] = {}
 
 # Module-level cache for live exchanges (reuse connections, avoid repeated load_markets())
 _live_exchanges: dict[str, Any] = {}
+
+
+def clear_paper_exchanges(*, backtest_only: bool = True) -> None:
+    """Remove cached PaperExchange instances. Called between backtest runs."""
+    if backtest_only:
+        keys = [k for k in _paper_exchanges if k[1] is True]
+        for k in keys:
+            _paper_exchanges.pop(k, None)
+    else:
+        _paper_exchanges.clear()
+
+
+async def close_live_exchanges() -> None:
+    """Close all cached live exchange connections. Call on graceful shutdown."""
+    for exchange_id, exchange in list(_live_exchanges.items()):
+        try:
+            await exchange.close()
+            logger.info("Closed live exchange: %s", exchange_id)
+        except Exception:
+            logger.debug("Failed to close exchange %s", exchange_id, exc_info=True)
+    _live_exchanges.clear()
 
 
 async def _get_exchange(state: ArenaState, pair: str):
@@ -28,10 +50,14 @@ async def _get_exchange(state: ArenaState, pair: str):
 
     engine = state["metadata"].get("engine", "paper")
     if engine == "paper":
-        if pair not in _paper_exchanges:
+        # Key by (pair, backtest_mode) to prevent cross-contamination between
+        # live paper trading and backtest runs sharing the same process.
+        is_backtest = state["metadata"].get("backtest_mode", False)
+        cache_key = (pair, is_backtest)
+        if cache_key not in _paper_exchanges:
             balances, positions = await _load_balances_from_db(state)
-            _paper_exchanges[pair] = PaperExchange(initial_balances=balances, initial_positions=positions)
-        return _paper_exchanges[pair], None
+            _paper_exchanges[cache_key] = PaperExchange(initial_balances=balances, initial_positions=positions)
+        return _paper_exchanges[cache_key], None
 
     from cryptotrader.config import load_config
     from cryptotrader.execution.exchange import LiveExchange

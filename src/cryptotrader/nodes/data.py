@@ -164,9 +164,9 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
 
     config = load_config()
     db_url = state["metadata"].get("database_url")
-    store = JournalStore(db_url)
-    summary = state["data"].get("snapshot_summary", {})
     is_backtest = state["metadata"].get("backtest_mode", False)
+    store = JournalStore(db_url, backtest_mode=is_backtest)
+    summary = state["data"].get("snapshot_summary", {})
 
     # Tag current regime
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)

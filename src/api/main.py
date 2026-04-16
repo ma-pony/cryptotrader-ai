@@ -48,6 +48,10 @@ async def lifespan(_app: FastAPI):
     setup_otel()
 
     yield
+
+    from cryptotrader.nodes.execution import close_live_exchanges
+
+    await close_live_exchanges()
     logger.info("Shutting down")
 
 

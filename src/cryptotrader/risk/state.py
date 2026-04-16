@@ -57,7 +57,7 @@ class RedisStateManager:
     def __init__(self, redis_url: str | None) -> None:
         self._redis: redis.Redis | None = None
         self._mem = _MemoryStore()
-        if redis_url:
+        if redis_url and redis_url != "DISABLED":
             try:
                 self._redis = redis.from_url(redis_url)
             except Exception:

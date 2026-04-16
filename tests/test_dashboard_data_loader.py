@@ -171,15 +171,15 @@ def test_load_backtest_session_function_exists():
 
 
 def test_load_portfolio_returns_dict():
-    """load_portfolio returns a dict with portfolio keys from PortfolioManager."""
+    """load_portfolio returns a dict with portfolio keys."""
     dl = _import_data_loader()
-    # Use empty db_url — PortfolioManager falls back to in-memory, returns valid dict
     result = dl.load_portfolio(db_url=None)
     assert isinstance(result, dict)
-    assert "account_id" in result
     assert "positions" in result
     assert "cash" in result
     assert "total_value" in result
+    # Source indicates whether data came from exchange API or database fallback
+    assert "source" in result
 
 
 def test_load_portfolio_total_value_non_negative():

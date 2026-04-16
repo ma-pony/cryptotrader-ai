@@ -112,13 +112,23 @@ class JournalStore:
     # Pure in-memory mode (db_url=None) keeps a per-instance list so test isolation is maintained.
     _shared_memory: dict[str, list[dict[str, Any]]] = {}
 
-    def __init__(self, database_url: str | None = None):
+    @classmethod
+    def clear_backtest_memory(cls) -> None:
+        """Remove all ``::backtest`` keyed fallback memory to prevent unbounded growth."""
+        keys = [k for k in cls._shared_memory if k.endswith("::backtest")]
+        for k in keys:
+            del cls._shared_memory[k]
+
+    def __init__(self, database_url: str | None = None, *, backtest_mode: bool = False):
         self._db_url = database_url
+        self._backtest_mode = backtest_mode
         if database_url:
-            # Shared fallback: all instances pointing at the same DB share one memory fallback
-            if database_url not in JournalStore._shared_memory:
-                JournalStore._shared_memory[database_url] = []
-            self._memory: list[dict[str, Any]] = JournalStore._shared_memory[database_url]
+            # Backtest uses a separate fallback key to prevent cross-contamination
+            # with live journal entries when DB is temporarily unreachable.
+            mem_key = f"{database_url}::backtest" if backtest_mode else database_url
+            if mem_key not in JournalStore._shared_memory:
+                JournalStore._shared_memory[mem_key] = []
+            self._memory: list[dict[str, Any]] = JournalStore._shared_memory[mem_key]
         else:
             # Pure in-memory mode: each instance is independent (preserves test isolation)
             self._memory = []

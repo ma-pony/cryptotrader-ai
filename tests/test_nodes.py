@@ -311,7 +311,7 @@ async def test_place_order_long_paper():
     mock_exchange.place_order = AsyncMock(return_value={"status": "filled", "filled": 0.02, "price": 50000})
 
     # Inject mock into per-pair cache
-    _paper_exchanges["BTC/USDT"] = mock_exchange
+    _paper_exchanges[("BTC/USDT", False)] = mock_exchange
 
     try:
         result = await place_order(state)
@@ -320,7 +320,7 @@ async def test_place_order_long_paper():
         assert order["side"] == "buy"
         assert order["status"] == "filled"
     finally:
-        _paper_exchanges.pop("BTC/USDT", None)
+        _paper_exchanges.pop(("BTC/USDT", False), None)
 
 
 @pytest.mark.asyncio
@@ -641,13 +641,13 @@ async def test_place_order_short():
     mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "filled", "filled": 0.01, "price": 50000})
 
-    _paper_exchanges["BTC/USDT"] = mock_exchange
+    _paper_exchanges[("BTC/USDT", False)] = mock_exchange
     try:
         result = await place_order(state)
         order = result["data"]["order"]
         assert order["side"] == "sell"
     finally:
-        _paper_exchanges.pop("BTC/USDT", None)
+        _paper_exchanges.pop(("BTC/USDT", False), None)
 
 
 @pytest.mark.asyncio
@@ -665,7 +665,7 @@ async def test_place_order_partial_fill():
     mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "partially_filled", "filled": 0.005, "price": 50100})
 
-    _paper_exchanges["BTC/USDT"] = mock_exchange
+    _paper_exchanges[("BTC/USDT", False)] = mock_exchange
     try:
         result = await place_order(state)
         order = result["data"]["order"]
@@ -673,7 +673,7 @@ async def test_place_order_partial_fill():
         assert order["amount"] == 0.005
         assert order["status"] == "partially_filled"
     finally:
-        _paper_exchanges.pop("BTC/USDT", None)
+        _paper_exchanges.pop(("BTC/USDT", False), None)
 
 
 @pytest.mark.asyncio
@@ -691,12 +691,12 @@ async def test_place_order_rejected():
     mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "rejected"})
 
-    _paper_exchanges["BTC/USDT"] = mock_exchange
+    _paper_exchanges[("BTC/USDT", False)] = mock_exchange
     try:
         result = await place_order(state)
         assert result["data"]["order"] is None
     finally:
-        _paper_exchanges.pop("BTC/USDT", None)
+        _paper_exchanges.pop(("BTC/USDT", False), None)
 
 
 # ── nodes/data.py — live collection path ──

@@ -160,6 +160,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/backtest/engine.py" = ["TID251"]
 # API routes are entry-layer -- they invoke graph builders directly.
 "src/api/routes/analyze.py" = ["TID251"]
+# main.py is FastAPI entry-layer -- lifespan hook may import nodes for shutdown.
+"src/api/main.py" = ["TID251"]
 # tests are allowed to import any module for integration and boundary testing.
 # S603 exempted: subprocess.run calls in tests invoke known, trusted CLI tools (ruff, pytest).
 "tests/*.py" = ["TID251", "S603"]

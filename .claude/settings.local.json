@@ -97,7 +97,21 @@
       "Skill(kiro:spec-design)",
       "Skill(kiro:spec-tasks)",
       "Bash(kill:*)",
-      "Bash(pkill:*)"
+      "Bash(pkill:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(*/scripts/spex-init.sh*)",
+      "Bash(*/scripts/spex-traits.sh*)",
+      "Bash(specify *)",
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep",
+      "Agent",
+      "Skill",
+      "ToolSearch",
+      "mcp__*"
     ]
   },
   "enableAllProjectMcpServers": true,

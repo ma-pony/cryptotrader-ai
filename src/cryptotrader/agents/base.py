@@ -35,12 +35,40 @@ FUNDING_RATE_LOW = -0.0001  # below → crowded short
 # ── LangChain SQLiteCache initialization ──
 
 _cache_initialized = False
+_cache_disabled = False
+
+
+def disable_llm_cache() -> None:
+    """Disable LLM cache (backtest mode). Reversible via ``restore_llm_cache()``.
+
+    Prevents cross-contamination between backtest and live LLM responses.
+    """
+    global _cache_disabled
+    _cache_disabled = True
+    try:
+        from langchain_core.globals import set_llm_cache
+
+        set_llm_cache(None)  # type: ignore[arg-type]
+        _logger.info("LLM cache disabled (backtest mode)")
+    except Exception:
+        _logger.debug("Failed to disable LLM cache", exc_info=True)
+
+
+def restore_llm_cache() -> None:
+    """Re-enable SQLiteCache after a backtest run."""
+    global _cache_disabled, _cache_initialized
+    _cache_disabled = False
+    _cache_initialized = False  # allow _init_cache() to run again
+    _init_cache()
 
 
 def _init_cache() -> None:
     """Initialize LangChain SQLiteCache for exact-match LLM caching."""
     global _cache_initialized
     if _cache_initialized:
+        return
+    _cache_initialized = True
+    if _cache_disabled:
         return
     try:
         from langchain_community.cache import SQLiteCache
@@ -53,7 +81,6 @@ def _init_cache() -> None:
         _logger.info("LLM cache initialized: %s", cache_db)
     except Exception:
         _logger.warning("Failed to initialize LLM cache, continuing without cache", exc_info=True)
-    _cache_initialized = True
 
 
 # ── Unified LLM factory ──
@@ -234,7 +261,9 @@ Data sufficiency self-assessment:
 - "low": Most of your core data is missing, zero, or placeholder. You MUST set confidence ≤ 0.3 and direction
   to "neutral". Do NOT guess a direction without data — say "insufficient data" in reasoning.
 
-Output JSON: {"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "data_sufficiency": "high|medium|low",
+CRITICAL: Output ONLY a JSON object. No code, no tools, no markdown fences, no explanations.
+Your ENTIRE response must be valid JSON matching this schema:
+{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "data_sufficiency": "high|medium|low",
 "reasoning": "2-3 sentences citing specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...],
 "data_points": {"indicator": value, ...}}"""
 
@@ -258,7 +287,7 @@ class BaseAgent:
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
         try:
-            llm = create_llm(model=self._resolve_model(), json_mode=True)
+            llm = create_llm(model=self._resolve_model())
             messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
             response = await llm.ainvoke(messages)
             log_llm_usage(response, caller=self.agent_id)
@@ -322,8 +351,41 @@ class BaseAgent:
             parts.append("⚠ DATA QUALITY WARNINGS:\n" + "\n".join(f"  - {w}" for w in warnings))
 
         if experience:
-            parts.append(experience)
+            parts.append(sanitize_input(experience, max_chars=4000))
         return "\n".join(parts)
+
+    @staticmethod
+    def _regex_fallback(text: str) -> dict | None:
+        """Last-resort extraction of direction/confidence from free-text responses."""
+        import re
+
+        text_lower = text.lower()
+        direction = "neutral"
+        for d in ("bullish", "bearish"):
+            if d in text_lower:
+                direction = d
+                break
+
+        conf_match = re.search(r"confidence[\":\s]+(0\.\d+)", text_lower)
+        confidence = float(conf_match.group(1)) if conf_match else 0.3
+
+        # Only use fallback if we found a clear directional signal
+        if direction == "neutral" and not conf_match:
+            return None
+
+        # Extract reasoning from first meaningful sentence, sanitized + capped
+        sentences = [s.strip() for s in text.split(".") if len(s.strip()) > 20]
+        raw_reasoning = ". ".join(sentences[:2]) + "." if sentences else "Extracted via regex fallback"
+        reasoning = sanitize_input(raw_reasoning, max_chars=500)
+
+        return {
+            "direction": direction,
+            "confidence": confidence,
+            "reasoning": reasoning,
+            "data_sufficiency": "low",
+            "key_factors": [],
+            "risk_flags": [],
+        }
 
     def _parse_response(self, response_text: str, pair: str) -> AgentAnalysis:
         try:
@@ -331,16 +393,26 @@ class BaseAgent:
 
             data = _extract_json(response_text)
         except (ValueError, json.JSONDecodeError):
-            logger.warning("Failed to parse LLM response for %s: %.200s", self.agent_id, response_text)
-            return AgentAnalysis(
-                agent_id=self.agent_id,
-                pair=pair,
-                direction="neutral",
-                confidence=0.1,
-                reasoning=f"Parse failure — raw: {response_text[:300]}",
-                is_mock=True,
-                data_sufficiency="low",
+            # Regex fallback: try to extract direction/confidence from free text
+            data = self._regex_fallback(response_text)
+            if data is None:
+                logger.warning("Failed to parse LLM response for %s: %.200s", self.agent_id, response_text)
+                return AgentAnalysis(
+                    agent_id=self.agent_id,
+                    pair=pair,
+                    direction="neutral",
+                    confidence=0.1,
+                    reasoning=f"Parse failure — raw: {response_text[:300]}",
+                    is_mock=True,
+                    data_sufficiency="low",
+                )
+            logger.info(
+                "Regex fallback parsed %s: direction=%s confidence=%.2f",
+                self.agent_id,
+                data.get("direction"),
+                data.get("confidence", 0.3),
             )
+            data["_regex_fallback"] = True
         # Standard fields
         standard = {
             "direction",
@@ -374,6 +446,7 @@ class BaseAgent:
             risk_flags=data.get("risk_flags", []),
             data_points=dp,
             data_sufficiency=sufficiency,
+            is_mock=bool(data.get("_regex_fallback")),
         )
 
 
