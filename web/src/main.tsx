@@ -21,16 +21,16 @@ if (!rootEl) throw new Error('Root element #root not found');
 ReactDOM.createRoot(rootEl).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <ThemeProvider>
-        <I18nProvider>
-          <ErrorBoundary>
-            <BrowserRouter>
+      <BrowserRouter>
+        <ThemeProvider>
+          <I18nProvider>
+            <ErrorBoundary>
               <App />
-            </BrowserRouter>
-          </ErrorBoundary>
-          <Toaster />
-        </I18nProvider>
-      </ThemeProvider>
+            </ErrorBoundary>
+            <Toaster />
+          </I18nProvider>
+        </ThemeProvider>
+      </BrowserRouter>
     </QueryClientProvider>
   </React.StrictMode>,
 );
