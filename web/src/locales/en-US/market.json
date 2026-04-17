@@ -1,0 +1,10 @@
+{
+  "title": "Market",
+  "exchange": { "binance": "Binance", "okx": "OKX" },
+  "side_panel": {
+    "funding_rate": "Funding rate",
+    "open_interest": "Open interest",
+    "liquidations": "Liquidations heatmap"
+  },
+  "tradingview": { "fallback": "TradingView failed to load — falling back to native chart" }
+}

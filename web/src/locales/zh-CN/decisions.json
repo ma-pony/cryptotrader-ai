@@ -1,0 +1,53 @@
+{
+  "title": "决策复盘",
+  "filter": {
+    "pair": "币对",
+    "from": "起始日期",
+    "to": "结束日期",
+    "all_pairs": "全部币对",
+    "reset": "重置"
+  },
+  "list": {
+    "ts": "时间",
+    "pair": "币对",
+    "price": "价格",
+    "action": "动作",
+    "size": "仓位",
+    "confidence": "置信度",
+    "empty": "未找到匹配的决策",
+    "page_info": "第 {{page}} 页 / 共 {{total}} 条",
+    "prev_page": "上一页",
+    "next_page": "下一页"
+  },
+  "detail": {
+    "select_hint": "选择一条决策查看详情",
+    "load_error": "加载失败",
+    "node_timeline": "节点序列",
+    "round": "第 {{n}} 轮",
+    "agents": "代理分析",
+    "confidence": "置信度",
+    "experience": "经验记忆",
+    "success_patterns": "成功模式",
+    "forbidden_zones": "禁止区域",
+    "strategic_insights": "战略洞察",
+    "debate": "多空辩论",
+    "verdict": "裁定",
+    "action": "动作",
+    "size": "仓位",
+    "risk_gate": "风控门",
+    "execution": "执行",
+    "order_id": "订单号",
+    "fill_price": "成交价",
+    "fill_size": "成交量",
+    "fee": "手续费",
+    "slippage": "滑点",
+    "no_execution": "未执行（HOLD 或 REJECT）",
+    "header": {
+      "trace_link": "查看 Jaeger 链路"
+    },
+    "verdict_source": {
+      "AI": "AI 裁决",
+      "WEIGHTED_DOWNGRADE": "加权降级"
+    }
+  }
+}

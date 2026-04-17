@@ -31,7 +31,6 @@ dependencies = [
     "fastapi>=0.135",
     "uvicorn>=0.41",
     "numpy>=2.2",
-    "streamlit>=1.55",
     "feedparser>=6.0.12",
     "structlog>=24.1",
     "alembic>=1.13",
@@ -143,7 +142,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # reflect.py contains Chinese LLM prompts -- fullwidth punctuation is intentional
 "src/cryptotrader/learning/reflect.py" = ["RUF001"]
 "src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
-"src/cli/main.py" = ["N806", "S104", "S603", "TID251"]
+"src/cli/main.py" = ["N806", "S104", "S603", "S607", "TID251"]
 # state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
 # (LangGraph calls get_type_hints() to extract channel reducers at class creation)
 "src/cryptotrader/state.py" = ["TCH002", "TCH003"]
@@ -160,6 +159,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/backtest/engine.py" = ["TID251"]
 # API routes are entry-layer -- they invoke graph builders directly.
 "src/api/routes/analyze.py" = ["TID251"]
+"src/api/routes/chat.py" = ["TID251"]
 # main.py is FastAPI entry-layer -- lifespan hook may import nodes for shutdown.
 "src/api/main.py" = ["TID251"]
 # tests are allowed to import any module for integration and boundary testing.

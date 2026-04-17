@@ -144,8 +144,8 @@ arena scheduler status
 ### 仪表盘 & API
 
 ```bash
-# Streamlit 仪表盘
-arena dashboard
+# Web 前端（React + Vite）
+arena web --port 5173
 
 # FastAPI 服务
 arena serve --port 8003
@@ -160,7 +160,7 @@ arena serve --port 8003
 | `arena backtest --pair BTC/USDT --start DATE --end DATE` | 历史回测 |
 | `arena sync` | 同步所有历史数据到 SQLite |
 | `arena serve --port 8003` | 启动 FastAPI 服务 |
-| `arena dashboard` | 启动 Streamlit 仪表盘 |
+| `arena web` | 启动 React Web 前端 |
 | `arena scheduler start` | 启动周期调度器 |
 | `arena scheduler status` | 查看组合和仓位 |
 | `arena journal log --limit 10` | 最近决策列表 |
@@ -373,7 +373,7 @@ docker compose up -d
 
 # 服务清单：
 #   app        — FastAPI :8003
-#   dashboard  — Streamlit :8501
+#   web        — React 前端 :5173
 #   scheduler  — 周期性交易循环
 #   postgres   — 决策日志 + 组合持久化
 #   redis      — 风控状态 + 冷却 + 熔断器
@@ -447,7 +447,7 @@ src/cryptotrader/
     └── result.py      # BacktestResult 指标
 src/cli/main.py        # Typer CLI（arena 命令）
 src/api/               # FastAPI 服务（认证、限流、中间件）
-src/dashboard/app.py   # Streamlit 仪表盘（概览、决策、风控、回测）
+web/                   # React 19 + Vite 7 前端（仪表盘、决策、回测、风控、指标）
 ```
 
 ## 技术栈
@@ -465,7 +465,7 @@ src/dashboard/app.py   # Streamlit 仪表盘（概览、决策、风控、回测
 | 缓存/状态 | Redis 7 |
 | 本地存储 | SQLite（数据存储 + LLM 缓存 + 经验记忆）|
 | API 服务 | FastAPI + Uvicorn |
-| 仪表盘 | Streamlit |
+| 仪表盘 | React 19 + Vite 7 + TypeScript |
 | CLI | Typer + Rich |
 
 ## 开发

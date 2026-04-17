@@ -22,12 +22,6 @@ class PortfolioOut(BaseModel):
     positions: list[PositionOut]
 
 
-class RiskStatusOut(BaseModel):
-    hourly_trades: int
-    daily_trades: int
-    circuit_breaker_active: bool
-
-
 @router.get("/portfolio", response_model=PortfolioOut)
 async def get_portfolio():
     from cryptotrader.config import load_config
@@ -53,24 +47,4 @@ async def get_portfolio():
         daily_pnl=daily_pnl,
         drawdown=drawdown,
         positions=positions,
-    )
-
-
-@router.get("/risk/status", response_model=RiskStatusOut)
-async def get_risk_status():
-    from cryptotrader.config import load_config
-    from cryptotrader.risk.state import RedisStateManager
-
-    config = load_config()
-
-    rsm = RedisStateManager(config.infrastructure.redis_url)
-    if rsm.available:
-        hourly, daily = await rsm.get_trade_counts()
-        cb = await rsm.is_circuit_breaker_active()
-    else:
-        hourly, daily, cb = 0, 0, False
-    return RiskStatusOut(
-        hourly_trades=hourly,
-        daily_trades=daily,
-        circuit_breaker_active=cb,
     )

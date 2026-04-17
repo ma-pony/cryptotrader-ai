@@ -1,0 +1,58 @@
+{
+  "app": {
+    "name": "CryptoTrader AI",
+    "tagline": "Multi-agent crypto trading research & monitoring"
+  },
+  "nav": {
+    "dashboard": "Dashboard",
+    "decisions": "Decisions",
+    "backtest": "Backtest",
+    "risk": "Risk",
+    "metrics": "Metrics",
+    "chat": "AI Chat",
+    "market": "Market"
+  },
+  "actions": {
+    "refresh": "Refresh",
+    "retry": "Retry",
+    "cancel": "Cancel",
+    "confirm": "Confirm",
+    "save": "Save",
+    "close": "Close",
+    "reset": "Reset",
+    "submit": "Submit",
+    "loading": "Loading…",
+    "more": "More",
+    "open": "Open",
+    "collapse": "Collapse"
+  },
+  "states": {
+    "loading": "Loading",
+    "empty": "No data",
+    "error": "Failed to load",
+    "redis_down": "Redis unavailable: scheduler is in conservative mode"
+  },
+  "theme": {
+    "light": "Light",
+    "dark": "Dark",
+    "system": "System"
+  },
+  "locale": {
+    "zh-CN": "简体中文",
+    "en-US": "English"
+  },
+  "errors": {
+    "generic": "Something went wrong",
+    "network": "Network error: is the backend running?",
+    "unauthorized": "Unauthorized: check X-API-Key",
+    "forbidden": "Forbidden",
+    "not_found": "Resource not found",
+    "rate_limited": "Rate limited, please retry later",
+    "server": "Internal server error",
+    "trace_id": "Trace ID"
+  },
+  "desktop_only": {
+    "title": "Desktop only",
+    "body": "This app supports desktop ≥ 1280px only."
+  }
+}

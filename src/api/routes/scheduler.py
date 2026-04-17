@@ -1,8 +1,15 @@
-"""Scheduler status endpoint — GET /scheduler/status.
+"""Scheduler status endpoints.
 
-Returns the current state of the APScheduler-based trading scheduler.
-When the scheduler is not running (e.g., in API-only mode), returns
-running=False with empty jobs instead of 503.
+Two routes are exposed:
+
+- ``GET /scheduler/status`` — legacy public endpoint with APScheduler-flavored
+  payload (``running``/``jobs``/``cycle_count``/…).
+- ``GET /api/scheduler/status`` — contract endpoint (FR-802) returning the
+  data-model shape consumed by the React Dashboard:
+  ``{enabled, next_pair, next_run_at, redis_available}``.
+
+When the scheduler is not running (API-only deployment), both routes
+degrade gracefully (``running=False`` / ``next_*=null``) instead of 503.
 """
 
 from __future__ import annotations
@@ -19,6 +26,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scheduler")
+api_router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
 
 
 # ---------------------------------------------------------------------------
@@ -110,4 +118,61 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
         cycle_count=scheduler._cycle_count,
         interval_minutes=scheduler.interval_minutes,
         pairs=scheduler.pairs,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Contract endpoint — /api/scheduler/status (FR-802)
+# ---------------------------------------------------------------------------
+
+
+class SchedulerContractStatus(BaseModel):
+    """Data-model §2 SchedulerStatus shape for the React Dashboard."""
+
+    enabled: bool
+    next_pair: str | None
+    next_run_at: datetime | None
+    redis_available: bool
+
+
+def _next_trading_run(scheduler: Scheduler | None) -> tuple[str | None, datetime | None]:
+    """Return ``(next_pair, next_run_at)`` from the live scheduler, or (None, None)."""
+    if scheduler is None:
+        return (None, None)
+
+    next_pair = scheduler.pairs[0] if scheduler.pairs else None
+
+    next_run: datetime | None = None
+    for raw in scheduler.jobs:
+        if raw.get("id") != "trading_cycle":
+            continue
+        raw_ts = raw.get("next_run_time")
+        if isinstance(raw_ts, datetime):
+            next_run = raw_ts
+        elif isinstance(raw_ts, str):
+            try:
+                next_run = datetime.fromisoformat(raw_ts)
+            except ValueError:
+                logger.debug("Cannot parse trading_cycle next_run_time %r", raw_ts)
+        break
+    return (next_pair, next_run)
+
+
+@api_router.get("/status", response_model=SchedulerContractStatus)
+async def scheduler_status_v2(request: Request) -> SchedulerContractStatus:
+    """Return scheduler status in the data-model contract shape (FR-802)."""
+    from cryptotrader.config import load_config
+    from cryptotrader.risk.state import RedisStateManager
+
+    config = load_config()
+    rsm = RedisStateManager(config.infrastructure.redis_url)
+
+    scheduler = _get_scheduler(request)
+    next_pair, next_run_at = _next_trading_run(scheduler)
+
+    return SchedulerContractStatus(
+        enabled=bool(getattr(config.scheduler, "enabled", False)),
+        next_pair=next_pair,
+        next_run_at=next_run_at,
+        redis_available=bool(rsm.available),
     )

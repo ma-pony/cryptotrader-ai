@@ -1,0 +1,11 @@
+{
+  "title": "AI 对话",
+  "placeholder": "向多代理研究助手提问…",
+  "send": "发送",
+  "stop": "停止",
+  "new_session": "新建会话",
+  "empty": "开始一个新对话",
+  "tool_call": "工具调用",
+  "tool_result": "工具结果",
+  "verdict": "结论"
+}

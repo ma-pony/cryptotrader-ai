@@ -11,9 +11,23 @@ from contextlib import asynccontextmanager
 import structlog
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from api.routes import analyze, health, journal, metrics, portfolio, scheduler
+from api.routes import (
+    analyze,
+    backtest,
+    chat,
+    decisions,
+    health,
+    journal,
+    market,
+    metrics,
+    portfolio,
+    portfolio_v2,
+    risk,
+    scheduler,
+)
 from cryptotrader.tracing import set_trace_id
 
 logger = logging.getLogger(__name__)
@@ -71,6 +85,17 @@ app = FastAPI(
     redoc_url=_redoc_url,
 )
 
+# ── CORS (dev only — frontend served at :5173) ──
+_cors_origins_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
+_cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 # ── Global exception handlers ──
 
@@ -100,10 +125,16 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
         error_count,
     )
     # Return structured error details from Pydantic (field paths + messages only,
-    # never raw body values).
+    # never raw body values). Strip non-JSON-serializable ``ctx`` payloads which
+    # Pydantic v2 includes for value_error types.
+    sanitized = []
+    for err in exc.errors():
+        clean = {k: v for k, v in err.items() if k != "ctx"}
+        clean["loc"] = list(clean.get("loc", ()))
+        sanitized.append(clean)
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": sanitized},
     )
 
 
@@ -200,3 +231,11 @@ app.include_router(scheduler.router)
 app.include_router(analyze.router, dependencies=[Depends(verify_api_key)])
 app.include_router(journal.router, dependencies=[Depends(verify_api_key)])
 app.include_router(portfolio.router, dependencies=[Depends(verify_api_key)])
+app.include_router(portfolio_v2.router, dependencies=[Depends(verify_api_key)])
+app.include_router(decisions.router, dependencies=[Depends(verify_api_key)])
+app.include_router(backtest.router, dependencies=[Depends(verify_api_key)])
+app.include_router(risk.router, dependencies=[Depends(verify_api_key)])
+app.include_router(scheduler.api_router, dependencies=[Depends(verify_api_key)])
+app.include_router(metrics.api_router, dependencies=[Depends(verify_api_key)])
+app.include_router(chat.router, dependencies=[Depends(verify_api_key)])
+app.include_router(market.router, dependencies=[Depends(verify_api_key)])

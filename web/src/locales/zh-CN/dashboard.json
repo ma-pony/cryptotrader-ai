@@ -1,0 +1,32 @@
+{
+  "title": "总览",
+  "metrics": {
+    "region": "核心指标",
+    "total_equity": "总权益",
+    "available_cash": "可用现金",
+    "pnl_24h": "24h PnL",
+    "drawdown": "当前回撤"
+  },
+  "equity": {
+    "title": "权益曲线",
+    "range_label": "时间范围"
+  },
+  "positions": {
+    "title": "持仓",
+    "pair": "币对",
+    "side": "方向",
+    "size": "数量",
+    "avg_price": "均价",
+    "pnl": "未实现 PnL",
+    "empty": "暂无持仓"
+  },
+  "scheduler": {
+    "title": "调度器",
+    "enabled": "已启用",
+    "disabled": "未启用",
+    "next_pair": "下一币对",
+    "next_run": "下次触发",
+    "idle": "调度器当前处于空闲状态",
+    "error": "调度器状态不可用"
+  }
+}

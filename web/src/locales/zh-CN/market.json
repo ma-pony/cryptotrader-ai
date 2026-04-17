@@ -1,0 +1,15 @@
+{
+  "title": "行情看板",
+  "exchange": {
+    "binance": "币安",
+    "okx": "欧易"
+  },
+  "side_panel": {
+    "funding_rate": "资金费率",
+    "open_interest": "未平仓量",
+    "liquidations": "清算热图"
+  },
+  "tradingview": {
+    "fallback": "TradingView 加载失败，已降级显示原生 K 线"
+  }
+}

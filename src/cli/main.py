@@ -344,18 +344,20 @@ async def _migrate():
     console.print("[green]Database tables created / verified.[/green]")
 
 
-# ── Dashboard command ──
-
-
 @app.command()
-def dashboard():
-    """Launch Streamlit dashboard."""
+def web(
+    port: int = typer.Option(5173, "--port"),
+):
+    """Start the React web frontend dev server (requires pnpm)."""
     import subprocess
-    import sys
     from pathlib import Path
 
-    app_path = Path(__file__).resolve().parent.parent / "dashboard" / "app.py"
-    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)])
+    web_dir = Path(__file__).resolve().parent.parent.parent / "web"
+    if not (web_dir / "package.json").exists():
+        console.print(f"[red]web/ directory not found at {web_dir}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[bold]Starting web frontend[/bold] at http://localhost:{port}")
+    subprocess.run(["pnpm", "dev", "--port", str(port)], cwd=web_dir)
 
 
 @app.command()

@@ -1,0 +1,26 @@
+{
+  "title": "指标",
+  "counters": {
+    "decisions": "决策总数",
+    "trades": "交易总数",
+    "errors": "错误总数",
+    "orders_placed": "下单数",
+    "orders_failed": "失败订单",
+    "risk_rejections": "风控拒绝",
+    "debate_skipped": "辩论跳过"
+  },
+  "latency": {
+    "title": "延迟",
+    "decision": "决策延迟",
+    "execution": "执行延迟",
+    "data": "数据延迟",
+    "p50": "P50",
+    "p95": "P95",
+    "p99": "P99",
+    "ms": "毫秒"
+  },
+  "trend": {
+    "title": "趋势（最近 60 个采样）",
+    "empty": "尚未采集到足够样本"
+  }
+}

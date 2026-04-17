@@ -1,7 +1,8 @@
-"""Tests for GET /portfolio and GET /risk/status API endpoints.
+"""Tests for GET /portfolio API endpoint.
 
-Uses FastAPI TestClient with mocked PortfolioManager and RedisStateManager
-so that no actual database or Redis connection is required.
+Uses FastAPI TestClient with a mocked PortfolioManager so no actual database
+connection is required. Risk-status coverage lives in ``test_api_risk.py``
+against the new ``/api/risk/*`` routes.
 """
 
 from __future__ import annotations
@@ -136,82 +137,5 @@ class TestPortfolioEndpoint:
         assert resp.json()["drawdown"] == pytest.approx(0.025)
 
 
-# ---------------------------------------------------------------------------
-# GET /risk/status
-# ---------------------------------------------------------------------------
-
-
-class TestRiskStatusEndpoint:
-    """GET /risk/status returns risk state (trades, circuit breaker)."""
-
-    def _mock_config(self, redis_url: str = "redis://localhost:6379"):
-        cfg = MagicMock()
-        cfg.infrastructure.redis_url = redis_url
-        return cfg
-
-    def test_risk_status_returns_200_when_redis_unavailable(self) -> None:
-        """GET /risk/status returns 200 with zeros when Redis is unavailable."""
-        mock_rsm = MagicMock()
-        mock_rsm.available = False
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=self._mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
-        ):
-            resp = client.get("/risk/status")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["hourly_trades"] == 0
-        assert data["daily_trades"] == 0
-        assert data["circuit_breaker_active"] is False
-
-    def test_risk_status_returns_counts_when_redis_available(self) -> None:
-        """GET /risk/status returns actual trade counts when Redis is reachable."""
-        mock_rsm = MagicMock()
-        mock_rsm.available = True
-        mock_rsm.get_trade_counts = AsyncMock(return_value=(3, 12))
-        mock_rsm.is_circuit_breaker_active = AsyncMock(return_value=False)
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=self._mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
-        ):
-            resp = client.get("/risk/status")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["hourly_trades"] == 3
-        assert data["daily_trades"] == 12
-        assert data["circuit_breaker_active"] is False
-
-    def test_risk_status_circuit_breaker_active(self) -> None:
-        """GET /risk/status reflects circuit_breaker_active=True."""
-        mock_rsm = MagicMock()
-        mock_rsm.available = True
-        mock_rsm.get_trade_counts = AsyncMock(return_value=(0, 0))
-        mock_rsm.is_circuit_breaker_active = AsyncMock(return_value=True)
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=self._mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
-        ):
-            resp = client.get("/risk/status")
-
-        assert resp.status_code == 200
-        assert resp.json()["circuit_breaker_active"] is True
-
-    def test_risk_status_response_shape(self) -> None:
-        """GET /risk/status response has exactly the required fields."""
-        mock_rsm = MagicMock()
-        mock_rsm.available = False
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=self._mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
-        ):
-            resp = client.get("/risk/status")
-
-        assert resp.status_code == 200
-        data = resp.json()
-        assert set(data.keys()) == {"hourly_trades", "daily_trades", "circuit_breaker_active"}
+# Risk-status endpoint coverage moved to ``test_api_risk.py`` — the new contract
+# lives at ``/api/risk/status`` with the data-model §4 shape.

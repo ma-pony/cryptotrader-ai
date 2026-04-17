@@ -144,8 +144,8 @@ APScheduler-based with `IntervalTrigger` (default 4h) for trading cycles and `Cr
 ### Dashboard & API
 
 ```bash
-# Streamlit dashboard
-arena dashboard
+# Web frontend (React + Vite)
+arena web --port 5173
 
 # FastAPI server
 arena serve --port 8003
@@ -160,7 +160,7 @@ arena serve --port 8003
 | `arena backtest --pair BTC/USDT --start DATE --end DATE` | Historical backtest |
 | `arena sync` | Sync all historical data to SQLite store |
 | `arena serve --port 8003` | Start FastAPI server |
-| `arena dashboard` | Launch Streamlit UI |
+| `arena web` | Launch React web frontend |
 | `arena scheduler start` | Start periodic scheduler |
 | `arena scheduler status` | Show portfolio & positions |
 | `arena journal log --limit 10` | Recent decisions |
@@ -365,7 +365,7 @@ docker compose up -d
 
 # Services:
 #   app        — FastAPI on :8003
-#   dashboard  — Streamlit on :8501
+#   web        — React frontend on :5173
 #   scheduler  — Periodic trading cycles
 #   postgres   — Decision journal + portfolio persistence
 #   redis      — Risk state + cooldowns + circuit breaker
@@ -439,7 +439,7 @@ src/cryptotrader/
     └── result.py      # BacktestResult metrics
 src/cli/main.py        # Typer CLI (arena command)
 src/api/               # FastAPI server (auth, rate limiting, middleware)
-src/dashboard/app.py   # Streamlit dashboard (overview, decisions, risk, backtest)
+web/                   # React 19 + Vite 7 frontend (dashboard, decisions, backtest, risk, metrics)
 ```
 
 ## Tech Stack
@@ -457,7 +457,7 @@ src/dashboard/app.py   # Streamlit dashboard (overview, decisions, risk, backtes
 | Cache / State | Redis 7 |
 | Local Storage | SQLite (data store + LLM cache + experience memory) |
 | API Server | FastAPI + Uvicorn |
-| Dashboard | Streamlit |
+| Dashboard | React 19 + Vite 7 + TypeScript |
 | CLI | Typer + Rich |
 
 ## Development

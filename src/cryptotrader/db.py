@@ -2,7 +2,7 @@
 
 Engine and sessionmaker are cached per (database_url, event_loop) to avoid
 asyncpg 'another operation in progress' errors when the same URL is accessed
-from different event loops (e.g. main app vs Streamlit dashboard).
+from different event loops (e.g. main app vs scheduler).
 """
 
 from __future__ import annotations

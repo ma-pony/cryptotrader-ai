@@ -1,0 +1,28 @@
+{
+  "title": "Backtest",
+  "form": {
+    "pair": "Pair",
+    "start_date": "Start date",
+    "end_date": "End date",
+    "initial_capital": "Initial capital (USDT)",
+    "use_llm": "Use LLM verdict",
+    "submit": "Run backtest",
+    "cancel": "Cancel run"
+  },
+  "sessions": { "title": "Sessions", "select": "Select a session", "empty": "No sessions yet" },
+  "metrics": {
+    "total_return": "Total return",
+    "sharpe": "Sharpe",
+    "max_drawdown": "Max drawdown",
+    "win_rate": "Win rate",
+    "trades": "Trades"
+  },
+  "chart": { "equity": "Equity curve", "decisions": "Decision timeline" },
+  "status": {
+    "PENDING": "Pending",
+    "RUNNING": "Running",
+    "COMPLETED": "Completed",
+    "FAILED": "Failed",
+    "CANCELLED": "Cancelled"
+  }
+}

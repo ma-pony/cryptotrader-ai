@@ -1,0 +1,35 @@
+{
+  "title": "回测",
+  "form": {
+    "pair": "币对",
+    "start_date": "起始日期",
+    "end_date": "结束日期",
+    "initial_capital": "初始资金（USDT）",
+    "use_llm": "使用 LLM 决策",
+    "submit": "运行回测",
+    "cancel": "取消运行"
+  },
+  "sessions": {
+    "title": "历史会话",
+    "select": "选择历史会话",
+    "empty": "暂无历史会话"
+  },
+  "metrics": {
+    "total_return": "总收益",
+    "sharpe": "夏普",
+    "max_drawdown": "最大回撤",
+    "win_rate": "胜率",
+    "trades": "交易次数"
+  },
+  "chart": {
+    "equity": "权益曲线",
+    "decisions": "决策时间线"
+  },
+  "status": {
+    "PENDING": "等待中",
+    "RUNNING": "运行中",
+    "COMPLETED": "已完成",
+    "FAILED": "失败",
+    "CANCELLED": "已取消"
+  }
+}

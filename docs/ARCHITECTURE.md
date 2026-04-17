@@ -15,7 +15,7 @@
 | 数据处理 | pandas + pandas-ta | >=2.3, >=0.4 |
 | 数据验证 | Pydantic | >=2.12 |
 | Web 框架 | FastAPI + Uvicorn | >=0.135 |
-| 仪表板 | Streamlit | >=1.55 |
+| 仪表板 | React 19 + Vite 7 + TypeScript | web/ |
 | CLI | Typer | >=0.24 |
 | 数据库 | PostgreSQL 16 + SQLAlchemy | asyncpg >=0.29 |
 | 缓存 / 状态 | Redis 7 | redis >=7.3 |
@@ -112,8 +112,7 @@ cryptotrader-ai/
 │   │       └── journal.py     # GET /journal/log, /journal/{hash}
 │   ├── cli/
 │   │   └── main.py            # Typer CLI（arena 命令）
-│   └── dashboard/
-│       └── app.py             # Streamlit 仪表板
+├── web/                       # React 19 + Vite 7 前端
 ├── tests/                     # 347 个测试，70% 覆盖率
 ├── pyproject.toml             # 项目配置 + 依赖
 ├── Makefile                   # 快捷命令
@@ -470,7 +469,7 @@ arena journal show abc123                        # 单条详情
 
 # 服务
 arena serve --port 8003                          # FastAPI 服务器
-arena dashboard                                  # Streamlit 仪表板
+arena web                                        # React Web 前端
 arena scheduler start                            # APScheduler 定时调度（需 scheduler.enabled=true）
 arena scheduler status                           # 组合状态
 
@@ -529,14 +528,15 @@ arena live-check                                 # 实盘就绪检查
 | Verdict 记忆 | Yes | No |
 | position_scale 连续映射 | Yes | Yes (3 档) |
 
-### 9.4 Streamlit 仪表板
+### 9.4 Web 前端 (React 19 + Vite 7)
 
 | 页面 | 内容 |
 |------|------|
-| Overview | 总价值/日损益/回撤指标 + 权益曲线 + 持仓表 |
-| Decisions | 最近 20 条决策展开卡片（风控/verdict/辩论/PnL） |
-| Risk Status | Redis 状态（交易计数/熔断） + 重置按钮 + 风控参数表 |
-| Backtest | 回测表单 → 运行 → 收益/Sharpe/MaxDD/胜率 + 权益曲线 + 交易表 |
+| Dashboard | 总权益/现金/24h PnL/回撤 + 权益曲线 + 持仓表 + 调度器状态 |
+| Decisions | 筛选+分页列表 + 详情面板（Node Timeline / Agent Analysis / Debate / Verdict / Risk Gate / Execution） |
+| Backtest | 回测表单 → 5s 轮询 → 收益/Sharpe/MaxDD/胜率 + 权益曲线 |
+| Risk | 交易计数 + 断路器（含重置 confirm） + 阈值展示 |
+| Metrics | Prometheus 计数器 + p50/p95 延迟 + IndexedDB 趋势图 |
 
 ## 10. 配置系统
 

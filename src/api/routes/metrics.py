@@ -18,6 +18,7 @@ from cryptotrader.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+api_router = APIRouter(prefix="/api/metrics", tags=["metrics"])
 
 
 # ---------------------------------------------------------------------------
@@ -230,3 +231,69 @@ async def metrics_summary() -> MetricsSummaryResponse:
     except Exception:
         logger.warning("Failed to build metrics summary", exc_info=True)
         raise
+
+
+# ---------------------------------------------------------------------------
+# Contract endpoint — /api/metrics/summary (FR-808)
+# ---------------------------------------------------------------------------
+
+
+class MetricsCounters(BaseModel):
+    trades_total: int
+    orders_placed: int
+    orders_failed: int
+    risk_rejections: int
+    debate_skipped_total: int
+
+
+class MetricsPercentiles(BaseModel):
+    pipeline_p50_ms: float
+    pipeline_p95_ms: float
+    execution_p50_ms: float
+    execution_p95_ms: float
+
+
+class MetricsSummaryV2Response(BaseModel):
+    """Data-model §5 MetricsSummary shape for the React Metrics page."""
+
+    counters: MetricsCounters
+    percentiles: MetricsPercentiles
+    collected_at: datetime.datetime
+
+
+@api_router.get("/summary", response_model=MetricsSummaryV2Response)
+async def metrics_summary_v2() -> MetricsSummaryV2Response:
+    """Return key metrics in the data-model contract shape (FR-808).
+
+    ``orders_placed`` mirrors ``trades_total`` (every executed trade went
+    through OrderManager). ``orders_failed`` is reserved for a future failure
+    counter and currently reports 0 — exposing the field keeps the contract
+    stable for the frontend.
+    """
+    get_metrics_collector()
+
+    trades_total = _sum_counter_samples("ct_trade_executed_total")
+    risk_rejections = _sum_counter_samples("ct_risk_rejected_total")
+    debate_skipped = _sum_counter_samples("ct_debate_skipped_total")
+
+    pipeline_p50 = _histogram_quantile("ct_pipeline_duration_ms", 0.50)
+    pipeline_p95 = _histogram_quantile("ct_pipeline_duration_ms", 0.95)
+    execution_p50 = _histogram_quantile("ct_execution_latency_ms", 0.50)
+    execution_p95 = _histogram_quantile("ct_execution_latency_ms", 0.95)
+
+    return MetricsSummaryV2Response(
+        counters=MetricsCounters(
+            trades_total=trades_total,
+            orders_placed=trades_total,
+            orders_failed=0,
+            risk_rejections=risk_rejections,
+            debate_skipped_total=debate_skipped,
+        ),
+        percentiles=MetricsPercentiles(
+            pipeline_p50_ms=float(pipeline_p50),
+            pipeline_p95_ms=float(pipeline_p95),
+            execution_p50_ms=float(execution_p50),
+            execution_p95_ms=float(execution_p95),
+        ),
+        collected_at=datetime.datetime.now(datetime.UTC),
+    )

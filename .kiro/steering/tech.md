@@ -20,7 +20,7 @@
 - **API 服务**：FastAPI + Uvicorn
 - **定时调度**：APScheduler 3.x（`AsyncIOScheduler`，`IntervalTrigger` + `CronTrigger`）
 - **CLI**：Typer + Rich（入口命令 `arena`）
-- **Dashboard**：Streamlit
+- **Dashboard**：React 19 + Vite 7 + TypeScript（web/ 子目录）
 
 ## 关键库约定
 
@@ -110,8 +110,8 @@ uv run arena run BTC/USDT
 # 启动 API 服务
 uv run arena serve
 
-# 启动 Streamlit Dashboard
-uv run streamlit run src/dashboard/app.py
+# 启动 Web 前端
+cd web && pnpm dev
 
 # 回测
 uv run arena backtest BTC/USDT --days 30

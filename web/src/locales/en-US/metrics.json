@@ -1,0 +1,23 @@
+{
+  "title": "Metrics",
+  "counters": {
+    "decisions": "Decisions",
+    "trades": "Trades",
+    "errors": "Errors",
+    "orders_placed": "Orders placed",
+    "orders_failed": "Orders failed",
+    "risk_rejections": "Risk rejections",
+    "debate_skipped": "Debate skipped"
+  },
+  "latency": {
+    "title": "Latency",
+    "decision": "Decision latency",
+    "execution": "Execution latency",
+    "data": "Data latency",
+    "p50": "P50",
+    "p95": "P95",
+    "p99": "P99",
+    "ms": "ms"
+  },
+  "trend": { "title": "Trend (last 60 samples)", "empty": "Not enough samples yet" }
+}

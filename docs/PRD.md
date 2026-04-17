@@ -36,7 +36,7 @@
 - 历史回测（LLM 驱动 + SMA 交叉 fallback）
 - 决策日志（PostgreSQL + 内存 fallback）
 - 言语强化学习（历史决策经验注入 prompt）
-- CLI / FastAPI / Streamlit 三入口
+- CLI / FastAPI / React Web 前端 三入口
 
 **Out-of-Scope**:
 - 多用户 / 权限管理

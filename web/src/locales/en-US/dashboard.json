@@ -1,0 +1,32 @@
+{
+  "title": "Dashboard",
+  "metrics": {
+    "region": "Key Metrics",
+    "total_equity": "Total Equity",
+    "available_cash": "Available Cash",
+    "pnl_24h": "24h PnL",
+    "drawdown": "Current Drawdown"
+  },
+  "equity": {
+    "title": "Equity Curve",
+    "range_label": "Time Range"
+  },
+  "positions": {
+    "title": "Positions",
+    "pair": "Pair",
+    "side": "Side",
+    "size": "Size",
+    "avg_price": "Avg Price",
+    "pnl": "Unrealized PnL",
+    "empty": "No open positions"
+  },
+  "scheduler": {
+    "title": "Scheduler",
+    "enabled": "Enabled",
+    "disabled": "Disabled",
+    "next_pair": "Next pair",
+    "next_run": "Next run",
+    "idle": "Scheduler is currently idle",
+    "error": "Scheduler status unavailable"
+  }
+}

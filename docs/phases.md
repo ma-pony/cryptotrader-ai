@@ -227,7 +227,7 @@ events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_
 
 **最小可用的 Web 监控界面。**
 
-- 技术选型：FastAPI + Jinja2 模板（或 Streamlit，更快）
+- 技术选型：React 19 + Vite 7 + TypeScript
 - 页面：
   1. **Overview**：当前持仓、今日 PnL、总 PnL、活跃 pair
   2. **Decisions**：最近决策列表（方向/置信度/分歧度/风控结果）

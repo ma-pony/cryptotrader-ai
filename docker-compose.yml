@@ -59,29 +59,23 @@ services:
           memory: 512m
           cpus: "1.0"
 
-  dashboard:
-    build: .
-    command: python -m streamlit run src/dashboard/app.py --server.port 8501
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
-      REDIS_URL: redis://redis:6379
-    env_file:
-      - .env
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
     ports:
-      - "8501:8501"
-    volumes:
-      - ctdata:/home/appuser/.cryptotrader
+      - "5173:80"
+    environment:
+      VITE_API_BASE_URL: http://api:8003
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
+      api:
         condition: service_healthy
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: "1.0"
+          memory: 128m
+          cpus: "0.5"
 
   scheduler:
     build: .

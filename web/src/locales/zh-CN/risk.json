@@ -1,0 +1,30 @@
+{
+  "title": "风控",
+  "trade_count": {
+    "today": "今日交易数",
+    "window": "窗口期交易数"
+  },
+  "circuit_breaker": {
+    "title": "断路器",
+    "ACTIVE": "已触发",
+    "INACTIVE": "未触发",
+    "expires_at": "到期时间",
+    "remaining": "剩余",
+    "reset": "重置断路器",
+    "confirm_title": "确认重置断路器？",
+    "confirm_body": "重置后断路器将立即失效，交易将恢复。建议确认根因后再操作。",
+    "confirm_action": "我已确认，立即重置"
+  },
+  "thresholds": {
+    "title": "阈值",
+    "max_position": "最大仓位 %",
+    "max_drawdown": "最大回撤 %",
+    "daily_loss_limit": "日损失上限 %",
+    "per_trade_risk": "单笔风险 %",
+    "max_correlated": "最大相关仓位",
+    "max_trades_hour": "每小时最大交易",
+    "max_trades_day": "每日最大交易",
+    "cooldown": "亏损冷却"
+  },
+  "redis_warning": "Redis 不可达：风控状态可能不准确"
+}

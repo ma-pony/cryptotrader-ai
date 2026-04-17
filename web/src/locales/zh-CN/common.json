@@ -1,0 +1,58 @@
+{
+  "app": {
+    "name": "CryptoTrader AI",
+    "tagline": "多代理加密货币交易研究与监控"
+  },
+  "nav": {
+    "dashboard": "总览",
+    "decisions": "决策复盘",
+    "backtest": "回测",
+    "risk": "风控",
+    "metrics": "指标",
+    "chat": "AI 对话",
+    "market": "行情看板"
+  },
+  "actions": {
+    "refresh": "刷新",
+    "retry": "重试",
+    "cancel": "取消",
+    "confirm": "确认",
+    "save": "保存",
+    "close": "关闭",
+    "reset": "重置",
+    "submit": "提交",
+    "loading": "加载中…",
+    "more": "更多",
+    "open": "展开",
+    "collapse": "收起"
+  },
+  "states": {
+    "loading": "加载中",
+    "empty": "暂无数据",
+    "error": "加载失败",
+    "redis_down": "Redis 不可达：调度器以保守模式运行"
+  },
+  "theme": {
+    "light": "浅色",
+    "dark": "深色",
+    "system": "跟随系统"
+  },
+  "locale": {
+    "zh-CN": "简体中文",
+    "en-US": "English"
+  },
+  "errors": {
+    "generic": "发生了一个错误",
+    "network": "网络异常，请检查后端是否启动",
+    "unauthorized": "未授权：请检查 X-API-Key",
+    "forbidden": "无权限",
+    "not_found": "资源不存在",
+    "rate_limited": "请求过于频繁，稍后再试",
+    "server": "服务器内部错误",
+    "trace_id": "Trace ID"
+  },
+  "desktop_only": {
+    "title": "桌面专用",
+    "body": "本应用仅支持 ≥ 1280px 桌面端访问。"
+  }
+}
