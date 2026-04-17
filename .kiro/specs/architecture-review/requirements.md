@@ -6,7 +6,7 @@
 
 ## 简介
 
-本规格定义了对 CryptoTrader AI 多智能体加密货币交易系统的全面架构审查与优化目标。系统以 LangGraph `StateGraph` 为骨架，串联数据采集、多 Agent 并行分析、辩论门控、AI 裁决、风控门、订单执行等核心流程，并集成经验记忆（GSSC 引擎）、APScheduler 定时调度、FastAPI 服务层与 Streamlit 仪表盘。
+本规格定义了对 CryptoTrader AI 多智能体加密货币交易系统的全面架构审查与优化目标。系统以 LangGraph `StateGraph` 为骨架，串联数据采集、多 Agent 并行分析、辩论门控、AI 裁决、风控门、订单执行等核心流程，并集成经验记忆（GSSC 引擎）、APScheduler 定时调度、FastAPI 服务层与 React Web 前端。
 
 审查范围覆盖：代码架构与模块边界、错误处理一致性、配置管理、测试覆盖率、异步并发安全、交易所抽象与组合管理、安全实践（密钥/API Key/输入校验）、性能优化（LLM 成本与延迟）、可观测性（日志/追踪/指标）以及部署与基础设施（Docker、CI/CD）。目标是确保各层均符合最佳实践与领域驱动分层原则，同时保持零 lint 错误、零静默异常、配置文件单一来源等硬性要求不退化。
 
@@ -160,7 +160,7 @@
 
 #### 验收标准
 
-1. The CryptoTrader AI 系统 shall 通过 Docker Compose 提供包含以下服务的完整部署配置：`api`（FastAPI）、`scheduler`（APScheduler）、`dashboard`（Streamlit）、`postgres`（可选）、`redis`（可选）。
+1. The CryptoTrader AI 系统 shall 通过 Docker Compose 提供包含以下服务的完整部署配置：`api`（FastAPI）、`scheduler`（APScheduler）、`web`（React）、`postgres`（可选）、`redis`（可选）。
 2. When 构建 Docker 镜像时，the CryptoTrader AI 系统 shall 使用多阶段构建（multi-stage build）分离依赖安装阶段和运行阶段，确保生产镜像不包含开发依赖（`uv`、`ruff`、测试库）。
 3. The CryptoTrader AI 系统 shall 在 CI 流水线中依次执行：`ruff check`（lint）、`ruff format --check`（格式验证）、`pytest`（测试 + 覆盖率）、`docker build`（镜像构建验证），任意步骤失败则阻断后续步骤。
 4. If Docker 健康检查（`HEALTHCHECK`）失败，the CryptoTrader AI 系统 shall 通过 `/health` 端点返回详细的组件状态（数据库连通性、Redis 连通性、LLM API 可达性），Docker 编排器据此决定是否重启容器。
