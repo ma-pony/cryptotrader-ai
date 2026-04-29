@@ -55,7 +55,13 @@ async def lifespan(_app: FastAPI):
     # Initialize HITL Telegram bot if enabled
     await _init_hitl_telegram(_app)
 
+    # Initialize trading scheduler if enabled
+    await _init_scheduler(_app)
+
     yield
+
+    # Shutdown scheduler first (it owns trading-cycle + daily-summary jobs)
+    await _shutdown_scheduler(_app)
 
     # Shutdown HITL Telegram bot
     telegram_bot = getattr(_app.state, "telegram_bot", None)
@@ -112,6 +118,63 @@ async def _init_trigger_engine(app_instance: FastAPI) -> None:
     app_instance.state.trigger_engine = engine
     app_instance.state.trigger_store = store
     logger.info("PriceTriggerEngine initialized")
+
+
+async def _init_scheduler(app_instance: FastAPI) -> None:
+    """Start the trading Scheduler in a background task if scheduler.enabled.
+
+    The Scheduler runs trading_cycle (interval) + daily_summary (cron) jobs.
+    trigger_engine is intentionally NOT injected here — it is owned by
+    _init_trigger_engine and started independently. Keeping the two surfaces
+    separate means each can be enabled/disabled in config without coupling.
+    """
+    import asyncio
+
+    from cryptotrader.config import load_config
+    from cryptotrader.scheduler import Scheduler
+
+    config = load_config()
+    if not config.scheduler.enabled:
+        app_instance.state.scheduler = None
+        app_instance.state.scheduler_task = None
+        logger.info("Scheduler disabled by config; skipping autostart")
+        return
+
+    scheduler = Scheduler(
+        pairs=config.scheduler.pairs,
+        interval_minutes=config.scheduler.interval_minutes,
+        daily_summary_hour=config.scheduler.daily_summary_hour,
+    )
+    # Scheduler.start() is blocking (awaits a stop_event), so run as a task.
+    task = asyncio.create_task(scheduler.start(), name="trading-scheduler")
+    app_instance.state.scheduler = scheduler
+    app_instance.state.scheduler_task = task
+    logger.info(
+        "Scheduler autostarted: pairs=%s interval=%dm daily_summary_hour=%d",
+        config.scheduler.pairs,
+        config.scheduler.interval_minutes,
+        config.scheduler.daily_summary_hour,
+    )
+
+
+async def _shutdown_scheduler(app_instance: FastAPI) -> None:
+    """Signal the Scheduler to stop and await its background task."""
+    import asyncio
+
+    scheduler = getattr(app_instance.state, "scheduler", None)
+    task = getattr(app_instance.state, "scheduler_task", None)
+    if scheduler is None or task is None:
+        return
+    import contextlib
+
+    scheduler.stop()
+    try:
+        await asyncio.wait_for(task, timeout=10)
+    except TimeoutError:
+        logger.warning("Scheduler did not exit within 10s; cancelling")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
 
 
 async def _init_hitl_telegram(app_instance: FastAPI) -> None:

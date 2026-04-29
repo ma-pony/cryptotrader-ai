@@ -28,7 +28,14 @@ from cryptotrader.scheduler import Scheduler
 
 @pytest.fixture
 def client():
-    """TestClient backed by the real FastAPI app."""
+    """TestClient backed by the real FastAPI app.
+
+    Scheduler autostart is disabled session-wide via conftest's
+    ``_disable_scheduler_autostart_for_tests`` fixture, so individual tests
+    can inject their own (real or mocked) Scheduler via
+    ``patch("api.routes.scheduler._get_scheduler", ...)`` without lifespan
+    interference.
+    """
     with TestClient(app, raise_server_exceptions=False) as c:
         yield c
 
@@ -319,14 +326,11 @@ def test_get_scheduler_status_via_app_state(real_scheduler):
     real_scheduler._cycle_count = 3
 
     p1, p2 = _patch_scheduler_running(real_scheduler, fake_jobs)
-    with p1, p2:
-        # Inject scheduler into app.state directly
+    with p1, p2, TestClient(app, raise_server_exceptions=False) as c:
         app.state.scheduler = real_scheduler
         try:
-            with TestClient(app, raise_server_exceptions=False) as c:
-                resp = c.get("/scheduler/status")
+            resp = c.get("/scheduler/status")
         finally:
-            # Clean up — remove injected scheduler so other tests are not affected
             del app.state.scheduler
 
     assert resp.status_code == 200
@@ -338,7 +342,6 @@ def test_get_scheduler_status_via_app_state(real_scheduler):
 
 def test_get_scheduler_status_app_state_none_after_cleanup():
     """After cleanup, endpoint falls back to running=False."""
-    # Ensure no scheduler is in app.state
     if hasattr(app.state, "scheduler"):
         del app.state.scheduler
 
