@@ -124,6 +124,7 @@ def _to_agent_analyses(raw_analyses: dict, pair: str) -> dict:
                 risk_flags=v.get("risk_flags", []),
                 data_points=v.get("data_points", {}),
                 data_sufficiency=v.get("data_sufficiency", "medium"),
+                is_mock=v.get("is_mock", False),
             )
         else:
             analyses[k] = v

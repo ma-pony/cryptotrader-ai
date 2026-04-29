@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from cryptotrader.models import NodeTraceEntry
-from cryptotrader.nodes.journal import _aggregate_latency
+from cryptotrader.nodes.journal import _aggregate_latency, _to_agent_analyses
 
 
 class TestAggregateLatency:
@@ -54,3 +54,42 @@ class TestAggregateLatency:
         out = _aggregate_latency(trace)
         assert out["agents"] == 0
         assert out["risk"] == 0
+
+
+class TestToAgentAnalysesPreservesIsMock:
+    """Regression: nodes/journal._to_agent_analyses dropped is_mock when
+    re-hydrating raw analysis dicts back into AgentAnalysis dataclasses,
+    making every fallback decision look real in the journal (observed in
+    the 22:38 cycle on 2026-04-29)."""
+
+    def test_is_mock_true_round_trips(self) -> None:
+        raw = {
+            "chain_agent": {
+                "direction": "neutral",
+                "confidence": 0.1,
+                "reasoning": "LLM unavailable - mock analysis",
+                "is_mock": True,
+                "data_sufficiency": "low",
+            }
+        }
+        out = _to_agent_analyses(raw, pair="BTC/USDT")
+        assert out["chain_agent"].is_mock is True
+        assert out["chain_agent"].reasoning == "LLM unavailable - mock analysis"
+
+    def test_is_mock_false_round_trips(self) -> None:
+        raw = {
+            "tech_agent": {
+                "direction": "bearish",
+                "confidence": 0.6,
+                "reasoning": "RSI < 30",
+                "is_mock": False,
+                "data_sufficiency": "high",
+            }
+        }
+        out = _to_agent_analyses(raw, pair="BTC/USDT")
+        assert out["tech_agent"].is_mock is False
+
+    def test_missing_is_mock_defaults_false(self) -> None:
+        raw = {"x": {"direction": "bullish", "confidence": 0.7, "reasoning": "ok"}}
+        out = _to_agent_analyses(raw, pair="ETH/USDT")
+        assert out["x"].is_mock is False
