@@ -269,7 +269,9 @@ async def _compute_daily_loss_pct(
             pm = PortfolioManager(database_url)
             portfolio = portfolio or await pm.get_portfolio()
             equity = float(portfolio.get("total_value", 0.0) or 0.0)
-            pnl_24h = float(await pm.get_daily_pnl()) if pnl_24h is None else pnl_24h
+            if pnl_24h is None:
+                raw = await pm.get_daily_pnl()
+                pnl_24h = float(raw) if raw is not None else 0.0
         if equity <= 0:
             return None
         # Positive value = loss magnitude; negative = profit. Frontend meter expects percent.
@@ -421,7 +423,7 @@ async def get_risk_status() -> RiskStatusOut:
 
     pm = PortfolioManager(db_url)
     try:
-        portfolio, snaps, pnl_24h = await asyncio.gather(
+        portfolio, snaps, pnl_24h_raw = await asyncio.gather(
             pm.get_portfolio(),
             pm.load_snapshots("default"),
             pm.get_daily_pnl(),
@@ -429,10 +431,13 @@ async def get_risk_status() -> RiskStatusOut:
         )
     except Exception:
         logger.warning("risk status: portfolio prefetch failed", exc_info=True)
-        portfolio, snaps, pnl_24h = {}, [], 0.0
+        portfolio, snaps, pnl_24h_raw = {}, [], None
+    # get_daily_pnl returns None when no snapshot exists in today's UTC window;
+    # surface as 0.0 for downstream serialization (frontend cannot render null).
+    pnl_24h = float(pnl_24h_raw) if pnl_24h_raw is not None else 0.0
 
     results = await asyncio.gather(
-        _compute_daily_loss_pct(db_url, portfolio=portfolio, pnl_24h=float(pnl_24h)),
+        _compute_daily_loss_pct(db_url, portfolio=portfolio, pnl_24h=pnl_24h),
         _compute_drawdown_pct(db_url, snaps=snaps),
         _compute_total_exposure_pct(db_url, portfolio=portfolio),
         _compute_cvar_95(db_url, snaps=snaps),

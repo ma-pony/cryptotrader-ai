@@ -45,7 +45,11 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
             max_exp = config.risk.position.max_total_exposure_pct
             constraints["remaining_exposure_pct"] = max(0.0, max_exp - current_exposure / total)
             daily_loss_budget = config.risk.loss.max_daily_loss_pct
-            if daily_pnl < 0:
+            if daily_pnl is None:
+                # No snapshot in today's UTC window — leave constraint absent so the
+                # verdict prompt does not advertise a budget that we cannot back up.
+                pass
+            elif daily_pnl < 0:
                 constraints["daily_loss_remaining_pct"] = max(0.0, daily_loss_budget - abs(daily_pnl / total))
             else:
                 constraints["daily_loss_remaining_pct"] = daily_loss_budget
@@ -362,7 +366,7 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
         pm_returns = await pm.get_returns()
     except Exception:
         logger.debug("Portfolio snapshot data fetch failed", exc_info=True)
-        daily_pnl = 0.0
+        daily_pnl = None  # surface "unknown" downstream rather than synthetic 0
         drawdown = 0.0
         pm_returns = []
 

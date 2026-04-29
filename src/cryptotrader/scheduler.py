@@ -288,13 +288,14 @@ class Scheduler:
             )
             pm = PortfolioManager(config.infrastructure.database_url)
             portfolio = await pm.get_portfolio()
-            daily_pnl = await pm.get_daily_pnl()
+            # get_daily_pnl returns None when no snapshot exists in today's UTC window
+            daily_pnl_raw = await pm.get_daily_pnl()
             drawdown = await pm.get_drawdown()
 
             summary = {
                 "date": datetime.now(UTC).strftime("%Y-%m-%d"),
                 "portfolio_value": portfolio.get("total_value", 0),
-                "daily_pnl": daily_pnl,
+                "daily_pnl": daily_pnl_raw,  # may be null in the notification payload
                 "drawdown": drawdown,
                 "pairs": {
                     p: {

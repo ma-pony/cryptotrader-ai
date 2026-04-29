@@ -166,11 +166,44 @@ class PortfolioManager:
                 logger.warning("DB cash update failed: %s", e)
         self._memory_cash[account_id] = cash
 
-    async def get_daily_pnl(self, account_id: str = "default") -> float:
+    async def get_daily_pnl(self, account_id: str = "default") -> float | None:
+        """Return PnL in absolute units since the start of the current UTC day.
+
+        Returns ``None`` when no snapshot exists in today's window. The previous
+        "two-most-recent snapshots diff" semantics produced false circuit-breaker
+        trips after long snapshot gaps — see 2026-04-29 10:28 cycle that read a
+        stale 04-28 snapshot diff (-$375) and reported -9.42% on a ~$3,980
+        cash-only equity reading.
+
+        - 0 snaps in today's window  → ``None``  (caller treats as "unknown")
+        - 1 snap                     → ``0.0``   (baseline; no movement yet today)
+        - 2+ snaps                   → ``latest - earliest_in_window``
+        """
         snaps = await self.load_snapshots(account_id)
-        if len(snaps) < 2:
+        if not snaps:
+            return None
+
+        midnight = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        today: list[float] = []
+        for s in snaps:
+            ts = s.get("timestamp")
+            if isinstance(ts, str):
+                try:
+                    ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if ts is None:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            if ts >= midnight:
+                today.append(s["total_value"])
+
+        if not today:
+            return None
+        if len(today) == 1:
             return 0.0
-        return snaps[-1]["total_value"] - snaps[-2]["total_value"]
+        return today[-1] - today[0]
 
     async def get_drawdown(self, account_id: str = "default") -> float:
         snaps = [s["total_value"] for s in await self.load_snapshots(account_id)]

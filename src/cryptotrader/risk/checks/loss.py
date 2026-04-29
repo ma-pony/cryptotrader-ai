@@ -35,7 +35,13 @@ class DailyLossLimit:
         total = portfolio.get("total_value", 0)
         if total <= 0:
             return CheckResult(passed=False, reason="Invalid portfolio value")
-        daily_pnl = portfolio.get("daily_pnl", 0)
+        daily_pnl = portfolio.get("daily_pnl")
+        # None == "no snapshot in today's UTC window" — cannot compute loss.
+        # Pass conservatively; other checks (drawdown, exposure, breaker) still gate.
+        # Blocking here would lock out every fresh install / post-restart cycle.
+        if daily_pnl is None:
+            logger.info("daily_pnl unknown (no snapshot in today's UTC window) -- skipping daily-loss check")
+            return CheckResult(passed=True, reason="daily_pnl unknown")
         loss_pct = abs(daily_pnl) / total if daily_pnl < 0 else 0
         if loss_pct > self._max_pct:
             self.circuit_breaker = True

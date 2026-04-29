@@ -247,7 +247,10 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
             equity = float(portfolio.get("total_value", 0.0))
             raw_positions = portfolio.get("positions", {}) or {}
 
-        pnl_24h = float(await pm.get_daily_pnl())
+        # get_daily_pnl returns None when no snapshot exists in today's UTC window;
+        # surface as 0.0 in the API response (frontend cannot render null PnL cards).
+        pnl_24h_raw = await pm.get_daily_pnl()
+        pnl_24h = float(pnl_24h_raw) if pnl_24h_raw is not None else 0.0
         drawdown_raw = float(await pm.get_drawdown())
     except Exception as exc:
         logger.warning("Portfolio snapshot read failed: %s", exc)
