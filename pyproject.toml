@@ -27,6 +27,7 @@ dependencies = [
     "redis>=7.3",
     "sqlalchemy[asyncio]>=2.0.48",
     "asyncpg>=0.29",
+    "aiosqlite>=0.20",
     "fastapi>=0.135",
     "uvicorn>=0.41",
     "numpy>=2.2",
@@ -37,7 +38,6 @@ dependencies = [
     "nest-asyncio>=1.6.0",
     "prometheus-client>=0.20",
     "websockets>=13.0",
-    "fastmcp>=2.0,<3",
 ]
 
 [project.optional-dependencies]
