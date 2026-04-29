@@ -12,5 +12,5 @@ if sys.version_info >= (3, 11):
 else:
     UTC = timezone.utc
 
-    class StrEnum(str, Enum):  # type: ignore[no-redef]
+    class StrEnum(str, Enum):  # type: ignore[no-redef]  # noqa: UP042 -- StrEnum backport (Py 3.10 lacks enum.StrEnum)
         """Minimal StrEnum backport for Python 3.10."""

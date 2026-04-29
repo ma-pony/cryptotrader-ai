@@ -146,8 +146,9 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # follow class-naming convention even though N806 sees them as variables.
 "src/cryptotrader/journal/store.py" = ["N806"]
 # _compat.py: Central UTC/StrEnum shim for Python 3.10 runtime compatibility.
-# UP042 is the same backport (Python 3.10 has no `enum.StrEnum`).
-"src/cryptotrader/_compat.py" = ["UP036", "UP017", "UP042"]
+# UP042 (newer ruff) suppressed inline on the class so the older ruff used by
+# tests/test_arch_boundary_8_2.py does not error on an unknown rule selector.
+"src/cryptotrader/_compat.py" = ["UP036", "UP017"]
 # MCP Server docstrings use Chinese for tool descriptions (consumed by LLM agents)
 "src/cryptotrader/mcp/servers/*.py" = ["RUF002"]
 # reflect.py contains Chinese LLM prompts -- fullwidth punctuation is intentional

@@ -91,7 +91,10 @@ class TestTelegramBackendSend:
     async def test_send_raises_after_three_failures(self) -> None:
         backend = TelegramBackend(_telegram_cfg())
         bad_resp = MagicMock()
-        bad_resp.raise_for_status = MagicMock(side_effect=Exception("500"))
+        bad_resp.status_code = 500
+        bad_resp.raise_for_status = MagicMock(
+            side_effect=httpx.HTTPStatusError("500", request=MagicMock(), response=bad_resp)
+        )
 
         client = AsyncMock()
         client.__aenter__ = AsyncMock(return_value=client)
