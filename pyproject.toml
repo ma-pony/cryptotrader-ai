@@ -37,7 +37,7 @@ dependencies = [
     "nest-asyncio>=1.6.0",
     "prometheus-client>=0.20",
     "websockets>=13.0",
-    "fastmcp>=2.0,<3",
+    "fastmcp>=3.2.0,<4",
 ]
 
 [project.optional-dependencies]
