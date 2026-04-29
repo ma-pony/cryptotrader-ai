@@ -113,9 +113,11 @@ def test_setup_otel_with_endpoint_activates_otel(monkeypatch):
 
     otel._otel_active = False
 
-    # Check if opentelemetry is actually installed
+    # Check if opentelemetry SDK is actually installed (not just the base namespace).
+    # The base `opentelemetry` package may be installed as a transitive dependency
+    # without the SDK extra, in which case the patches below would fail.
     try:
-        import opentelemetry  # noqa: F401
+        import opentelemetry.sdk.trace  # noqa: F401
 
         otel_available = True
     except ImportError:
