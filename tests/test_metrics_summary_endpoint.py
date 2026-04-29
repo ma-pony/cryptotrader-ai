@@ -291,7 +291,9 @@ class TestMetricsSummarySnapshotTime:
 
     def test_snapshot_time_is_close_to_now(self, client):
         """snapshot_time is within 5 seconds of the current UTC time."""
-        now = datetime.datetime.now(datetime.UTC)
+        from cryptotrader._compat import UTC
+
+        now = datetime.datetime.now(UTC)
         body = _get_summary(client)
         snap_str = body["snapshot_time"]
         dt = datetime.datetime.fromisoformat(snap_str.replace("Z", "+00:00"))

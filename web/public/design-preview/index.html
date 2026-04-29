@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>CryptoTrader AI · 设计探索</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="tokens.css"/>
+  <style>
+    html, body { margin: 0; padding: 0; height: 100%; background: #f0eee9; font-family: 'Inter', system-ui, sans-serif; }
+    #app { width: 100vw; height: 100vh; }
+  </style>
+
+  <script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="text/babel" src="design-canvas.jsx"></script>
+  <script type="text/babel" src="tweaks-panel.jsx"></script>
+  <script type="text/babel" src="lib/mock-data.jsx"></script>
+  <script type="text/babel" src="lib/primitives.jsx"></script>
+  <script type="text/babel" src="lib/app-shell.jsx"></script>
+  <script type="text/babel" src="pages/dashboard.jsx"></script>
+  <script type="text/babel" src="pages/decisions.jsx"></script>
+  <script type="text/babel" src="pages/debate.jsx"></script>
+  <script type="text/babel" src="pages/ops.jsx"></script>
+  <script type="text/babel" src="pages/extra.jsx"></script>
+
+  <script type="text/babel">
+    const TWEAKS = /*EDITMODE-BEGIN*/{
+      "theme": "dark",
+      "scenario": "bull",
+      "density": "medium",
+      "showTweaks": false
+    }/*EDITMODE-END*/;
+
+    function PageFrame({ page, selectedDecision, onOpenDebate, onBackFromDebate, onBackFromDetail, onSelectDecision }) {
+      return (
+        <AppShell page={page} onNav={() => {}}>
+          {page === "dashboard" && <Dashboard/>}
+          {page === "decisions" && (
+            selectedDecision ?
+              <DecisionDetail onBack={onBackFromDetail} onOpenDebate={onOpenDebate}/> :
+              <DecisionsList onSelect={onSelectDecision} selectedId={null}/>
+          )}
+          {page === "debate"   && <DebatePage onBack={onBackFromDebate}/>}
+          {page === "backtest" && <BacktestPage/>}
+          {page === "risk"     && <RiskPage/>}
+          {page === "metrics"  && <MetricsPage/>}
+          {page === "chat"     && <ChatPage/>}
+          {page === "market"   && <MarketPage/>}
+        </AppShell>
+      );
+    }
+
+    // Artboard body — Dashboard inside app shell
+    function ArtboardPage({ page }) {
+      return <PageFrame page={page}/>;
+    }
+
+    function App() {
+      const [tweaks, setTweak] = useTweaks(TWEAKS);
+
+      // Apply theme to :root
+      React.useEffect(() => {
+        document.documentElement.setAttribute("data-theme", tweaks.theme);
+      }, [tweaks.theme]);
+
+      return (
+        <>
+          <DesignCanvas>
+            {/* ── Section 1: 主体 app · 全部 8 页 ───────────────── */}
+            <DCSection id="app" title="CryptoTrader AI · 主 App" subtitle="深色 AI-native · 8 大页面 · 左侧导航共享">
+
+              <DCArtboard id="dashboard" label="1 · 仪表盘 Dashboard" width={1380} height={900}>
+                <PageFrame page="dashboard"/>
+              </DCArtboard>
+
+              <DCArtboard id="decisions" label="2 · 决策列表 Decisions" width={1380} height={900}>
+                <PageFrame page="decisions"/>
+              </DCArtboard>
+
+              <DCArtboard id="decision-detail" label="3 · 决策详情 · 8 节面板 ★" width={1380} height={1900}>
+                <PageFrame page="decisions" selectedDecision="c5a8f2e"/>
+              </DCArtboard>
+
+              <DCArtboard id="debate" label="4 · 辩论时间线 ★ (4 Agent · 2 轮)" width={1380} height={1800}>
+                <PageFrame page="debate"/>
+              </DCArtboard>
+
+              <DCArtboard id="backtest" label="5 · 回测 Backtest" width={1380} height={900}>
+                <PageFrame page="backtest"/>
+              </DCArtboard>
+
+              <DCArtboard id="risk" label="6 · 风控 Risk" width={1380} height={900}>
+                <PageFrame page="risk"/>
+              </DCArtboard>
+
+              <DCArtboard id="metrics" label="7 · 指标 Metrics" width={1380} height={800}>
+                <PageFrame page="metrics"/>
+              </DCArtboard>
+
+              <DCArtboard id="chat" label="8 · 多 Agent 会话 Chat (SSE)" width={1000} height={900}>
+                <PageFrame page="chat"/>
+              </DCArtboard>
+
+              <DCArtboard id="market" label="9 · 行情 Market View" width={1380} height={900}>
+                <PageFrame page="market"/>
+              </DCArtboard>
+            </DCSection>
+          </DesignCanvas>
+
+          <TweaksPanel title="Tweaks">
+            <TweakSection title="主题">
+              <TweakRadio label="主题" value={tweaks.theme} onChange={v => setTweak("theme", v)}
+                options={[{value:"dark",label:"深色"},{value:"light",label:"浅色"}]}/>
+            </TweakSection>
+            <TweakSection title="场景">
+              <TweakRadio label="市场场景" value={tweaks.scenario} onChange={v => setTweak("scenario", v)}
+                options={[{value:"bull",label:"牛市"},{value:"choppy",label:"震荡"},{value:"bear",label:"熊市"}]}/>
+              <div style={{ fontSize: 11, color: "var(--fg-tertiary)", padding: "6px 0 0" }}>
+                说明:场景切换作为预览概念 — 当前数据基于牛市
+              </div>
+            </TweakSection>
+            <TweakSection title="信息">
+              <div style={{ fontSize: 12, color: "var(--fg-secondary)", lineHeight: 1.5 }}>
+                <div><b>★ 必看:</b></div>
+                <div style={{ paddingLeft: 8, marginTop: 4 }}>
+                  · 决策详情(8 节面板)<br/>
+                  · 辩论时间线(4 Agent × 2 轮)
+                </div>
+              </div>
+            </TweakSection>
+          </TweaksPanel>
+        </>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("app"));
+    root.render(<App/>);
+  </script>
+</body>
+</html>

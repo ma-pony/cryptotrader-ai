@@ -1,9 +1,10 @@
 """Smoke tests for data models."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pandas as pd
 
+from cryptotrader._compat import UTC
 from cryptotrader.models import (
     VALID_TRANSITIONS,
     AgentAnalysis,

@@ -15,5 +15,6 @@ examples/
 scripts/
 docs/
 *.md
+!README.md
 .pre-commit-config.yaml
 .claude/

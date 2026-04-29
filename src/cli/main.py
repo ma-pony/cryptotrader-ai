@@ -55,12 +55,7 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
         "lite": build_lite_graph,
         "debate": build_debate_graph,
     }
-    if graph_mode == "supervisor":
-        from cryptotrader.graph import build_supervisor_graph_v2
-
-        graph = build_supervisor_graph_v2()
-    else:
-        graph = builders.get(graph_mode, build_trading_graph)()
+    graph = builders.get(graph_mode, build_trading_graph)()
 
     # Live mode pre-flight checks
     if mode == "live":
@@ -275,6 +270,32 @@ async def _scheduler_start():
     )
     s = Scheduler(pairs, interval, daily_summary_hour=summary_hour)
     await s.start()
+
+
+@scheduler_app.command("healthcheck")
+def scheduler_healthcheck(
+    max_age_seconds: int = typer.Option(
+        0, help="Max heartbeat age in seconds. 0 = derive from scheduler.interval_minutes * 2."
+    ),
+):
+    """Exit 0 if scheduler heartbeat is fresh, 1 otherwise (for docker healthcheck)."""
+    import time
+    from pathlib import Path
+
+    if max_age_seconds <= 0:
+        from cryptotrader.config import load_config
+
+        max_age_seconds = max(120, load_config().scheduler.interval_minutes * 60 * 2)
+
+    hb = Path.home() / ".cryptotrader" / "scheduler.heartbeat"
+    if not hb.exists():
+        console.print(f"[red]heartbeat missing: {hb}[/red]")
+        raise typer.Exit(1)
+    age = time.time() - hb.stat().st_mtime
+    if age > max_age_seconds:
+        console.print(f"[red]heartbeat stale: {age:.0f}s > {max_age_seconds}s[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]ok: heartbeat {age:.0f}s ago[/green]")
 
 
 @scheduler_app.command("status")
@@ -792,6 +813,107 @@ async def _portfolio_reset(capital: float):
     await pm.update_cash("default", capital)
     await pm.snapshot("default", capital, capital)
     console.print(f"[green]Portfolio reset. Cash: ${capital:,.2f}[/green]")
+
+
+# ── Agent subcommands ──
+
+agent_app = typer.Typer(help="Agent management commands")
+app.add_typer(agent_app, name="agent")
+
+
+@agent_app.command("list")
+def agent_list():
+    """List registered agents and their configuration."""
+    from cryptotrader.config import load_config
+
+    cfg = load_config()
+    active = cfg.agents.list_active()
+
+    table = Table(title="Registered Agents")
+    table.add_column("Name", style="cyan")
+    table.add_column("Type")
+    table.add_column("Model")
+    table.add_column("Status")
+    table.add_column("Skills")
+
+    builtin_ids = {"tech_agent", "chain_agent", "news_agent", "macro_agent"}
+    for ac in sorted(active, key=lambda a: a.agent_id):
+        agent_type = "builtin" if ac.agent_id in builtin_ids else "custom"
+        model_display = ac.model if ac.model else "<default>"
+        status = "[green]enabled[/green]" if ac.enabled else "[red]disabled[/red]"
+        skill_count = len(ac.skills) + sum(len(v) for v in ac.regime_skills.values())
+        table.add_row(ac.agent_id, agent_type, model_display, status, str(skill_count))
+
+    console.print(table)
+
+
+# ── MCP subcommands ──
+
+mcp_app = typer.Typer(help="MCP data layer management commands")
+app.add_typer(mcp_app, name="mcp")
+
+
+@mcp_app.command("list")
+def mcp_list():
+    """List registered MCP tools and server health status."""
+    from cryptotrader.config import load_config
+
+    cfg = load_config()
+    if not cfg.mcp.enabled:
+        console.print("[yellow]MCP is disabled (mcp.enabled=false). Showing configured servers:[/yellow]")
+
+    table = Table(title="MCP Servers & Tools")
+    table.add_column("Server", style="cyan")
+    table.add_column("Transport")
+    table.add_column("Enabled")
+    table.add_column("Tools")
+
+    for sc in cfg.mcp.servers:
+        enabled_display = "[green]yes[/green]" if sc.enabled else "[red]no[/red]"
+        tools_display = ", ".join(sc.tools) if sc.tools else "<auto-discover>"
+        table.add_row(sc.name, sc.transport, enabled_display, tools_display)
+
+    console.print(table)
+    tool_count = sum(len(sc.tools) for sc in cfg.mcp.servers if sc.enabled)
+    console.print(f"\nTotal tools configured: {tool_count}")
+
+
+@mcp_app.command("call")
+def mcp_call(
+    tool_name: str = typer.Argument(..., help="MCP tool name to call"),
+    args: str = typer.Option("{}", "--args", help="JSON arguments for the tool"),
+):
+    """Call an MCP tool directly for debugging."""
+    import json
+
+    from cryptotrader.config import load_config
+    from cryptotrader.mcp.registry import MCPRegistry, MCPToolNotFoundError
+
+    cfg = load_config()
+    if not cfg.mcp.enabled:
+        console.print("[red]MCP is disabled. Set mcp.enabled=true in config.[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        parsed_args = json.loads(args)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Invalid JSON args: {e}[/red]")
+        raise typer.Exit(code=1) from e
+
+    registry = MCPRegistry.from_config(cfg.mcp)
+
+    async def _call():
+        return await registry.call_tool(tool_name, parsed_args)
+
+    try:
+        result = asyncio.run(_call())
+        console.print_json(json.dumps(result, default=str, indent=2))
+    except MCPToolNotFoundError as exc:
+        console.print(f"[red]Tool '{tool_name}' not found. Use 'arena mcp list' to see available tools.[/red]")
+        raise typer.Exit(code=1) from exc
+    except Exception as e:
+        console.print(f"[red]Error calling tool: {e}[/red]")
+        raise typer.Exit(code=1) from e
 
 
 if __name__ == "__main__":

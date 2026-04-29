@@ -204,3 +204,5 @@ NEWS_TOOLS = [
     get_social_buzz,
     get_fear_greed_index,
 ]
+
+ALL_TOOLS = list(CHAIN_TOOLS) + list(NEWS_TOOLS)

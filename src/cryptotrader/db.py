@@ -38,7 +38,10 @@ async def _init_engine(database_url: str) -> None:
     """Create and cache engine + sessionmaker for a URL on the current loop."""
     from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-    engine = create_async_engine(database_url, pool_size=5, max_overflow=10)
+    kwargs: dict = {}
+    if not database_url.startswith("sqlite"):
+        kwargs.update(pool_size=5, max_overflow=10)
+    engine = create_async_engine(database_url, **kwargs)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     _engines[_cache_key(database_url)] = (engine, sm)
 

@@ -124,8 +124,20 @@ class ChainAgent(ToolAgent):
         if network_parts:
             parts.append("BTC Network Health:\n" + "\n".join(network_parts))
         initial_data = "On-Chain Data (initial snapshot):\n" + "\n".join(parts) if parts else ""
+        # Surface data coverage so the model can distinguish "value is genuinely 0"
+        # from "provider unavailable / API key not set". Without this, missing
+        # API keys on third-party providers silently degrade decision quality.
+        coverage = ""
+        if oc.data_quality:
+            unavailable = [p for p, ok in oc.data_quality.items() if not ok]
+            if unavailable:
+                coverage = (
+                    f"\n\nDATA COVERAGE WARNING: the following on-chain providers were "
+                    f"unavailable in this snapshot: {', '.join(sorted(unavailable))}. "
+                    f"Treat absent fields as UNMEASURED, not as zero. Lower data_sufficiency accordingly."
+                )
         hint = (
             "\n\nYou have tools to query more data. Use them if the initial snapshot is incomplete "
             "or if you need historical context (e.g. funding rate trend over the last 2 days)."
         )
-        return f"{initial_data}{hint}\n\n{base}"
+        return f"{initial_data}{coverage}{hint}\n\n{base}"

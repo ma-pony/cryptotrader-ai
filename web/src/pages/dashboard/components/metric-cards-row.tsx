@@ -1,6 +1,9 @@
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { formatCurrency, formatPercent, pnlClass } from '@/lib/format';
+import type { ConnectionStatus } from '@/contexts/market-data';
+import { useEquityCurve } from '@/hooks/use-equity-curve';
+import { formatCurrency, formatPercent } from '@/lib/format';
 import type { Portfolio } from '@/types/api';
 
 import { MetricCard } from './metric-card';
@@ -8,21 +11,51 @@ import { MetricCard } from './metric-card';
 interface MetricCardsRowProps {
   data: Portfolio | undefined;
   isLoading: boolean;
+  connectionStatus?: ConnectionStatus;
 }
 
-export const MetricCardsRow = ({ data, isLoading }: MetricCardsRowProps) => {
+export const MetricCardsRow = memo(function MetricCardsRow({
+  data,
+  isLoading,
+  connectionStatus,
+}: MetricCardsRowProps) {
   const { t } = useTranslation('dashboard');
+  const equity = useEquityCurve('30d');
+  const trendEquity = equity.data?.points.map((p) => p.equity);
 
-  const pnlDir = !data ? 'neutral' : data.pnl_24h > 0 ? 'up' : data.pnl_24h < 0 ? 'down' : 'neutral';
-  const ddDir = !data ? 'neutral' : data.drawdown > 0 ? 'down' : 'neutral';
-  const ddClass = pnlClass(-Math.abs(data?.drawdown ?? 0));
-  void ddClass; // used for aria semantics via deltaDirection
+  const pnlDir: 'up' | 'down' | 'neutral' = !data
+    ? 'neutral'
+    : data.pnl_24h > 0
+      ? 'up'
+      : data.pnl_24h < 0
+        ? 'down'
+        : 'neutral';
+  const ddDir: 'up' | 'down' | 'neutral' = !data ? 'neutral' : data.drawdown > 0 ? 'down' : 'neutral';
+  const isLive = connectionStatus === 'connected';
 
   return (
-    <div className="grid grid-cols-4 gap-4" role="region" aria-label={t('metrics.region', { defaultValue: '核心指标' })}>
+    <div
+      className="grid grid-cols-4 gap-3"
+      role="region"
+      aria-label={t('metrics.region', { defaultValue: '核心指标' })}
+    >
       <MetricCard
-        label={t('metrics.total_equity', { defaultValue: '总权益' })}
+        label={
+          <span className="inline-flex items-center gap-1.5">
+            {t('metrics.total_equity', { defaultValue: '总权益' })}
+            {isLive ? (
+              <span
+                className="h-1.5 w-1.5 rounded-full bg-trade-long animate-ct-pulse"
+                aria-label={t('metrics.realtime', { defaultValue: '实时数据' })}
+              />
+            ) : null}
+          </span>
+        }
         value={data ? formatCurrency(data.equity) : '--'}
+        delta={data ? formatPercent(data.pnl_24h_pct) : undefined}
+        deltaDirection={pnlDir}
+        trend={trendEquity}
+        trendColor="var(--amber-500)"
         isLoading={isLoading}
       />
       <MetricCard
@@ -31,18 +64,18 @@ export const MetricCardsRow = ({ data, isLoading }: MetricCardsRowProps) => {
         isLoading={isLoading}
       />
       <MetricCard
-        label={t('metrics.pnl_24h', { defaultValue: '24h PnL' })}
-        value={data ? formatCurrency(data.pnl_24h) : '--'}
-        delta={data ? formatPercent(data.pnl_24h_pct) : undefined}
-        deltaDirection={pnlDir}
+        label={t('metrics.sharpe', { defaultValue: 'Sharpe (90D)' })}
+        value={data?.sharpe_90d != null ? data.sharpe_90d.toFixed(2) : '—'}
+        sub={data ? `胜率 ${data.win_rate != null ? `${(data.win_rate * 100).toFixed(1)}%` : '—'} · ${data.total_trades} 笔` : undefined}
         isLoading={isLoading}
       />
       <MetricCard
-        label={t('metrics.drawdown', { defaultValue: '当前回撤' })}
+        label={t('metrics.drawdown', { defaultValue: '回撤 · 30D 已实现' })}
         value={data ? formatPercent(-data.drawdown) : '--'}
+        sub={data ? `30D 已实现 ${data.realized_pnl_30d >= 0 ? '+' : ''}${formatCurrency(data.realized_pnl_30d)}` : undefined}
         deltaDirection={ddDir}
         isLoading={isLoading}
       />
     </div>
   );
-};
+});

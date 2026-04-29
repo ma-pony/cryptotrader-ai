@@ -150,6 +150,9 @@ type Verdict = {
 ```ts
 type RiskGate = {
   passed: boolean;
+  rejected_by?: string;      // 首个失败检查名（passed=false 时）
+  reason?: string;           // 拒绝/调整原因
+  scale_adjustment?: number; // 聚合后的 position_scale 上限（min(所有检查的提议)）；null = 无 check 提议调整
   checks: RiskCheck[];       // 序列，按执行顺序
 };
 
@@ -158,8 +161,11 @@ type RiskCheck = {
   passed: boolean;
   reason?: string;           // 拒绝时必填
   threshold?: number | string;
+  scale_adjustment?: number; // 该 check 提议的 position_scale 上限（∈ [0, 1]）；null = 无意见
 };
 ```
+
+**契约 (PROD-I3)**：风控 check **MUST NOT** 在 `evaluate()` 中原地修改 `verdict.position_scale`，必须通过 `CheckResult.scale_adjustment` 返回提议。`risk_check` 节点聚合所有 passing check 的提议（取 min），然后通过 LangGraph 的 return delta 写回 `state["data"]["verdict"]["position_scale"]`，保证 graph 状态变更可追踪。
 
 ### Execution
 

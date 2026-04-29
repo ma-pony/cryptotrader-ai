@@ -23,6 +23,13 @@ def merge_dicts(a: dict, b: dict) -> dict:
     return result
 
 
+class HitlState(TypedDict, total=False):
+    approval_id: str
+    decision: str
+    trigger_reason: str
+    skipped: bool
+
+
 class ArenaState(TypedDict):
     messages: Annotated[Sequence[BaseMessage], operator.add]
     data: Annotated[dict[str, Any], merge_dicts]
@@ -30,6 +37,7 @@ class ArenaState(TypedDict):
     debate_round: int
     max_debate_rounds: int
     divergence_scores: Annotated[list[float], operator.add]
+    hitl: Annotated[dict[str, Any], merge_dicts]
 
 
 def build_initial_state(
@@ -88,6 +96,7 @@ def build_initial_state(
         "redis_url": config.infrastructure.redis_url,
         "convergence_threshold": config.debate.convergence_threshold,
         "max_single_pct": config.risk.position.max_single_pct,
+        "schedule_depth": 0,
     }
 
     if extra_metadata:
@@ -106,4 +115,5 @@ def build_initial_state(
         "debate_round": 0,
         "max_debate_rounds": config.debate.max_rounds,
         "divergence_scores": [],
+        "hitl": {},
     }

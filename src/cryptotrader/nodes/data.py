@@ -55,6 +55,23 @@ def _calc_price_change_7d(snapshot) -> float | None:
 
 
 @node_logger()
+async def init_decision(state: ArenaState) -> dict:
+    """Initialise per-decision observability state.
+
+    Currently binds a fresh :class:`~cryptotrader.llm.token_tracker.TokenLedger`
+    to the ContextVar so every downstream ``create_llm()`` call accumulates
+    token usage. Skipped in backtest mode to avoid resetting the ledger once
+    per backtest step (see deep-review C-m2).
+    """
+    from cryptotrader.llm.token_tracker import start_ledger
+
+    is_backtest = (state.get("metadata") or {}).get("backtest_mode")
+    if not is_backtest:
+        start_ledger()
+    return {}
+
+
+@node_logger()
 async def collect_snapshot(state: ArenaState) -> dict:
     """Collect market snapshot or reuse pre-provided one (backtest)."""
     if state.get("data", {}).get("snapshot"):
@@ -80,10 +97,30 @@ async def collect_snapshot(state: ArenaState) -> dict:
     exchange_id = state["metadata"].get("exchange_id", "binance")
     timeframe = state["metadata"].get("timeframe", "1h")
     limit = state["metadata"].get("ohlcv_limit", 100)
+    backtest_mode = state["metadata"].get("backtest_mode", False)
 
-    providers_cfg = load_config().providers
-    agg = SnapshotAggregator(providers_cfg)
-    snapshot = await agg.collect(pair, exchange_id, timeframe, limit)
+    cfg = load_config()
+    agg = SnapshotAggregator(cfg.providers)
+
+    adapter = None
+    if cfg.mcp.enabled and not backtest_mode:
+        try:
+            from cryptotrader.mcp.adapter import MCPAdapter
+            from cryptotrader.mcp.registry import MCPRegistry
+
+            registry = MCPRegistry.from_config(cfg.mcp)
+            adapter = MCPAdapter(registry, cfg.mcp)
+        except Exception:
+            logger.debug("MCP adapter creation failed, using direct providers", exc_info=True)
+
+    snapshot = await agg.collect(
+        pair,
+        exchange_id,
+        timeframe,
+        limit,
+        adapter=adapter,
+        backtest_mode=backtest_mode,
+    )
     summary = {
         "pair": pair,
         "price": snapshot.market.ticker.get("last", 0),

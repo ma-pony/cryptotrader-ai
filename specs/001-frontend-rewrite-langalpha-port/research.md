@@ -344,3 +344,43 @@ services:
 ---
 
 **Phase 0 出口**：所有 NEEDS CLARIFICATION 已解决，可进入 Phase 1（数据模型 + 接口合约）。
+
+---
+
+## 15. 实现阶段架构注记 (2026-04-29)
+
+实现过程中发现的几个隐含架构契约，记录以便未来维护：
+
+### 15.1 节点 trace 收集 — trace_id-keyed 内存 registry
+**问题**：FR-204 要求决策详情渲染节点 Pipeline，需要 `node_timeline + latency_breakdown` 写入 journal commit。LangGraph 的 `record_trade` 节点在 graph 内部运行，但 trace 由 graph 外部的 runner（`run_graph_traced` 或 `analysis_runner`）逐 chunk 累积。无法通过 state delta 把累积中的列表传给后续节点（reducer 会覆盖）。
+
+**方案**：`tracing.py` 提供 `_node_trace_registry: dict[trace_id, list[entry]]`，runner 在 `register/append/unregister` 三段式中维护；`journal.py:_resolve_node_trace(state)` 优先读 `state["data"]["node_trace"]`，回退到 `trace_get(state.metadata.trace_id)`。`finally` 清理 registry，避免内存泄漏。
+
+### 15.2 LangGraph state 序列化禁忌
+**问题**：state 中放 `EventBus` / `RedisStateManager` 等运行时对象，会让 MemorySaver checkpointer msgpack 失败 → SSE 末端 `stream_error`。
+
+**方案**：(a) 移除非必要的 checkpointer（`build_trading_graph` 不再使用 `MemorySaver()`）；(b) 运行时对象通过 `chat/runtime_registry.py` (session_id-keyed) 传递，`state.metadata` 只存可序列化基本类型；(c) 节点用 `get_event_bus(session_id)` 从 registry 取。
+
+### 15.3 Py 3.10 `asyncio.TimeoutError` 不是 `TimeoutError`
+**问题**：Python 3.10 下 `asyncio.TimeoutError is not builtins.TimeoutError`。`except TimeoutError` 不捕获 `asyncio.wait_for` 的超时 → SSE keepalive 不触发 → 30s 后强行断连。
+
+**方案**：所有 `await asyncio.wait_for(...)` 的超时捕获必须显式写 `except asyncio.TimeoutError`。Py 3.11+ 这两个等价，但代码必须兼容 3.10。
+
+### 15.4 Risk check 必须用 return delta 提议 scale 调整
+见 [data-model.md#RiskGate](./data-model.md#riskgate) 中 PROD-I3 契约：检查不得原地 mutate `verdict.position_scale`，必须通过 `CheckResult.scale_adjustment` 返回；`risk_check` 节点聚合 (取 min) 后通过 LangGraph return delta 写回。
+
+### 15.5 技术指标无原生依赖
+**问题**：`pandas_ta` 在调用 `rsi/macd/atr` 时尝试 `from talib import ...`，arm64 Mac 上 talib x86_64 .so dlopen 失败 → tech_agent 静默 fallback 到 mock。
+
+**方案**：`agents/_indicators.py` 提供纯 pandas/numpy 实现的 6 个 indicator (rsi, macd, sma, bbands, atr, obv)，`tech.py` 用 `from cryptotrader.agents import _indicators as ta` 替代 `import pandas_ta`。`pyproject.toml` 移除 `pandas-ta` 依赖。
+
+---
+
+## Changelog
+- 2026-04-29: NFR-S-001 — 鉴权默认 fail-closed (AUTH_MODE env, `secrets.compare_digest`)
+- 2026-04-29: NFR-S-002 — 显式禁用生产 sourcemap (hidden 模式) + forbid `VITE_API_KEY` at build time
+- 2026-04-29: NFR-S-005 — 明确 `useSettingsStore.apiKey` 仅 dev 模式 hydrate
+- 2026-04-29: NFR-S-006 — CORS allowlist 强制；Redis-backed rate limiter (multi-process)
+- 2026-04-29: FR-007 — 澄清 X-API-Key 仅来自 in-memory store；SSE keepalive 用 `asyncio.TimeoutError`
+- 2026-04-29: data-model RiskGate — 新增 `scale_adjustment` 字段 + PROD-I3 契约
+- 2026-04-29: research §15 — 实现阶段架构注记 (5 条)

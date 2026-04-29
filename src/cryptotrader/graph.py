@@ -10,6 +10,9 @@ from typing import Any
 
 from langgraph.graph import END, START, StateGraph
 
+# HITL gate — only used in _build_full_graph()
+from cryptotrader.hitl.gate import hitl_gate, hitl_router
+
 # ── Re-export node functions for backward compatibility ──
 # These are used by graph_supervisor.py, tests, and external callers.
 from cryptotrader.nodes.agents import (
@@ -18,7 +21,13 @@ from cryptotrader.nodes.agents import (
     news_analyze,
     tech_analyze,
 )
-from cryptotrader.nodes.data import collect_snapshot, enrich_verdict_context, update_past_pnl, verbal_reinforcement
+from cryptotrader.nodes.data import (
+    collect_snapshot,
+    enrich_verdict_context,
+    init_decision,
+    update_past_pnl,
+    verbal_reinforcement,
+)
 from cryptotrader.nodes.debate import (
     bull_bear_debate,
     check_stability,
@@ -50,6 +59,8 @@ __all__ = [
     "debate_gate_router",
     "debate_round",
     "enrich_verdict_context",
+    "hitl_gate",
+    "hitl_router",
     "journal_rejection",
     "journal_trade",
     "judge_verdict",
@@ -77,6 +88,7 @@ def build_lite_graph(config: dict | None = None) -> Any:
     """Lightweight graph: skip debate, no risk gate. Used for quick testing only."""
     graph = StateGraph(ArenaState)
 
+    graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("inject_experience", verbal_reinforcement)
@@ -87,7 +99,8 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_node("enrich_context", enrich_verdict_context)
     graph.add_node("verdict", make_verdict)
 
-    graph.add_edge(START, "collect_data")
+    graph.add_edge(START, "init_decision")
+    graph.add_edge("init_decision", "collect_data")
     graph.add_edge("collect_data", "update_pnl")
     graph.add_edge("update_pnl", "inject_experience")
     graph.add_edge("inject_experience", "tech_agent")
@@ -115,6 +128,7 @@ def build_backtest_graph(config: dict | None = None) -> Any:
     """
     graph = StateGraph(ArenaState)
 
+    graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("inject_experience", verbal_reinforcement)
@@ -129,7 +143,8 @@ def build_backtest_graph(config: dict | None = None) -> Any:
     graph.add_node("verdict", make_verdict)
     graph.add_node("risk_gate", risk_check)
 
-    graph.add_edge(START, "collect_data")
+    graph.add_edge(START, "init_decision")
+    graph.add_edge("init_decision", "collect_data")
     graph.add_edge("collect_data", "update_pnl")
     graph.add_edge("update_pnl", "inject_experience")
     graph.add_edge("inject_experience", "tech_agent")
@@ -158,6 +173,7 @@ def build_debate_graph(config: dict | None = None) -> Any:
     """Lite graph + bull/bear adversarial debate before verdict."""
     graph = StateGraph(ArenaState)
 
+    graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("inject_experience", verbal_reinforcement)
@@ -169,7 +185,8 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph.add_node("enrich_context", enrich_verdict_context)
     graph.add_node("verdict", judge_verdict)
 
-    graph.add_edge(START, "collect_data")
+    graph.add_edge(START, "init_decision")
+    graph.add_edge("init_decision", "collect_data")
     graph.add_edge("collect_data", "update_pnl")
     graph.add_edge("update_pnl", "inject_experience")
     graph.add_edge("inject_experience", "tech_agent")
@@ -202,6 +219,7 @@ def _build_full_graph(config: dict | None = None) -> Any:
     """
     graph = StateGraph(ArenaState)
 
+    graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("stop_loss_check", check_stop_loss)
@@ -215,12 +233,14 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("debate_round_2", debate_round)
     graph.add_node("enrich_context", enrich_verdict_context)
     graph.add_node("verdict", make_verdict)
+    graph.add_node("hitl_gate", hitl_gate)
     graph.add_node("risk_gate", risk_check)
     graph.add_node("execute", place_order)
     graph.add_node("record_trade", journal_trade)
     graph.add_node("record_rejection", journal_rejection)
 
-    graph.add_edge(START, "collect_data")
+    graph.add_edge(START, "init_decision")
+    graph.add_edge("init_decision", "collect_data")
     # After data collection: update PnL for past trades + check stop-loss
     graph.add_edge("collect_data", "update_pnl")
     graph.add_edge("update_pnl", "stop_loss_check")
@@ -251,7 +271,15 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_edge("debate_round_1", "debate_round_2")
     graph.add_edge("debate_round_2", "enrich_context")
     graph.add_edge("enrich_context", "verdict")
-    graph.add_edge("verdict", "risk_gate")
+    graph.add_edge("verdict", "hitl_gate")
+    graph.add_conditional_edges(
+        "hitl_gate",
+        hitl_router,
+        {
+            "pass": "risk_gate",
+            "rejected": "record_rejection",
+        },
+    )
     graph.add_conditional_edges(
         "risk_gate",
         risk_router,
@@ -264,11 +292,7 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_edge("record_trade", END)
     graph.add_edge("record_rejection", END)
 
+    # No checkpointer: state contains DataFrames + dataclasses that aren't
+    # msgpack-serializable, and we don't resume graphs across requests.
+    # Lite/debate variants compile the same way.
     return graph.compile()
-
-
-def build_supervisor_graph_v2() -> Any:
-    """Build graph using LangChain official supervisor pattern."""
-    from cryptotrader.graph_supervisor import build_supervisor_graph
-
-    return build_supervisor_graph()

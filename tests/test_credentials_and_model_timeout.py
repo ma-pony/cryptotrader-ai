@@ -170,3 +170,28 @@ async def test_live_check_all_exchanges_iterated_safely():
         _name, ok, detail = _check_credentials(cfg, ex_id)
         assert not ok
         assert ex_id in detail or "No credentials" in detail
+
+
+# -- RetryConfig env var overrides --
+
+
+def test_retry_max_attempts_env_override():
+    """CRYPTOTRADER_LLM__RETRY__MAX_ATTEMPTS overrides default."""
+    from unittest.mock import patch as mock_patch
+
+    from cryptotrader.config import _build_config, apply_env_overrides
+
+    with mock_patch.dict("os.environ", {"CRYPTOTRADER_LLM__RETRY__MAX_ATTEMPTS": "5"}):
+        cfg = _build_config(apply_env_overrides({}))
+    assert cfg.llm.retry.max_attempts == 5
+
+
+def test_retry_base_delay_env_override():
+    """CRYPTOTRADER_LLM__RETRY__RETRY_BASE_DELAY_S overrides default."""
+    from unittest.mock import patch as mock_patch
+
+    from cryptotrader.config import _build_config, apply_env_overrides
+
+    with mock_patch.dict("os.environ", {"CRYPTOTRADER_LLM__RETRY__RETRY_BASE_DELAY_S": "2.0"}):
+        cfg = _build_config(apply_env_overrides({}))
+    assert cfg.llm.retry.retry_base_delay_s == 2.0

@@ -16,6 +16,42 @@ logger = logging.getLogger(__name__)
 _F = TypeVar("_F", bound=Callable[..., Coroutine[Any, Any, Any]])
 
 
+# Per-trace_id node-trace registry.
+# `run_graph_traced` and `analysis_runner` populate this as nodes complete;
+# the journal's `record_trade` / `record_rejection` nodes read from here
+# because LangGraph node return-deltas can't carry the per-node timing list
+# back to a sibling node within the same graph execution.
+_node_trace_registry: dict[str, list[dict]] = {}
+
+
+def trace_register(trace_id: str) -> None:
+    """Initialize a fresh trace bucket for the given trace_id."""
+    if trace_id:
+        _node_trace_registry[trace_id] = []
+
+
+def trace_append(trace_id: str | None, entry: dict) -> None:
+    """Append a node trace entry. No-op if trace_id is unset or unregistered."""
+    if not trace_id:
+        return
+    bucket = _node_trace_registry.get(trace_id)
+    if bucket is not None:
+        bucket.append(entry)
+
+
+def trace_get(trace_id: str | None) -> list[dict]:
+    """Return current trace entries; empty list if unset/unregistered."""
+    if not trace_id:
+        return []
+    return list(_node_trace_registry.get(trace_id, []))
+
+
+def trace_unregister(trace_id: str | None) -> None:
+    """Drop the trace bucket. Call in finally after the graph completes."""
+    if trace_id:
+        _node_trace_registry.pop(trace_id, None)
+
+
 def set_trace_id(trace_id: str | None = None) -> str:
     """Set trace ID for current context."""
     tid = trace_id or str(uuid.uuid4())
@@ -67,11 +103,18 @@ def node_logger() -> Callable[[_F], _F]:
     return decorator
 
 
-async def run_graph_traced(graph, initial_state: dict) -> tuple[dict, list[dict]]:
+async def run_graph_traced(
+    graph,
+    initial_state: dict,
+    event_bus: Any = None,
+) -> tuple[dict, list[dict]]:
     """Run a LangGraph graph with per-node tracing.
 
     Uses ``graph.astream(stream_mode="updates")`` to capture the output
     of every node as it completes.
+
+    Args:
+        event_bus: Optional EventBus for publishing structured SSE events.
 
     Returns:
         (final_state, node_trace) where node_trace is a list of dicts:
@@ -80,19 +123,43 @@ async def run_graph_traced(graph, initial_state: dict) -> tuple[dict, list[dict]
     node_trace: list[dict] = []
     final_state: dict[str, Any] = {}
 
-    async for chunk in graph.astream(initial_state, stream_mode="updates"):
-        # chunk is a dict: {node_name: state_update}
-        for node_name, update in chunk.items():
-            entry = _build_trace_entry(node_name, update)
-            node_trace.append(entry)
-            logger.debug("Node %s completed in %dms", node_name, entry["duration_ms"])
+    import uuid
 
-    # Build final state from initial + all updates
-    final_state = dict(initial_state)
-    for entry in node_trace:
-        _merge_update(final_state, entry["output"])
+    config = {"configurable": {"thread_id": str(uuid.uuid4())}}
 
-    return final_state, node_trace
+    # Share the live trace via the registry so journal nodes (which run *inside*
+    # the graph) can read what's accumulated so far. Keyed by state.metadata.trace_id.
+    trace_id = (initial_state.get("metadata") or {}).get("trace_id")
+    trace_register(trace_id) if trace_id else None
+    last_chunk_t = time.monotonic()
+    try:
+        async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):
+            now = time.monotonic()
+            duration_ms = int((now - last_chunk_t) * 1000)
+            last_chunk_t = now
+            for node_name, update in chunk.items():
+                entry = _build_trace_entry(node_name, update)
+                entry["duration_ms"] = duration_ms
+                node_trace.append(entry)
+                trace_append(trace_id, entry)
+                logger.debug("Node %s completed in %dms", node_name, duration_ms)
+                if event_bus is not None:
+                    await event_bus.publish(
+                        "node_done",
+                        {
+                            "node_name": node_name,
+                            "duration_ms": duration_ms,
+                        },
+                    )
+
+        # Build final state from initial + all updates
+        final_state = dict(initial_state)
+        for entry in node_trace:
+            _merge_update(final_state, entry["output"])
+
+        return final_state, node_trace
+    finally:
+        trace_unregister(trace_id)
 
 
 def _build_trace_entry(node_name: str, update: Any) -> dict:

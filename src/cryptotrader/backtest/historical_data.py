@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import UTC, datetime
+from datetime import datetime
 
 import httpx
 
+from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import CACHE_DB
 
 # BTC+ETH combined share of total crypto market cap (approximate stable ratio)

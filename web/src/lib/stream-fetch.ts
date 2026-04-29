@@ -39,7 +39,7 @@ const buildUrl = (path: string): string => {
   return `${base}${path.startsWith('/') ? path : `/${path}`}`;
 };
 
-const resolveApiKey = (): string => useSettingsStore.getState().apiKey ?? env.VITE_API_KEY ?? '';
+const resolveApiKey = (): string => useSettingsStore.getState().apiKey;
 
 // Patch JSON.parse to tolerate NaN/Infinity values that some agents emit.
 const safeJsonParse = (raw: string): unknown => {

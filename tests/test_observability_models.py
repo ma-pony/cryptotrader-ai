@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 
+from cryptotrader._compat import UTC
 from cryptotrader.journal.store import JournalStore
 from cryptotrader.models import (
     ConsensusMetrics,

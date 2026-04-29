@@ -197,7 +197,9 @@ def test_add_job_trading_cycle_has_max_instances_and_misfire():
 
     with patch.object(s._scheduler, "add_job", side_effect=capturing_add_job):
         # Replicate the exact add_job calls used in start() to verify parameters
-        from datetime import UTC, datetime
+        from datetime import datetime
+
+        from cryptotrader._compat import UTC
 
         s._scheduler.add_job(
             s._run_cycle,

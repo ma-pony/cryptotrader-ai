@@ -8,3 +8,8 @@ dist/
 .idea/
 config/exchanges.toml
 config/local.toml
+
+# pytest coverage artifacts
+.coverage
+.coverage.*
+htmlcov/

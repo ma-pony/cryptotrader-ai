@@ -5,13 +5,40 @@ from __future__ import annotations
 import copy
 import logging
 import os
-import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
+
+from cryptotrader.mcp.config import MCPConfig, MCPServerConfig
 
 logger = logging.getLogger(__name__)
 
 # ── LLM gateway ──
+
+
+@dataclass
+class RetryConfig:
+    max_attempts: int = 3
+    retry_base_delay_s: float = 1.0
+    retry_backoff_factor: float = 2.0
+    retry_jitter: bool = True
+
+
+@dataclass
+class LLMModelCostConfig:
+    """USD cost per 1M tokens for a specific model.
+
+    Populated from ``[[llm.model_costs]]`` TOML blocks. Any model not present in
+    this table falls back to the hardcoded table in ``llm.token_tracker.MODEL_COSTS``.
+    """
+
+    name: str = ""
+    input_usd_per_mtok: float = 0.0
+    output_usd_per_mtok: float = 0.0
 
 
 @dataclass
@@ -21,6 +48,9 @@ class LLMConfig:
     streaming_models: list[str] = field(default_factory=list)
     default_temperature: float = 0.2
     timeout: int = 120
+    prompt_caching: bool = True
+    retry: RetryConfig = field(default_factory=RetryConfig)
+    model_costs: list[LLMModelCostConfig] = field(default_factory=list)
 
 
 # ── Model names ──
@@ -37,6 +67,7 @@ class ModelConfig:
     macro_agent: str = "gemini-3.1-pro"
     fallback: str = "deepseek-chat"
     timeout_seconds: int = 90
+    models_path: str = ""
 
 
 # ── Debate ──
@@ -231,6 +262,13 @@ class ProvidersConfig:
 
 
 @dataclass
+class TelegramConfig:
+    bot_token: str = ""
+    chat_id: str = ""
+    enabled: bool = False
+
+
+@dataclass
 class NotificationsConfig:
     webhook_url: str = ""
     enabled: bool = True
@@ -238,6 +276,18 @@ class NotificationsConfig:
     events: list[str] = field(
         default_factory=lambda: ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary"]
     )
+    telegram: TelegramConfig = field(default_factory=TelegramConfig)
+
+
+# ── Triggers ──
+
+
+@dataclass
+class TriggersConfig:
+    enabled: bool = False
+    max_rules: int = 50
+    ws_reconnect_max_s: int = 60
+    funding_rate_poll_interval_minutes: int = 5
 
 
 # ── Exchanges ──
@@ -265,6 +315,51 @@ class ExchangesConfig:
         return self._exchanges.items()
 
 
+# ── Chart Analysis ──
+
+
+@dataclass
+class ChartAnalysisConfig:
+    vision_models: list[str] = field(
+        default_factory=lambda: [
+            "gpt-4o",
+            "gpt-4o-mini",
+            "claude-3-5-sonnet-20241022",
+            "claude-opus-4-5",
+            "gemini-3.1-pro",
+            "gemini-3-flash",
+        ]
+    )
+    fast_model: str = ""
+    max_image_bytes: int = 4_718_592
+    description_max_tokens: int = 800
+
+
+@dataclass
+class HitlTelegramConfig:
+    enabled: bool = False
+    bot_token: str = ""
+    chat_id: str = ""
+
+
+@dataclass
+class HitlConfig:
+    enabled: bool = False
+    min_position_scale: float = 0.5
+    divergence_threshold: float = 0.6
+    cold_start_min_trades: int = 5
+    approval_timeout_seconds: int = 300
+    telegram: HitlTelegramConfig = field(default_factory=HitlTelegramConfig)
+
+
+@dataclass
+class ChatConfig:
+    event_buffer_ttl_seconds: int = 300
+    max_concurrent_tasks: int = 10
+    max_steering_instruction_chars: int = 500
+    event_buffer_max_size: int = 500
+
+
 # ── Infrastructure ──
 
 
@@ -272,6 +367,164 @@ class ExchangesConfig:
 class InfrastructureConfig:
     database_url: str = ""
     redis_url: str = ""
+
+
+# ── Agents ──
+
+_BUILTIN_AGENT_IDS = ("tech_agent", "chain_agent", "news_agent", "macro_agent")
+
+
+@dataclass
+class AgentConfig:
+    agent_id: str = ""
+    model: str = ""
+    timeout_seconds: int = 0
+    enabled: bool = True
+    prompt_template: str = ""
+    tools: list[str] = field(default_factory=list)
+    skills: list[str] = field(default_factory=list)
+    regime_skills: dict[str, list[str]] = field(default_factory=dict)
+
+
+class AgentNotFoundError(KeyError):
+    def __init__(self, agent_id: str, registered: list[str]) -> None:
+        self.agent_id = agent_id
+        self.registered = registered
+        super().__init__(f"Agent {agent_id!r} not found. Registered agents: {registered}")
+
+
+@dataclass
+class AgentsConfig:
+    _agents: dict[str, AgentConfig] = field(default_factory=dict)
+
+    def get(self, agent_id: str) -> AgentConfig | None:
+        cfg = self._agents.get(agent_id)
+        if cfg is not None:
+            return cfg
+        if agent_id in _BUILTIN_AGENT_IDS:
+            return AgentConfig(agent_id=agent_id)
+        return None
+
+    def list_active(self) -> list[AgentConfig]:
+        seen = set(self._agents.keys())
+        result = [cfg for cfg in self._agents.values() if cfg.enabled]
+        result.extend(AgentConfig(agent_id=bid) for bid in _BUILTIN_AGENT_IDS if bid not in seen)
+        return result
+
+    def build(
+        self,
+        agent_id: str,
+        backtest_mode: bool = False,
+        regime_tags: list[str] | None = None,
+        model_override: str = "",
+    ):
+        """Dynamically construct an Agent instance from registry config.
+
+        Returns BaseAgent or ToolAgent depending on agent_id and config.
+        """
+        from cryptotrader.agents.base import BaseAgent, ToolAgent
+
+        agent_cfg = self._agents.get(agent_id)
+        if agent_cfg is None:
+            if agent_id in _BUILTIN_AGENT_IDS:
+                agent_cfg = AgentConfig(agent_id=agent_id)
+            else:
+                raise AgentNotFoundError(agent_id, list(self._agents.keys()) + list(_BUILTIN_AGENT_IDS))
+
+        if not agent_cfg.enabled:
+            raise AgentNotFoundError(agent_id, [a.agent_id for a in self.list_active()])
+
+        role_description = self._resolve_role(agent_id, agent_cfg)
+        model = model_override or agent_cfg.model
+        skill_content = self._resolve_skills(agent_cfg, regime_tags)
+
+        if agent_id in _BUILTIN_AGENT_IDS and not agent_cfg.tools and not agent_cfg.prompt_template:
+            return self._build_builtin(agent_id, model, backtest_mode, skill_content)
+
+        if agent_cfg.tools:
+            tools = self._resolve_tools(agent_cfg)
+            agent = ToolAgent(
+                agent_id=agent_id,
+                role_description=role_description,
+                tools=tools,
+                model=model,
+                backtest_mode=backtest_mode,
+            )
+        else:
+            agent = BaseAgent(agent_id=agent_id, role_description=role_description, model=model)
+
+        if skill_content:
+            agent.role_description = agent.role_description + "\n\n--- STRATEGY SKILLS ---\n" + skill_content
+        return agent
+
+    @staticmethod
+    def _build_builtin(agent_id: str, model: str, backtest_mode: bool, skill_content: str):
+        from cryptotrader.agents.chain import ChainAgent
+        from cryptotrader.agents.macro import MacroAgent
+        from cryptotrader.agents.news import NewsAgent
+        from cryptotrader.agents.tech import TechAgent
+
+        builders = {
+            "tech_agent": lambda: TechAgent(model=model),
+            "chain_agent": lambda: ChainAgent(model=model, backtest_mode=backtest_mode),
+            "news_agent": lambda: NewsAgent(model=model, backtest_mode=backtest_mode),
+            "macro_agent": lambda: MacroAgent(model=model),
+        }
+        agent = builders[agent_id]()
+        if skill_content:
+            agent.role_description = agent.role_description + "\n\n--- STRATEGY SKILLS ---\n" + skill_content
+        return agent
+
+    @staticmethod
+    def _resolve_role(agent_id: str, agent_cfg: AgentConfig) -> str:
+        if agent_cfg.prompt_template:
+            pt = Path(agent_cfg.prompt_template)
+            if not pt.is_absolute():
+                pt = Path.cwd() / pt
+            if not pt.exists():
+                raise ConfigurationError(
+                    field_path=f"agents.{agent_id}.prompt_template",
+                    expected=f"file must exist: {agent_cfg.prompt_template}",
+                )
+            return pt.read_text(encoding="utf-8")
+
+        builtin_roles = {
+            "tech_agent": "cryptotrader.agents.tech",
+            "chain_agent": "cryptotrader.agents.chain",
+            "news_agent": "cryptotrader.agents.news",
+            "macro_agent": "cryptotrader.agents.macro",
+        }
+        if agent_id in builtin_roles:
+            import importlib
+
+            mod = importlib.import_module(builtin_roles[agent_id])
+            return mod.ROLE
+        return f"You are {agent_id}, a specialized analysis agent."
+
+    def _resolve_skills(self, agent_cfg: AgentConfig, regime_tags: list[str] | None) -> str:
+        if not agent_cfg.skills and not agent_cfg.regime_skills:
+            return ""
+        from cryptotrader.agents.skill_loader import SkillLoader
+        from cryptotrader.agents.skill_selector import SkillSelector
+
+        loader = SkillLoader()
+        selector = SkillSelector()
+        contents = selector.select(agent_cfg, regime_tags or [], loader)
+        return "\n\n".join(contents) if contents else ""
+
+    @staticmethod
+    def _resolve_tools(agent_cfg: AgentConfig) -> list:
+        from cryptotrader.agents.data_tools import CHAIN_TOOLS, NEWS_TOOLS
+
+        all_tools = list(CHAIN_TOOLS) + list(NEWS_TOOLS)
+        tool_by_name = {t.name: t for t in all_tools}
+        result = []
+        for name in agent_cfg.tools:
+            if name in tool_by_name:
+                result.append(tool_by_name[name])
+            else:
+                logger.warning("unknown tool '%s' in agents.%s.tools", name, agent_cfg.agent_id)
+        return result
 
 
 # ── Top-level ──
@@ -293,8 +546,14 @@ class AppConfig:
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
     execution: ExecutionConfig = field(default_factory=ExecutionConfig)
     notifications: NotificationsConfig = field(default_factory=NotificationsConfig)
+    triggers: TriggersConfig = field(default_factory=TriggersConfig)
     infrastructure: InfrastructureConfig = field(default_factory=InfrastructureConfig)
     exchanges: ExchangesConfig = field(default_factory=ExchangesConfig)
+    chart_analysis: ChartAnalysisConfig = field(default_factory=ChartAnalysisConfig)
+    chat: ChatConfig = field(default_factory=ChatConfig)
+    hitl: HitlConfig = field(default_factory=HitlConfig)
+    agents: AgentsConfig = field(default_factory=AgentsConfig)
+    mcp: MCPConfig = field(default_factory=MCPConfig)
 
     @property
     def reflection(self) -> ExperienceConfig:
@@ -331,11 +590,35 @@ def validate_config(cfg: AppConfig) -> None:
     _check_open_unit_interval(cfg.risk.loss.max_daily_loss_pct, "risk.loss.max_daily_loss_pct")
     _check_open_unit_interval(cfg.risk.position.max_single_pct, "risk.position.max_single_pct")
     _check_open_unit_interval(cfg.debate.consensus_skip_threshold, "debate.consensus_skip_threshold")
+    if cfg.hitl.enabled:
+        _check_open_unit_interval(cfg.hitl.min_position_scale, "hitl.min_position_scale")
     if not cfg.models.fallback.strip():
         raise ConfigurationError(
             field_path="models.fallback",
             expected="non-empty string (model name must be specified)",
         )
+    # Agents validation
+    active_agents = cfg.agents.list_active()
+    if not active_agents:
+        raise ConfigurationError(
+            field_path="agents",
+            expected="at least 1 enabled agent",
+        )
+    for ac in cfg.agents._agents.values():
+        if ac.prompt_template:
+            pt = Path(ac.prompt_template)
+            if not pt.is_absolute():
+                pt = Path.cwd() / pt
+            if not pt.exists():
+                raise ConfigurationError(
+                    field_path=f"agents.{ac.agent_id}.prompt_template",
+                    expected=f"file must exist: {ac.prompt_template}",
+                )
+        if ac.timeout_seconds != 0 and ac.timeout_seconds < 1:
+            raise ConfigurationError(
+                field_path=f"agents.{ac.agent_id}.timeout_seconds",
+                expected=f"positive integer, got {ac.timeout_seconds}",
+            )
 
 
 def _check_open_unit_interval(value: float, field_path: str) -> None:
@@ -486,10 +769,57 @@ def _build_experience_config(toml_data: dict) -> ExperienceConfig:
     )
 
 
+def _build_notifications_config(toml_data: dict) -> NotificationsConfig:
+    """Build NotificationsConfig, extracting nested [notifications.telegram]."""
+    raw = dict(toml_data.get("notifications", {}))
+    telegram_raw = raw.pop("telegram", {})
+    return NotificationsConfig(**raw, telegram=TelegramConfig(**telegram_raw))
+
+
+def _build_hitl_config(toml_data: dict) -> HitlConfig:
+    """Build HitlConfig, extracting nested [hitl.telegram]."""
+    raw = dict(toml_data.get("hitl", {}))
+    telegram_raw = raw.pop("telegram", {})
+    return HitlConfig(**raw, telegram=HitlTelegramConfig(**telegram_raw))
+
+
+def _build_agents_config(toml_data: dict) -> AgentsConfig:
+    """Build AgentsConfig from TOML [agents.*] sections."""
+    agents_raw = toml_data.get("agents", {})
+    agents_map: dict[str, AgentConfig] = {}
+    for agent_id, agent_data in agents_raw.items():
+        if not isinstance(agent_data, dict):
+            continue
+        raw = dict(agent_data)
+        raw.setdefault("agent_id", agent_id)
+        regime_skills_raw = raw.pop("regime_skills", {})
+        regime_skills: dict[str, list[str]] = {}
+        for tag, skill_list in regime_skills_raw.items():
+            if isinstance(skill_list, list):
+                regime_skills[tag] = [str(s) for s in skill_list]
+        agents_map[agent_id] = AgentConfig(**raw, regime_skills=regime_skills)
+    return AgentsConfig(_agents=agents_map)
+
+
+def _build_mcp_config(toml_data: dict) -> MCPConfig:
+    mcp_raw = toml_data.get("mcp", {})
+    servers_raw = mcp_raw.pop("servers", []) if isinstance(mcp_raw, dict) else []
+    servers = [MCPServerConfig(**s) for s in servers_raw if isinstance(s, dict)]
+    return MCPConfig(
+        enabled=mcp_raw.get("enabled", False),
+        transport=mcp_raw.get("transport", "stdio"),
+        fallback_on_error=mcp_raw.get("fallback_on_error", True),
+        call_timeout_s=mcp_raw.get("call_timeout_s", 5.0),
+        servers=servers,
+    )
+
+
 def _build_config(toml_data: dict) -> AppConfig:
     """Build AppConfig from parsed TOML dict."""
     app = toml_data.get("app", {})
-    llm = toml_data.get("llm", {})
+    llm_raw = dict(toml_data.get("llm", {}))
+    retry_raw = llm_raw.pop("retry", {})
+    llm_cfg = LLMConfig(**llm_raw, retry=RetryConfig(**retry_raw))
     risk_raw = toml_data.get("risk", {})
 
     risk = RiskConfig(
@@ -526,7 +856,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         mode=app.get("mode", "standalone"),
         engine=app.get("engine", "paper"),
         exchange_id=app.get("exchange_id", "binance"),
-        llm=LLMConfig(**llm),
+        llm=llm_cfg,
         models=ModelConfig(**toml_data.get("models", {})),
         debate=DebateConfig(**toml_data.get("debate", {})),
         data=DataConfig(**toml_data.get("data", {})),
@@ -536,9 +866,15 @@ def _build_config(toml_data: dict) -> AppConfig:
         scheduler=SchedulerConfig(**toml_data.get("scheduler", {})),
         providers=providers,
         execution=ExecutionConfig(**toml_data.get("execution", {})),
-        notifications=NotificationsConfig(**toml_data.get("notifications", {})),
+        notifications=_build_notifications_config(toml_data),
+        triggers=TriggersConfig(**toml_data.get("triggers", {})),
         infrastructure=InfrastructureConfig(**toml_data.get("infrastructure", {})),
         exchanges=exchanges,
+        chart_analysis=ChartAnalysisConfig(**toml_data.get("chart_analysis", {})),
+        chat=ChatConfig(**toml_data.get("chat", {})),
+        hitl=_build_hitl_config(toml_data),
+        agents=_build_agents_config(toml_data),
+        mcp=_build_mcp_config(toml_data),
     )
 
 

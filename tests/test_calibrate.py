@@ -1,9 +1,10 @@
 """Tests for accuracy_report, calibrate_weights, and bias detection."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 
+from cryptotrader._compat import UTC
 from cryptotrader.journal.calibrate import (
     accuracy_report,
     calibrate_weights,

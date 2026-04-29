@@ -55,7 +55,15 @@ async def test_debate_one_agent_success():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=response_json))
     with patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm):
-        aid, result = await _debate_one_agent("tech_agent", analysis, others, "BTC/USDT", "test", 60)
+        aid, result, _turn = await _debate_one_agent(
+            "tech_agent",
+            analysis,
+            others,
+            "BTC/USDT",
+            "test",
+            60,
+            1,
+        )
     assert aid == "tech_agent"
     assert result["confidence"] == 0.85
     assert result["new_findings"] == "cross-domain"
@@ -69,7 +77,15 @@ async def test_debate_one_agent_failure_returns_original():
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM timeout"))
     with patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm):
-        aid, result = await _debate_one_agent("tech_agent", analysis, others, "BTC/USDT", "test", 60)
+        aid, result, _turn = await _debate_one_agent(
+            "tech_agent",
+            analysis,
+            others,
+            "BTC/USDT",
+            "test",
+            60,
+            1,
+        )
     assert aid == "tech_agent"
     assert result == analysis
 

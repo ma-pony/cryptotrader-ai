@@ -3,8 +3,6 @@
 Verifies:
 1. read_portfolio_from_exchange is importable from portfolio.manager
 2. nodes/verdict.py no longer imports from nodes/execution for read_portfolio_from_exchange
-3. graph_supervisor.py has experimental status comment at the top
-4. agents/langchain_agents.py has experimental status comment at the top
 """
 
 from __future__ import annotations
@@ -70,31 +68,7 @@ def test_verdict_imports_read_portfolio_from_portfolio_manager():
     )
 
 
-# ── Test 3: graph_supervisor.py has experimental status comment ──
-
-
-def test_graph_supervisor_has_experimental_comment():
-    """graph_supervisor.py must have a top-level experimental status comment."""
-    path = _SRC / "cryptotrader/graph_supervisor.py"
-    first_lines = "\n".join(path.read_text().splitlines()[:20]).lower()
-    assert any(kw in first_lines for kw in ("experimental", "not enabled", "not used")), (
-        "graph_supervisor.py must have an experimental/not-in-main-path status comment at the top of the file"
-    )
-
-
-# ── Test 4: agents/langchain_agents.py has experimental status comment ──
-
-
-def test_langchain_agents_has_experimental_comment():
-    """agents/langchain_agents.py must have a top-level experimental status comment."""
-    path = _SRC / "cryptotrader/agents/langchain_agents.py"
-    first_lines = "\n".join(path.read_text().splitlines()[:20]).lower()
-    assert any(kw in first_lines for kw in ("experimental", "not enabled", "not used")), (
-        "agents/langchain_agents.py must have an experimental/not-in-main-path status comment at the top of the file"
-    )
-
-
-# ── Test 5: Functional tests ──
+# ── Test 3: Functional tests ──
 
 
 @pytest.mark.asyncio

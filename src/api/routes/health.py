@@ -26,6 +26,19 @@ router = APIRouter()
 
 _start_time = time.time()
 
+# Cached connection objects keyed by URL so /health doesn't create+dispose a
+# fresh aioredis client and SQLAlchemy engine on every probe (every 30s under
+# the docker healthcheck interval). Tests can clear via _reset_health_clients().
+_redis_clients: dict[str, aioredis.Redis] = {}  # type: ignore[name-defined]
+_db_engines: dict[str, object] = {}
+
+
+def _reset_health_clients() -> None:
+    """Clear cached clients (used by tests / on shutdown)."""
+    _redis_clients.clear()
+    _db_engines.clear()
+
+
 # ---------------------------------------------------------------------------
 # Optional heavy dependencies -- imported at module level so tests can patch
 # them by name (e.g. patch("api.routes.health.aioredis")).
@@ -94,35 +107,45 @@ async def health():
     config = load_config()
     checks: dict[str, str] = {"api": "ok"}
 
-    # --- Redis check ---
+    # --- Redis check (cached client) ---
     redis_url = config.infrastructure.redis_url
-    if redis_url:
+    if redis_url and aioredis is not None:
         try:
-            r = aioredis.from_url(redis_url)
+            r = _redis_clients.get(redis_url)
+            if r is None:
+                r = aioredis.from_url(redis_url)
+                _redis_clients[redis_url] = r
             await r.ping()
             checks["redis"] = "ok"
-            await r.aclose()
         except Exception:
             logger.debug("Redis health check failed", exc_info=True)
             checks["redis"] = "unavailable"
+            # Drop dead client so next probe rebuilds it.
+            _redis_clients.pop(redis_url, None)
     else:
         checks["redis"] = "not_configured"
 
-    # --- DB check ---
+    # --- DB check (cached engine) ---
     db_url = config.infrastructure.database_url
-    if db_url:
-        engine = None
+    if db_url and create_async_engine is not None:
         try:
-            engine = create_async_engine(db_url, pool_pre_ping=True)
-            async with engine.connect() as conn:
+            engine = _db_engines.get(db_url)
+            if engine is None:
+                engine = create_async_engine(db_url, pool_pre_ping=True, pool_size=2, max_overflow=0)
+                _db_engines[db_url] = engine
+            async with engine.connect() as conn:  # type: ignore[union-attr]
                 await conn.execute(text("SELECT 1"))
             checks["db"] = "ok"
         except Exception:
             logger.debug("DB health check failed", exc_info=True)
             checks["db"] = "unavailable"
-        finally:
-            if engine is not None:
-                await engine.dispose()
+            # Dispose + drop dead engine so next probe rebuilds it.
+            old = _db_engines.pop(db_url, None)
+            if old is not None:
+                try:
+                    await old.dispose()  # type: ignore[union-attr]
+                except Exception:
+                    logger.debug("Engine dispose failed", exc_info=True)
     else:
         checks["db"] = "not_configured"
 

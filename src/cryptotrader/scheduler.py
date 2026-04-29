@@ -4,18 +4,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
+from cryptotrader._compat import UTC
+
 logger = logging.getLogger(__name__)
 
 
 class Scheduler:
-    def __init__(self, pairs: list[str], interval_minutes: int = 240, daily_summary_hour: int = 0):
+    def __init__(
+        self,
+        pairs: list[str],
+        interval_minutes: int = 240,
+        daily_summary_hour: int = 0,
+        trigger_engine: Any | None = None,
+    ):
         self.pairs = pairs
         self.interval_minutes = interval_minutes
         self.daily_summary_hour = daily_summary_hour
@@ -23,6 +31,7 @@ class Scheduler:
         self._status: dict[str, dict[str, Any]] = {p: {} for p in pairs}
         self._scheduler = AsyncIOScheduler()
         self._stop_event: asyncio.Event | None = None
+        self._trigger_engine = trigger_engine
 
     async def start(self) -> None:
         # Startup reconciliation for live mode
@@ -51,6 +60,29 @@ class Scheduler:
             misfire_grace_time=1,
         )
 
+        # Start price trigger engine if configured
+        if self._trigger_engine is not None:
+            await self._trigger_engine.start()
+            from cryptotrader.config import load_config as _lc
+
+            _cfg = _lc()
+            self._scheduler.add_job(
+                self._trigger_engine.poll_funding_rates,
+                IntervalTrigger(minutes=_cfg.triggers.funding_rate_poll_interval_minutes),
+                id="funding_rate_poll",
+                name="Funding rate poll",
+                max_instances=1,
+                misfire_grace_time=1,
+            )
+            self._scheduler.add_job(
+                self._cleanup_expired_rules,
+                CronTrigger(minute=0, timezone="UTC"),
+                id="cleanup_expired_rules",
+                name="Cleanup expired trigger rules",
+                max_instances=1,
+                misfire_grace_time=1,
+            )
+
         # Signal handlers for graceful shutdown
         import signal
 
@@ -71,6 +103,8 @@ class Scheduler:
         await self._stop_event.wait()
 
         # Cleanup
+        if self._trigger_engine is not None:
+            await self._trigger_engine.stop()
         self._scheduler.shutdown(wait=False)
         await self._close_live_exchanges()
         logger.info("Scheduler stopped gracefully")
@@ -105,6 +139,19 @@ class Scheduler:
             for p in self.pairs:
                 next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
                 self._status[p]["next_run"] = next_run.isoformat()
+            # Heartbeat: write timestamp to disk after every cycle so docker
+            # healthcheck ("arena scheduler healthcheck") can detect a hung
+            # scheduler (file mtime older than 2x interval = unhealthy).
+            try:
+                from pathlib import Path
+
+                hb_dir = Path.home() / ".cryptotrader"
+                hb_dir.mkdir(parents=True, exist_ok=True)
+                (hb_dir / "scheduler.heartbeat").write_text(
+                    datetime.now(UTC).isoformat(),
+                )
+            except Exception:
+                logger.debug("Failed to write scheduler heartbeat", exc_info=True)
         except Exception:
             logger.warning("Unexpected error in trading cycle", exc_info=True)
 
@@ -155,9 +202,10 @@ class Scheduler:
             enabled=config.notifications.enabled,
             events=config.notifications.events,
             webhook_timeout=config.notifications.webhook_timeout,
+            telegram_config=config.notifications.telegram,
         )
 
-    async def _run_pair(self, pair: str) -> None:
+    async def _run_pair(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
         from cryptotrader.tracing import set_trace_id
 
         trace_id = set_trace_id()
@@ -171,18 +219,30 @@ class Scheduler:
             graph = build_trading_graph()
             from cryptotrader.state import build_initial_state
 
+            extra_meta: dict[str, Any] = {"cycle_count": self._cycle_count}
+            if trigger_meta:
+                extra_meta["schedule_depth"] = trigger_meta.get("schedule_depth", 0)
+                extra_meta["trigger_event_id"] = trigger_meta.get("trigger_event_id")
             initial = build_initial_state(
                 pair,
                 engine=config.engine,
                 exchange_id=config.scheduler.exchange_id,
                 config=config,
-                extra_metadata={"cycle_count": self._cycle_count},
+                extra_metadata=extra_meta,
             )
             from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
 
             graph_timeout = config.execution.graph_timeout_s
+            import time as _time
+
+            from cryptotrader.metrics import get_metrics_collector
+
+            pipeline_t0 = _time.monotonic()
             try:
                 result, node_trace = await asyncio.wait_for(run_graph_traced(graph, initial), timeout=graph_timeout)
+                # Histogram observation populates pipeline_p50_ms / p95_ms in
+                # /api/metrics/summary. Also fired in chat analysis_runner.
+                get_metrics_collector().observe_pipeline_duration(ms=(_time.monotonic() - pipeline_t0) * 1000.0)
                 add_timing_to_trace(node_trace)
                 for t in node_trace:
                     logger.info("Node %s [%dms]: %s", t["node"], t["duration_ms"], t["summary"][:120])
@@ -224,6 +284,7 @@ class Scheduler:
                 webhook_url=config.notifications.webhook_url,
                 events=config.notifications.events,
                 webhook_timeout=config.notifications.webhook_timeout,
+                telegram_config=config.notifications.telegram,
             )
             pm = PortfolioManager(config.infrastructure.database_url)
             portfolio = await pm.get_portfolio()
@@ -247,3 +308,15 @@ class Scheduler:
             await notifier.notify("daily_summary", summary)
         except Exception:
             logger.warning("Failed to emit daily summary", exc_info=True)
+
+    async def _cleanup_expired_rules(self) -> None:
+        """Hourly cleanup of expired agent-created trigger rules."""
+        if self._trigger_engine is None:
+            return
+        try:
+            store = self._trigger_engine._store
+            count = await store.cleanup_expired_rules()
+            if count > 0:
+                await self._trigger_engine.reload_rules()
+        except Exception:
+            logger.warning("Failed to cleanup expired rules", exc_info=True)

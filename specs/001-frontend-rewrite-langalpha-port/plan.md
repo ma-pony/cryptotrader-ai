@@ -202,3 +202,20 @@ src/cli/main.py                  # 移 dashboard 命令，新增 arena web
 ## Complexity Tracking
 
 > 无违规需记录。本特性虽涉及 ~50 组件 + 11 实施阶段，但每项都是 spec FR 直接派生；技术栈选择直接对齐 LangAlpha（已验证），无需额外架构论证。
+
+## Implementation Notes (post-merge, 2026-04-29)
+
+实施阶段发现并记录的 5 条隐含架构契约，详见 [research.md §15](./research.md#15-实现阶段架构注记-2026-04-29)：
+
+1. **§15.1 Trace registry** — `tracing._node_trace_registry` 配合 `journal._resolve_node_trace()`，让 graph 内部的 `record_trade` 节点能读到由 graph 外部 runner 累积的 node_trace。
+2. **§15.2 LangGraph state 序列化** — 移除 `MemorySaver()`；`EventBus` / `RedisStateManager` 通过 `chat/runtime_registry.py` (session_id-keyed) 传递，避免 msgpack 失败。
+3. **§15.3 Py 3.10 asyncio.TimeoutError 兼容性** — SSE keepalive、scheduler timeout 必须 `except asyncio.TimeoutError`（不是 `TimeoutError`）。
+4. **§15.4 Risk check 必须用 return delta** — 见 [data-model.md#RiskGate](./data-model.md#riskgate) PROD-I3 契约：`CheckResult.scale_adjustment` 提议，gate 聚合 (min)，节点 return delta 写回。
+5. **§15.5 技术指标无原生依赖** — `agents/_indicators.py` (纯 pandas/numpy) 替代 `pandas_ta` (依赖 talib，arm64 不兼容)。
+
+**对应 spec.md 修订**（见 [research.md changelog](./research.md#changelog)）：
+- NFR-S-001 (fail-closed AUTH_MODE)
+- NFR-S-002 (hidden sourcemap + forbid baked VITE_API_KEY)
+- NFR-S-005 / FR-007 (in-memory key only)
+- NFR-S-006 (CORS allowlist + Redis-backed rate limiter)
+- data-model RiskGate (新增 scale_adjustment)

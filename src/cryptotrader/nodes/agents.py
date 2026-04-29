@@ -27,10 +27,6 @@ _MOCK_ANALYSIS_RESULT: dict[str, Any] = {
 
 
 async def _run_agent(agent_type: str, state: ArenaState) -> dict:
-    from cryptotrader.agents.chain import ChainAgent
-    from cryptotrader.agents.macro import MacroAgent
-    from cryptotrader.agents.news import NewsAgent
-    from cryptotrader.agents.tech import TechAgent
     from cryptotrader.config import load_config
     from cryptotrader.learning.context import gather_packets, select_packets, structure_experience
 
@@ -47,15 +43,36 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         return {"data": {"analyses": {agent_type: prev_analyses[agent_type]}}}
 
     backtest_mode = state["metadata"].get("backtest_mode", False)
-    agents: dict[str, Any] = {
-        "tech_agent": lambda m: TechAgent(model=m),
-        "chain_agent": lambda m: ChainAgent(model=m, backtest_mode=backtest_mode),
-        "news_agent": lambda m: NewsAgent(model=m, backtest_mode=backtest_mode),
-        "macro_agent": lambda m: MacroAgent(model=m),
-    }
-    models_cfg = state["metadata"].get("models", {})
-    model = models_cfg.get(agent_type, state["metadata"].get("analysis_model", ""))
-    agent = agents[agent_type](model)
+    regime_tags = state["data"].get("regime_tags", [])
+    cfg = load_config()
+
+    agent_cfg = cfg.agents.get(agent_type)
+    if agent_cfg is not None and agent_cfg.model:
+        model = agent_cfg.model
+    else:
+        models_cfg = state["metadata"].get("models", {})
+        model = models_cfg.get(agent_type, state["metadata"].get("analysis_model", ""))
+
+    try:
+        agent = cfg.agents.build(
+            agent_type,
+            backtest_mode=backtest_mode,
+            regime_tags=regime_tags,
+            model_override=model,
+        )
+    except KeyError:
+        from cryptotrader.agents.chain import ChainAgent
+        from cryptotrader.agents.macro import MacroAgent
+        from cryptotrader.agents.news import NewsAgent
+        from cryptotrader.agents.tech import TechAgent
+
+        agents_fallback: dict[str, Any] = {
+            "tech_agent": lambda m: TechAgent(model=m),
+            "chain_agent": lambda m: ChainAgent(model=m, backtest_mode=backtest_mode),
+            "news_agent": lambda m: NewsAgent(model=m, backtest_mode=backtest_mode),
+            "macro_agent": lambda m: MacroAgent(model=m),
+        }
+        agent = agents_fallback[agent_type](model)
     snapshot = state["data"]["snapshot"]
 
     # Build GSSC experience context
@@ -72,8 +89,20 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         selected = select_packets(packets, regime_tags, _DEFAULT_TOKEN_BUDGET)
         experience = structure_experience(selected)
 
-    timeout_seconds = load_config().models.timeout_seconds
+    # Inject live steering instructions (T024)
+    experience = await _inject_steering(state, agent_type, experience)
+
+    # Publish agent_thinking event
+    from cryptotrader.chat.runtime_registry import get_event_bus
+
+    event_bus = get_event_bus((state.get("metadata") or {}).get("session_id"))
+    if event_bus is not None:
+        await event_bus.publish("agent_thinking", {"agent_id": agent_type})
+
+    agent_timeout = agent_cfg.timeout_seconds if agent_cfg is not None else 0
+    timeout_seconds = agent_timeout if agent_timeout > 0 else cfg.models.timeout_seconds
     logger.info("Running %s for %s (model=%s)", agent_type, snapshot.pair, model or "default")
+    steered = (state.get("metadata") or {}).get(f"_steered_{agent_type}", False)
     try:
         analysis = await asyncio.wait_for(
             agent.analyze(snapshot, experience),
@@ -85,14 +114,18 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
             agent_type,
             timeout_seconds,
         )
-        return {"data": {"analyses": {agent_type: dict(_MOCK_ANALYSIS_RESULT)}}}
+        mock = dict(_MOCK_ANALYSIS_RESULT)
+        await _publish_agent_done(event_bus, agent_type, mock, steered, state)
+        return {"data": {"analyses": {agent_type: mock}}}
     except Exception:
         logger.warning(
             "LLM call failed for %s — degrading to mock result",
             agent_type,
             exc_info=True,
         )
-        return {"data": {"analyses": {agent_type: dict(_MOCK_ANALYSIS_RESULT)}}}
+        mock = dict(_MOCK_ANALYSIS_RESULT)
+        await _publish_agent_done(event_bus, agent_type, mock, steered, state)
+        return {"data": {"analyses": {agent_type: mock}}}
 
     logger.info(
         "%s result: direction=%s confidence=%.2f mock=%s sufficiency=%s",
@@ -110,8 +143,10 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         "risk_flags": analysis.risk_flags,
         "is_mock": analysis.is_mock,
         "data_sufficiency": analysis.data_sufficiency,
+        "steered": steered,
     }
     result.update(analysis.data_points)
+    await _publish_agent_done(event_bus, agent_type, result, steered, state)
 
     # Update prev_snapshot_hash and prev_analyses for the next cycle's hash reuse.
     # Merge with existing prev_analyses to avoid evicting other agents' cached results.
@@ -122,6 +157,66 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         output["prev_snapshot_hash"] = current_hash
         output["prev_analyses"] = merged_prev
     return {"data": output}
+
+
+async def _inject_steering(
+    state: ArenaState,
+    agent_type: str,
+    experience: str,
+) -> str:
+    """Read and apply live steering instructions from Redis queue."""
+    metadata = state.get("metadata") or {}
+    session_id = metadata.get("session_id")
+    state_mgr = metadata.get("redis_state_manager")
+    if not session_id or state_mgr is None:
+        return experience
+
+    steer_key = f"steering:{session_id}:{agent_type}"
+    try:
+        instructions = await state_mgr.buffer_range(steer_key, 0, -1)
+        if instructions:
+            await state_mgr.buffer_delete(steer_key)
+            joined = "\n".join(instructions)
+            if metadata is not None:
+                metadata[f"_steered_{agent_type}"] = True
+            suffix = f"\n\n[用户实时引导]\n{joined}"
+            return f"{experience}{suffix}" if experience else suffix
+    except Exception:
+        logger.debug("Failed to read steering queue for %s", agent_type, exc_info=True)
+    return experience
+
+
+async def _publish_agent_done(
+    event_bus: Any,
+    agent_type: str,
+    result: dict[str, Any],
+    steered: bool,
+    state: ArenaState,
+) -> None:
+    """Publish agent_analysis event and update completed_agents on the task."""
+    if event_bus is not None:
+        await event_bus.publish(
+            "agent_analysis",
+            {
+                "agent_id": agent_type,
+                "direction": result.get("direction", "neutral"),
+                "confidence": result.get("confidence", 0),
+                "steered": steered,
+            },
+        )
+
+    metadata = state.get("metadata") or {}
+    session_id = metadata.get("session_id")
+    if session_id:
+        try:
+            from cryptotrader.chat.task_manager import BackgroundTaskManager
+
+            mgr = BackgroundTaskManager.get_instance()
+            task = mgr.get(session_id)
+            if task is not None:
+                task.completed_agents.append(agent_type)
+        except Exception:
+            pass
 
 
 def _build_experience(state: ArenaState, agent_type: str) -> str:

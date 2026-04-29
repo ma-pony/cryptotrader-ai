@@ -34,6 +34,32 @@ Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "r
 "key_factors": [...], "risk_flags": [...], "new_findings": "cross-domain insight from other agents' data"}}"""
 
 
+def _classify_move(before_dir: str, before_conf: float, after_dir: str, after_conf: float) -> str:
+    """Classify how an agent's position shifted between rounds.
+
+    Returns a short human-readable label used by the Debate UI. Invariants:
+      - any direction flip is considered a concession (``让步``)
+      - confidence up ≥ 0.05 → ``强化``
+      - confidence down ≥ 0.05 → ``弱化``
+      - otherwise ``保持``
+    """
+    if before_dir != after_dir:
+        return f"让步(由{_dir_label(before_dir)}转{_dir_label(after_dir)})"
+    delta = after_conf - before_conf
+    if delta >= 0.05:
+        return "强化"
+    if delta <= -0.05:
+        return "弱化"
+    return "保持"
+
+
+_DIR_LABELS = {"bullish": "看多", "bearish": "看空", "neutral": "中性"}
+
+
+def _dir_label(direction: str) -> str:
+    return _DIR_LABELS.get(direction, direction)
+
+
 async def _debate_one_agent(
     agent_id: str,
     analysis: dict,
@@ -41,48 +67,91 @@ async def _debate_one_agent(
     pair: str,
     model: str,
     timeout_seconds: float,
-) -> tuple[str, dict]:
-    """Single agent's debate response — extracted for parallel execution."""
+    round_number: int,
+) -> tuple[str, dict, dict]:
+    """Single agent's debate response — extracted for parallel execution.
+
+    Returns ``(agent_id, merged_analysis, turn_entry)`` where ``turn_entry`` is a
+    structured dict suitable for persisting into ``DecisionCommit.challenges``.
+    """
     from cryptotrader.debate.challenge import build_challenge_prompt
-    from cryptotrader.debate.verdict import _extract_json
+    from cryptotrader.llm.json_retry import extract_json_with_retry
 
     prompt = build_challenge_prompt(agent_id, pair, analysis, others)
     role_label = _DEBATE_ROLES.get(agent_id, agent_id)
     system = DEBATE_SYSTEM.format(role=role_label)
+    before_dir = analysis.get("direction", "neutral")
+    before_conf = float(analysis.get("confidence", 0.0) or 0.0)
+    # Pick the opponent with the lowest confidence as the "addressee" — the agent
+    # most likely to be challenged. When ``others`` is empty (sole agent), ``to`` is
+    # None and the UI renders the turn as a monologue.
+    to_agent: str | None = None
+    if others:
+        to_agent = min(others, key=lambda k: float(others[k].get("confidence", 0.0) or 0.0))
+
+    def _turn(after_dir: str, after_conf: float, reasoning: str, new_findings: str, errored: bool) -> dict:
+        return {
+            "round": round_number,
+            "from": agent_id,
+            "to": to_agent,
+            "before": {"direction": before_dir, "confidence": before_conf},
+            "after": {"direction": after_dir, "confidence": after_conf},
+            "move": _classify_move(before_dir, before_conf, after_dir, after_conf),
+            "reasoning": reasoning,
+            "new_findings": new_findings,
+            "errored": errored,
+        }
+
     try:
         llm = create_llm(model=model, temperature=0.3)
         lc_msgs = [SystemMessage(content=system), HumanMessage(content=prompt)]
         resp = await asyncio.wait_for(llm.ainvoke(lc_msgs), timeout=timeout_seconds)
         text = extract_content(resp)
-        data = _extract_json(text)
+        data = await extract_json_with_retry(
+            text,
+            llm=llm,
+            schema_hint="direction,confidence,reasoning,key_factors,risk_flags,new_findings",
+            max_retries=2,
+        )
         merged = dict(analysis)
+        after_dir = data.get("direction", before_dir)
+        after_conf = float(data.get("confidence", before_conf))
+        reasoning = data.get("reasoning", analysis.get("reasoning", ""))
+        new_findings = data.get("new_findings", "")
         merged.update(
             {
-                "direction": data.get("direction", analysis["direction"]),
-                "confidence": float(data.get("confidence", analysis["confidence"])),
-                "reasoning": data.get("reasoning", analysis["reasoning"]),
+                "direction": after_dir,
+                "confidence": after_conf,
+                "reasoning": reasoning,
                 "key_factors": data.get("key_factors", analysis.get("key_factors", [])),
                 "risk_flags": data.get("risk_flags", analysis.get("risk_flags", [])),
-                "new_findings": data.get("new_findings", ""),
+                "new_findings": new_findings,
             }
         )
-        return agent_id, merged
+        return agent_id, merged, _turn(after_dir, after_conf, reasoning, new_findings, False)
     except TimeoutError:
         logger.warning(
             "LLM timeout for debate agent %s after %ss — keeping original analysis",
             agent_id,
             timeout_seconds,
         )
-        return agent_id, analysis
+        return agent_id, analysis, _turn(before_dir, before_conf, "LLM timeout — 保持原立场", "", True)
     except Exception:
         logger.warning("Debate round LLM call failed for %s — keeping original analysis", agent_id, exc_info=True)
-        return agent_id, analysis
+        return agent_id, analysis, _turn(before_dir, before_conf, "LLM failed — 保持原立场", "", True)
 
 
 @node_logger()
 async def debate_round(state: ArenaState) -> dict:
     """One round of cross-challenge debate between agents (parallel)."""
     from cryptotrader.config import load_config as _load_config
+
+    round_number = state["debate_round"] + 1
+    from cryptotrader.chat.runtime_registry import get_event_bus
+
+    event_bus = get_event_bus((state.get("metadata") or {}).get("session_id"))
+    if event_bus is not None:
+        await event_bus.publish("debate_started", {"round_number": round_number})
 
     analyses = state["data"].get("analyses", {})
     _dcfg = _load_config()
@@ -95,14 +164,25 @@ async def debate_round(state: ArenaState) -> dict:
     for agent_id in agent_ids:
         analysis = analyses[agent_id]
         others = {k: v for k, v in analyses.items() if k != agent_id}
-        tasks.append(_debate_one_agent(agent_id, analysis, others, state["metadata"]["pair"], model, timeout_seconds))
+        tasks.append(
+            _debate_one_agent(
+                agent_id,
+                analysis,
+                others,
+                state["metadata"]["pair"],
+                model,
+                timeout_seconds,
+                round_number,
+            )
+        )
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     updated: dict[str, Any] = {}
+    new_turns: list[dict] = []
     for i, result in enumerate(results):
         aid = agent_ids[i]
-        if isinstance(result, Exception):
+        if isinstance(result, BaseException):
             logger.warning(
                 "Debate gather exception for %s: %r — keeping original analysis",
                 aid,
@@ -111,10 +191,32 @@ async def debate_round(state: ArenaState) -> dict:
             )
             updated[aid] = analyses[aid]
         else:
-            updated[result[0]] = result[1]
+            r_aid, r_analysis, r_turn = result
+            updated[r_aid] = r_analysis
+            new_turns.append(r_turn)
+
+    if event_bus is not None:
+        positions = {
+            aid: {"direction": a.get("direction"), "confidence": a.get("confidence")} for aid, a in updated.items()
+        }
+        await event_bus.publish(
+            "debate_round_done",
+            {
+                "round_number": round_number,
+                "updated_positions": positions,
+            },
+        )
+
+    # Append turns to the state's persistent debate_turns list so graph.py can
+    # write them into DecisionCommit.challenges unchanged.
+    existing_turns = list(state["data"].get("debate_turns") or [])
+    existing_turns.extend(new_turns)
 
     return {
-        "data": {"analyses": updated},
+        "data": {
+            "analyses": updated,
+            "debate_turns": existing_turns,
+        },
         "debate_round": state["debate_round"] + 1,
     }
 

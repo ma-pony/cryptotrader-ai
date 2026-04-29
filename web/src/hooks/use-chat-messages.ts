@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type { ChatMessage } from '@/types/api';
+import type { AdditionalContext } from '@/types/chart-analysis';
 import { streamFetch, type SSEEvent } from '@/lib/stream-fetch';
 import { useChatStore } from '@/stores/use-chat-store';
 
@@ -48,7 +49,7 @@ export interface UseChatMessagesReturn {
   messages: ChatMessage[];
   status: StreamStatus;
   error: string | null;
-  sendMessage: (text: string) => void;
+  sendMessage: (text: string, additionalContext?: AdditionalContext) => void;
   stopStream: () => void;
   clearMessages: () => void;
 }
@@ -165,13 +166,73 @@ export function useChatMessages(sessionId: string | null): UseChatMessagesReturn
           setStatus('idle');
           break;
         }
+
+        // ── Structured analysis events ──
+
+        case 'stream_resume': {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              ts: new Date().toISOString(),
+              content_md: '已从断点恢复连接。',
+            },
+          ]);
+          break;
+        }
+
+        case 'session_replaced': {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: 'assistant' as const,
+              ts: new Date().toISOString(),
+              content_md: '此分析已被新会话覆盖。',
+            },
+          ]);
+          setStatus('idle');
+          break;
+        }
+
+        case 'stream_done': {
+          setStatus('idle');
+          break;
+        }
+
+        case 'stream_error': {
+          const errData = event.data as { error?: string };
+          setError(errData.error ?? 'Analysis error');
+          setStatus('error');
+          break;
+        }
+
+        case 'checkpoint_saved':
+        case 'interrupt_received':
+        case 'interrupt_noop':
+        case 'interrupt_rejected':
+        case 'steer_queued':
+        case 'steer_too_late':
+        case 'steer_truncated':
+        case 'node_started':
+        case 'node_done':
+        case 'agent_thinking':
+        case 'agent_analysis':
+        case 'debate_started':
+        case 'debate_round_done':
+        case 'verdict_ready':
+        case 'verdict_partial':
+        case 'risk_checked':
+        case 'session_start':
+          break;
       }
     },
     [upsertSession, setPendingMessage],
   );
 
   const sendMessage = useCallback(
-    (text: string) => {
+    (text: string, additionalContext?: AdditionalContext) => {
       if (status === 'streaming' || status === 'connecting') return;
 
       const userMsg: ChatMessage = {
@@ -192,6 +253,7 @@ export function useChatMessages(sessionId: string | null): UseChatMessagesReturn
         body: {
           session_id: sessionId ?? '',
           message: text,
+          ...(additionalContext ? { additional_context: additionalContext } : {}),
         },
         signal: controller.signal,
         onEvent: handleEvent,

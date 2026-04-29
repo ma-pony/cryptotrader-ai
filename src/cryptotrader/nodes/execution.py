@@ -357,7 +357,18 @@ async def place_order(state: ArenaState) -> dict:
 
     logger.info("Placing order: %s %s %.6f @ %.2f", order.side, pair, order.amount, order.price)
     om = OrderManager()
+    import time as _time
+
+    from cryptotrader.metrics import get_metrics_collector
+
+    exec_t0 = _time.monotonic()
     order, result = await om.place(order, exchange)
+    # Histogram observation populates execution_p50_ms / p95_ms in
+    # /api/metrics/summary. Engine label = paper / live.
+    get_metrics_collector().observe_execution_latency(
+        engine=state["metadata"].get("engine", "paper"),
+        ms=(_time.monotonic() - exec_t0) * 1000.0,
+    )
 
     status = order.status
     if status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):

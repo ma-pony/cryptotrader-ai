@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader._compat import UTC
 from cryptotrader.db import get_async_session, get_engine
 
 if TYPE_CHECKING:
@@ -166,20 +167,20 @@ class PortfolioManager:
         self._memory_cash[account_id] = cash
 
     async def get_daily_pnl(self, account_id: str = "default") -> float:
-        snaps = await self._load_snapshots(account_id)
+        snaps = await self.load_snapshots(account_id)
         if len(snaps) < 2:
             return 0.0
         return snaps[-1]["total_value"] - snaps[-2]["total_value"]
 
     async def get_drawdown(self, account_id: str = "default") -> float:
-        snaps = [s["total_value"] for s in await self._load_snapshots(account_id)]
+        snaps = [s["total_value"] for s in await self.load_snapshots(account_id)]
         if not snaps:
             return 0.0
         peak = max(snaps)
         return (snaps[-1] - peak) / peak if peak > 0 else 0.0
 
     async def get_returns(self, account_id: str = "default", days: int = 60) -> list[float]:
-        snaps = [s["total_value"] for s in await self._load_snapshots(account_id)]
+        snaps = [s["total_value"] for s in await self.load_snapshots(account_id)]
         snaps = snaps[-days:]
         if len(snaps) < 2:
             return []
@@ -215,7 +216,7 @@ class PortfolioManager:
             except Exception as e:
                 logger.warning("DB snapshot write failed: %s", e)
 
-    async def _load_snapshots(self, account_id: str) -> list[dict]:
+    async def load_snapshots(self, account_id: str) -> list[dict]:
         """Load snapshots from DB if available, else use in-memory."""
         if self._db_url:
             try:

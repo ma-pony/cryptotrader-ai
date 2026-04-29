@@ -152,7 +152,7 @@
 - **FR-004**：系统 MUST 按以下顺序组装 Provider 栈：QueryClient → BrowserRouter → ThemeProvider → I18nProvider → App + Toaster
 - **FR-005**：系统 MUST 实现暗/亮主题切换（基于 CSS variables），默认跟随 `prefers-color-scheme`，可手动切换并持久化到 localStorage
 - **FR-006**：系统 MUST 实现 i18next 多语言框架：默认 `zh-CN`，同时提供 `en-US` 翻译；TopBar 提供语言切换器并持久化；翻译文件按 namespace 分文件（common/dashboard/decisions/backtest/risk/metrics/chat/market）；缺失键回退到 zh-CN
-- **FR-007**：系统 MUST 实现 SSE 客户端（基于 fetch + ReadableStream，移植自 LangAlpha streamFetch），处理 429/413/404 结构化错误；HTTP 客户端使用原生 fetch + React Query 5
+- **FR-007**：系统 MUST 实现 SSE 客户端（基于 fetch + ReadableStream，移植自 LangAlpha streamFetch），处理 429/413/404 结构化错误；HTTP 客户端使用原生 fetch + React Query 5。所有 API/SSE 调用的 `X-API-Key` 仅从 `useSettingsStore` 读取，**不得**回退到 `env.VITE_API_KEY`（详见 NFR-S-001 / NFR-S-005）。SSE 30s 不活跃必须发 `: keepalive\n\n` 心跳（捕获 `asyncio.TimeoutError`，注意 Py3.10 不与 `builtins.TimeoutError` 等价）。
 - **FR-008**：系统 MUST 实现全局 ErrorBoundary 与 Toast 通知组件
 - **FR-009**：系统 MUST 通过环境变量 `VITE_API_BASE_URL` 配置 API 地址（默认 `http://localhost:8003`）；dev 模式经 Vite proxy 转发避免 CORS
 - **FR-010**：系统 MUST 提供共享 UI 原子组件：Button / Card / Dialog / DropdownMenu / Popover / ScrollArea / Toast / Skeleton / Tabs / Badge / Separator / Tooltip
@@ -283,12 +283,12 @@
 
 安全（NFR-S）：
 
-- **NFR-S-001**：所有 API 调用携带 `X-API-Key` header（若 `VITE_API_KEY` 配置）；后端未设置 API_KEY 时跳过校验（开发模式）
-- **NFR-S-002**：构建输出无 inline script / `eval` / `new Function`
+- **NFR-S-001**：所有 API 调用携带 `X-API-Key` header；前端 key 仅来自运行时 `useSettingsStore`（in-memory，从不持久化）。后端默认 fail-closed：`AUTH_MODE=enabled`（默认）+ `API_KEY` env 必须设置，未设则**启动失败**；`AUTH_MODE=disabled` 是显式 opt-out，每请求打 WARNING 日志。Key 比较使用 `secrets.compare_digest` 防时序攻击。CORS preflight 必须返回精确 `allow_methods` / `allow_headers` allowlist，不得使用通配（与 `allow_credentials=true` 冲突）。
+- **NFR-S-002**：构建输出无 inline script / `eval` / `new Function`；生产构建 sourcemap 必须为 `hidden` 模式（`.map` 文件可上传到私有 error tracker，但 JS bundle 不得含 `sourceMappingURL` 指针，防止源码泄漏）；`VITE_API_KEY` 在生产构建时必须为空，Vite 插件 `forbid-baked-api-key` 强制此契约。
 - **NFR-S-003**：ChatAgent InlineWidget iframe 强制 `sandbox="allow-scripts"`（不给 `allow-same-origin`）
-- **NFR-S-004**：Markdown 渲染走 `react-markdown` + `rehype-sanitize`，禁止原始 HTML
-- **NFR-S-005**：本地持久化（localStorage / IndexedDB）不存任何 API key / 敏感凭证
-- **NFR-S-006**：生产 nginx 配置 security headers：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Content-Security-Policy`（连接源白名单）
+- **NFR-S-004**：Markdown 渲染走 `react-markdown` + `rehype-sanitize`，禁止原始 HTML（所有渲染 LLM 输出的位置都必须挂 `rehypeSanitize`，包括市场分析面板）
+- **NFR-S-005**：本地持久化（localStorage / IndexedDB）不存任何 API key / 敏感凭证；`useSettingsStore.apiKey` 仅在 dev 模式从 `VITE_API_KEY` hydrate 一次，生产环境 hydrate 值固定为空
+- **NFR-S-006**：生产 nginx 配置 security headers：`X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、`Referrer-Policy: no-referrer`、`Content-Security-Policy`（连接源白名单）；后端 rate limiter 必须支持多进程部署（Redis-backed fixed window，60 req/min/IP），单进程 dev 可降级为内存
 - **NFR-S-008**：断路器重置操作需 confirm dialog 二次确认（防误触）
 
 可访问性（NFR-A）：

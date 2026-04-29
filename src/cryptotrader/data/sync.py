@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 
 import httpx
 
+from cryptotrader._compat import UTC
 from cryptotrader.data.store import (
     _record_fetch,
     _should_fetch,

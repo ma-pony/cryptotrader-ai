@@ -4,15 +4,38 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, datetime
+from dataclasses import dataclass, field
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
+from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import _TF_MS, fetch_historical
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _BacktestLoopState:
+    """Mutable state threaded through the per-bar loop helpers."""
+
+    equity: float
+    equity_curve: list[float]
+    peak: float
+    graph: Any  # CompiledGraph | None
+    max_stop_loss_pct: float
+    position: float = 0.0
+    entry_price: float = 0.0
+    pending_action: str | None = None
+    pending_scale: float = 1.0
+    trades: list[dict] = field(default_factory=list)
+    decisions: list[dict] = field(default_factory=list)
 
 
 class BacktestEngine:
@@ -28,6 +51,7 @@ class BacktestEngine:
         fee_bps: float | None = None,
         position_pct: float | None = None,
         lookback: int | None = None,
+        progress_callback: Callable[[float], None] | None = None,
     ):
         from cryptotrader.config import load_config
 
@@ -47,6 +71,7 @@ class BacktestEngine:
         risk_cfg = load_config().risk.position
         self.position_pct = position_pct if position_pct is not None else risk_cfg.max_single_pct
         self.lookback = lookback if lookback is not None else bt_cfg.lookback
+        self.progress_callback = progress_callback
         # Cache config once to avoid re-parsing TOML per candle
         self._config = None
         # LLM usage tracking
@@ -329,156 +354,159 @@ class BacktestEngine:
         if not candles:
             return BacktestResult()
 
-        equity = self.capital
-        position = 0.0
-        entry_price = 0.0
-        equity_curve = [equity]
-        trades: list[dict] = []
-        decisions: list[dict] = []
-        peak = equity
-
         from cryptotrader.graph import build_backtest_graph
 
-        graph = build_backtest_graph() if self.use_llm else None
+        st = _BacktestLoopState(
+            equity=self.capital,
+            equity_curve=[self.capital],
+            peak=self.capital,
+            graph=build_backtest_graph() if self.use_llm else None,
+            max_stop_loss_pct=self._cached_config.risk.max_stop_loss_pct,
+        )
 
         lookback = self.lookback
-
-        pending_action: str | None = None
-        pending_scale: float = 1.0
-
-        max_stop_loss_pct = self._cached_config.risk.max_stop_loss_pct
-
+        total_bars = len(candles) - lookback
         for i in range(lookback, len(candles)):
-            window = candles[max(0, i - lookback) : i + 1]
-            cur = candles[i]
-            ts, o, c = cur[0], cur[1], cur[4]
+            if self.progress_callback and (i - lookback) % 10 == 0:
+                try:
+                    self.progress_callback((i - lookback) / max(total_bars, 1))
+                except Exception:
+                    logger.debug("progress_callback raised", exc_info=True)
+            await self._process_backtest_bar(i, candles, st)
 
-            # Skip candles with invalid data
-            if c is None or c <= 0:
-                continue
+        equity, final_trades = self._close_final_position(
+            st.position, st.entry_price, st.equity, candles[-1][4], candles[-1][0]
+        )
+        st.trades.extend(final_trades)
+        return self._compute_result(equity, st.equity_curve, st.trades, st.decisions)
 
-            # Per-bar decision record
-            bar_decision: dict = {
-                "ts": ts,
-                "price": c,
-                "open": o,
-                "position_before": position,
-                "entry_price": entry_price,
-                "equity": equity,
-            }
+    async def _process_backtest_bar(self, i: int, candles: list[list], st: _BacktestLoopState) -> None:
+        window = candles[max(0, i - self.lookback) : i + 1]
+        cur = candles[i]
+        ts, o, c = cur[0], cur[1], cur[4]
+        if c is None or c <= 0:
+            return
 
-            stop_loss_triggered = False
-            # Stop-loss check — mirror live graph's check_stop_loss node
-            # Skip if AI already requested close (avoid redundant override + confusing logs)
-            if position != 0 and entry_price > 0 and pending_action != "close":
-                pnl_pct = (c - entry_price) / entry_price if position > 0 else (entry_price - c) / entry_price
-                if pnl_pct < -max_stop_loss_pct:
-                    pending_action = "close"
-                    pending_scale = 1.0
-                    stop_loss_triggered = True
-                    logger.info(
-                        "Backtest stop-loss: %.2f%% loss (threshold: %.2f%%)",
-                        pnl_pct * 100,
-                        -max_stop_loss_pct * 100,
-                    )
-            bar_decision["stop_loss_triggered"] = stop_loss_triggered
+        bar_decision: dict = {
+            "ts": ts,
+            "price": c,
+            "open": o,
+            "position_before": st.position,
+            "entry_price": st.entry_price,
+            "equity": st.equity,
+            "stop_loss_triggered": self._maybe_trigger_stop_loss(c, st),
+            "executed_action": self._execute_pending_if_any(o, c, ts, st),
+        }
 
-            # Execute pending action from PREVIOUS bar's signal at current bar's open
-            # This eliminates look-ahead bias: signal on bar[i-1], fill on bar[i] open
-            executed_action = None
-            if pending_action is not None:
-                executed_action = pending_action
-                exec_price = o if (o is not None and o > 0) else c
-                position, entry_price, equity, new_trades = self._execute_pending_action(
-                    pending_action, position, entry_price, equity, exec_price, ts, pending_scale
+        signal = await self._evaluate_bar_signal(window, ts, i, st)
+        bar_decision.update(signal["bar_fields"])
+
+        if signal["action"] != "hold":
+            st.pending_action = signal["action"]
+            st.pending_scale = signal["position_scale"]
+
+        mtm = self._mark_to_market(st.position, st.equity, st.entry_price, c)
+        st.equity_curve.append(mtm)
+        st.peak = max(st.peak, mtm)
+        bar_decision["position_after"] = st.position
+        bar_decision["equity_after"] = mtm
+        bar_decision["pending_action"] = st.pending_action
+        st.decisions.append(bar_decision)
+
+    def _maybe_trigger_stop_loss(self, close: float, st: _BacktestLoopState) -> bool:
+        # Skip if AI already requested close (avoid redundant override + confusing logs)
+        if st.position == 0 or st.entry_price <= 0 or st.pending_action == "close":
+            return False
+        pnl_pct = (
+            (close - st.entry_price) / st.entry_price if st.position > 0 else (st.entry_price - close) / st.entry_price
+        )
+        if pnl_pct >= -st.max_stop_loss_pct:
+            return False
+        st.pending_action = "close"
+        st.pending_scale = 1.0
+        logger.info(
+            "Backtest stop-loss: %.2f%% loss (threshold: %.2f%%)",
+            pnl_pct * 100,
+            -st.max_stop_loss_pct * 100,
+        )
+        return True
+
+    def _execute_pending_if_any(
+        self, open_price: float | None, close: float, ts: int, st: _BacktestLoopState
+    ) -> str | None:
+        if st.pending_action is None:
+            return None
+        executed = st.pending_action
+        exec_price = open_price if (open_price is not None and open_price > 0) else close
+        st.position, st.entry_price, st.equity, new_trades = self._execute_pending_action(
+            st.pending_action, st.position, st.entry_price, st.equity, exec_price, ts, st.pending_scale
+        )
+        st.trades.extend(new_trades)
+        st.pending_action = None
+        st.pending_scale = 1.0
+        return executed
+
+    async def _evaluate_bar_signal(self, window: list[list], ts: int, i: int, st: _BacktestLoopState) -> dict:
+        analyses: dict = {}
+        verdict: dict = {}
+        risk_gate: dict = {}
+        debate_skipped = False
+        node_trace: list[dict] = []
+
+        if st.graph and self.use_llm:
+            snapshot = self._build_snapshot(window, ts, i)
+            result = await self._run_graph(st.graph, snapshot, st.position, st.entry_price, st.equity, st.peak)
+            node_trace = result.pop("_node_trace", [])
+            data = result.get("data", {})
+            verdict = data.get("verdict", {})
+            analyses = data.get("analyses", {})
+            risk_gate = data.get("risk_gate", {})
+            debate_skipped = data.get("debate_skipped", False)
+            original_action = verdict.get("action", "hold")
+            action = original_action
+            if not risk_gate.get("passed", True) and action != "hold":
+                logger.info(
+                    "Backtest risk gate rejected: %s — %s",
+                    risk_gate.get("rejected_by", "unknown"),
+                    risk_gate.get("reason", ""),
                 )
-                trades.extend(new_trades)
-                pending_action = None
-                pending_scale = 1.0
-            bar_decision["executed_action"] = executed_action
+                action = "hold"
+        else:
+            action = self._simple_signal(window)
+            original_action = action
 
-            # Generate signal on current bar (will be executed on NEXT bar)
-            analyses = {}
-            verdict = {}
-            risk_gate = {}
-            debate_skipped = False
-            original_action = "hold"
-            node_trace: list[dict] = []
-            if graph and self.use_llm:
-                snapshot = self._build_snapshot(window, ts, i)
-                result = await self._run_graph(graph, snapshot, position, entry_price, equity, peak)
-                node_trace = result.pop("_node_trace", [])
-                data = result.get("data", {})
-                verdict = data.get("verdict", {})
-                analyses = data.get("analyses", {})
-                risk_gate = data.get("risk_gate", {})
-                debate_skipped = data.get("debate_skipped", False)
-                original_action = verdict.get("action", "hold")
-                action = original_action
-                # Check risk gate — reject trade if risk gate failed
-                if not risk_gate.get("passed", True) and action != "hold":
-                    logger.info(
-                        "Backtest risk gate rejected: %s — %s",
-                        risk_gate.get("rejected_by", "unknown"),
-                        risk_gate.get("reason", ""),
-                    )
-                    action = "hold"
-            else:
-                action = self._simple_signal(window)
-                original_action = action
-
-            if action != "hold":
-                pending_action = action
-                pending_scale = verdict.get("position_scale", 1.0)
-
-            # Mark to market at close
-            mtm = self._mark_to_market(position, equity, entry_price, c)
-            equity_curve.append(mtm)
-            peak = max(peak, mtm)
-
-            # Record decision details
-            bar_decision.update(
-                {
-                    "position_after": position,
-                    "equity_after": mtm,
-                    "analyses": {
-                        k: {
-                            "direction": v.get("direction", ""),
-                            "confidence": v.get("confidence", 0),
-                            "data_sufficiency": v.get("data_sufficiency", ""),
-                        }
-                        for k, v in analyses.items()
-                    },
-                    "debate_skipped": debate_skipped,
-                    "verdict": {
-                        "action": verdict.get("action", "hold"),
-                        "confidence": verdict.get("confidence", 0),
-                        "position_scale": verdict.get("position_scale", 0),
-                        "reasoning": verdict.get("reasoning", ""),
-                        "thesis": verdict.get("thesis", ""),
-                    },
-                    "risk_gate": {
-                        "passed": risk_gate.get("passed", True),
-                        "rejected_by": risk_gate.get("rejected_by", ""),
-                        "reason": risk_gate.get("reason", ""),
-                    },
-                    "final_action": action
-                    if action != "hold"
-                    else ("hold" if original_action == "hold" else "rejected"),
-                    "pending_action": pending_action,
-                    "node_trace": [
-                        {"node": t["node"], "summary": t["summary"], "duration_ms": t["duration_ms"]}
-                        for t in node_trace
-                    ],
+        bar_fields = {
+            "analyses": {
+                k: {
+                    "direction": v.get("direction", ""),
+                    "confidence": v.get("confidence", 0),
+                    "data_sufficiency": v.get("data_sufficiency", ""),
                 }
-            )
-            decisions.append(bar_decision)
-
-        # Close any open position at end
-        equity, final_trades = self._close_final_position(position, entry_price, equity, candles[-1][4], candles[-1][0])
-        trades.extend(final_trades)
-
-        return self._compute_result(equity, equity_curve, trades, decisions)
+                for k, v in analyses.items()
+            },
+            "debate_skipped": debate_skipped,
+            "verdict": {
+                "action": verdict.get("action", "hold"),
+                "confidence": verdict.get("confidence", 0),
+                "position_scale": verdict.get("position_scale", 0),
+                "reasoning": verdict.get("reasoning", ""),
+                "thesis": verdict.get("thesis", ""),
+            },
+            "risk_gate": {
+                "passed": risk_gate.get("passed", True),
+                "rejected_by": risk_gate.get("rejected_by", ""),
+                "reason": risk_gate.get("reason", ""),
+            },
+            "final_action": action if action != "hold" else ("hold" if original_action == "hold" else "rejected"),
+            "node_trace": [
+                {"node": t["node"], "summary": t["summary"], "duration_ms": t["duration_ms"]} for t in node_trace
+            ],
+        }
+        return {
+            "action": action,
+            "position_scale": verdict.get("position_scale", 1.0),
+            "bar_fields": bar_fields,
+        }
 
     def _simple_signal(self, window: list[list]) -> str:
         closes = [c[4] for c in window]

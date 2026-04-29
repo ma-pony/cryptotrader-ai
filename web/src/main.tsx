@@ -6,6 +6,7 @@ import { BrowserRouter } from 'react-router';
 import { App } from './App';
 import { ErrorBoundary } from './components/error-boundary';
 import { I18nProvider } from './components/providers/i18n-provider';
+import { MarketDataProvider } from './contexts/market-data';
 import { ThemeProvider } from './components/providers/theme-provider';
 import { Toaster } from './components/ui/toaster';
 import './lib/i18n';
@@ -24,10 +25,12 @@ ReactDOM.createRoot(rootEl).render(
       <BrowserRouter>
         <ThemeProvider>
           <I18nProvider>
-            <ErrorBoundary>
-              <App />
-            </ErrorBoundary>
-            <Toaster />
+            <MarketDataProvider>
+              <ErrorBoundary>
+                <App />
+              </ErrorBoundary>
+              <Toaster />
+            </MarketDataProvider>
           </I18nProvider>
         </ThemeProvider>
       </BrowserRouter>

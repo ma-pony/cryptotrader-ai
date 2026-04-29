@@ -33,7 +33,6 @@ class MaxTotalExposure:
         self._max_single_pct = config.max_single_pct
 
     async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
-        # hold/close don't add exposure — always pass
         if verdict.action in ("hold", "close"):
             return CheckResult(passed=True)
 
@@ -41,29 +40,41 @@ class MaxTotalExposure:
         if total <= 0:
             return CheckResult(passed=True)
         positions = portfolio.get("positions", {})
-        # positions can be {pair: float} or {pair: {"amount": x, "avg_price": y}}
         existing = 0.0
         for v in positions.values():
             if isinstance(v, dict):
-                existing += abs(v.get("amount", 0) * v.get("avg_price", 0))
+                amount = v.get("amount", 0) or 0
+                avg_price = v.get("avg_price", 0) or 0
+                existing += abs(amount * avg_price)
             else:
-                existing += abs(float(v))
-        # Cap at max_pct so leveraged/underwater positions don't block all new trades
+                try:
+                    existing += abs(float(v))
+                except (TypeError, ValueError):
+                    continue
         existing_pct = min(existing / total, self._max_pct)
 
-        # Project the new trade's exposure: max_single_pct * scale.
-        # The execution layer uses delta logic (target - existing_for_pair),
-        # so this is a conservative upper bound.
         projected_new = self._max_single_pct * verdict.position_scale
         projected_total = existing_pct + projected_new
 
         if projected_total > self._max_pct:
+            remaining = self._max_pct - existing_pct
+            if remaining > 0.01 and self._max_single_pct > 0:
+                # PROD-I3: Propose a scale via CheckResult.scale_adjustment instead
+                # of mutating verdict.position_scale in place. risk_check aggregates
+                # all proposals and emits the final scale via the node return delta.
+                proposed = max(0.0, min(1.0, remaining / self._max_single_pct))
+                return CheckResult(
+                    passed=True,
+                    scale_adjustment=proposed,
+                    reason=(
+                        f"Scale clamped {projected_new:.2%} -> {remaining:.2%} "
+                        f"to fit exposure limit {self._max_pct:.2%}"
+                    ),
+                )
             return CheckResult(
                 passed=False,
                 reason=(
-                    f"Projected exposure {projected_total:.2%} "
-                    f"(existing {existing_pct:.2%} + new {projected_new:.2%}) "
-                    f"exceeds max {self._max_pct:.2%}"
+                    f"No remaining exposure budget: existing {existing_pct:.2%} already at max {self._max_pct:.2%}"
                 ),
             )
         return CheckResult(passed=True)

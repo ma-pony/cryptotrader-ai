@@ -12,6 +12,13 @@ api_key = ""
 base_url = ""          # e.g. "http://localhost:3000/v1" or your proxy
 default_temperature = 0.2
 timeout = 120
+prompt_caching = true  # Anthropic prompt cache — ~90% input token discount for static system prompts
+
+[llm.retry]
+max_attempts = 3
+retry_base_delay_s = 1.0
+retry_backoff_factor = 2.0
+retry_jitter = true
 
 [models]
 analysis = "glm-5"
@@ -141,7 +148,18 @@ graph_timeout_s = 300
 webhook_url = ""
 enabled = true
 webhook_timeout = 5
-events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary", "portfolio_stale"]
+events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary", "portfolio_stale", "price_trigger"]
+
+[notifications.telegram]
+bot_token = ""
+chat_id = ""
+enabled = false
+
+[triggers]
+enabled = false
+max_rules = 50
+ws_reconnect_max_s = 60
+funding_rate_poll_interval_minutes = 5
 
 [exchanges.binance]
 api_key = ""
@@ -157,3 +175,65 @@ sandbox = true
 [infrastructure]
 database_url = ""
 redis_url = ""
+
+[chart_analysis]
+vision_models = [
+    "gpt-4o", "gpt-4o-mini",
+    "claude-3-5-sonnet-20241022", "claude-opus-4-5",
+    "gemini-3.1-pro", "gemini-3-flash",
+]
+fast_model = ""
+max_image_bytes = 4718592
+description_max_tokens = 800
+
+[hitl]
+enabled = false
+min_position_scale = 0.5
+divergence_threshold = 0.6
+cold_start_min_trades = 5
+approval_timeout_seconds = 300
+
+[hitl.telegram]
+enabled = false
+bot_token = ""
+chat_id = ""
+
+[chat]
+# 分析事件缓冲区 TTL（秒），过期后无法重连回放
+event_buffer_ttl_seconds = 300
+# 最大同时运行的后台分析任务数
+max_concurrent_tasks = 10
+# Live Steering 单条指令最大字符数
+max_steering_instruction_chars = 500
+# 事件缓冲区最大条目数（超出时 FIFO 淘汰）
+event_buffer_max_size = 500
+
+[mcp]
+enabled = false
+transport = "stdio"
+fallback_on_error = true
+call_timeout_s = 5.0
+
+[[mcp.servers]]
+name = "cryptotrader-binance"
+transport = "stdio"
+enabled = true
+tools = ["binance_derivatives", "binance_funding_rate", "binance_klines"]
+
+[[mcp.servers]]
+name = "cryptotrader-macro"
+transport = "stdio"
+enabled = true
+tools = ["macro_fear_greed", "macro_btc_dominance", "macro_fred_series", "macro_etf_flow"]
+
+[[mcp.servers]]
+name = "cryptotrader-onchain"
+transport = "stdio"
+enabled = true
+tools = ["onchain_defi_tvl", "onchain_derivatives", "onchain_exchange_netflow", "onchain_whale_transfers"]
+
+[[mcp.servers]]
+name = "cryptotrader-news"
+transport = "stdio"
+enabled = true
+tools = ["news_rss", "news_sosovalue"]

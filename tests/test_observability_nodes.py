@@ -7,8 +7,10 @@ Task 2.3 — journal_trade and journal_rejection pass the 5 new fields to build_
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+
+from cryptotrader._compat import UTC
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 

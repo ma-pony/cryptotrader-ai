@@ -1,249 +1,254 @@
 # CryptoTrader AI
 
-AI-powered crypto trading system using LangGraph multi-agent debate.
+**简体中文** · [English](README_EN.md)
+
+基于 LangGraph 多智能体辩论的 AI 加密货币交易系统。
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-347%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-1813%20passed-brightgreen.svg)]()
 
-## Overview
+## 概述
 
-4 specialized AI agents (Technical, On-chain, News, Macro) independently analyze market data, then debate through cross-challenge rounds to reach consensus. A hard-coded risk gate (11 rule-based checks, no LLM) enforces position limits, loss limits, and circuit breakers. Every decision is recorded in a Git-like Decision Journal for auditability and experience-based learning.
+4 个专业 AI 智能体（技术面、链上数据、新闻情绪、宏观经济）独立分析市场数据，然后通过交叉挑战辩论轮次达成共识。硬编码的风控门（11 项规则检查，不依赖 LLM）强制执行仓位限制、损失限制和熔断机制。每个决策都记录在类 Git 的决策日志中，便于审计和基于经验的学习。
 
-Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's think-before-act pattern) to reduce overconfidence and hallucination before outputting signals.
+每个智能体在输出信号前都会运行**领域专属的预信号检查清单**（受 Devin 的先思后行模式启发），以减少过度自信和幻觉。
 
-### Key Features
+### 核心特性
 
-- **Multi-agent debate** — 4 agents analyze independently, then cross-challenge each other over 2-3 rounds; debate gate skips debate on consensus or confusion for progressive filtering
-- **Three graph modes** — Full debate pipeline with debate gate, lite (backtest), bull/bear adversarial with judge
-- **11-check risk gate** — Pure rules, no LLM: position limits, CVaR, correlation, circuit breakers
-- **Decision journal** — Git-like immutable commit chain with similarity search and calibration
-- **Verbal reinforcement** — Past decisions injected into agent prompts for experience-based learning
-- **Structured experience memory** — GSSC pipeline (gather → select → structure) with regime-aware retrieval, ExperienceRule/ExperienceMemory JSON, and 5-layer anti-overfitting defense
-- **Backtesting engine** — Historical simulation with realistic cost modeling and no look-ahead bias
-- **Live trading ready** — ccxt-based exchange adapters with retry, precision, and timeout handling
-- **APScheduler automation** — Periodic trading cycles with daily portfolio summaries
-- **61+ data sources** — Unified SQLite store across 7 categories with rate limiting per source
+- **多智能体辩论** — 4 个智能体独立分析后，经辩论门控渐进过滤：共识或迷茫时跳过辩论，否则进入 2-3 轮并行交叉质疑
+- **三种图模式** — 完整辩论流程（含辩论门控）、轻量回测、多空对抗+评委
+- **11 项风控检查** — 纯规则，零 LLM：仓位限制、CVaR、相关性、熔断器
+- **决策日志链** — 类 Git 不可变提交链，支持相似搜索和校准分析
+- **语言强化** — 将历史决策经验注入智能体 prompt，实现经验学习
+- **结构化经验记忆** — GSSC 流水线（汇集→选择→结构化）将历史经验注入智能体 prompt，含 regime 感知搜索和防过拟合五层防线
+- **回测引擎** — 历史模拟，含真实成本建模和防前视偏差
+- **实盘就绪** — 基于 ccxt 的交易所适配器，带重试、精度处理和超时控制
+- **APScheduler 自动化** — 周期性交易循环 + 每日组合摘要
+- **61+ 数据源** — 统一 SQLite 存储，覆盖 7 个类别，按源独立限速
 
-## Architecture
+## 系统架构
 
 ```
-Data Collection → Verbal Reinforcement → 4 Agents (fan-out, parallel)
-  → Debate Gate → [skip] → Enrich Context → Verdict
-                → [debate] → 2 Debate Rounds (parallel per round)
-  → Verdict → Risk Gate (11 checks) → Execute / Reject → Journal
-                                        ↓
-                              Portfolio Write-back → Snapshot
+数据采集 → 语言强化注入 → 4 智能体（并行）
+  → 辩论门控 → [跳过] → 上下文丰富 → 裁决
+             → [辩论] → 2 轮辩论（轮内并行）
+  → 裁决 → 风控门（11 项检查）→ 执行 / 拒绝 → 日志记录
+                                  ↓
+                        持仓回写 → 快照保存
 ```
 
-**Three graph variants:**
-- `build_trading_graph()` — Full pipeline with debate gate (skip on consensus/confusion), 2 debate rounds, AI verdict with downgrade
-- `build_lite_graph()` — Skips debate, used for backtesting
-- `build_debate_graph()` — Bull/bear adversarial debate with judge (TradingAgents-style)
+**三种图模式：**
+- `build_trading_graph()` — 完整流程，含辩论门控（共识/迷茫时跳过辩论）、2 轮辩论、AI 裁决可降级
+- `build_lite_graph()` — 跳过辩论，用于回测
+- `build_debate_graph()` — 多空对抗辩论 + 评委（TradingAgents 风格）
 
-### How Agents Work
+### 智能体分工
 
-| Agent | Type | Data | Role |
-|-------|------|------|------|
-| TechAgent | BaseAgent | OHLCV + pandas-ta indicators (RSI, MACD, SMA, BBands, ATR) | Technical pattern recognition |
-| ChainAgent | ToolAgent | OI, funding rate, exchange netflow, whale transfers, DeFi TVL | On-chain signal detection |
-| NewsAgent | ToolAgent | RSS headlines + keyword sentiment + CoinGecko social buzz | News & sentiment analysis |
-| MacroAgent | BaseAgent | Fed rate, DXY, BTC dominance, Fear & Greed, ETF flows, VIX | Macro regime assessment |
+| 智能体 | 类型 | 数据 | 职责 |
+|--------|------|------|------|
+| TechAgent | BaseAgent | OHLCV + pandas-ta 指标（RSI、MACD、SMA、BBands、ATR）| 技术形态识别 |
+| ChainAgent | ToolAgent | OI、资金费率、交易所净流量、鲸鱼转账、DeFi TVL | 链上信号检测 |
+| NewsAgent | ToolAgent | RSS 标题 + 关键词情绪 + CoinGecko 社交热度 | 新闻情绪分析 |
+| MacroAgent | BaseAgent | 利率、美元指数、BTC 主导率、恐惧贪婪、ETF 流量、VIX | 宏观环境评估 |
 
-- **BaseAgent**: Single LLM call with structured JSON output
-- **ToolAgent**: LangChain agent with tool-calling loop for real-time data queries (falls back to single call in backtest mode to avoid forward-looking bias)
+- **BaseAgent**：单次 LLM 调用，结构化 JSON 输出
+- **ToolAgent**：LangChain 代理，带工具调用循环，可实时查询数据（回测模式下降级为单次调用，避免前视偏差）
 
-Every agent's system prompt includes a **5-point pre-signal checklist**: contradiction check, evidence grounding, confidence sanity, base rate awareness, and recency trap avoidance. Confidence is calibrated on a 0-1 scale with `data_sufficiency="low"` capping output at 0.3.
+每个智能体的系统提示都包含 **5 点预信号检查清单**：矛盾检查、证据落地、信心合理性、基准概率意识、近因偏差防范。`data_sufficiency="low"` 时信心值上限为 0.3。
 
-### How Debate Works
+### 辩论流程
 
-1. **Round 1**: All 4 agents analyze independently (parallel)
-2. **Debate Gate**: Evaluates divergence; skips debate if agents already show consensus (divergence < `consensus_skip_threshold`) or confusion (divergence < `confusion_max_dispersion` with low confidence); otherwise proceeds to debate
-3. **Round 2-3**: Each agent sees all others' analyses and must justify holding or revising their position with specific data points (parallel per round)
-4. **Convergence check**: Divergence score (population stdev of `confidence × direction`) tracked per round; stops when relative change < 10% or max rounds reached
-5. **Verdict**: Single LLM at temperature 0.1 sees all agent outputs, position context (FLAT/LONG/SHORT, entry price, unrealized PnL), price trend, and risk constraints → outputs `{action, confidence, position_scale, reasoning, thesis, invalidation}`
+1. **第 1 轮**：4 个智能体独立分析
+2. **辩论门控**：评估智能体共识程度；达成共识或极度迷茫时跳过辩论直接进入裁决，否则进入辩论轮次
+3. **第 2-3 轮（轮内并行）**：每个智能体看到其他人的分析结果，必须用具体数据点支持自己保持或修改立场
+4. **收敛检查**：每轮计算分歧度（`confidence × direction` 的总体标准差），相对变化 < 10% 或达到最大轮数时停止
+5. **裁决**：单个 LLM（temperature=0.1）综合所有智能体输出、持仓上下文（空仓/多头/空头、入场价、浮动盈亏）、价格趋势和风控约束 → 输出 `{action, confidence, position_scale, reasoning, thesis, invalidation}`
 
-### Learning System
+### 学习系统
 
-- **Verbal reinforcement**: `search_by_regime()` retrieves past decisions matching current regime tags via Jaccard overlap. Regime labels (high_funding, high_vol, trending_up, extreme_fear, etc.) are computed by `tag_regime()` from the data snapshot
-- **GSSC pipeline**: `context.py` implements gather → select → structure: collects regime-matched cases and structured rules, scores by relevance, fits within token budget, and injects as structured context into agent prompts
-- **Structured experience memory**: `reflect.py` generates `ExperienceMemory` JSON (success_patterns, forbidden_zones, strategic_insights) with `ExperienceRule` entries per pattern. Rules carry maturity levels (observation → hypothesis → rule) and empirical win rates
-- **Anti-overfitting 5-layer defense**: minimum sample thresholds, maturity gating, regime-aware verification (win rates computed only within matching regime), LLM constraint prompts, code-verified win rates
-- **Calibration**: Per-agent accuracy tracking with bias detection (overconfidence, directional lean, neutral-defaulting). Corrections injected into verdict prompt
+- **GSSC 流水线**：`verbal.py`（regime 感知搜索）+ `reflect.py`（结构化规则生成）→ `context.py`（汇集 → 选择 → 结构化）→ 注入智能体 prompt
+- **Regime 感知搜索**：`tag_regime()` 将当前快照分类为离散标签（high_funding、high_vol、trending_up、extreme_fear 等），通过 Jaccard 重叠度检索最相关的历史案例
+- **结构化经验记忆**：LLM 将历史案例提炼为 `ExperienceMemory`（成功模式、禁止区域、战略洞见），支持增量演化和 maturity 分级（observation → hypothesis → rule）
+- **防过拟合五层防线**：最小样本阈值、maturity 分级、regime 感知验证、LLM 约束 prompt、代码核验胜率
+- **校准分析**：逐智能体准确率追踪 + 偏差检测（过度自信、方向偏好、中性默认）。校正信息注入裁决 prompt
 
-## Quickstart
+## 快速开始
 
-### Prerequisites
+### 前置条件
 
 - Python 3.12+
-- [uv](https://docs.astral.sh/uv/) package manager
-- An OpenAI-compatible LLM API key (OpenAI, Anthropic, DeepSeek, etc.)
+- [uv](https://docs.astral.sh/uv/) 包管理器
+- 一个兼容 OpenAI 的 LLM API Key（OpenAI、Anthropic、DeepSeek 等）
 
-### Installation
+### 安装
 
 ```bash
-# Clone and install
+# 克隆并安装
 git clone https://github.com/your-org/cryptotrader-ai.git
 cd cryptotrader-ai
 uv sync
 
-# Configure LLM endpoint
+# 配置 LLM 端点
 cp config/default.toml config/local.toml
-# Edit config/local.toml: set [llm] api_key and base_url
+# 编辑 config/local.toml：设置 [llm] api_key 和 base_url
 
-# Or use environment variables
+# 或使用环境变量
 export OPENAI_API_KEY=your_key
 ```
 
-### First Run
+### 首次运行
 
 ```bash
-# Run one analysis cycle (paper trading)
+# 运行单次分析（模拟交易）
 arena run --pair BTC/USDT --mode paper
 
-# Multi-pair analysis with full debate
+# 多交易对分析（完整辩论）
 arena run --pair BTC/USDT --pair ETH/USDT --graph full
 
-# View decision journal
+# 查看决策日志
 arena journal log --limit 10
 arena journal show <hash>
 ```
 
-### Backtesting
+### 回测
 
 ```bash
-# Basic backtest with AI agents
+# AI 智能体回测
 arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --interval 4h
 
-# Fast backtest with SMA crossover (no LLM calls)
+# 快速 SMA 交叉回测（无 LLM 调用）
 arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --no-llm
 
-# Sync historical data first for richer backtests
+# 先同步历史数据，回测数据更丰富
 arena sync
 ```
 
-The backtest engine features:
-- **No look-ahead bias**: Signal on bar[i], execution at bar[i+1] open
-- **Realistic costs**: Configurable slippage (5 bps) + fees (10 bps)
-- **Dynamic position sizing**: 35% at high confidence, 12% medium, 6% low
-- **Rich data**: ETF flows, OI, long/short ratio, DeFi TVL, VIX, S&P500, stablecoin supply, hashrate
-- **Metrics**: Total return, Sharpe ratio (365d annualized), max drawdown, win rate, equity curve
+回测引擎特性：
+- **防前视偏差**：bar[i] 生成信号，bar[i+1] 开盘执行
+- **真实成本**：可配置滑点（5 bps）+ 手续费（10 bps）
+- **动态仓位**：高信心 35%、中等 12%、低 6%
+- **丰富数据**：ETF 流量、OI、多空比、DeFi TVL、VIX、S&P500、稳定币供应、哈希率
+- **指标输出**：总收益、夏普比率（365 天年化）、最大回撤、胜率、权益曲线
 
-### Scheduler
+### 调度器
 
 ```bash
-# Start periodic trading cycles (requires scheduler.enabled=true in config)
+# 启动周期性交易循环（需 config 中 scheduler.enabled=true）
 arena scheduler start
 
-# Check portfolio status
+# 查看组合状态
 arena scheduler status
 ```
 
-APScheduler-based with `IntervalTrigger` (default 4h) for trading cycles and `CronTrigger` for daily portfolio summaries.
+基于 APScheduler，`IntervalTrigger`（默认 4 小时）执行交易循环，`CronTrigger` 发送每日组合摘要。
 
-### Dashboard & API
+### 仪表盘 & API
 
 ```bash
-# Web frontend (React + Vite)
+# Web 前端（React + Vite）
 arena web --port 5173
 
-# FastAPI server
+# FastAPI 服务
 arena serve --port 8003
 ```
 
-## CLI Reference
+## CLI 命令参考
 
-| Command | Description |
-|---------|-------------|
-| `arena run --pair BTC/USDT --mode paper` | Single analysis + execution cycle |
-| `arena run --pair BTC/USDT --graph full\|lite\|debate` | Choose graph variant |
-| `arena backtest --pair BTC/USDT --start DATE --end DATE` | Historical backtest |
-| `arena sync` | Sync all historical data to SQLite store |
-| `arena serve --port 8003` | Start FastAPI server |
-| `arena web` | Launch React web frontend |
-| `arena scheduler start` | Start periodic scheduler |
-| `arena scheduler status` | Show portfolio & positions |
-| `arena journal log --limit 10` | Recent decisions |
-| `arena journal show <hash>` | Decision detail |
-| `arena migrate` | Create PostgreSQL tables |
-| `arena risk reset-breaker` | Reset circuit breaker |
-| `arena live-check --exchange binance` | Pre-flight check for live trading |
-| `arena experience distill --session {id}` | Distill experience from backtest |
-| `arena experience show --session {id}` | Show distilled experience |
-| `arena experience merge --session {id}` | Merge backtest experience into live |
-| `arena experience sessions` | List backtest sessions |
+| 命令 | 说明 |
+|------|------|
+| `arena run --pair BTC/USDT --mode paper` | 单次分析 + 执行 |
+| `arena run --pair BTC/USDT --graph full\|lite\|debate` | 选择图模式 |
+| `arena backtest --pair BTC/USDT --start DATE --end DATE` | 历史回测 |
+| `arena sync` | 同步所有历史数据到 SQLite |
+| `arena serve --port 8003` | 启动 FastAPI 服务 |
+| `arena web` | 启动 React Web 前端 |
+| `arena scheduler start` | 启动周期调度器 |
+| `arena scheduler status` | 查看组合和仓位 |
+| `arena journal log --limit 10` | 最近决策列表 |
+| `arena journal show <hash>` | 决策详情 |
+| `arena migrate` | 创建 PostgreSQL 表 |
+| `arena risk reset-breaker` | 重置熔断器 |
+| `arena live-check --exchange binance` | 实盘就绪检查 |
+| `arena experience sessions` | 列出所有回测会话 |
+| `arena experience distill --session {id}` | 从回测会话提炼经验记忆 |
+| `arena experience show --session {id}` | 查看已提炼的经验记忆 |
+| `arena experience merge --session {id}` | 将回测经验合并入实盘记忆 |
 
-## Data Sources
+## 数据源
 
-### Market & On-chain
+### 行情与链上
 
-Real-time data from 5 providers with graceful degradation (works without API keys):
+5 个数据源，支持优雅降级（无 API Key 也能运行）：
 
-| Provider | Data | Cost | Key Required |
-|----------|------|------|-------------|
-| Binance | Futures OI, funding rate, liquidations, long/short ratio | Free | No |
-| DefiLlama | DeFi TVL, 7d change, stablecoin supply | Free | No |
-| CoinGlass | Open interest, liquidations | Free tier (1000/mo) | Yes |
-| CryptoQuant | Exchange netflow | Free tier (daily) | Yes |
-| Whale Alert | Large transfers | Free tier (10/min) | Yes |
+| 数据源 | 数据 | 成本 | 需要 Key |
+|--------|------|------|---------|
+| Binance | 期货 OI、资金费率、清算、多空比 | 免费 | 否 |
+| DefiLlama | DeFi TVL、7 日变化、稳定币供应 | 免费 | 否 |
+| CoinGlass | 持仓量、清算数据 | 免费层（1000 次/月）| 是 |
+| CryptoQuant | 交易所净流入流出 | 免费层（每日）| 是 |
+| Whale Alert | 大额转账 | 免费层（10 次/分钟）| 是 |
 
-### News & Sentiment
+### 新闻与情绪
 
-| Source | Data | Cost |
+| 数据源 | 数据 | 成本 |
 |--------|------|------|
-| CoinDesk, CoinTelegraph, Decrypt | Headlines via RSS | Free |
-| CoinGecko Community API | Social buzz (Twitter followers, Reddit subs, sentiment votes) | Free |
+| CoinDesk, CoinTelegraph, Decrypt | RSS 标题抓取 | 免费 |
+| CoinGecko 社区 API | 社交热度（Twitter 粉丝、Reddit 订阅、情绪投票）| 免费 |
 
-### Macro
+### 宏观
 
-| Source | Data | Cost |
+| 数据源 | 数据 | 成本 |
 |--------|------|------|
-| FRED | Fed funds rate, DXY, VIX, S&P 500 | Free (key required) |
-| CoinGecko | BTC dominance | Free |
-| Alternative.me | Fear & Greed index | Free |
-| SoSoValue | BTC/ETH ETF daily flows, net assets | Free (key required) |
+| FRED | 美联储利率、美元指数、VIX、S&P 500 | 免费（需 Key）|
+| CoinGecko | BTC 主导率 | 免费 |
+| Alternative.me | 恐惧贪婪指数 | 免费 |
+| SoSoValue | BTC/ETH ETF 日流量、净资产 | 免费（需 Key）|
 
-### Unified Data Store
+### 统一数据存储
 
-All data is cached in `~/.cryptotrader/market_data.db` (SQLite, WAL mode):
-- 61+ data sources across 7 categories (macro, on-chain, derivatives, DeFi, sentiment, ETF, stablecoin)
-- Per-source rate limiting (5 min to 1 hour TTL depending on source)
-- Forward-fill for trading-day data (FRED, ETF) to handle weekends/holidays
-- `arena sync` bulk-fetches all historical data for backtesting
+所有数据缓存在 `~/.cryptotrader/market_data.db`（SQLite，WAL 模式）：
+- 61+ 数据源，覆盖 7 个类别（宏观、链上、衍生品、DeFi、情绪、ETF、稳定币）
+- 按源独立限速（5 分钟到 1 小时 TTL）
+- 交易日数据前向填充（FRED、ETF），处理周末和假期
+- `arena sync` 批量拉取全部历史数据用于回测
 
-## Configuration
+## 配置
 
-### Config Files
+### 配置文件
 
 ```
 config/
-├── default.toml          # Main config (mode, models, risk, scheduler, providers)
-├── local.toml            # Local overrides (API keys, gitignored)
-└── exchanges.toml.example  # Exchange credential template
+├── default.toml          # 主配置（模式、模型、风控、调度器、数据源）
+├── local.toml            # 本地覆盖（API Key，已 gitignore）
+└── exchanges.toml.example  # 交易所凭证模板
 ```
 
-Config loads `default.toml` first, then deep-merges `local.toml`. Cached after first load.
+先加载 `default.toml`，再深度合并 `local.toml`。首次加载后全局缓存。
 
-### Key Config Sections
+### 关键配置段
 
 ```toml
 [llm]
-api_key = ""           # Unified LLM API key
-base_url = ""          # API endpoint (e.g. "http://localhost:3000/v1")
+api_key = ""           # 统一 LLM API Key
+base_url = ""          # API 端点（如 "http://localhost:3000/v1"）
 
-[models]               # Per-role model selection
-analysis = "deepseek-chat"
-verdict = "deepseek-reasoner"
-fallback = "deepseek-chat"
-# Also: debate, tech_agent, chain_agent, news_agent, macro_agent
+[models]               # 按角色选择模型 — 模型名必须存在于 LLM 网关
+analysis = "deepseek-v4-flash"
+debate = "deepseek-v4-flash"
+verdict = "gpt-5.5"
+tech_agent = "deepseek-v4-flash"
+chain_agent = "deepseek-v4-flash"
+news_agent = "deepseek-v4-flash"
+macro_agent = "deepseek-v4-flash"
+fallback = "deepseek-v4-flash"
+# 任何留空字段会回退到 models.analysis → models.fallback
 
 [debate]
 max_rounds = 3
 convergence_threshold = 0.1
-skip_debate = true
-consensus_skip_threshold = 0.5
-confusion_skip_threshold = 0.05
-confusion_max_dispersion = 0.2
+gate_consensus_threshold = 0.8   # 分歧度低于此值时跳过辩论（共识）
+gate_confusion_threshold = 0.05  # 分歧度高于此值时跳过辩论（迷茫）
 
 [risk]
 max_stop_loss_pct = 0.05
@@ -259,235 +264,271 @@ enabled = false
 pairs = ["BTC/USDT", "ETH/USDT"]
 interval_minutes = 240
 exchange_id = "binance"
-daily_summary_hour = 0    # UTC hour (0-23)
+daily_summary_hour = 0    # UTC 小时（0-23）
 
 [experience]
 enabled = true
 every_n_cycles = 20
+token_budget = 2000              # 注入 prompt 的 token 上限
+win_rate_tolerance = 0.10        # 规则胜率容差（防过拟合验证）
+
+[experience.regime_thresholds]
+high_funding = 0.01
+high_vol = 0.05
+trending_up = 0.03
+trending_down = -0.03
+extreme_fear = 25
+extreme_greed = 75
 ```
 
-### Environment Variables
+### 环境变量
 
 ```bash
-# LLM providers
-OPENAI_API_KEY=your_key
-ANTHROPIC_API_KEY=your_key
+# ── API 鉴权（生产必须）──
+# 默认 AUTH_MODE=enabled — API_KEY 必须设置，否则进程启动失败。
+# AUTH_MODE=disabled 仅作 dev opt-out（每请求打 WARNING 日志）。
+AUTH_MODE=enabled
+API_KEY=$(openssl rand -hex 32)
 
-# On-chain providers (optional — degrades gracefully)
+# ── 链上数据源（可选但推荐）──
+# 缺 key 时 provider 返 None；chain_agent prompt 会被告知哪些数据源
+# 不可用，自动降低 data_sufficiency。
 COINGLASS_API_KEY=your_key
 CRYPTOQUANT_API_KEY=your_key
 WHALE_ALERT_API_KEY=your_key
 FRED_API_KEY=your_key
 
-# Infrastructure (optional — uses in-memory fallback)
-DATABASE_URL=postgresql+asyncpg://...
-REDIS_URL=redis://localhost:6379
+# ── 基础设施（用 CRYPTOTRADER_INFRASTRUCTURE__* 前缀注入 config）──
+CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL=postgresql+asyncpg://...
+CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL=redis://localhost:6379
+
+# ── 前端（生产构建拒绝 VITE_API_KEY）──
+# 仅 dev .env.local 用一次性 hydrate 进 useSettingsStore
+VITE_API_BASE_URL=http://localhost:8003
+# VITE_API_KEY= （仅 dev；生产用户在 Settings UI 输入）
 ```
 
-## Risk Gate
+## 风控门
 
-11 rule-based checks (no LLM), all configurable in `config/default.toml` under `[risk]`:
+11 项规则检查（不依赖 LLM），全部可在 `config/default.toml` 的 `[risk]` 段配置：
 
-| Check | What it does | Default |
-|-------|-------------|---------|
-| Max Position Size | Cap single position as % of portfolio | 10% |
-| Total Exposure | Limit total open exposure | 50% |
-| Daily Loss Limit | Circuit breaker on daily loss threshold | 3% |
-| Max Drawdown | Reject trades during deep drawdowns | 10% |
-| CVaR (99%) | Conditional Value-at-Risk from recent returns | 5% |
-| Correlation | Block correlated positions (14 hardcoded groups) | — |
-| Cooldown | Minimum time between trades on same pair | 60 min |
-| Post-Loss Cooldown | Extra cooldown after a losing trade | 120 min |
-| Volatility | Reject during extreme vol or flash crashes | — |
-| Funding Rate | Block when funding rate signals crowded positioning | — |
-| Rate Limit | Cap trades per hour/day | — |
-| Exchange Health | Check API latency before execution | — |
+| 检查项 | 功能 | 默认值 |
+|--------|------|--------|
+| 最大单仓位 | 限制单个仓位占组合比例 | 10% |
+| 总敞口 | 限制总敞口 | 50% |
+| 日损失限制 | 日损失达到阈值触发熔断 | 3% |
+| 最大回撤 | 深度回撤期间拒绝交易 | 10% |
+| CVaR (99%) | 基于近期收益的条件风险价值 | 5% |
+| 相关性 | 阻止高度相关的仓位（14 个硬编码组）| — |
+| 冷却时间 | 同一交易对的最小交易间隔 | 60 分钟 |
+| 亏损后冷却 | 亏损交易后的额外冷却 | 120 分钟 |
+| 波动率 | 极端波动或闪崩时拒绝 | — |
+| 资金费率 | 资金费率异常时阻止（拥挤信号）| — |
+| 频率限制 | 每小时/每天交易次数上限 | — |
+| 交易所健康 | 执行前检查 API 延迟 | — |
 
-The `close` action (closing existing positions) is **exempt from all risk checks** — reducing exposure should never be blocked.
+`close` 动作（平仓）**豁免全部风控检查** — 减仓是降低风险，不应被阻断。
 
-## Notifications
+## 通知
 
-Webhook notifications for 6 event types (configure in `config/default.toml`):
+6 种事件类型的 Webhook 通知（在 `config/default.toml` 配置）：
 
-| Event | Trigger |
-|-------|---------|
-| `trade` | Successful order fill |
-| `rejection` | Risk gate rejects a trade |
-| `circuit_breaker` | Daily loss limit triggers circuit breaker |
-| `daily_summary` | Scheduler emits daily portfolio summary |
-| `reconcile_mismatch` | Position reconciliation detects mismatch |
-| `portfolio_stale` | Portfolio data becomes stale or unavailable |
+| 事件 | 触发条件 |
+|------|---------|
+| `trade` | 订单成功成交 |
+| `rejection` | 风控门拒绝交易 |
+| `circuit_breaker` | 日损失限制触发熔断 |
+| `daily_summary` | 调度器每日发送组合摘要 |
+| `reconcile_mismatch` | 仓位对账发现不一致 |
+| `portfolio_stale` | 组合数据过期或不可用 |
 
-## API Endpoints
+## API 端点
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/analyze` | API Key | Run full analysis cycle for a pair |
-| GET | `/journal/log?limit=10` | API Key | Recent decision commits |
-| GET | `/journal/{hash}` | API Key | Single commit detail |
-| GET | `/portfolio` | API Key | Current portfolio state |
-| GET | `/risk/status` | API Key | Risk state (trade counts, circuit breaker) |
-| GET | `/health` | Public | System status (API, Redis, DB) |
-| GET | `/metrics` | API Key | Stats: total decisions, win rate, avg divergence |
+| 方法 | 路径 | 认证 | 描述 |
+|------|------|------|------|
+| GET | `/health` | 公开 | 详细组件状态（API/Redis/DB/LLM）— 503 表示降级 |
+| GET | `/metrics` | 公开 | Prometheus 指标（文本格式）|
+| GET | `/scheduler/status` | 公开 | 调度器心跳（LB 探测）|
+| GET | `/api/portfolio/snapshot` | API Key | 当前权益、现金、持仓 |
+| GET | `/api/portfolio/equity-curve?range=24h\|7d\|30d\|all` | API Key | 时序权益数据点 |
+| GET | `/api/risk/status` | API Key | 交易次数、熔断、阈值（实时 Redis ping）|
+| POST | `/api/risk/circuit-breaker/reset` | API Key | 手动重置熔断（未触发返 409）|
+| GET | `/api/decisions?pair=&from=&to=&page=&size=` | API Key | 决策列表（分页 + 日期筛选）|
+| GET | `/api/decisions/{commit_hash}` | API Key | 决策详情（含 agents/debate/verdict/risk_gate/timeline）|
+| GET | `/api/scheduler/status` | API Key | 下次触发币对 / 时间 |
+| GET / POST / PATCH / DELETE | `/api/scheduler/rules` | API Key | 触发规则 CRUD |
+| GET | `/api/metrics/summary` | API Key | 计数器 + p50/p95 延迟 |
+| POST | `/api/backtest/run` | API Key | 异步提交回测（返 run_id）|
+| GET | `/api/backtest/runs/{run_id}` | API Key | 状态 + 进度 + 结果 |
+| DELETE | `/api/backtest/runs/{run_id}` | API Key | 取消运行中的回测 |
+| GET | `/api/backtest/sessions` | API Key | 已保存的会话名 |
+| GET | `/api/backtest/sessions/{name}` | API Key | 加载已保存会话 |
+| POST | `/api/chat/stream` | API Key | SSE 流式分析（30s keepalive）|
+| POST | `/api/chat/interrupt/{session_id}` | API Key | 软中断 |
+| POST | `/api/chat/steer/{session_id}` | API Key | 注入中途引导 |
+| GET | `/api/hitl/pending` | API Key | 待人工审批的请求 |
+| POST | `/api/hitl/{approval_id}/respond` | API Key | 同意 / 拒绝 |
+| GET | `/api/market/{pair}` | API Key | 资金费率 / OI / 清算 |
+| GET | `/api/market/{pair}/ohlcv?timeframe=&limit=` | API Key | OHLCV 蜡烛 |
 
-Authentication via `X-API-Key` header (enabled when `API_KEY` env var is set). Rate limited at 60 req/min/IP.
+**认证**：默认 `AUTH_MODE=enabled`，`API_KEY` env 必须设置；缺失则进程启动失败。`AUTH_MODE=disabled` 仅作 dev opt-out（每请求 WARNING 日志）。所有比较使用 `secrets.compare_digest`（防时序攻击）。**限流**：60 次/分钟/IP，配置 Redis 时为多进程安全 fixed window；单进程 dev 降级内存。**CORS**：显式 `allow_methods` / `allow_headers` allowlist（与 `allow_credentials=true` 配合）。
 
-## Execution Layer
+## 执行层
 
-### Paper Trading
+### 模拟交易
 
-- Default mode, no real money at risk
-- Configurable initial balance (default $10,000)
-- Slippage model: `base + amount × price × 1e-8`
-- Thread-safe via `asyncio.Lock`
+- 默认模式，不涉及真实资金
+- 可配置初始余额（默认 $10,000）
+- 滑点模型：`base + amount × price × 1e-8`
+- 通过 `asyncio.Lock` 保证线程安全
 
-### Live Trading
+### 实盘交易
 
-Production-hardened `LiveExchange` wrapping ccxt:
+生产级加固的 `LiveExchange`，封装 ccxt：
 
-- **Retry**: Exponential backoff (3 attempts), fatal errors excluded (auth, permissions, insufficient funds)
-- **Balance pre-check**: Verifies sufficient funds before every order
-- **Precision**: Applies exchange-specific `amount_to_precision()` / `price_to_precision()`
-- **Minimum order**: Checks exchange market limits
-- **Timeout**: Polls every 2s for up to 30s, auto-cancels stale orders
-- **Pre-flight**: `arena live-check` validates credentials, API latency, Redis, and database
+- **重试机制**：指数退避（3 次），致命错误不重试（认证、权限、余额不足）
+- **余额预检**：每次下单前验证可用余额
+- **精度处理**：应用交易所特定的 `amount_to_precision()` / `price_to_precision()`
+- **最小下单量**：检查交易所市场限制
+- **超时控制**：每 2 秒轮询，30 秒后自动撤单
+- **飞行前检查**：`arena live-check` 验证凭证、API 延迟、Redis 和数据库
 
 ```bash
-# Verify live trading readiness
+# 验证实盘就绪状态
 arena live-check --exchange binance
 ```
 
-## Docker Deployment
+## Docker 部署
 
 ```bash
-# Start full stack (PostgreSQL 16 + Redis 7 + App + Dashboard + Scheduler)
+# 启动全套服务（PostgreSQL 16 + Redis 7 + 应用 + 仪表盘 + 调度器）
 docker compose up -d
 
-# Services:
-#   app        — FastAPI on :8003
-#   web        — React frontend on :5173
-#   scheduler  — Periodic trading cycles
-#   postgres   — Decision journal + portfolio persistence
-#   redis      — Risk state + cooldowns + circuit breaker
+# 服务清单：
+#   app        — FastAPI :8003
+#   web        — React 前端 :5173
+#   scheduler  — 周期性交易循环
+#   postgres   — 决策日志 + 组合持久化
+#   redis      — 风控状态 + 冷却 + 熔断器
 ```
 
-The Dockerfile uses multi-stage build with non-root user. Healthcheck polls `/health` every 30s.
+Dockerfile 使用多阶段构建 + 非 root 用户。健康检查每 30 秒轮询 `/health`。
 
-## Project Structure
+## 项目结构
 
 ```
 src/cryptotrader/
-├── models.py          # All data models (DataSnapshot, AgentAnalysis, TradeVerdict, Order, etc.)
-├── config.py          # TOML config loading + dataclass validation
-├── graph.py           # LangGraph orchestration (3 graph variants)
-├── state.py           # ArenaState TypedDict + build_initial_state() factory
-├── scheduler.py       # APScheduler-based periodic trading cycles + daily summary
-├── notifications.py   # Webhook notifications (6 event types)
-├── db.py              # Shared async DB session factory
+├── models.py          # 所有数据模型（DataSnapshot, AgentAnalysis, TradeVerdict, Order 等）
+├── config.py          # TOML 配置加载 + 数据类验证
+├── graph.py           # LangGraph 编排（3 种图模式）
+├── state.py           # ArenaState TypedDict + build_initial_state() 工厂
+├── scheduler.py       # APScheduler 周期性交易循环 + 每日摘要
+├── notifications.py   # Webhook 通知（6 种事件）
+├── db.py              # 共享 async DB session 工厂
 ├── data/
-│   ├── store.py       # Unified SQLite store (61+ sources, rate limiting)
-│   ├── snapshot.py    # SnapshotAggregator (data collection entry point)
-│   ├── market.py      # ccxt OHLCV + ticker + funding rate + volatility
-│   ├── onchain.py     # Aggregates 5 providers (parallel fetch)
-│   ├── news.py        # RSS + keyword sentiment + CoinGecko social buzz
-│   ├── macro.py       # FRED + CoinGecko + Fear&Greed + SoSoValue ETF
-│   ├── sync.py        # Bulk historical sync (arena sync)
+│   ├── store.py       # 统一 SQLite 存储（61+ 源，按源限速）
+│   ├── snapshot.py    # SnapshotAggregator（数据聚合入口）
+│   ├── market.py      # ccxt OHLCV + ticker + 资金费率 + 波动率
+│   ├── onchain.py     # 聚合 5 个数据源（并行获取）
+│   ├── news.py        # RSS + 关键词情绪 + CoinGecko 社交热度
+│   ├── macro.py       # FRED + CoinGecko + 恐惧贪婪 + SoSoValue ETF
+│   ├── sync.py        # 批量历史同步（arena sync）
 │   └── providers/     # Binance, DefiLlama, CoinGlass, CryptoQuant, WhaleAlert, SoSoValue
 ├── agents/
-│   ├── base.py        # BaseAgent + ToolAgent + create_llm() factory
-│   ├── tech.py        # TechAgent (pandas-ta indicators)
-│   ├── chain.py       # ChainAgent (ToolAgent with on-chain tools)
-│   ├── news.py        # NewsAgent (ToolAgent with news tools)
-│   ├── macro.py       # MacroAgent (macro regime analysis)
-│   └── data_tools.py  # LangChain @tool definitions (6 chain + 3 news)
+│   ├── base.py        # BaseAgent + ToolAgent + create_llm() 工厂
+│   ├── tech.py        # TechAgent（pandas-ta 指标）
+│   ├── chain.py       # ChainAgent（ToolAgent + 链上工具）
+│   ├── news.py        # NewsAgent（ToolAgent + 新闻工具）
+│   ├── macro.py       # MacroAgent（宏观环境分析）
+│   └── data_tools.py  # LangChain @tool 定义（6 链上 + 3 新闻）
 ├── debate/
-│   ├── challenge.py   # Cross-challenge prompt construction
-│   ├── convergence.py # Divergence score + convergence detection
-│   ├── verdict.py     # AI verdict (LLM) + rules verdict (backtest)
-│   └── researchers.py # Bull/bear adversarial debate with judge
-├── nodes/             # LangGraph node functions
-│   ├── agents.py      # 4-agent fan-out
-│   ├── data.py        # Data collection + PnL update + trend context
-│   ├── debate.py      # Debate rounds + convergence routing
-│   ├── verdict.py     # Verdict + risk check
-│   ├── execution.py   # Order placement + stop loss + position update
-│   └── journal.py     # Decision logging
+│   ├── challenge.py   # 交叉挑战 prompt 构建
+│   ├── convergence.py # 分歧度计算 + 收敛检测
+│   ├── verdict.py     # AI 裁决（LLM）+ 规则裁决（回测）
+│   └── researchers.py # 多空对抗辩论 + 评委
+├── nodes/             # LangGraph 节点函数
+│   ├── agents.py      # 4 智能体并行
+│   ├── data.py        # 数据采集 + PnL 更新 + 趋势上下文
+│   ├── debate.py      # 辩论轮次 + 收敛路由
+│   ├── verdict.py     # 裁决 + 风控检查
+│   ├── execution.py   # 下单 + 止损 + 仓位更新
+│   └── journal.py     # 日志记录
 ├── risk/
-│   ├── gate.py        # RiskGate (11 sequential checks)
-│   └── state.py       # RedisStateManager (with in-memory fallback)
+│   ├── gate.py        # RiskGate（11 项顺序检查）
+│   └── state.py       # RedisStateManager（含内存降级）
 ├── execution/
-│   ├── simulator.py   # PaperExchange (paper trading)
-│   ├── exchange.py    # LiveExchange (ccxt, production-hardened)
-│   ├── order.py       # OrderManager (state machine)
-│   └── reconcile.py   # Position reconciliation
+│   ├── simulator.py   # PaperExchange（模拟交易）
+│   ├── exchange.py    # LiveExchange（ccxt，生产级加固）
+│   ├── order.py       # OrderManager（状态机）
+│   └── reconcile.py   # 仓位对账
 ├── portfolio/
-│   └── manager.py     # PortfolioManager (DB + in-memory)
+│   └── manager.py     # PortfolioManager（DB + 内存）
 ├── journal/
-│   ├── store.py       # JournalStore (PostgreSQL + in-memory fallback)
-│   ├── search.py      # Similarity search (funding rate, volatility, trend)
-│   └── calibrate.py   # Per-agent accuracy tracking + bias detection
+│   ├── store.py       # JournalStore（PostgreSQL + 内存降级）
+│   ├── search.py      # 相似搜索（资金费率、波动率、趋势）
+│   └── calibrate.py   # 逐智能体准确率追踪 + 偏差检测
 ├── learning/
-│   ├── verbal.py      # Verbal reinforcement (regime-aware historical case retrieval)
-│   ├── reflect.py     # Structured experience memory (ExperienceRule JSON generation)
-│   ├── context.py     # GSSC engine (gather → select → structure → inject)
-│   └── regime.py      # Regime tagging (tag_regime) + Jaccard overlap matching
+│   ├── verbal.py      # 语言强化（regime 感知历史案例检索）
+│   ├── reflect.py     # 结构化经验记忆生成（ExperienceMemory JSON）
+│   ├── context.py     # GSSC 引擎（汇集→选择→结构化，CJK 感知 token 估算）
+│   └── regime.py      # regime 标签（tag_regime）+ Jaccard 重叠度匹配
 └── backtest/
-    ├── engine.py      # BacktestEngine (LLM + SMA modes)
-    ├── session.py     # Backtest session storage (commits, results, experience)
-    ├── cache.py       # OHLCV SQLite cache
-    ├── historical_data.py  # FnG, funding rate, FRED, futures volume
-    └── result.py      # BacktestResult metrics
-src/cli/main.py        # Typer CLI (arena command)
-src/api/               # FastAPI server (auth, rate limiting, middleware)
-web/                   # React 19 + Vite 7 frontend (dashboard, decisions, backtest, risk, metrics)
+    ├── engine.py      # BacktestEngine（LLM + SMA 模式）
+    ├── session.py     # 回测会话存储（commits.jsonl + result.json + experience.json）
+    ├── cache.py       # OHLCV SQLite 缓存
+    ├── historical_data.py  # FnG、资金费率、FRED、期货成交量
+    └── result.py      # BacktestResult 指标
+src/cli/main.py        # Typer CLI（arena 命令）
+src/api/               # FastAPI 服务（认证、限流、中间件）
+web/                   # React 19 + Vite 7 前端（仪表盘、决策、回测、风控、指标）
 ```
 
-## Tech Stack
+## 技术栈
 
-| Component | Technology |
-|-----------|-----------|
-| Language | Python 3.12+ |
-| Package Manager | uv + Hatchling |
-| LLM Orchestration | LangChain 1.2+ / LangGraph 1.0+ |
-| LLM Providers | ChatOpenAI (OpenAI, DeepSeek, Anthropic compatible) |
-| Exchange | ccxt (Binance, OKX, etc.) |
-| Data Processing | pandas + pandas-ta + numpy |
-| Scheduling | APScheduler 3.x |
-| Database | PostgreSQL 16 + SQLAlchemy 2.0 async |
-| Cache / State | Redis 7 |
-| Local Storage | SQLite (data store + LLM cache + experience memory) |
-| API Server | FastAPI + Uvicorn |
-| Dashboard | React 19 + Vite 7 + TypeScript |
+| 组件 | 技术 |
+|------|------|
+| 语言 | Python 3.12+ |
+| 包管理 | uv + Hatchling |
+| LLM 编排 | LangChain 1.2+ / LangGraph 1.0+ |
+| LLM 提供商 | ChatOpenAI（兼容 OpenAI、DeepSeek、Anthropic）|
+| 交易所连接 | ccxt（Binance、OKX 等）|
+| 数据处理 | pandas + pandas-ta + numpy |
+| 调度 | APScheduler 3.x |
+| 数据库 | PostgreSQL 16 + SQLAlchemy 2.0 async |
+| 缓存/状态 | Redis 7 |
+| 本地存储 | SQLite（数据存储 + LLM 缓存 + 经验记忆）|
+| API 服务 | FastAPI + Uvicorn |
+| 仪表盘 | React 19 + Vite 7 + TypeScript |
 | CLI | Typer + Rich |
 
-## Development
+## 开发
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v (347 tests)
+make test             # pytest tests/ -v（347 个测试）
 make lint             # ruff check src/ tests/
 make format           # ruff format src/ tests/
 make scheduler        # arena scheduler start
-make pre-commit-run   # Run all pre-commit hooks
+make pre-commit-run   # 运行所有 pre-commit 钩子
 
-# Run a single test
+# 运行单个测试
 uv run pytest tests/test_risk_gate.py -v
 uv run pytest tests/test_risk_gate.py::test_max_position -v
 
-# Docker infrastructure
+# Docker 基础设施
 docker compose up -d   # PostgreSQL 16 + Redis 7
-arena migrate          # Create database tables
-arena sync             # Sync historical data
+arena migrate          # 创建数据库表
+arena sync             # 同步历史数据
 ```
 
-### Code Quality
+### 代码质量
 
-- **Zero lint errors**: `ruff check src/ tests/` must pass with zero errors
-- **No `noqa` comments**: Refactor instead of suppressing (C901 threshold = 10)
-- **347 tests**, 1 skip, 70% coverage
-- **Async tests**: `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed
-- **Must use `uv run pytest`** (Python 3.12 venv), not bare `pytest`
+- **零 lint 错误**：`ruff check src/ tests/` 必须零错误通过
+- **禁止 `noqa` 注释**：遇到 C901 必须重构（阈值 = 10）
+- **347 个测试**，1 个跳过，70% 覆盖率
+- **异步测试**：`asyncio_mode = "auto"` — 无需 `@pytest.mark.asyncio`
+- **必须用 `uv run pytest`**（Python 3.12 venv），不要用裸 `pytest`
 
-## License
+## 许可证
 
 MIT

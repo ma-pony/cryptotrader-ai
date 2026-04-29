@@ -143,7 +143,7 @@ class TestRequestValidationErrorHandler:
     def _post_invalid_json(self, client):
         """POST non-JSON bytes with application/json content-type -> 422."""
         return client.post(
-            "/analyze",
+            "/api/backtest/run",
             content=b"THIS IS NOT JSON",
             headers={"Content-Type": "application/json"},
         )
@@ -164,7 +164,7 @@ class TestRequestValidationErrorHandler:
         """422 response detail must NOT echo back raw request body."""
         sensitive_payload = b"NOT-JSON password=supersecret"
         r = client.post(
-            "/analyze",
+            "/api/backtest/run",
             content=sensitive_payload,
             headers={"Content-Type": "application/json"},
         )
@@ -199,4 +199,4 @@ class TestRequestValidationErrorHandler:
         assert log_calls, "No warning was logged for the validation error"
         # The logged message or args should mention method/path info
         all_log_text = " ".join(str(c) for c in log_calls)
-        assert "POST" in all_log_text or "/analyze" in all_log_text
+        assert "POST" in all_log_text or "/api/backtest/run" in all_log_text

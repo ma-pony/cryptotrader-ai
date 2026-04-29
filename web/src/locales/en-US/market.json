@@ -6,5 +6,23 @@
     "open_interest": "Open interest",
     "liquidations": "Liquidations heatmap"
   },
-  "tradingview": { "fallback": "TradingView failed to load — falling back to native chart" }
+  "tradingview": { "fallback": "TradingView failed to load — falling back to native chart" },
+  "ai_analysis": {
+    "fast_btn": "AI Analyze (Fast)",
+    "deep_btn": "AI Analyze (Deep)",
+    "stop_btn": "Stop",
+    "tab_tradingview": "TradingView",
+    "tab_candlestick": "Candlestick (Analyzable)",
+    "tab_tradingview_disabled_tip": "TradingView chart does not support AI screenshot analysis. Switch to Candlestick tab.",
+    "status_loading": "AI is analyzing chart patterns...",
+    "status_error": "Analysis failed, please retry",
+    "screenshot_failed": "Screenshot failed, using text description",
+    "image_too_large": "Image too large, using text summary",
+    "context_badge": "Chart context attached",
+    "result_expired": "Analysis expired (chart updated)",
+    "source_visual": "Visual Recognition",
+    "source_numerical": "Numerical Data",
+    "secondary_timeframe": "Compare timeframe",
+    "no_secondary": "—"
+  }
 }

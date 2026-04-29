@@ -33,10 +33,7 @@ const buildUrl = (path: string): string => {
   return `${base}${suffix}`;
 };
 
-const resolveApiKey = (): string => {
-  const runtimeKey = useSettingsStore.getState().apiKey;
-  return runtimeKey ?? env.VITE_API_KEY ?? '';
-};
+const resolveApiKey = (): string => useSettingsStore.getState().apiKey;
 
 async function parseError(res: Response): Promise<ApiError> {
   let payload: ApiErrorShape = { code: `HTTP_${res.status}`, message: res.statusText || 'Request failed' };

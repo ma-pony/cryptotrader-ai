@@ -1,10 +1,101 @@
+import { ChevronRight } from 'lucide-react';
+import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { DirChip } from '@/components/ui/dir-chip';
 import { Skeleton } from '@/components/ui/skeleton';
-import { formatCurrency, formatPercent, pnlClass } from '@/lib/format';
+import { StatusPill } from '@/components/ui/status-pill';
+import { useMarketDataWS } from '@/hooks/use-market-data-ws';
+import { cn } from '@/lib/cn';
+import { formatCurrency } from '@/lib/format';
 import type { Position } from '@/types/api';
+
+const fmtAgo = (iso: string | null | undefined): string => {
+  if (!iso) return '—';
+  const diffMs = Date.now() - new Date(iso).getTime();
+  if (!Number.isFinite(diffMs) || diffMs < 0) return '刚开仓';
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 60) return `${mins}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ${mins % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+};
+
+interface PositionRowProps {
+  pos: Position;
+}
+
+const PositionRow = memo(function PositionRow({ pos }: PositionRowProps) {
+  const pairKey = pos.pair.replace('/', '');
+  const { tickerData } = useMarketDataWS(pairKey);
+
+  let pnl = pos.unrealized_pnl;
+  let pnlPct = pos.unrealized_pnl_pct;
+  let currentPrice: number | null = null;
+
+  if (tickerData) {
+    currentPrice = tickerData.price;
+    pnl =
+      pos.side === 'long'
+        ? (tickerData.price - pos.avg_price) * pos.size
+        : (pos.avg_price - tickerData.price) * pos.size;
+    pnlPct = pos.avg_price > 0 ? pnl / (pos.avg_price * pos.size) : 0;
+  }
+
+  const notional = pos.avg_price * pos.size;
+  const pnlTone: 'long' | 'short' = pnl >= 0 ? 'long' : 'short';
+
+  return (
+    <div
+      className={cn(
+        'grid items-center gap-3 border-b border-border px-4 py-3 transition-colors hover:bg-muted/40',
+        'grid-cols-[minmax(92px,92px)_minmax(72px,72px)_1fr_minmax(90px,90px)_minmax(90px,90px)_minmax(24px,24px)]',
+      )}
+    >
+      <div className="font-mono text-xs font-medium">{pos.pair}</div>
+      <DirChip dir={pos.side} />
+      <div className="min-w-0">
+        <div className="truncate text-xs text-muted-foreground">
+          {pos.size} @ <span className="font-mono">{formatCurrency(pos.avg_price)}</span>
+          {currentPrice != null ? (
+            <>
+              {' '}
+              → <span className="font-mono">{formatCurrency(currentPrice)}</span>
+            </>
+          ) : null}
+        </div>
+        <div className="mt-0.5 text-[10px] text-muted-foreground">
+          开仓 {fmtAgo(pos.opened_at)}
+        </div>
+      </div>
+      <div className="text-right font-mono text-xs tabular-nums">
+        ${notional.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+      </div>
+      <div className="text-right">
+        <div
+          className={cn(
+            'font-mono text-xs font-medium',
+            pnlTone === 'long' ? 'text-trade-long' : 'text-trade-short',
+          )}
+        >
+          {pnl >= 0 ? '+' : '-'}${Math.abs(pnl).toLocaleString('en-US', { maximumFractionDigits: 0 })}
+        </div>
+        <div
+          className={cn(
+            'font-mono text-[10px]',
+            pnlTone === 'long' ? 'text-trade-long' : 'text-trade-short',
+          )}
+        >
+          {pnl >= 0 ? '+' : ''}
+          {(pnlPct * 100).toFixed(2)}%
+        </div>
+      </div>
+      <ChevronRight size={14} className="text-muted-foreground" />
+    </div>
+  );
+});
 
 interface PositionsTableProps {
   positions: Position[] | undefined;
@@ -17,56 +108,59 @@ export const PositionsTable = ({ positions, isLoading }: PositionsTableProps) =>
   if (isLoading) {
     return (
       <Card>
-        <CardContent className="p-4 space-y-3">
+        <CardContent className="space-y-3 p-4">
           {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-8 w-full" />
+            <Skeleton key={i} className="h-12 w-full" />
           ))}
         </CardContent>
       </Card>
     );
   }
 
-  const sorted = [...(positions ?? [])].sort((a, b) => Math.abs(b.unrealized_pnl) - Math.abs(a.unrealized_pnl));
+  const sorted = [...(positions ?? [])].sort(
+    (a, b) => Math.abs(b.unrealized_pnl) - Math.abs(a.unrealized_pnl),
+  );
 
   return (
     <Card>
-      <CardHeader className="pb-3">
-        <CardTitle className="text-base">{t('positions.title', { defaultValue: '持仓' })}</CardTitle>
+      <CardHeader className="flex flex-row items-center justify-between p-4 pb-2">
+        <CardTitle className="text-sm">
+          {t('positions.title', { defaultValue: '当前仓位' })}
+          <span className="ml-2 text-[11px] font-normal text-muted-foreground">
+            {sorted.length} 个
+          </span>
+        </CardTitle>
+        <StatusPill tone="cyan" live>
+          {t('positions.realtime', { defaultValue: '实时' })}
+        </StatusPill>
       </CardHeader>
       <CardContent className="p-0">
         {sorted.length === 0 ? (
-          <p className="p-4 text-sm text-muted-foreground">{t('positions.empty', { defaultValue: '暂无持仓' })}</p>
+          <p className="p-4 text-sm text-muted-foreground">
+            {t('positions.empty', { defaultValue: '暂无持仓' })}
+          </p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm" role="table">
-              <thead>
-                <tr className="border-b text-muted-foreground text-left">
-                  <th className="px-4 py-2 font-medium">{t('positions.pair', { defaultValue: '币对' })}</th>
-                  <th className="px-4 py-2 font-medium">{t('positions.side', { defaultValue: '方向' })}</th>
-                  <th className="px-4 py-2 font-medium text-right">{t('positions.size', { defaultValue: '数量' })}</th>
-                  <th className="px-4 py-2 font-medium text-right">{t('positions.avg_price', { defaultValue: '均价' })}</th>
-                  <th className="px-4 py-2 font-medium text-right">{t('positions.pnl', { defaultValue: '未实现 PnL' })}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map((pos) => (
-                  <tr key={pos.pair} className="border-b last:border-b-0 hover:bg-muted/50">
-                    <td className="px-4 py-2 font-medium">{pos.pair}</td>
-                    <td className="px-4 py-2">
-                      <Badge variant={pos.side === 'long' ? 'default' : 'destructive'}>
-                        {pos.side === 'long' ? '做多' : '做空'}
-                      </Badge>
-                    </td>
-                    <td className="px-4 py-2 text-right tabular-nums">{pos.size.toFixed(4)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums">{formatCurrency(pos.avg_price)}</td>
-                    <td className={`px-4 py-2 text-right tabular-nums ${pnlClass(pos.unrealized_pnl)}`}>
-                      {formatCurrency(pos.unrealized_pnl)} ({formatPercent(pos.unrealized_pnl_pct)})
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div
+              className={cn(
+                'grid items-center gap-3 border-b border-border bg-muted/30 px-4 py-2',
+                'grid-cols-[minmax(92px,92px)_minmax(72px,72px)_1fr_minmax(90px,90px)_minmax(90px,90px)_minmax(24px,24px)]',
+                'text-[10px] uppercase tracking-wider font-medium text-muted-foreground',
+              )}
+            >
+              <div>{t('positions.pair', { defaultValue: '交易对' })}</div>
+              <div>{t('positions.side', { defaultValue: '方向' })}</div>
+              <div>{t('positions.size_price', { defaultValue: '数量 · 均价' })}</div>
+              <div className="text-right">{t('positions.notional', { defaultValue: '净值' })}</div>
+              <div className="text-right">{t('positions.pnl', { defaultValue: '盈亏' })}</div>
+              <div />
+            </div>
+            <div>
+              {sorted.map((pos) => (
+                <PositionRow key={pos.pair} pos={pos} />
+              ))}
+            </div>
+          </>
         )}
       </CardContent>
     </Card>

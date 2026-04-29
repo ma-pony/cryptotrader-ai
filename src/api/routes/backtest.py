@@ -6,12 +6,14 @@ import asyncio
 import json
 import logging
 import secrets
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, model_validator
+
+from cryptotrader._compat import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -100,6 +102,10 @@ def _spawn_run(params: BacktestParams) -> str:
 async def _execute_backtest(run_id: str, params: BacktestParams) -> None:
     from cryptotrader.backtest.engine import BacktestEngine
 
+    def _on_progress(p: float) -> None:
+        # Clamp to (0, 1) — final 1.0 is set by the completed branch below.
+        _RUNS[run_id]["progress"] = max(0.0, min(0.99, p))
+
     try:
         engine = BacktestEngine(
             pair=params.pair,
@@ -107,8 +113,19 @@ async def _execute_backtest(run_id: str, params: BacktestParams) -> None:
             end=params.end,
             initial_capital=params.initial_capital,
             use_llm=(params.mode == "llm"),
+            progress_callback=_on_progress,
         )
         result = await engine.run()
+        # Persist named session so /api/backtest/sessions can list/load it.
+        if params.session_name:
+            try:
+                from cryptotrader.backtest import session as session_mod
+
+                session_mod.save_result(params.session_name, result)
+                if hasattr(result, "commits") and result.commits:
+                    session_mod.save_commits(params.session_name, result.commits)
+            except Exception:
+                logger.warning("Failed to save backtest session %s", params.session_name, exc_info=True)
         _RUNS[run_id].update(
             {
                 "status": "completed",

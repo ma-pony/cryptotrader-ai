@@ -81,6 +81,8 @@ def _make_mock_cfg(timeout_seconds: float = 0.05) -> MagicMock:
     cfg.models.debate = "gpt-4o-mini"
     cfg.models.fallback = "gpt-4o-mini"
     cfg.models.analysis = "gpt-4o-mini"
+    cfg.agents.get.return_value = None
+    cfg.agents.build.side_effect = KeyError("not configured")
     return cfg
 
 

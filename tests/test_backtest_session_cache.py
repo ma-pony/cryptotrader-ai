@@ -7,10 +7,11 @@ Uses tmp_path to isolate filesystem state from the real ~/.cryptotrader director
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 
+from cryptotrader._compat import UTC
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.models import (
     ConsensusMetrics,

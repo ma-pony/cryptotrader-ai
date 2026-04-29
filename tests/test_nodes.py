@@ -580,6 +580,51 @@ async def test_risk_check_node():
     assert "passed" in rg
     assert "rejected_by" in rg
     assert "reason" in rg
+    assert "scale_adjustment" in rg
+
+
+@pytest.mark.asyncio
+async def test_risk_check_emits_scale_via_delta_not_mutation():
+    """PROD-I3: when gate proposes a clamped scale, the delta carries it (state untouched)."""
+    from cryptotrader.models import GateResult
+    from cryptotrader.nodes.verdict import _risk_gate_cache, risk_check
+
+    state = _base_state(
+        verdict={
+            "action": "long",
+            "confidence": 0.7,
+            "position_scale": 0.9,
+            "divergence": 0.1,
+            "reasoning": "bullish",
+            "thesis": "breakout",
+            "invalidation": "below 48k",
+        },
+    )
+    original_scale = state["data"]["verdict"]["position_scale"]
+
+    _risk_gate_cache.clear()
+    mock_pm = MagicMock()
+    mock_pm.get_portfolio = AsyncMock(return_value={"total_value": 10000, "positions": {}})
+    mock_pm.get_daily_pnl = AsyncMock(return_value=0.0)
+    mock_pm.get_drawdown = AsyncMock(return_value=0.0)
+    mock_pm.get_returns = AsyncMock(return_value=[0.01] * 30)
+
+    fake_gate = AsyncMock()
+    fake_gate.check = AsyncMock(
+        return_value=GateResult(passed=True, scale_adjustment=0.4),
+    )
+
+    with (
+        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
+        patch("cryptotrader.risk.gate.RiskGate", return_value=fake_gate),
+    ):
+        result = await risk_check(state)
+
+    # State dict NOT mutated.
+    assert state["data"]["verdict"]["position_scale"] == original_scale
+    # Delta carries the clamped scale.
+    assert result["data"]["verdict"]["position_scale"] == pytest.approx(0.4)
+    assert result["data"]["risk_gate"]["scale_adjustment"] == pytest.approx(0.4)
 
 
 @pytest.mark.asyncio
@@ -730,3 +775,59 @@ async def test_collect_snapshot_live_path():
     assert result["data"]["snapshot_summary"]["pair"] == "ETH/USDT"
     assert result["data"]["snapshot_summary"]["price"] == 3000
     assert "snapshot" in result["data"]
+
+
+# ── Backtest mode + LLM resilience ──
+
+
+@pytest.mark.asyncio
+async def test_create_llm_works_after_disable_cache():
+    """create_llm() returns a usable LLM when cache is disabled (backtest mode)."""
+    from cryptotrader.agents.base import disable_llm_cache, restore_llm_cache
+
+    disable_llm_cache()
+    try:
+        with (
+            patch("cryptotrader.config.load_config") as mock_cfg,
+            patch("cryptotrader.agents.base.ChatOpenAI", return_value=MagicMock()) as mock_cls,
+        ):
+            from cryptotrader.config import AppConfig, LLMConfig, ModelConfig
+
+            cfg = AppConfig()
+            cfg.models = ModelConfig(analysis="gpt-4o-mini", fallback="gpt-4o-mini")
+            cfg.llm = LLMConfig()
+            mock_cfg.return_value = cfg
+
+            from cryptotrader.agents.base import create_llm
+
+            llm = create_llm(model="gpt-4o-mini", with_fallback=False)
+            assert llm is not None
+            mock_cls.assert_called_once()
+    finally:
+        restore_llm_cache()
+
+
+@pytest.mark.asyncio
+async def test_backtest_agent_no_real_llm_calls():
+    """In backtest mode with mocked LLM, retry middleware doesn't leak real calls."""
+    from cryptotrader.nodes.agents import chain_analyze
+
+    state = _base_state()
+    state["metadata"]["backtest_mode"] = True
+    state["metadata"]["models"]["chain_agent"] = "gpt-4o-mini"
+
+    mock_analysis = AgentAnalysis(
+        agent_id="chain_agent",
+        pair="BTC/USDT",
+        direction="bullish",
+        confidence=0.7,
+        reasoning="Test backtest",
+    )
+
+    with patch("cryptotrader.agents.chain.ChainAgent") as mock_agent:
+        instance = mock_agent.return_value
+        instance.analyze = AsyncMock(return_value=mock_analysis)
+        result = await chain_analyze(state)
+        mock_agent.assert_called_once_with(model="gpt-4o-mini", backtest_mode=True)
+        analysis = result["data"]["analyses"]["chain_agent"]
+        assert analysis["direction"] == "bullish"

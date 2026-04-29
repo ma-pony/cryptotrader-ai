@@ -113,10 +113,24 @@ async def make_verdict(state: ArenaState) -> dict:
     # If all agents returned mock data (LLM outage), skip verdict entirely
     if not analyses:
         logger.warning("All agents returned mock analyses — forcing hold verdict")
+        from cryptotrader.chat.runtime_registry import get_event_bus
         from cryptotrader.debate.verdict import TradeVerdict
 
         verdict = TradeVerdict(action="hold", confidence=0.0, reasoning="All agents failed — no real data")
         get_metrics_collector().inc_verdict(action=verdict.action)
+        # Publish verdict_ready even on the all-mock fallback path so the
+        # frontend always sees a verdict event before stream_done.
+        bus = get_event_bus((state.get("metadata") or {}).get("session_id"))
+        if bus is not None:
+            await bus.publish(
+                "verdict_ready",
+                {
+                    "action": verdict.action,
+                    "confidence": verdict.confidence,
+                    "position_scale": 0.0,
+                    "reasoning": verdict.reasoning,
+                },
+            )
         return {
             "data": {
                 "verdict": {
@@ -181,20 +195,80 @@ async def make_verdict(state: ArenaState) -> dict:
     )
     # Metrics instrumentation: ct_verdict_total[action] (req 9.5)
     get_metrics_collector().inc_verdict(action=verdict.action)
-    return {
-        "data": {
-            "verdict": {
-                "action": verdict.action,
-                "confidence": verdict.confidence,
-                "position_scale": verdict.position_scale,
-                "divergence": verdict.divergence,
-                "reasoning": verdict.reasoning,
-                "thesis": verdict.thesis,
-                "invalidation": verdict.invalidation,
-                "verdict_source": verdict_source,
-            }
-        }
+
+    verdict_data = {
+        "action": verdict.action,
+        "confidence": verdict.confidence,
+        "position_scale": verdict.position_scale,
+        "divergence": verdict.divergence,
+        "reasoning": verdict.reasoning,
+        "thesis": verdict.thesis,
+        "invalidation": verdict.invalidation,
+        "verdict_source": verdict_source,
     }
+
+    await _process_schedule_follow_up(state, verdict_data)
+
+    from cryptotrader.chat.runtime_registry import get_event_bus
+
+    event_bus = get_event_bus((state.get("metadata") or {}).get("session_id"))
+    if event_bus is not None:
+        await event_bus.publish(
+            "verdict_ready",
+            {
+                "action": verdict_data["action"],
+                "confidence": verdict_data["confidence"],
+                "position_scale": verdict_data["position_scale"],
+                "reasoning": verdict_data["reasoning"][:300],
+            },
+        )
+
+    return {"data": {"verdict": verdict_data}}
+
+
+async def _process_schedule_follow_up(state: ArenaState, verdict_data: dict) -> None:
+    """Register a temporary trigger rule if the verdict includes schedule_follow_up."""
+    follow_up = verdict_data.get("schedule_follow_up")
+    if not follow_up or not isinstance(follow_up, dict):
+        return
+
+    depth = state["metadata"].get("schedule_depth", 0)
+    if depth >= 3:
+        logger.info("Schedule depth %d >= 3, skipping follow-up registration", depth)
+        return
+
+    try:
+        from datetime import datetime, timedelta
+        from functools import partial
+
+        from cryptotrader._compat import UTC
+        from cryptotrader.config import load_config
+        from cryptotrader.db import get_async_session
+        from cryptotrader.triggers.store import TriggerRuleStore
+
+        config = load_config()
+        if not config.infrastructure.database_url:
+            return
+
+        session_factory = partial(get_async_session, config.infrastructure.database_url)
+        store = TriggerRuleStore(session_factory)
+
+        ttl_hours = min(int(follow_up.get("ttl_hours", 24)), 72)
+        await store.create_rule(
+            {
+                "name": follow_up.get("name", f"agent-follow-up-{state['metadata'].get('pair', '')}"),
+                "trigger_type": follow_up.get("trigger_type", "price_threshold"),
+                "pair": state["metadata"].get("pair", "BTC/USDT"),
+                "parameters": follow_up.get("parameters", {}),
+                "cooldown_minutes": int(follow_up.get("cooldown_minutes", 60)),
+                "created_by": "agent",
+                "schedule_depth": depth + 1,
+                "ttl_expires_at": datetime.now(UTC) + timedelta(hours=ttl_hours),
+            }
+        )
+        logger.info("Registered agent follow-up trigger (depth=%d)", depth + 1)
+    except Exception:
+        logger.warning("Failed to register schedule follow-up", exc_info=True)
 
 
 # Module-level cache for RiskGate to preserve circuit breaker state
@@ -211,7 +285,7 @@ def _get_notifier(state: ArenaState) -> Any:
         from cryptotrader.notifications import Notifier
 
         cfg = load_config().notifications
-        _notifier_instance = Notifier(cfg.webhook_url, cfg.enabled, cfg.events, cfg.webhook_timeout)
+        _notifier_instance = Notifier(cfg.webhook_url, cfg.enabled, cfg.events, cfg.webhook_timeout, cfg.telegram)
     return _notifier_instance
 
 
@@ -272,12 +346,75 @@ async def _measure_api_latency(state: ArenaState) -> int:
         return 100
 
 
+async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
+    """Assemble the portfolio dict for risk checks. Returns None when the live exchange
+    reports zero balance and trading must be rejected upstream."""
+    from cryptotrader.portfolio.manager import PortfolioManager, read_portfolio_from_exchange
+
+    recent_prices, returns_daily = _extract_ohlcv_returns(state)
+    exchange_portfolio = await read_portfolio_from_exchange(state)
+
+    db_url = state["metadata"].get("database_url")
+    pm = PortfolioManager(db_url)
+    try:
+        daily_pnl = await pm.get_daily_pnl()
+        drawdown = await pm.get_drawdown()
+        pm_returns = await pm.get_returns()
+    except Exception:
+        logger.debug("Portfolio snapshot data fetch failed", exc_info=True)
+        daily_pnl = 0.0
+        drawdown = 0.0
+        pm_returns = []
+
+    if exchange_portfolio and exchange_portfolio.get("total_value", 0) > 0:
+        total_value = exchange_portfolio["total_value"]
+        positions = exchange_portfolio.get("positions", {})
+    elif state["metadata"].get("engine") == "live":
+        return None
+    else:
+        total_value = config.backtest.initial_capital
+        positions = {}
+
+    api_latency_ms = await _measure_api_latency(state)
+    return {
+        "total_value": total_value,
+        "positions": positions,
+        "cash": exchange_portfolio.get("cash", 0) if exchange_portfolio else 0,
+        "daily_pnl": daily_pnl,
+        "drawdown": drawdown,
+        "returns_60d": _merge_returns(pm_returns, returns_daily),
+        "recent_prices": recent_prices,
+        "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
+        "api_latency_ms": api_latency_ms,
+        "pair": state["metadata"]["pair"],
+    }
+
+
+def _log_risk_outcome(state: ArenaState, result, vd_action: str) -> None:
+    if result.passed:
+        logger.info("Risk gate PASSED for %s (action=%s)", state["metadata"]["pair"], vd_action)
+        return
+    # Structured rejection log — check_name + reason carry the full context for alerting.
+    _structlog.warning(
+        "risk_gate_rejected",
+        pair=state["metadata"]["pair"],
+        check_name=result.rejected_by or "unknown",
+        reason=result.reason or "",
+    )
+    logger.warning(
+        "Risk gate REJECTED for %s: check_name=%s reason=%s",
+        state["metadata"]["pair"],
+        result.rejected_by,
+        result.reason,
+    )
+    get_metrics_collector().inc_risk_rejected(check_name=result.rejected_by or "unknown")
+
+
 @node_logger()
 async def risk_check(state: ArenaState) -> dict:
     """Run all risk gate checks on the verdict."""
     from cryptotrader.config import load_config
     from cryptotrader.models import TradeVerdict
-    from cryptotrader.portfolio.manager import PortfolioManager
     from cryptotrader.risk.gate import RiskGate
     from cryptotrader.risk.state import RedisStateManager
 
@@ -285,43 +422,17 @@ async def risk_check(state: ArenaState) -> dict:
     redis_url = state["metadata"].get("redis_url")
     cache_key = redis_url or "_default"
     if cache_key not in _risk_gate_cache:
-        redis_state = RedisStateManager(redis_url)
-        _risk_gate_cache[cache_key] = RiskGate(config.risk, redis_state)
+        _risk_gate_cache[cache_key] = RiskGate(config.risk, RedisStateManager(redis_url))
     gate = _risk_gate_cache[cache_key]
 
     vd = state["data"]["verdict"]
     verdict = TradeVerdict(**vd)
 
     # In backtest mode, portfolio is pre-built by the engine — skip exchange queries
-    pre_built_portfolio = state["data"].get("portfolio")
-    if pre_built_portfolio:
-        portfolio = pre_built_portfolio
-    else:
-        recent_prices, returns_daily = _extract_ohlcv_returns(state)
-
-        # Read portfolio from exchange (source of truth)
-        from cryptotrader.portfolio.manager import read_portfolio_from_exchange
-
-        exchange_portfolio = await read_portfolio_from_exchange(state)
-
-        # Historical metrics from DB snapshots (PnL, drawdown, returns)
-        db_url = state["metadata"].get("database_url")
-        pm = PortfolioManager(db_url)
-        try:
-            daily_pnl = await pm.get_daily_pnl()
-            drawdown = await pm.get_drawdown()
-            pm_returns = await pm.get_returns()
-        except Exception:
-            logger.debug("Portfolio snapshot data fetch failed", exc_info=True)
-            daily_pnl = 0.0
-            drawdown = 0.0
-            pm_returns = []
-
-        if exchange_portfolio and exchange_portfolio.get("total_value", 0) > 0:
-            total_value = exchange_portfolio["total_value"]
-            positions = exchange_portfolio.get("positions", {})
-        elif state["metadata"].get("engine") == "live":
-            # Live mode: exchange returned 0 — reject to prevent trading with unknown portfolio
+    portfolio = state["data"].get("portfolio")
+    if portfolio is None:
+        portfolio = await _build_risk_portfolio(state, config)
+        if portfolio is None:
             logger.warning("Exchange returned 0 total_value in live mode — rejecting")
             return {
                 "data": {
@@ -332,48 +443,9 @@ async def risk_check(state: ArenaState) -> dict:
                     }
                 }
             }
-        else:
-            # Paper mode fallback: use initial capital from config
-            total_value = config.backtest.initial_capital
-            positions = {}
-
-        api_latency_ms = await _measure_api_latency(state)
-        portfolio = {
-            "total_value": total_value,
-            "positions": positions,
-            "cash": exchange_portfolio.get("cash", 0) if exchange_portfolio else 0,
-            "daily_pnl": daily_pnl,
-            "drawdown": drawdown,
-            "returns_60d": _merge_returns(pm_returns, returns_daily),
-            "recent_prices": recent_prices,
-            "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
-            "api_latency_ms": api_latency_ms,
-            "pair": state["metadata"]["pair"],
-        }
 
     result = await gate.check(verdict, portfolio)
-
-    if result.passed:
-        logger.info("Risk gate PASSED for %s (action=%s)", state["metadata"]["pair"], verdict.action)
-    else:
-        # Structured rejection log with required fields: check_name, reason summary (req 9.4).
-        # The reason string from each RiskCheck already embeds current_value/threshold details
-        # (e.g. "Funding rate 0.001 exceeds threshold 0.0002"), so structlog fields carry
-        # all the context needed for alerting and log-based metrics.
-        _structlog.warning(
-            "risk_gate_rejected",
-            pair=state["metadata"]["pair"],
-            check_name=result.rejected_by or "unknown",
-            reason=result.reason or "",
-        )
-        logger.warning(
-            "Risk gate REJECTED for %s: check_name=%s reason=%s",
-            state["metadata"]["pair"],
-            result.rejected_by,
-            result.reason,
-        )
-        # Metrics instrumentation: ct_risk_rejected_total[check_name] (req 9.5)
-        get_metrics_collector().inc_risk_rejected(check_name=result.rejected_by or "unknown")
+    _log_risk_outcome(state, result, verdict.action)
 
     # Fire circuit_breaker notification if triggered
     if not result.passed and result.rejected_by == "daily_loss_limit" and "Circuit breaker" in (result.reason or ""):
@@ -383,15 +455,44 @@ async def risk_check(state: ArenaState) -> dict:
         except Exception:
             logger.debug("Circuit-breaker notification failed", exc_info=True)
 
-    return {
-        "data": {
-            "risk_gate": {
-                "passed": result.passed,
-                "rejected_by": result.rejected_by,
-                "reason": result.reason,
-            }
-        }
+    # PROD-I3: Apply scale proposals via the return delta (LangGraph contract),
+    # not by mutating state["data"]["verdict"] in place. ``GateResult.scale_adjustment``
+    # is the min of all CheckResult proposals from passing checks.
+    final_scale = vd.get("position_scale", 1.0)
+    if result.passed and result.scale_adjustment is not None:
+        final_scale = min(final_scale, result.scale_adjustment)
+        if final_scale != vd.get("position_scale", 1.0):
+            logger.info(
+                "Position scale adjusted by risk gate: %.2f -> %.2f for %s",
+                vd.get("position_scale", 1.0),
+                final_scale,
+                state["metadata"]["pair"],
+            )
+
+    risk_gate_data = {
+        "passed": result.passed,
+        "rejected_by": result.rejected_by,
+        "reason": result.reason,
+        "scale_adjustment": result.scale_adjustment,
     }
+
+    from cryptotrader.chat.runtime_registry import get_event_bus
+
+    event_bus = get_event_bus((state.get("metadata") or {}).get("session_id"))
+    if event_bus is not None:
+        await event_bus.publish(
+            "risk_checked",
+            {
+                "allowed": result.passed,
+                "flags": [result.rejected_by] if result.rejected_by else [],
+                "reason": result.reason or "",
+            },
+        )
+
+    delta: dict = {"data": {"risk_gate": risk_gate_data}}
+    if result.passed and final_scale != vd.get("position_scale", 1.0):
+        delta["data"]["verdict"] = {**vd, "position_scale": final_scale}
+    return delta
 
 
 def risk_router(state: ArenaState) -> str:

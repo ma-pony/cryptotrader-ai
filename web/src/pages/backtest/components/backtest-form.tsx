@@ -1,7 +1,7 @@
+import { Play } from 'lucide-react';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { Button } from '@/components/ui/button';
 import { useBacktestSessions, useStartBacktest } from '@/hooks/use-backtest';
 
 interface Props {
@@ -69,9 +69,18 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
           </label>
         )}
 
-        <Button type="submit" size="sm" disabled={startMutation.isPending || !start || !end}>
-          {startMutation.isPending ? '...' : t('form.submit')}
-        </Button>
+        <button
+          type="submit"
+          disabled={startMutation.isPending || !start || !end}
+          className="ml-auto inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-xs font-semibold shadow-glow-amber transition-opacity disabled:opacity-50"
+          style={{
+            background: 'linear-gradient(135deg, var(--amber-500), var(--amber-600))',
+            color: 'hsl(var(--primary-foreground))',
+          }}
+        >
+          <Play size={12} strokeWidth={2.5} />
+          {startMutation.isPending ? '...' : t('form.submit', { defaultValue: '启动回测' })}
+        </button>
       </div>
     </form>
   );

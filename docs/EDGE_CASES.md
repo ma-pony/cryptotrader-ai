@@ -36,10 +36,10 @@
 
 ## 3. 已知限制
 
-- `langchain_agents.py` 绕过统一配置（不读 `base_url`/`api_key`）
 - CorrelationCheck 使用硬编码 14 组，非动态计算
-- `verify=False` 存在于约 15 个外部 API 调用中
-- `graph_supervisor.py` 是备选架构，非主路径
+- `verify=False` 存在于约 15 个外部 API 调用中（部分 provider）
+
+> 历史备注：`graph_supervisor.py` / `langchain_agents.py` / `agents/skills.py` / `agents/tools.py` 等实验性 supervisor 架构已于 2026-04-28 删除，仅保留 `build_trading_graph()` / `build_lite_graph()` / `build_debate_graph()` 主路径。
 
 ---
 

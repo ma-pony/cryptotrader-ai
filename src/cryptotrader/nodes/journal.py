@@ -3,11 +3,108 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from cryptotrader.state import ArenaState
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
+
+
+_LATENCY_STAGE_MAP: dict[str, str] = {
+    # Node name → stage bucket. Unknown nodes fall into "other".
+    "collect_data": "data",
+    "update_pnl": "data",
+    "stop_loss_check": "data",
+    "verbal_reinforcement": "data",
+    "inject_experience": "data",
+    "init_decision": "data",
+    "tech_agent": "agents",
+    "chain_agent": "agents",
+    "news_agent": "agents",
+    "macro_agent": "agents",
+    "debate_gate": "debate",
+    "debate": "debate",
+    "debate_round": "debate",
+    "debate_round_1": "debate",
+    "debate_round_2": "debate",
+    "check_stability": "debate",
+    "enrich_context": "verdict",
+    "enrich_verdict_context": "verdict",
+    "verdict": "verdict",
+    "judge_verdict": "verdict",
+    "bull_bear_debate": "debate",
+    "risk_gate": "risk",
+    "hitl_gate": "risk",
+    "execute_trade": "execute",
+    "execute": "execute",
+    "record_trade": "execute",
+    "record_rejection": "execute",
+    "journal_trade": "execute",
+    "journal_rejection": "execute",
+}
+
+
+def _snapshot_token_usage() -> dict[str, Any]:
+    """Export the current decision's token ledger, or empty dict if unbound.
+
+    Shape matches :class:`cryptotrader.models.TokenUsage`.
+    """
+    from cryptotrader.llm.token_tracker import current_ledger
+
+    ledger = current_ledger()
+    if ledger is None:
+        return {}
+    return ledger.to_dict()
+
+
+def _resolve_node_trace(state: ArenaState) -> list:
+    """Resolve the node_trace for this run.
+
+    Preference order:
+      1) ``state["data"]["node_trace"]`` — set by an external runner if it ever does.
+      2) ``tracing.trace_get(metadata.trace_id)`` — populated by run_graph_traced
+         and by analysis_runner via the trace registry.
+      3) Empty list.
+
+    The registry path is the production source: nodes can't share an updated
+    list via state-deltas (LangGraph would only see the last-write per chunk),
+    so the runner accumulates externally and the journal node reads it here.
+    """
+    explicit = state.get("data", {}).get("node_trace")
+    if explicit:
+        return explicit
+    from cryptotrader.tracing import trace_get
+
+    trace_id = state.get("metadata", {}).get("trace_id")
+    return trace_get(trace_id)
+
+
+def _aggregate_latency(node_trace: list) -> dict[str, Any]:
+    """Collapse per-node durations into {data,agents,debate,verdict,risk,execute,total}.
+
+    Shape matches :class:`cryptotrader.models.LatencyBreakdown`.
+    """
+    buckets: dict[str, float] = {
+        "data": 0.0,
+        "agents": 0.0,
+        "debate": 0.0,
+        "verdict": 0.0,
+        "risk": 0.0,
+        "execute": 0.0,
+        "other": 0.0,
+    }
+    for entry in node_trace or []:
+        if isinstance(entry, dict):
+            node = entry.get("node", "")
+            ms = float(entry.get("duration_ms", 0.0) or 0.0)
+        else:
+            node = getattr(entry, "node", "")
+            ms = float(getattr(entry, "duration_ms", 0.0) or 0.0)
+        bucket = _LATENCY_STAGE_MAP.get(node, "other")
+        buckets[bucket] = buckets.get(bucket, 0.0) + ms
+    buckets["total"] = sum(buckets.values())
+    return buckets
 
 
 def _to_agent_analyses(raw_analyses: dict, pair: str) -> dict:
@@ -86,6 +183,7 @@ async def journal_trade(state: ArenaState) -> dict:
         portfolio_after = await _get_portfolio_snapshot(state)
 
         parent_hash = state["data"].get("journal_hash")
+        node_trace = _resolve_node_trace(state)
         commit = build_commit(
             pair=state["metadata"]["pair"],
             snapshot_summary=state["data"].get("snapshot_summary", {}),
@@ -103,8 +201,11 @@ async def journal_trade(state: ArenaState) -> dict:
             consensus_metrics=state["data"].get("consensus_metrics"),
             verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),
             experience_memory=state["data"].get("experience_memory", {}),
-            node_trace=state["data"].get("node_trace", []),
+            node_trace=node_trace,
             debate_skip_reason=state["data"].get("debate_skip_reason", ""),
+            challenges=state["data"].get("debate_turns") or [],
+            latency_breakdown=_aggregate_latency(node_trace),
+            token_usage=_snapshot_token_usage(),
         )
         await store.commit(commit)
         logger.info(
@@ -149,6 +250,7 @@ async def journal_rejection(state: ArenaState) -> dict:
             risk_gate = GateResult(**{k: v for k, v in raw_gate.items() if k in GateResult.__dataclass_fields__})
 
         parent_hash = state["data"].get("journal_hash")
+        node_trace = _resolve_node_trace(state)
         commit = build_commit(
             pair=state["metadata"]["pair"],
             snapshot_summary=state["data"].get("snapshot_summary", {}),
@@ -163,8 +265,11 @@ async def journal_rejection(state: ArenaState) -> dict:
             consensus_metrics=state["data"].get("consensus_metrics"),
             verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),
             experience_memory=state["data"].get("experience_memory", {}),
-            node_trace=state["data"].get("node_trace", []),
+            node_trace=node_trace,
             debate_skip_reason=state["data"].get("debate_skip_reason", ""),
+            challenges=state["data"].get("debate_turns") or [],
+            latency_breakdown=_aggregate_latency(node_trace),
+            token_usage=_snapshot_token_usage(),
         )
         await store.commit(commit)
         logger.info(

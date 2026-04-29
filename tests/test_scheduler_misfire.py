@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 from apscheduler.triggers.interval import IntervalTrigger
 
+from cryptotrader._compat import UTC
 from cryptotrader.scheduler import Scheduler
 
 # ---------------------------------------------------------------------------
@@ -159,9 +160,11 @@ async def test_apscheduler_max_instances_blocks_overlap(caplog):
 
         now = datetime.now(UTC)
 
-        # Register job so it fires immediately twice in rapid succession.
+        # Register job with the real coroutine function (APScheduler needs
+        # inspect.signature to work); the patch.object side_effect handles
+        # interception when the scheduler calls s._run_cycle().
         s._scheduler.add_job(
-            s._run_cycle,
+            slow_run_cycle,
             IntervalTrigger(seconds=1),
             id="trading_cycle_overlap",
             name="Trading cycle overlap",
@@ -278,7 +281,7 @@ async def test_job_is_skipped_not_queued_on_max_instances(caplog):
         s._scheduler.start(paused=False)
 
         s._scheduler.add_job(
-            s._run_cycle,
+            blocking_cycle,
             IntervalTrigger(seconds=1),
             id="overlap_test",
             name="Overlap test",
@@ -334,7 +337,7 @@ async def test_cycle_resumes_normally_after_overlap_prevented():
         s._scheduler.start(paused=False)
 
         s._scheduler.add_job(
-            s._run_cycle,
+            controlled_cycle,
             IntervalTrigger(seconds=1),
             id="resume_test",
             name="Resume test",

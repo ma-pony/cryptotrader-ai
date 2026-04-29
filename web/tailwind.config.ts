@@ -43,6 +43,40 @@ const config: Config = {
           DEFAULT: 'hsl(var(--card))',
           foreground: 'hsl(var(--card-foreground))',
         },
+        amber: {
+          50: 'var(--amber-50)',
+          200: 'var(--amber-200)',
+          400: 'var(--amber-400)',
+          500: 'var(--amber-500)',
+          600: 'var(--amber-600)',
+        },
+        cyan: {
+          400: 'var(--cyan-400)',
+          500: 'var(--cyan-500)',
+          600: 'var(--cyan-600)',
+        },
+        violet: {
+          400: 'var(--violet-400)',
+          500: 'var(--violet-500)',
+          600: 'var(--violet-600)',
+        },
+        trade: {
+          long: 'var(--trade-long)',
+          'long-soft': 'var(--trade-long-soft)',
+          short: 'var(--trade-short)',
+          'short-soft': 'var(--trade-short-soft)',
+        },
+        agent: {
+          tech: 'var(--agent-tech)',
+          chain: 'var(--agent-chain)',
+          news: 'var(--agent-news)',
+          macro: 'var(--agent-macro)',
+          verdict: 'var(--agent-verdict)',
+        },
+      },
+      boxShadow: {
+        'glow-amber': '0 0 32px var(--amber-glow)',
+        'glow-violet': '0 0 32px var(--violet-glow)',
       },
       borderRadius: {
         lg: 'var(--radius)',

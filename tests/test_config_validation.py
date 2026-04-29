@@ -286,5 +286,31 @@ def test_default_toml_fallback_nonempty():
     assert cfg.models.fallback.strip() != ""
 
 
+# ── ChartAnalysisConfig ──────────────────────────────────────────────────
+
+
+def test_chart_analysis_config_defaults():
+    """ChartAnalysisConfig has correct default values."""
+    from cryptotrader.config import ChartAnalysisConfig
+
+    cfg = ChartAnalysisConfig()
+    assert isinstance(cfg.vision_models, list)
+    assert len(cfg.vision_models) >= 4
+    assert "gpt-4o" in cfg.vision_models
+    assert cfg.fast_model == ""
+    assert isinstance(cfg.max_image_bytes, int)
+    assert cfg.max_image_bytes == 4_718_592
+    assert cfg.description_max_tokens == 800
+
+
+def test_chart_analysis_config_from_toml():
+    """ChartAnalysisConfig is loaded from default.toml."""
+    config_module._cached_config = None
+    cfg = config_module.load_config()
+    assert hasattr(cfg, "chart_analysis")
+    assert isinstance(cfg.chart_analysis.vision_models, list)
+    assert cfg.chart_analysis.max_image_bytes == 4_718_592
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

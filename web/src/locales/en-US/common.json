@@ -6,11 +6,13 @@
   "nav": {
     "dashboard": "Dashboard",
     "decisions": "Decisions",
+    "debate": "Debate",
     "backtest": "Backtest",
     "risk": "Risk",
     "metrics": "Metrics",
     "chat": "AI Chat",
-    "market": "Market"
+    "market": "Market",
+    "scheduler": "Scheduler"
   },
   "actions": {
     "refresh": "Refresh",
@@ -54,5 +56,12 @@
   "desktop_only": {
     "title": "Desktop only",
     "body": "This app supports desktop ≥ 1280px only."
+  },
+  "ws": {
+    "connecting": "Connecting",
+    "reconnecting": "Reconnecting…",
+    "degraded": "Data delayed, polling mode",
+    "degraded_interval": "Data delayed, polling interval {{interval}}",
+    "polling_mode": "Polling mode"
   }
 }

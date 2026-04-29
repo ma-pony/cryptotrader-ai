@@ -17,13 +17,14 @@ React Dashboard:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from cryptotrader._compat import UTC
 
 
 @pytest.fixture

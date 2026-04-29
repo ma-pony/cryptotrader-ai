@@ -4,7 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+from cryptotrader._compat import UTC
+
+if TYPE_CHECKING:
+    from cryptotrader.mcp.adapter import MCPAdapter
 
 from cryptotrader.data.macro import MacroCollector
 from cryptotrader.data.market import MarketCollector
@@ -29,6 +35,9 @@ class SnapshotAggregator:
         timeframe: str = "1h",
         limit: int = 100,
         date: str | None = None,
+        *,
+        adapter: MCPAdapter | None = None,
+        backtest_mode: bool = False,
     ) -> DataSnapshot:
         logger.info("Collecting snapshot: pair=%s exchange=%s tf=%s limit=%d", pair, exchange_id, timeframe, limit)
         market_data, news_data, macro_data = await asyncio.gather(
@@ -44,6 +53,11 @@ class SnapshotAggregator:
         )
 
         onchain_data = await self.onchain.collect(pair, market_data.funding_rate)
+
+        if adapter is not None:
+            symbol = pair.split("/")[0] if "/" in pair else pair.replace("USDT", "")
+            await self._enrich_via_mcp(adapter, symbol, market_data, onchain_data, backtest_mode)
+
         logger.info("Snapshot complete: market + %d news + onchain + macro", len(news_data.headlines))
 
         return DataSnapshot(
@@ -54,3 +68,30 @@ class SnapshotAggregator:
             news=news_data,
             macro=macro_data,
         )
+
+    async def _enrich_via_mcp(
+        self,
+        adapter: MCPAdapter,
+        symbol: str,
+        market_data,
+        onchain_data,
+        backtest_mode: bool,
+    ) -> None:
+        """Supplement snapshot with MCP-sourced derivatives data when adapter is available."""
+        from cryptotrader.data.providers.binance import fetch_derivatives_binance
+
+        try:
+            derivatives = await adapter.call(
+                "binance_derivatives",
+                {"symbol": symbol},
+                backtest_mode=backtest_mode,
+                python_fallback=fetch_derivatives_binance,
+                fallback_args={"symbol": symbol},
+                zero_value={"open_interest": 0.0, "long_short_ratio": 0.0},
+            )
+            if derivatives.get("open_interest") and not onchain_data.open_interest:
+                onchain_data.open_interest = derivatives["open_interest"]
+            if derivatives.get("liquidations_24h") and not onchain_data.liquidations_24h:
+                onchain_data.liquidations_24h = derivatives["liquidations_24h"]
+        except Exception:
+            logger.debug("MCP enrichment failed for derivatives", exc_info=True)

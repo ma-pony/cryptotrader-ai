@@ -1,0 +1,105 @@
+{
+  "title": "调度器 / 触发规则",
+  "tabs": {
+    "rules": "规则列表",
+    "history": "触发历史"
+  },
+  "actions": {
+    "create": "新建规则",
+    "from_template": "从模板创建",
+    "edit": "编辑",
+    "delete": "删除",
+    "save": "保存",
+    "cancel": "取消"
+  },
+  "trigger_type": {
+    "price_threshold": "价格阈值",
+    "pct_change": "涨跌幅",
+    "candle_pattern": "K线形态",
+    "funding_rate": "资金费率"
+  },
+  "templates": {
+    "title": "选择模板",
+    "btc_price_drop": {
+      "name": "BTC 价格跌破阈值",
+      "description": "当 BTC 价格跌破设定值时触发分析"
+    },
+    "eth_volatility": {
+      "name": "ETH 短期异常波动",
+      "description": "15 分钟内涨跌幅超过 3% 时触发分析"
+    },
+    "funding_rate_alert": {
+      "name": "资金费率异常",
+      "description": "资金费率超过 0.1% 时触发分析"
+    },
+    "btc_bearish_candles": {
+      "name": "BTC 连续阴线",
+      "description": "1h 级别连续 3 根阴线时触发分析"
+    }
+  },
+  "form": {
+    "create_title": "新建触发规则",
+    "edit_title": "编辑触发规则",
+    "name": "规则名称",
+    "name_placeholder": "如：BTC 价格预警",
+    "trigger_type": "触发类型",
+    "pair": "交易对",
+    "pair_placeholder": "如：BTC/USDT",
+    "cooldown_minutes": "冷却时间（分钟）",
+    "parameters": "参数",
+    "price_threshold": {
+      "direction": "方向",
+      "above": "高于",
+      "below": "低于",
+      "price": "目标价格"
+    },
+    "pct_change": {
+      "window_minutes": "时间窗口（分钟）",
+      "threshold_pct": "涨跌幅阈值 (%)"
+    },
+    "candle_pattern": {
+      "interval": "时间级别",
+      "consecutive_count": "连续根数",
+      "direction": "方向",
+      "bearish": "阴线",
+      "bullish": "阳线"
+    },
+    "funding_rate": {
+      "threshold_pct": "费率阈值 (%)"
+    }
+  },
+  "table": {
+    "name": "名称",
+    "type": "类型",
+    "pair": "交易对",
+    "enabled": "启用",
+    "cooldown": "冷却状态",
+    "last_triggered": "最后触发",
+    "actions": "操作",
+    "in_cooldown": "冷却中",
+    "ready": "就绪",
+    "never": "从未触发",
+    "empty": "暂无规则，点击「新建规则」开始配置"
+  },
+  "history": {
+    "time": "触发时间",
+    "rule": "规则",
+    "reason": "触发原因",
+    "depth": "调度深度",
+    "commit": "分析提交",
+    "cooldown_skipped": "跳过冷却",
+    "expand": "查看详情",
+    "price_snapshot": "价格快照",
+    "empty": "暂无触发历史",
+    "pagination": {
+      "prev": "上一页",
+      "next": "下一页",
+      "info": "第 {{page}} 页，共 {{total}} 条"
+    }
+  },
+  "delete": {
+    "confirm_title": "确认删除规则？",
+    "confirm_body": "删除后将无法恢复，相关触发历史仍会保留。",
+    "confirm_action": "确认删除"
+  }
+}

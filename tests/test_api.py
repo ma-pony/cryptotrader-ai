@@ -19,14 +19,3 @@ def test_metrics():
     assert r.status_code == 200
     # /metrics 现在返回 Prometheus 文本格式
     assert "text/plain" in r.headers["content-type"]
-
-
-def test_journal_log_returns_list():
-    r = client.get("/journal/log")
-    assert r.status_code == 200
-    assert isinstance(r.json(), list)
-
-
-def test_journal_show_not_found():
-    r = client.get("/journal/nonexistent")
-    assert r.status_code == 404

@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pandas as pd
-import pandas_ta as ta
 
+from cryptotrader.agents import _indicators as ta
 from cryptotrader.agents.base import BaseAgent
 
 if TYPE_CHECKING:

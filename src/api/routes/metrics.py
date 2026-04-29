@@ -6,14 +6,17 @@ GET /metrics/summary — JSON snapshot of key metrics for Dashboard consumption
 
 from __future__ import annotations
 
+import asyncio
 import datetime
 import logging
+from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
 from pydantic import BaseModel
 
+from cryptotrader._compat import UTC
 from cryptotrader.metrics import get_metrics_collector
 
 logger = logging.getLogger(__name__)
@@ -226,7 +229,7 @@ async def metrics_summary() -> MetricsSummaryResponse:
             pipeline_duration_p95_ms=float(pipeline_p95),
             execution_latency_p50_ms=float(execution_p50),
             execution_latency_p95_ms=float(execution_p95),
-            snapshot_time=datetime.datetime.now(datetime.UTC),
+            snapshot_time=datetime.datetime.now(UTC),
         )
     except Exception:
         logger.warning("Failed to build metrics summary", exc_info=True)
@@ -253,12 +256,129 @@ class MetricsPercentiles(BaseModel):
     execution_p95_ms: float
 
 
+class LatencyHistogramBucketOut(BaseModel):
+    """One Prometheus histogram bucket for the Metrics page chart."""
+
+    upper_bound_s: float  # upper bound in seconds (+Inf serialised as a large number)
+    count: float
+
+
+class DailyCostPointOut(BaseModel):
+    ts: str  # ISO date, e.g. "2026-04-17"
+    cost_usd: float
+
+
 class MetricsSummaryV2Response(BaseModel):
     """Data-model §5 MetricsSummary shape for the React Metrics page."""
 
     counters: MetricsCounters
     percentiles: MetricsPercentiles
     collected_at: datetime.datetime
+    # Alignment with frontend prototype (2026-04-24):
+    llm_calls_24h: int = 0
+    llm_cost_24h: float = 0.0
+    cache_hit_rate: float = 0.0
+    decisions_per_day: float = 0.0
+    latency_histogram: list[LatencyHistogramBucketOut] = []
+    cost_14d: list[DailyCostPointOut] = []
+
+
+def _pipeline_histogram_buckets() -> list[LatencyHistogramBucketOut]:
+    """Export raw Prometheus histogram buckets for the pipeline duration metric."""
+    buckets, total = _collect_histogram_buckets("ct_pipeline_duration_ms", filter_labels=None)
+    out: list[LatencyHistogramBucketOut] = []
+    for upper_ms, count in sorted(buckets.items()):
+        out.append(LatencyHistogramBucketOut(upper_bound_s=upper_ms / 1000.0, count=count))
+    if total:
+        # Append the +Inf bucket as a synthetic bound so front-end can render the long tail.
+        out.append(LatencyHistogramBucketOut(upper_bound_s=1e12, count=total))
+    return out
+
+
+async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float, float, float]:
+    """Aggregate llm_calls / llm_cost / cache_hit_rate / decisions_per_day from journal.
+
+    Returns ``(calls_24h, cost_24h, cache_hit_rate, decisions_per_day_last_30d)``.
+    """
+    from cryptotrader.journal.store import JournalStore
+
+    try:
+        store = JournalStore(database_url)
+        commits = await store.log(limit=2000)
+    except Exception:
+        logger.debug("metrics: journal read failed", exc_info=True)
+        return 0, 0.0, 0.0, 0.0
+
+    now = datetime.datetime.now(UTC)
+    cutoff_24h = now - datetime.timedelta(hours=24)
+    cutoff_30d = now - datetime.timedelta(days=30)
+
+    def _ts(c: Any) -> datetime.datetime | None:
+        return _metrics_coerce_ts(c.timestamp)
+
+    calls = 0
+    cost = 0.0
+    cache_hits = 0
+    in_last_24h = 0
+    decisions_30d = 0
+
+    for c in commits:
+        ts = _ts(c)
+        if ts is None:
+            continue
+        if ts >= cutoff_30d:
+            decisions_30d += 1
+        if ts < cutoff_24h:
+            continue
+        in_last_24h += 1
+        usage = getattr(c, "token_usage", None) or {}
+        if isinstance(usage, dict):
+            calls += int(usage.get("calls", 0) or 0)
+            cost += float(usage.get("cost_usd", 0.0) or 0.0)
+            cache_hits += int(usage.get("cache_hits", 0) or 0)
+
+    # Anthropic prompt cache can emit multi-segment cache_reads per call, so
+    # raw cache_hits may exceed calls — clamp to [0, 1] for the contract.
+    cache_hit_rate = min(1.0, (cache_hits / calls) if calls > 0 else 0.0)
+    decisions_per_day = decisions_30d / 30.0
+    # Suppress in_last_24h — not returned (kept as a trace aid).
+    _ = in_last_24h
+    return calls, round(cost, 4), round(cache_hit_rate, 4), round(decisions_per_day, 2)
+
+
+async def _cost_14d_series(database_url: str | None) -> list[DailyCostPointOut]:
+    """Per-day cost total for the last 14 calendar days (UTC), including zero-fill days."""
+    from cryptotrader.journal.store import JournalStore
+
+    try:
+        store = JournalStore(database_url)
+        commits = await store.log(limit=3000)
+    except Exception:
+        logger.debug("cost_14d: journal read failed", exc_info=True)
+        return []
+
+    now = datetime.datetime.now(UTC)
+    daily: dict[str, float] = {}
+    for i in range(14):
+        day = (now - datetime.timedelta(days=13 - i)).date().isoformat()
+        daily[day] = 0.0
+
+    cutoff = now - datetime.timedelta(days=14)
+    for c in commits:
+        ts_dt = _metrics_coerce_ts(c.timestamp)
+        if ts_dt is None or ts_dt < cutoff:
+            continue
+        day = ts_dt.date().isoformat()
+        if day not in daily:
+            continue
+        usage = getattr(c, "token_usage", None) or {}
+        if isinstance(usage, dict):
+            daily[day] += float(usage.get("cost_usd", 0.0) or 0.0)
+
+    return [DailyCostPointOut(ts=d, cost_usd=round(v, 4)) for d, v in daily.items()]
+
+
+from api.routes._utils import coerce_timestamp as _metrics_coerce_ts  # noqa: E402  — shared util
 
 
 @api_router.get("/summary", response_model=MetricsSummaryV2Response)
@@ -281,6 +401,17 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
     execution_p50 = _histogram_quantile("ct_execution_latency_ms", 0.50)
     execution_p95 = _histogram_quantile("ct_execution_latency_ms", 0.95)
 
+    from cryptotrader.config import load_config
+
+    cfg = load_config()
+    db_url = cfg.infrastructure.database_url
+    # Parallel fetch: both helpers scan the journal independently — gather saves ~50% latency.
+    (calls_24h, cost_24h, cache_hit_rate, decisions_per_day), cost_14d = await asyncio.gather(
+        _llm_accounting_last_24h(db_url),
+        _cost_14d_series(db_url),
+    )
+    latency_hist = _pipeline_histogram_buckets()
+
     return MetricsSummaryV2Response(
         counters=MetricsCounters(
             trades_total=trades_total,
@@ -295,5 +426,11 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
             execution_p50_ms=float(execution_p50),
             execution_p95_ms=float(execution_p95),
         ),
-        collected_at=datetime.datetime.now(datetime.UTC),
+        collected_at=datetime.datetime.now(UTC),
+        llm_calls_24h=calls_24h,
+        llm_cost_24h=cost_24h,
+        cache_hit_rate=cache_hit_rate,
+        decisions_per_day=decisions_per_day,
+        latency_histogram=latency_hist,
+        cost_14d=cost_14d,
     )

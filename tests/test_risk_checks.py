@@ -107,7 +107,7 @@ async def test_total_exposure_fail(verdict):
     c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
     r = await c.evaluate(verdict, {"total_value": 10000, "positions": {"A": 4000}})
     assert not r.passed
-    assert "Projected" in r.reason
+    assert "No remaining exposure budget" in r.reason
 
 
 @pytest.mark.asyncio
@@ -129,16 +129,19 @@ async def test_total_exposure_close_always_passes():
 
 
 @pytest.mark.asyncio
-async def test_total_exposure_projected_blocks():
-    """New trade that would push total exposure over limit should be blocked."""
+async def test_total_exposure_projected_clamps():
+    """PROD-I3: Over-budget trade returns a scale_adjustment proposal (no in-place mutation)."""
     v = TradeVerdict(action="long", confidence=0.7, position_scale=0.90)
     # max_single_pct=0.50, scale=0.90 → projected_new=0.45
     # existing=0.20, projected_total=0.65 > max=0.50
+    # remaining=0.30 → proposed scale_adjustment=0.30/0.50=0.60
     c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
     r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
-    assert not r.passed
-    assert "existing 20.00%" in r.reason
-    assert "new 45.00%" in r.reason
+    assert r.passed
+    # Verdict MUST NOT be mutated — the check only proposes via CheckResult.
+    assert v.position_scale == pytest.approx(0.90)
+    assert r.scale_adjustment == pytest.approx(0.60)
+    assert "Scale clamped" in r.reason
 
 
 @pytest.mark.asyncio
@@ -150,6 +153,70 @@ async def test_total_exposure_projected_passes():
     c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50))
     r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
     assert r.passed
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_skips_unparseable_position_value(verdict):
+    """Non-numeric position values must not crash the risk gate."""
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50))
+    # Mixed shapes: dict with None fields, bare string, bare None, normal float.
+    portfolio = {
+        "total_value": 10000,
+        "positions": {
+            "BAD_DICT": {"amount": None, "avg_price": None},
+            "BAD_STR": "pending",
+            "BAD_NONE": None,
+            "GOOD": 1000,
+        },
+    }
+    r = await c.evaluate(verdict, portfolio)
+    # Only "GOOD" (1000) and "BAD_DICT" (0*0=0) should be summed → 10% existing.
+    # verdict scale=0.05, max_single_pct=0.10 → projected_new=0.5%; total < max.
+    assert r.passed
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_at_limit_rejects_with_no_budget():
+    """TEST-I1: when remaining ≤ 0.01 the check rejects, doesn't propose tiny scale."""
+    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
+    # existing=4995/10000=49.95%, max=50% → remaining=0.05% (<= 0.01 threshold).
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 4995}})
+    assert not r.passed
+    assert r.scale_adjustment is None
+    assert "No remaining exposure budget" in r.reason
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_just_above_threshold_clamps():
+    """TEST-I1: remaining slightly above 0.01 → scale clamping kicks in (boundary above)."""
+    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
+    # existing=4880/10000=48.8%, max=50% → remaining=1.2% (> 1% threshold).
+    # proposed = 1.2% / 50% = 0.024 → still very small but legal.
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 4880}})
+    assert r.passed
+    assert r.scale_adjustment is not None
+    assert 0 < r.scale_adjustment < 0.05
+
+
+@pytest.mark.asyncio
+async def test_total_exposure_dict_positions_summed_correctly():
+    """TEST-M1: dict-format positions (production shape) accumulate exposure correctly."""
+    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
+    # Two dict positions: 0.1 BTC @ $30k = $3000 + 1 ETH @ $2000 = $2000 → $5000 / $10000 = 50%.
+    # max=50% → remaining=0 → reject.
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    portfolio = {
+        "total_value": 10000,
+        "positions": {
+            "BTC/USDT": {"amount": 0.1, "avg_price": 30000},
+            "ETH/USDT": {"amount": 1, "avg_price": 2000},
+        },
+    }
+    r = await c.evaluate(v, portfolio)
+    assert not r.passed
+    assert "50.00%" in r.reason
 
 
 # ── Loss checks ──

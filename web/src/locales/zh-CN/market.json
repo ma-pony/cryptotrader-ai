@@ -11,5 +11,23 @@
   },
   "tradingview": {
     "fallback": "TradingView 加载失败，已降级显示原生 K 线"
+  },
+  "ai_analysis": {
+    "fast_btn": "AI 分析此图（快速）",
+    "deep_btn": "AI 分析此图（深度）",
+    "stop_btn": "停止",
+    "tab_tradingview": "TradingView",
+    "tab_candlestick": "K 线图（可分析）",
+    "tab_tradingview_disabled_tip": "TradingView 图表不支持 AI 截图分析，请切换到「K 线图」",
+    "status_loading": "AI 正在分析图表形态...",
+    "status_error": "分析失败，请重试",
+    "screenshot_failed": "图片截取失败，使用文字描述分析",
+    "image_too_large": "图片过大，已使用文字摘要",
+    "context_badge": "已附加图表上下文",
+    "result_expired": "分析结果已过期（图表已更新）",
+    "source_visual": "视觉识别",
+    "source_numerical": "数值数据",
+    "secondary_timeframe": "对比时间周期",
+    "no_secondary": "—"
   }
 }

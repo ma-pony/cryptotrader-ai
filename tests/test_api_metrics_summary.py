@@ -91,7 +91,17 @@ class TestMetricsSummaryV2:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert set(data.keys()) == {"counters", "percentiles", "collected_at"}
+        # Spec: frontend-prototype-alignment (2026-04-24) extends MetricsSummary with
+        # llm accounting + cost series + latency histogram. Contract is now superset.
+        assert {"counters", "percentiles", "collected_at"}.issubset(set(data.keys()))
+        assert {
+            "llm_calls_24h",
+            "llm_cost_24h",
+            "cache_hit_rate",
+            "decisions_per_day",
+            "latency_histogram",
+            "cost_14d",
+        }.issubset(set(data.keys()))
 
         counters = data["counters"]
         assert counters["trades_total"] == 142

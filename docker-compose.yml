@@ -5,8 +5,6 @@ services:
       POSTGRES_DB: cryptotrader
       POSTGRES_USER: ${POSTGRES_USER:-cryptotrader}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    ports:
-      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -17,8 +15,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -32,8 +28,11 @@ services:
     ports:
       - "8003:8003"
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
-      REDIS_URL: redis://redis:6379
+      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
+      CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
+      # SEC-I5: API_KEY is required unless AUTH_MODE is explicitly set to "disabled".
+      # Setting AUTH_MODE=disabled in production logs a WARNING on every request.
+      AUTH_MODE: ${AUTH_MODE:-enabled}
       API_KEY: ${API_KEY:-}
       # Disable Swagger UI and ReDoc in production to prevent schema leakage (Req 7.6)
       DOCS_ENABLED: "false"
@@ -46,12 +45,16 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # PROD-C2: strict healthcheck — only HTTP 200 counts as healthy.
+    # Previously the check swallowed HTTPError, so 503 (DB/Redis down) was
+    # treated as healthy and the `web` service started against a broken API.
+    # start_period gives time for migrations + first DB/Redis connect.
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8003/health')\" || exit 1"]
+      test: ["CMD-SHELL", "python -c 'import sys,urllib.request as u; sys.exit(0 if u.urlopen(\"http://localhost:8003/health\", timeout=5).getcode()==200 else 1)'"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
+      start_period: 60s
     restart: unless-stopped
     deploy:
       resources:
@@ -81,8 +84,8 @@ services:
     build: .
     command: arena scheduler start
     environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
-      REDIS_URL: redis://redis:6379
+      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
+      CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
     env_file:
       - .env
     volumes:
@@ -92,6 +95,14 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # Heartbeat-based liveness: scheduler writes scheduler.heartbeat after each
+    # cycle; check fails if file age > 2× interval (default ≥120s).
+    healthcheck:
+      test: ["CMD", "arena", "scheduler", "healthcheck"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
     restart: unless-stopped
     deploy:
       resources:

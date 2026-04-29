@@ -3,16 +3,18 @@
 Returns historical equity points for a given range. Supports range param
 24h | 7d | 30d | all (data-model §1).  400 on invalid range.
 
-Backed by PortfolioManager._load_snapshots → equity-curve transformation.
+Backed by PortfolioManager.load_snapshots → equity-curve transformation.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from cryptotrader._compat import UTC
 
 
 @pytest.fixture
@@ -46,7 +48,7 @@ class TestEquityCurveShape:
     @pytest.mark.parametrize("rng", ["24h", "7d", "30d", "all"])
     def test_valid_range_returns_200(self, client: TestClient, rng: str) -> None:
         mock_pm = MagicMock()
-        mock_pm._load_snapshots = AsyncMock(return_value=_make_snapshots(5))
+        mock_pm.load_snapshots = AsyncMock(return_value=_make_snapshots(5))
 
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
@@ -61,7 +63,7 @@ class TestEquityCurveShape:
 
     def test_each_point_has_ts_and_equity(self, client: TestClient) -> None:
         mock_pm = MagicMock()
-        mock_pm._load_snapshots = AsyncMock(return_value=_make_snapshots(3))
+        mock_pm.load_snapshots = AsyncMock(return_value=_make_snapshots(3))
 
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
@@ -80,7 +82,7 @@ class TestEquityCurveShape:
         """24h range only returns snapshots within last 24 hours."""
         snaps = _make_snapshots(50, hours_apart=1)  # 50 hours of data
         mock_pm = MagicMock()
-        mock_pm._load_snapshots = AsyncMock(return_value=snaps)
+        mock_pm.load_snapshots = AsyncMock(return_value=snaps)
 
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
@@ -96,7 +98,7 @@ class TestEquityCurveShape:
         """data-model §1 — at most 1000 points to honour NFR-P-004."""
         snaps = _make_snapshots(2000, hours_apart=1)
         mock_pm = MagicMock()
-        mock_pm._load_snapshots = AsyncMock(return_value=snaps)
+        mock_pm.load_snapshots = AsyncMock(return_value=snaps)
 
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
@@ -109,7 +111,7 @@ class TestEquityCurveShape:
 
     def test_empty_snapshots_returns_empty_points(self, client: TestClient) -> None:
         mock_pm = MagicMock()
-        mock_pm._load_snapshots = AsyncMock(return_value=[])
+        mock_pm.load_snapshots = AsyncMock(return_value=[])
 
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),

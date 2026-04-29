@@ -9,10 +9,13 @@ from __future__ import annotations
 import json
 import logging
 
+import structlog
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.agents.base import FUNDING_RATE_HIGH, FUNDING_RATE_LOW, create_llm, extract_content
 from cryptotrader.models import TradeVerdict
+
+_slog = structlog.get_logger(__name__)
 
 
 def _extract_json(text: str) -> dict:
@@ -238,11 +241,26 @@ AGENT ANALYSES:
         # json_mode=False: response_format causes LangChain to strip stream=true,
         # breaking streaming for providers that only support streaming.
         # JSON output is enforced via prompt ("Output ONLY JSON") + _extract_json().
+        from cryptotrader.llm.json_retry import extract_json_with_retry
+
         llm = create_llm(model=model, temperature=0.1)
         messages = [SystemMessage(content=VERDICT_PROMPT), HumanMessage(content=user_msg)]
+        from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
+
+        if should_cache(model=model, role="verdict"):
+            messages = apply_cache_control(messages)
         resp = await llm.ainvoke(messages)
         text = extract_content(resp)
-        data = _extract_json(text)
+        data = await extract_json_with_retry(
+            text,
+            llm=llm,
+            schema_hint="action,confidence,position_scale,reasoning,thesis,invalidation",
+            max_retries=2,
+        )
+
+        if not data:
+            logger.warning("Verdict JSON parse exhausted — falling back to weighted")
+            return make_verdict_weighted(analyses)
 
         action = _normalize_action(data.get("action", "hold"))
         confidence = max(0.0, min(1.0, float(data.get("confidence", 0.0))))
@@ -268,7 +286,16 @@ AGENT ANALYSES:
             (verdict.thesis or "")[:100],
         )
         return verdict
-    except Exception:
+    except Exception as exc:
+        from cryptotrader.llm.errors import LLMProvidersExhaustedError
+
+        if isinstance(exc, LLMProvidersExhaustedError):
+            _slog.warning(
+                "llm_all_providers_exhausted",
+                role=exc.role,
+                providers_tried=exc.providers_tried,
+            )
+            return make_verdict_weighted(analyses)
         logger.exception("Verdict AI call failed, falling back to conservative hold")
         return TradeVerdict(action="hold", confidence=0.1, reasoning="Verdict AI call failed — defaulting to hold")
 

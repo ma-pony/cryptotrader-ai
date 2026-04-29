@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from api.routes._utils import coerce_timestamp as _coerce_timestamp  # backwards compat
+from cryptotrader._compat import UTC
 
 if TYPE_CHECKING:
     from cryptotrader.state import ArenaState
@@ -40,6 +44,11 @@ class PortfolioSnapshotOut(BaseModel):
     pnl_24h_pct: float
     drawdown: float  # ∈ [0, 1]
     updated_at: str
+    # Alignment with frontend prototype (2026-04-24):
+    sharpe_90d: float | None = None
+    win_rate: float | None = None  # fraction ∈ [0, 1]
+    total_trades: int = 0
+    realized_pnl_30d: float = 0.0
 
 
 class EquityPointOut(BaseModel):
@@ -65,12 +74,124 @@ def _compute_pnl_pct(equity: float, pnl_24h: float) -> float:
 
 def _build_state(pair: str = "BTC/USDT") -> dict:
     """Minimum ArenaState shape for read_portfolio_from_exchange."""
-    return {"metadata": {"pair": pair}, "data": {"snapshot_summary": {}}}
+    from cryptotrader.config import load_config
+
+    config = load_config()
+    return {
+        "metadata": {"pair": pair, "engine": config.engine, "exchange_id": config.exchange_id},
+        "data": {"snapshot_summary": {}},
+    }
+
+
+def _daily_last_equity(snaps: list[dict], cutoff: datetime) -> dict[str, float]:
+    """Reduce snapshot list to {date_iso: last equity that day} since cutoff."""
+    out: dict[str, float] = {}
+    for s in snaps:
+        ts = s.get("timestamp")
+        if isinstance(ts, str):
+            try:
+                ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            except ValueError:
+                continue
+        if ts is None:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        if ts < cutoff:
+            continue
+        out[ts.date().isoformat()] = float(s.get("total_value", 0.0) or 0.0)
+    return out
+
+
+def _sharpe_from_daily(daily_last: dict[str, float]) -> float | None:
+    """Annualised Sharpe from daily equity series; None when fewer than 30 samples."""
+    from math import sqrt
+    from statistics import mean, pstdev
+
+    if len(daily_last) < 30:
+        return None
+    series = [daily_last[k] for k in sorted(daily_last.keys())]
+    returns = [(series[i] - series[i - 1]) / series[i - 1] for i in range(1, len(series)) if series[i - 1] > 0]
+    if not returns:
+        return None
+    sd = pstdev(returns)
+    if sd <= 0:
+        return None
+    return round((mean(returns) / sd) * sqrt(365), 2)
+
+
+async def _load_snapshots(database_url: str | None) -> list[dict]:
+    from cryptotrader.portfolio.manager import PortfolioManager
+
+    try:
+        pm = PortfolioManager(database_url)
+        return await pm.load_snapshots("default")
+    except Exception:
+        logger.debug("equity snapshot read failed for sharpe", exc_info=True)
+        return []
+
+
+async def _load_commits(database_url: str | None) -> list:
+    from cryptotrader.journal.store import JournalStore
+
+    try:
+        store = JournalStore(database_url)
+        return await store.log(limit=1000)
+    except Exception:
+        logger.debug("journal log read failed for pnl stats", exc_info=True)
+        return []
+
+
+def _commit_pnl_stats(commits: list, cutoff_30d: datetime) -> tuple[int, float | None, float]:
+    """Return (total_trades, win_rate_or_None, realized_pnl_30d)."""
+    filled = [c for c in commits if getattr(c, "order", None) is not None]
+    total = len(filled)
+    win_rate: float | None = None
+    if filled:
+        wins = [c for c in filled if (c.pnl is not None and c.pnl > 0)]
+        settled = [c for c in filled if c.pnl is not None]
+        if settled:
+            win_rate = round(len(wins) / len(settled), 4)
+    realized = 0.0
+    for c in filled:
+        ts_dt = _coerce_timestamp(c.timestamp)
+        if ts_dt is None or ts_dt < cutoff_30d or c.pnl is None:
+            continue
+        realized += float(c.pnl)
+    return total, win_rate, round(realized, 2)
+
+
+async def _compute_extras(database_url: str | None) -> dict[str, object]:
+    """Derive (sharpe_90d, win_rate, total_trades, realized_pnl_30d).
+
+    - **sharpe_90d**: mean/std of daily equity returns over last 90 days, annualised
+      by sqrt(365). ``None`` when fewer than 30 daily samples.
+    - **win_rate**: share of filled commits with positive ``pnl``; ``None`` when no
+      filled trades exist.
+    - **total_trades**: number of commits with a non-null ``order`` (executed).
+    - **realized_pnl_30d**: sum of ``commit.pnl`` for commits in the last 30 days.
+    """
+    now = datetime.now(UTC)
+    snaps = await _load_snapshots(database_url)
+    sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
+
+    commits = await _load_commits(database_url)
+    total, win_rate, realized_30d = _commit_pnl_stats(commits, now - timedelta(days=30))
+
+    return {
+        "sharpe_90d": sharpe,
+        "win_rate": win_rate,
+        "total_trades": total,
+        "realized_pnl_30d": realized_30d,
+    }
 
 
 def _serialize_positions(raw_positions: dict) -> list[PositionOut]:
     out: list[PositionOut] = []
     for pair, pos in (raw_positions or {}).items():
+        if not isinstance(pos, dict):
+            logger.debug("Skipping non-dict position for %s: %r", pair, type(pos).__name__)
+            continue
         amount = float(pos.get("amount", 0.0) or 0.0)
         if amount == 0.0:
             continue
@@ -107,7 +228,10 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
     pm = PortfolioManager(config.infrastructure.database_url)
 
     try:
-        live = await pm_mod.read_portfolio_from_exchange(cast("ArenaState", _build_state()))
+        live = await asyncio.wait_for(
+            pm_mod.read_portfolio_from_exchange(cast("ArenaState", _build_state())),
+            timeout=15.0,
+        )
     except Exception:
         logger.debug("read_portfolio_from_exchange failed", exc_info=True)
         live = None
@@ -129,6 +253,8 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         logger.warning("Portfolio snapshot read failed: %s", exc)
         raise HTTPException(status_code=503, detail="Portfolio data unavailable") from exc
 
+    extras = await _compute_extras(config.infrastructure.database_url)
+
     return PortfolioSnapshotOut(
         equity=equity,
         cash=cash,
@@ -137,6 +263,10 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         pnl_24h_pct=_compute_pnl_pct(equity, pnl_24h),
         drawdown=abs(drawdown_raw),
         updated_at=datetime.now(UTC).isoformat(),
+        sharpe_90d=cast("float | None", extras["sharpe_90d"]),
+        win_rate=cast("float | None", extras["win_rate"]),
+        total_trades=int(cast("int", extras["total_trades"])),
+        realized_pnl_30d=float(cast("float", extras["realized_pnl_30d"])),
     )
 
 
@@ -152,7 +282,7 @@ async def get_equity_curve(
 
     config = load_config()
     pm = PortfolioManager(config.infrastructure.database_url)
-    snaps = await pm._load_snapshots("default")
+    snaps = await pm.load_snapshots("default")
 
     # Window filter
     if range != "all":

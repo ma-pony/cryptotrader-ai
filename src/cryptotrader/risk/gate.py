@@ -57,6 +57,7 @@ class RiskGate:
             )
 
         failed: GateResult | None = None
+        proposals: list[float] = []
         for c in self._checks:
             try:
                 result = await c.evaluate(verdict, portfolio)
@@ -77,4 +78,12 @@ class RiskGate:
             if not result.passed and failed is None:
                 failed = GateResult(passed=False, rejected_by=c.name, reason=result.reason)
 
-        return failed if failed is not None else GateResult(passed=True)
+            # PROD-I3: collect scale proposals from passed checks; the strictest
+            # (min) wins. Failed checks short-circuit so their proposals don't apply.
+            if result.passed and result.scale_adjustment is not None:
+                proposals.append(result.scale_adjustment)
+
+        if failed is not None:
+            return failed
+        agg = min(proposals) if proposals else None
+        return GateResult(passed=True, scale_adjustment=agg)

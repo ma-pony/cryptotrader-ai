@@ -19,7 +19,6 @@ dependencies = [
     "langgraph>=1.0.10",
     "ccxt>=4.5.42",
     "pandas>=2.3",
-    "pandas-ta>=0.4",
     "httpx>=0.28",
     "pydantic>=2.12",
     "typer>=0.24",
@@ -37,6 +36,8 @@ dependencies = [
     "apscheduler>=3.10,<4",
     "nest-asyncio>=1.6.0",
     "prometheus-client>=0.20",
+    "websockets>=13.0",
+    "fastmcp>=2.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -77,6 +78,8 @@ omit = [
     "src/cryptotrader/data/providers/sosovalue.py",
     # Alternative supervisor/agent pattern — not on the main execution path.
     "src/cryptotrader/debate/researchers.py",
+    # MCP Server wrappers are thin Provider call delegates (same rationale as providers).
+    "src/cryptotrader/mcp/servers/*.py",
 ]
 
 [dependency-groups]
@@ -137,11 +140,24 @@ known-first-party = ["cryptotrader", "api", "cli"]
 
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = ["T201"]
-"scripts/**/*.py" = ["T201"]
+# Scripts are entry-layer launchers and may import graph.py / nodes (TID251 exempt).
+"scripts/**/*.py" = ["T201", "TID251"]
+# journal/store.py: SQLAlchemy declarative classes (Base, Row) assigned in functions
+# follow class-naming convention even though N806 sees them as variables.
 "src/cryptotrader/journal/store.py" = ["N806"]
+# _compat.py: Central UTC/StrEnum shim for Python 3.10 runtime compatibility.
+# UP042 is the same backport (Python 3.10 has no `enum.StrEnum`).
+"src/cryptotrader/_compat.py" = ["UP036", "UP017", "UP042"]
+# MCP Server docstrings use Chinese for tool descriptions (consumed by LLM agents)
+"src/cryptotrader/mcp/servers/*.py" = ["RUF002"]
 # reflect.py contains Chinese LLM prompts -- fullwidth punctuation is intentional
 "src/cryptotrader/learning/reflect.py" = ["RUF001"]
+# portfolio/manager.py: same SQLAlchemy declarative-class pattern as journal/store.
 "src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
+# cli/main.py:
+# N806 — SQLAlchemy declarative class assigned in function (Base = declarative_base()).
+# S104 — uvicorn's --host default is 0.0.0.0 by design (containers expose the port).
+# S603/S607 — `arena web` shells out to the user's local pnpm with hardcoded argv.
 "src/cli/main.py" = ["N806", "S104", "S603", "S607", "TID251"]
 # state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
 # (LangGraph calls get_type_hints() to extract channel reducers at class creation)
@@ -151,14 +167,13 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # TID251 exempted: nodes/ IS the orchestration layer above domain; it may reference
 # sibling node modules via lazy imports without violating the boundary rule.
 "src/cryptotrader/nodes/*.py" = ["TCH001", "TID251"]
-# graph.py and graph_supervisor.py assemble the LangGraph topology from nodes.
+# graph.py assembles the LangGraph topology from nodes.
 "src/cryptotrader/graph.py" = ["TID251"]
-"src/cryptotrader/graph_supervisor.py" = ["TID251"]
 # scheduler.py and backtest/engine.py are entry-layer orchestrators above nodes.
 "src/cryptotrader/scheduler.py" = ["TID251"]
 "src/cryptotrader/backtest/engine.py" = ["TID251"]
-# API routes are entry-layer -- they invoke graph builders directly.
-"src/api/routes/analyze.py" = ["TID251"]
+# api/routes/chat.py: SSE chat endpoint dispatches via build_chat_graph() -- the
+# routes layer is entry-level above nodes/graph and may import the assembler.
 "src/api/routes/chat.py" = ["TID251"]
 # main.py is FastAPI entry-layer -- lifespan hook may import nodes for shutdown.
 "src/api/main.py" = ["TID251"]

@@ -63,19 +63,23 @@ async def run_debate(
     bull_history = []
     bear_history = []
 
+    from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
+
+    enable_cache = should_cache(model=model, role="debate")
+
     for r in range(rounds):
         # Bull argues (sees bear's last argument if any)
-        bull_msgs = [{"role": "system", "content": BULL_SYSTEM}]
         bull_prompt = f"Analyst reports:\n{reports}"
         if bear_history:
             bull_prompt += f"\n\n{REBUTTAL_TEMPLATE.format(opponent_argument=bear_history[-1])}"
         elif r == 0:
             bull_prompt += "\n\nMake your opening bull case."
-        bull_msgs.append({"role": "user", "content": bull_prompt})
 
         try:
             llm = create_llm(model=model, temperature=0.3)
             lc_msgs = [SystemMessage(content=BULL_SYSTEM), HumanMessage(content=bull_prompt)]
+            if enable_cache:
+                lc_msgs = apply_cache_control(lc_msgs)
             resp = await llm.ainvoke(lc_msgs)
             bull_arg = extract_content(resp)
         except Exception:
@@ -89,6 +93,8 @@ async def run_debate(
         try:
             llm = create_llm(model=model, temperature=0.3)
             lc_msgs = [SystemMessage(content=BEAR_SYSTEM), HumanMessage(content=bear_prompt)]
+            if enable_cache:
+                lc_msgs = apply_cache_control(lc_msgs)
             resp = await llm.ainvoke(lc_msgs)
             bear_arg = extract_content(resp)
         except Exception:
@@ -132,12 +138,16 @@ async def judge_debate(
     model: str = "",
 ) -> dict:
     """Research manager judges the debate. Returns {action, confidence, reasoning}."""
+    from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
+
     try:
         llm = create_llm(model=model, temperature=0.1)
         lc_msgs = [
             SystemMessage(content=JUDGE_PROMPT.format(pair=pair)),
             HumanMessage(content=debate["full_debate"]),
         ]
+        if should_cache(model=model, role="debate"):
+            lc_msgs = apply_cache_control(lc_msgs)
         resp = await llm.ainvoke(lc_msgs)
         text = extract_content(resp)
         data = _extract_json(text)

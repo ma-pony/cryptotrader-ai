@@ -46,28 +46,11 @@ async def test_token_security_check_integration():
     assert result.passed is True
 
 
-@pytest.mark.asyncio
-async def test_enhanced_data_provider():
-    """Test enhanced data provider integration."""
-    from cryptotrader.data.enhanced import EnhancedDataProvider
-
-    provider = EnhancedDataProvider()
-
-    # Test price data (may fail due to API, that's ok)
-    price_data = await provider.get_price_data("BTC/USDT")
-    assert "okx_available" in price_data
-
-    # Test sentiment data
-    sentiment_data = await provider.get_sentiment_data("BTC/USDT")
-    assert "sentiment_available" in sentiment_data
-
-
 if __name__ == "__main__":
     import asyncio
 
     async def run_tests():
         await test_risk_gate_with_token_security()
         await test_token_security_check_integration()
-        await test_enhanced_data_provider()
 
     asyncio.run(run_tests())

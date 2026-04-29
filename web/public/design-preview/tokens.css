@@ -1,0 +1,246 @@
+/* CryptoTrader AI — Design Tokens */
+/* Dark-first, AI-native. Amber = AI decisions, Cyan = data, Violet = reasoning */
+
+:root[data-theme="dark"] {
+  /* ── Surfaces (near-black with subtle warm tint) ────────────── */
+  --bg-base:      oklch(14% 0.008 270);
+  --bg-raised:   oklch(17% 0.010 270);
+  --bg-card:     oklch(19% 0.012 270);
+  --bg-elev:     oklch(22% 0.014 270);
+  --bg-hover:    oklch(24% 0.018 270);
+  --bg-inset:    oklch(11% 0.006 270);
+
+  /* ── Borders ────────────────────────────────────────────────── */
+  --border-subtle:  oklch(24% 0.012 270);
+  --border-default: oklch(30% 0.015 270);
+  --border-strong:  oklch(40% 0.020 270);
+
+  /* ── Text ───────────────────────────────────────────────────── */
+  --fg-primary:   oklch(96% 0.010 90);
+  --fg-secondary: oklch(72% 0.012 90);
+  --fg-tertiary:  oklch(54% 0.015 90);
+  --fg-muted:     oklch(40% 0.012 90);
+  --fg-inverse:   oklch(15% 0.010 270);
+
+  /* ── Brand palette ──────────────────────────────────────────── */
+  /* Amber gold — AI decisions, verdict, primary action */
+  --amber-50:   oklch(96% 0.030 80);
+  --amber-200:  oklch(88% 0.110 80);
+  --amber-400:  oklch(78% 0.155 75);
+  --amber-500:  oklch(74% 0.165 70);
+  --amber-600:  oklch(66% 0.170 65);
+  --amber-glow: oklch(78% 0.165 70 / 0.35);
+
+  /* Cyan — data / indicators / neutral info */
+  --cyan-400:   oklch(76% 0.130 220);
+  --cyan-500:   oklch(68% 0.140 215);
+  --cyan-600:   oklch(58% 0.135 215);
+
+  /* Violet — reasoning, debate, AI internals */
+  --violet-400: oklch(72% 0.140 300);
+  --violet-500: oklch(62% 0.180 295);
+  --violet-600: oklch(54% 0.185 295);
+  --violet-glow: oklch(62% 0.180 295 / 0.28);
+
+  /* ── Semantic (trading) ─────────────────────────────────────── */
+  --long:       oklch(74% 0.160 150);  /* green — bullish / long */
+  --long-soft:  oklch(74% 0.160 150 / 0.15);
+  --short:      oklch(66% 0.210 25);   /* red — bearish / short */
+  --short-soft: oklch(66% 0.210 25 / 0.15);
+  --hold:       oklch(65% 0.015 270);  /* gray */
+  --hold-soft:  oklch(65% 0.015 270 / 0.15);
+
+  /* ── Status ─────────────────────────────────────────────────── */
+  --success:    var(--long);
+  --warning:    oklch(78% 0.155 75);
+  --danger:     var(--short);
+  --info:       var(--cyan-500);
+
+  /* ── Agent colors (4 专业分析师) ────────────────────────────── */
+  --agent-tech:   oklch(74% 0.155 220);  /* cyan - 技术面 */
+  --agent-chain:  oklch(72% 0.150 300);  /* violet - 链上 */
+  --agent-news:   oklch(78% 0.145 45);   /* orange - 新闻 */
+  --agent-macro:  oklch(74% 0.150 150);  /* green - 宏观 */
+  --agent-verdict: oklch(78% 0.165 70);  /* amber - AI 决策者 */
+
+  /* ── Shadows ────────────────────────────────────────────────── */
+  --shadow-sm: 0 1px 2px rgba(0,0,0,0.3);
+  --shadow-md: 0 4px 12px rgba(0,0,0,0.35);
+  --shadow-lg: 0 16px 40px rgba(0,0,0,0.5);
+  --shadow-glow-amber: 0 0 32px var(--amber-glow);
+  --shadow-glow-violet: 0 0 32px var(--violet-glow);
+}
+
+/* Light theme alt */
+:root[data-theme="light"] {
+  --bg-base:      oklch(98% 0.004 90);
+  --bg-raised:   oklch(100% 0 0);
+  --bg-card:     oklch(100% 0 0);
+  --bg-elev:     oklch(97% 0.004 90);
+  --bg-hover:    oklch(94% 0.006 90);
+  --bg-inset:    oklch(95% 0.005 90);
+
+  --border-subtle:  oklch(92% 0.005 90);
+  --border-default: oklch(86% 0.008 90);
+  --border-strong:  oklch(74% 0.010 90);
+
+  --fg-primary:   oklch(20% 0.015 270);
+  --fg-secondary: oklch(38% 0.015 270);
+  --fg-tertiary:  oklch(54% 0.012 270);
+  --fg-muted:     oklch(68% 0.010 270);
+  --fg-inverse:   oklch(98% 0.004 90);
+
+  --amber-500:  oklch(62% 0.170 65);
+  --amber-600:  oklch(55% 0.170 60);
+  --amber-glow: oklch(70% 0.170 65 / 0.25);
+
+  --cyan-500:   oklch(55% 0.140 220);
+  --violet-500: oklch(50% 0.180 295);
+  --violet-glow: oklch(60% 0.180 295 / 0.20);
+
+  --long:       oklch(55% 0.160 150);
+  --short:      oklch(55% 0.210 25);
+  --long-soft:  oklch(55% 0.160 150 / 0.12);
+  --short-soft: oklch(55% 0.210 25 / 0.12);
+  --hold:       oklch(55% 0.010 270);
+  --hold-soft:  oklch(55% 0.010 270 / 0.10);
+
+  --success: var(--long);
+  --warning: oklch(62% 0.165 70);
+  --danger:  var(--short);
+  --info:    var(--cyan-500);
+
+  --agent-tech:   oklch(55% 0.155 220);
+  --agent-chain:  oklch(52% 0.180 300);
+  --agent-news:   oklch(62% 0.155 45);
+  --agent-macro:  oklch(55% 0.150 150);
+  --agent-verdict: oklch(60% 0.170 65);
+
+  --shadow-sm: 0 1px 2px rgba(20,15,10,0.06);
+  --shadow-md: 0 4px 12px rgba(20,15,10,0.08);
+  --shadow-lg: 0 16px 40px rgba(20,15,10,0.12);
+  --shadow-glow-amber: 0 0 24px var(--amber-glow);
+  --shadow-glow-violet: 0 0 24px var(--violet-glow);
+}
+
+/* ── Typography ───────────────────────────────────────────────── */
+:root {
+  --font-display: "Space Grotesk", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-body:    "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono:    "JetBrains Mono", "SF Mono", "Menlo", monospace;
+
+  --t-display: 32px;
+  --t-h1:      24px;
+  --t-h2:      18px;
+  --t-h3:      15px;
+  --t-body:    13px;
+  --t-small:   12px;
+  --t-micro:   11px;
+
+  --radius-sm: 4px;
+  --radius:    8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+}
+
+/* ── Base resets inside the artboards ─────────────────────────── */
+.ct-root {
+  font-family: var(--font-body);
+  font-size: var(--t-body);
+  color: var(--fg-primary);
+  background: var(--bg-base);
+  line-height: 1.5;
+  font-feature-settings: "cv11", "ss01", "tnum";
+  letter-spacing: -0.005em;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+.ct-root *, .ct-root *::before, .ct-root *::after { box-sizing: border-box; }
+.ct-root h1, .ct-root h2, .ct-root h3, .ct-root h4 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 0;
+  color: var(--fg-primary);
+}
+.ct-root .mono { font-family: var(--font-mono); font-feature-settings: "tnum", "zero"; }
+.ct-root button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; padding: 0; }
+.ct-root ::selection { background: var(--amber-500); color: var(--fg-inverse); }
+
+/* ── Utility atoms ────────────────────────────────────────────── */
+.ct-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+.ct-card-elev {
+  background: var(--bg-card);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+.ct-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: var(--t-micro);
+  font-weight: 500;
+  line-height: 1.6;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-elev);
+  color: var(--fg-secondary);
+  white-space: nowrap;
+}
+.ct-chip-long {
+  color: var(--long);
+  background: var(--long-soft);
+  border-color: color-mix(in oklch, var(--long) 30%, transparent);
+}
+.ct-chip-short {
+  color: var(--short);
+  background: var(--short-soft);
+  border-color: color-mix(in oklch, var(--short) 30%, transparent);
+}
+.ct-chip-hold {
+  color: var(--fg-secondary);
+  background: var(--hold-soft);
+}
+.ct-num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; letter-spacing: -0.02em; }
+.ct-muted { color: var(--fg-tertiary); }
+.ct-dim { color: var(--fg-muted); }
+
+/* Dotted grid background pattern for "data zones" */
+.ct-dotgrid {
+  background-image: radial-gradient(var(--border-subtle) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+/* Pulse animation for live indicators */
+@keyframes ct-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.ct-pulse { animation: ct-pulse 2s ease-in-out infinite; }
+
+/* Shimmer for loading */
+@keyframes ct-shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* Scrollbar */
+.ct-root ::-webkit-scrollbar { width: 8px; height: 8px; }
+.ct-root ::-webkit-scrollbar-track { background: transparent; }
+.ct-root ::-webkit-scrollbar-thumb { background: var(--border-default); border-radius: 4px; }
+.ct-root ::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }

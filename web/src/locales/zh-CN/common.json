@@ -6,11 +6,13 @@
   "nav": {
     "dashboard": "总览",
     "decisions": "决策复盘",
+    "debate": "辩论",
     "backtest": "回测",
     "risk": "风控",
     "metrics": "指标",
     "chat": "AI 对话",
-    "market": "行情看板"
+    "market": "行情看板",
+    "scheduler": "调度规则"
   },
   "actions": {
     "refresh": "刷新",
@@ -54,5 +56,12 @@
   "desktop_only": {
     "title": "桌面专用",
     "body": "本应用仅支持 ≥ 1280px 桌面端访问。"
+  },
+  "ws": {
+    "connecting": "连接中",
+    "reconnecting": "重连中…",
+    "degraded": "数据延迟中，轮询模式",
+    "degraded_interval": "数据延迟中，当前轮询间隔 {{interval}}",
+    "polling_mode": "轮询模式"
   }
 }

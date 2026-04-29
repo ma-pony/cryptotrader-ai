@@ -7,12 +7,13 @@ All LLM calls and external APIs are mocked.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock, patch
 
 import pandas as pd
 import pytest
 
+from cryptotrader._compat import UTC
 from cryptotrader.models import (
     DataSnapshot,
     MacroData,
@@ -21,6 +22,8 @@ from cryptotrader.models import (
     OnchainData,
     TradeVerdict,
 )
+
+pytest.importorskip("talib", reason="TA-Lib native library not available")
 
 # ── Fixtures ──
 

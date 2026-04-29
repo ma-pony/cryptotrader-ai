@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from cryptotrader._compat import UTC
 from cryptotrader.config import ExperienceConfig, ReflectionConfig
 from cryptotrader.learning.reflect import (
     _assign_maturity,

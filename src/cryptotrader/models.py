@@ -3,14 +3,74 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from enum import StrEnum
-from typing import TYPE_CHECKING, Any, Literal
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, Literal, TypedDict
 
 from pydantic import BaseModel, field_validator
 
+from cryptotrader._compat import UTC, StrEnum
+
 if TYPE_CHECKING:
     import pandas as pd
+
+
+class LatencyBreakdown(TypedDict, total=False):
+    """Pipeline stage latency snapshot in milliseconds.
+
+    ``total`` is the sum of the six stage buckets. ``other`` absorbs any
+    non-classified node (see ``cryptotrader.nodes.journal._LATENCY_STAGE_MAP``).
+    """
+
+    data: float
+    agents: float
+    debate: float
+    verdict: float
+    risk: float
+    execute: float
+    other: float
+    total: float
+
+
+class _ModelTokenStats(TypedDict, total=False):
+    input: float
+    output: float
+    calls: float
+    cost_usd: float
+
+
+class TokenUsage(TypedDict, total=False):
+    """Aggregated LLM token consumption + USD cost for a single decision.
+
+    ``by_model`` maps concrete model name (e.g. ``claude-sonnet-4-6``) → the same
+    counter shape minus ``cache_hits`` (which is global per call, not per model).
+    """
+
+    input_tokens: float
+    output_tokens: float
+    cache_hits: float
+    calls: float
+    cost_usd: float
+    by_model: dict[str, _ModelTokenStats]
+
+
+@dataclass
+class CommitObservability:
+    """Observability + telemetry fields attached to a :class:`DecisionCommit`.
+
+    Groups the 8 per-decision telemetry fields that previously lived as individual
+    parameters on ``build_commit``. Callers can pass ``CommitObservability()`` with
+    all defaults or omit the argument entirely.
+    """
+
+    node_trace: list = field(default_factory=list)
+    latency_breakdown: dict[str, Any] = field(default_factory=dict)
+    token_usage: dict[str, Any] = field(default_factory=dict)
+    consensus_metrics: Any = None  # ConsensusMetrics | None
+    debate_skip_reason: str = ""
+    experience_memory: dict[str, Any] = field(default_factory=dict)
+    verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
+    trace_id: str | None = None
+
 
 # ── External API Response Schema Models (Section 7.3) ──
 
@@ -188,6 +248,11 @@ class TradeVerdict:
 class CheckResult:
     passed: bool
     reason: str = ""
+    # PROD-I3: Optional proposal for clamping verdict.position_scale into ``[0, 1]``.
+    # ``risk_check`` aggregates proposals across all checks (taking the min) and
+    # emits the final scale via the node's return delta — checks MUST NOT mutate
+    # ``verdict.position_scale`` directly. ``None`` means "no opinion".
+    scale_adjustment: float | None = None
 
 
 @dataclass
@@ -195,6 +260,10 @@ class GateResult:
     passed: bool
     rejected_by: str = ""
     reason: str = ""
+    # PROD-I3: Aggregated scale proposal across all checks (min of all
+    # CheckResult.scale_adjustment values), or ``None`` if no check proposed
+    # an adjustment. Consumed by ``risk_check`` to emit the verdict delta.
+    scale_adjustment: float | None = None
 
 
 # ── Execution Layer Models (Section 7.1) ──
@@ -320,3 +389,9 @@ class DecisionCommit:
     experience_memory: dict[str, Any] = field(default_factory=dict)
     node_trace: list[NodeTraceEntry] = field(default_factory=list)
     debate_skip_reason: str = ""
+    # Latency per pipeline stage (ms) — see :class:`LatencyBreakdown` for the shape.
+    # Typed as dict[str, Any] to remain consistent with ``experience_memory`` and to
+    # avoid TypedDict strictness cascades at every call site.
+    latency_breakdown: dict[str, Any] = field(default_factory=dict)
+    # Token + cost accounting — see :class:`TokenUsage` for the shape.
+    token_usage: dict[str, Any] = field(default_factory=dict)

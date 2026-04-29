@@ -126,9 +126,9 @@ class TestBuildTradingGraph:
         uncond = _unconditional_edges(graph)
         assert ("enrich_context", "verdict") in uncond
 
-    def test_verdict_leads_to_risk_gate(self, graph):
+    def test_verdict_leads_to_hitl_gate(self, graph):
         uncond = _unconditional_edges(graph)
-        assert ("verdict", "risk_gate") in uncond
+        assert ("verdict", "hitl_gate") in uncond
 
     def test_execute_leads_to_record_trade(self, graph):
         uncond = _unconditional_edges(graph)

@@ -1,4 +1,7 @@
 {
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
   "permissions": {
     "allow": [
       "Bash(tail:*)",
@@ -111,14 +114,14 @@
       "Agent",
       "Skill",
       "ToolSearch",
-      "mcp__*"
+      "mcp__*",
+      "mcp__chrome-devtools__new_page",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:api.anthropic.com)"
     ]
   },
   "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "shadcn"
-  ],
-  "env": {
-    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
-  }
+  ]
 }

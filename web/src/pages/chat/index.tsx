@@ -1,7 +1,10 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useLocation } from 'react-router';
 
+import type { AdditionalContext } from '@/types/chart-analysis';
+import { AnalysisProgressPanel } from '@/components/analysis/analysis-progress-panel';
+import { useAnalysisProgress } from '@/hooks/use-analysis-progress';
 import { useChatMessages } from '@/hooks/use-chat-messages';
 import { useChatStore } from '@/stores/use-chat-store';
 import { Card } from '@/components/ui/card';
@@ -14,10 +17,26 @@ const ChatPage = () => {
   const { t } = useTranslation('chat');
   const { sessionId } = useParams<{ sessionId?: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const { sessions, activeSessionId, setActiveSession, removeSession } = useChatStore();
   const currentSessionId = sessionId ?? activeSessionId;
   const { messages, status, error, sendMessage, stopStream, clearMessages } = useChatMessages(currentSessionId);
+  const { progress, sendInterrupt, sendSteer } = useAnalysisProgress();
+
+  const initialContextRef = useRef(false);
+  useEffect(() => {
+    if (initialContextRef.current) return;
+    const state = location.state as { additionalContext?: AdditionalContext } | null;
+    if (!state?.additionalContext) return;
+    initialContextRef.current = true;
+    const timer = setTimeout(() => {
+      sendMessage('请分析当前图表', state.additionalContext);
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [location.state, sendMessage]);
+
+  const chartContext = (location.state as { additionalContext?: AdditionalContext } | null)?.additionalContext;
 
   const handleSelectSession = useCallback(
     (id: string) => {
@@ -46,7 +65,6 @@ const ChatPage = () => {
 
   return (
     <div className="flex h-[calc(100vh-4rem)] gap-4">
-      {/* Sidebar — session list */}
       <Card className="hidden w-64 shrink-0 overflow-hidden lg:block">
         <SessionList
           sessions={sessions}
@@ -57,12 +75,30 @@ const ChatPage = () => {
         />
       </Card>
 
-      {/* Main chat area */}
       <Card className="flex flex-1 flex-col overflow-hidden">
         <div className="border-b border-border px-4 py-3">
           <h1 className="text-lg font-semibold text-foreground">{t('title')}</h1>
           {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+          {chartContext && (
+            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+              <span className="inline-block rounded bg-blue-500/20 px-1.5 py-0.5 text-blue-400">
+                {t('chart_context_badge', '已附加图表上下文')}
+              </span>
+              <span>{chartContext.payloads[0]?.symbol} / {chartContext.payloads[0]?.timeframe}</span>
+            </div>
+          )}
         </div>
+
+        <AnalysisProgressPanel
+          progress={progress}
+          sessionId={currentSessionId ?? null}
+          onSteer={currentSessionId
+            ? (target, instruction) => void sendSteer(currentSessionId, target, instruction)
+            : undefined}
+          onInterrupt={currentSessionId
+            ? () => void sendInterrupt(currentSessionId)
+            : undefined}
+        />
 
         <div className="flex-1 overflow-hidden">
           <MessageStream messages={messages} status={status} />

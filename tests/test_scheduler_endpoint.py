@@ -10,7 +10,7 @@ Strategy: minimize mocks.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import patch
 
 import pytest
@@ -18,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from api.main import app
 from api.routes.scheduler import SchedulerJobStatus, SchedulerStatusResponse
+from cryptotrader._compat import UTC
 from cryptotrader.scheduler import Scheduler
 
 # ---------------------------------------------------------------------------

@@ -16,18 +16,32 @@ export const EquityChartSection = () => {
 
   return (
     <Card>
-      <CardHeader className="pb-2 flex flex-row items-center justify-between">
-        <CardTitle className="text-base">{t('equity.title', { defaultValue: '权益曲线' })}</CardTitle>
-        <div className="flex gap-1" role="tablist" aria-label={t('equity.range_label', { defaultValue: '时间范围' })}>
+      <CardHeader className="flex flex-row items-center justify-between pb-2">
+        <div>
+          <CardTitle className="text-sm">
+            {t('equity.title', { defaultValue: '权益曲线' })}
+          </CardTitle>
+          <div className="mt-0.5 text-[11px] text-muted-foreground">
+            {t('equity.subtitle', { defaultValue: '实时权益 · 多窗口对比' })}
+          </div>
+        </div>
+        <div
+          className="flex gap-0.5 rounded-md bg-muted/60 p-0.5"
+          role="tablist"
+          aria-label={t('equity.range_label', { defaultValue: '时间范围' })}
+        >
           {RANGES.map((r) => (
             <button
               key={r}
+              id={`equity-range-tab-${r}`}
               role="tab"
               aria-selected={r === range}
-              className={`px-3 py-1 text-xs rounded-md transition-colors ${
+              aria-controls="equity-range-panel"
+              tabIndex={r === range ? 0 : -1}
+              className={`rounded px-2.5 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${
                 r === range
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
               }`}
               onClick={() => setRange(r)}
             >
@@ -36,7 +50,12 @@ export const EquityChartSection = () => {
           ))}
         </div>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent
+        className="pt-0"
+        role="tabpanel"
+        id="equity-range-panel"
+        aria-labelledby={`equity-range-tab-${range}`}
+      >
         {isLoading ? (
           <Skeleton className="h-[320px] w-full" />
         ) : (

@@ -19,10 +19,11 @@ Note on SQLite vs PostgreSQL:
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 
+from cryptotrader._compat import UTC
 from cryptotrader.journal.store import JournalStore
 from cryptotrader.models import (
     ConsensusMetrics,

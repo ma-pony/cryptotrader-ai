@@ -1,0 +1,24 @@
+{
+  "mcpServers": {
+    "cryptotrader-binance": {
+      "command": "python",
+      "args": ["-m", "cryptotrader.mcp.servers.binance"],
+      "env": {}
+    },
+    "cryptotrader-macro": {
+      "command": "python",
+      "args": ["-m", "cryptotrader.mcp.servers.macro"],
+      "env": {}
+    },
+    "cryptotrader-onchain": {
+      "command": "python",
+      "args": ["-m", "cryptotrader.mcp.servers.onchain"],
+      "env": {}
+    },
+    "cryptotrader-news": {
+      "command": "python",
+      "args": ["-m", "cryptotrader.mcp.servers.news"],
+      "env": {}
+    }
+  }
+}

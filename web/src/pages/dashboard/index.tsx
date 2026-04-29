@@ -20,7 +20,7 @@ const DashboardContent = () => {
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold text-foreground">{t('title', { defaultValue: '总览' })}</h1>
 
-      <MetricCardsRow data={portfolio.data} isLoading={portfolio.isLoading} />
+      <MetricCardsRow data={portfolio.data} isLoading={portfolio.isLoading} connectionStatus={portfolio.connectionStatus} />
 
       <div className="grid grid-cols-3 gap-4">
         <div className="col-span-2">

@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from cryptotrader._compat import UTC
 
 if TYPE_CHECKING:
     from cryptotrader.backtest.result import BacktestResult

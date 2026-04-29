@@ -1,0 +1,57 @@
+# LLM Provider Manifest — Multi-provider fallback configuration
+#
+# provider_chain: ordered list of model_id references (max 3 per role).
+# Chains longer than 3 are truncated with a WARNING log.
+#
+# api_key_env: environment variable name for the API key.
+# The engine reads os.environ[api_key_env] at LLM creation time.
+# If the env var is unset, the provider is skipped during fallback.
+
+[[providers]]
+model_id = "claude-opus-4-6"
+provider_type = "anthropic"
+base_url = ""
+api_key_env = "ANTHROPIC_API_KEY"
+
+[[providers]]
+model_id = "gpt-5.4"
+provider_type = "openai"
+base_url = ""
+api_key_env = "OPENAI_API_KEY"
+
+[[providers]]
+model_id = "gemini-3-pro"
+provider_type = "google"
+base_url = ""
+api_key_env = "GOOGLE_API_KEY"
+
+[[providers]]
+model_id = "deepseek-v4-flash"
+provider_type = "deepseek"
+base_url = ""
+api_key_env = "DEEPESEEK_API_KEY"
+
+# Role configurations
+[roles.analysis]
+primary_model = "claude-opus-4-6"
+provider_chain = ["claude-opus-4-6", "gpt-5.4", "gemini-3-pro"]
+
+[roles.verdict]
+primary_model = "gpt-5.4"
+provider_chain = ["gpt-5.4", "claude-opus-4-6"]
+
+[roles.debate]
+primary_model = "claude-opus-4-6"
+provider_chain = ["claude-opus-4-6", "gpt-5.4"]
+
+[roles.flash]
+primary_model = "deepseek-v4-flash"
+provider_chain = ["deepseek-v4-flash", "gpt-5.4"]
+
+[roles.summarization]
+primary_model = "deepseek-v4-flash"
+provider_chain = ["deepseek-v4-flash", "claude-opus-4-6"]
+
+[roles.fallback]
+primary_model = "gpt-5.4"
+provider_chain = ["gpt-5.4"]

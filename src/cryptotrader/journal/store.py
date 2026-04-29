@@ -13,6 +13,27 @@ from cryptotrader.models import ConsensusMetrics, DecisionCommit, NodeTraceEntry
 
 logger = logging.getLogger(__name__)
 
+
+def _to_node_trace_entries(raw: list) -> list[NodeTraceEntry]:
+    """Convert JSONB-roundtripped node_trace dicts back into dataclass entries.
+
+    Tolerant of extra keys (the runtime registry may carry ``ts`` / ``output``)
+    and missing ``summary`` (defaults to empty string).
+    """
+    out: list[NodeTraceEntry] = []
+    for entry in raw or []:
+        if not isinstance(entry, dict) or not entry.get("node"):
+            continue
+        out.append(
+            NodeTraceEntry(
+                node=str(entry["node"]),
+                duration_ms=int(entry.get("duration_ms") or 0),
+                summary=str(entry.get("summary") or ""),
+            )
+        )
+    return out
+
+
 # Track which URLs have had their schema initialised
 _table_ready: set[str] = set()
 
@@ -58,6 +79,9 @@ def _sa_models():
         experience_memory = Column(JSONB, nullable=True, default=None)
         node_trace = Column(JSONB, nullable=False, default=[])
         debate_skip_reason = Column(String(500), nullable=False, default="")
+        # Spec: frontend-prototype-alignment (2026-04-24)
+        latency_breakdown = Column(JSONB, nullable=False, default={})
+        token_usage = Column(JSONB, nullable=False, default={})
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
@@ -70,29 +94,46 @@ _OBSERVABILITY_COLUMNS = [
     ("experience_memory", "JSONB", "DEFAULT NULL"),
     ("node_trace", "JSONB", "NOT NULL DEFAULT '[]'"),
     ("debate_skip_reason", "VARCHAR(500)", "NOT NULL DEFAULT ''"),
+    ("latency_breakdown", "JSONB", "NOT NULL DEFAULT '{}'"),
+    ("token_usage", "JSONB", "NOT NULL DEFAULT '{}'"),
 ]
 
 
 async def _ensure_tables(database_url: str) -> None:
     """Create journal schema on first call per database URL.
 
-    For PostgreSQL, also issues ALTER TABLE ADD COLUMN IF NOT EXISTS for each
-    new observability column so that existing deployments are migrated online
-    without downtime.  SQLite (used in tests) gets all columns via CREATE TABLE.
+    New columns must be backfilled on *existing* databases too — ``create_all`` is
+    non-migrating and only adds tables, not columns. For PostgreSQL we use
+    ``ALTER TABLE ... ADD COLUMN IF NOT EXISTS``. SQLite rejects IF NOT EXISTS on
+    ADD COLUMN, so we first probe the column list via ``PRAGMA table_info`` and
+    ALTER only when the column is absent.
     """
+    from sqlalchemy import text
+
     if database_url not in _table_ready:
         Base, _ = _sa_models()
         engine = await get_engine(database_url)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            # Online migration: add new columns to pre-existing PostgreSQL tables.
             dialect = conn.dialect.name
             if dialect == "postgresql":
                 for col_name, col_type, col_default in _OBSERVABILITY_COLUMNS:
                     await conn.execute(
-                        __import__("sqlalchemy").text(
+                        text(
                             f"ALTER TABLE decision_commits ADD COLUMN IF NOT EXISTS {col_name} {col_type} {col_default}"
                         )
+                    )
+            elif dialect == "sqlite":
+                # SQLite `ALTER TABLE ADD COLUMN` has no IF NOT EXISTS — detect via PRAGMA.
+                result = await conn.execute(text("PRAGMA table_info(decision_commits)"))
+                existing_cols = {row[1] for row in result.fetchall()}  # index 1 is column name
+                for col_name, col_type, col_default in _OBSERVABILITY_COLUMNS:
+                    if col_name in existing_cols:
+                        continue
+                    # SQLite types are flexible — treat JSONB/VARCHAR as TEXT; keep DEFAULT clause.
+                    sqlite_type = "TEXT" if col_type.upper() in {"JSONB", "TEXT"} else col_type
+                    await conn.execute(
+                        text(f"ALTER TABLE decision_commits ADD COLUMN {col_name} {sqlite_type} {col_default}")
                     )
         _table_ready.add(database_url)
 
@@ -170,7 +211,7 @@ class JournalStore:
         # Observability fields — None-safe deserialization
         cm_data = d.get("consensus_metrics")
         consensus_metrics = ConsensusMetrics(**cm_data) if cm_data else None
-        node_trace = [NodeTraceEntry(**e) for e in (d.get("node_trace") or [])]
+        node_trace = _to_node_trace_entries(d.get("node_trace") or [])
         return DecisionCommit(
             hash=d["hash"],
             parent_hash=d.get("parent_hash"),
@@ -195,6 +236,8 @@ class JournalStore:
             experience_memory=d.get("experience_memory") or {},
             node_trace=node_trace,
             debate_skip_reason=d.get("debate_skip_reason", ""),
+            latency_breakdown=d.get("latency_breakdown") or {},
+            token_usage=d.get("token_usage") or {},
         )
 
     def _dc_to_row_dict(self, dc: DecisionCommit) -> dict[str, Any]:
@@ -224,6 +267,8 @@ class JournalStore:
             "experience_memory": d.get("experience_memory") or None,
             "node_trace": d.get("node_trace", []),
             "debate_skip_reason": dc.debate_skip_reason,
+            "latency_breakdown": d.get("latency_breakdown") or {},
+            "token_usage": d.get("token_usage") or {},
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:
@@ -252,7 +297,7 @@ class JournalStore:
         cm_data = getattr(row, "consensus_metrics", None)
         consensus_metrics = ConsensusMetrics(**cm_data) if cm_data else None
         node_trace_data = getattr(row, "node_trace", None) or []
-        node_trace = [NodeTraceEntry(**e) for e in node_trace_data]
+        node_trace = _to_node_trace_entries(node_trace_data)
         return DecisionCommit(
             hash=row.hash,
             parent_hash=row.parent_hash,
@@ -277,6 +322,8 @@ class JournalStore:
             experience_memory=getattr(row, "experience_memory", None) or {},
             node_trace=node_trace,
             debate_skip_reason=getattr(row, "debate_skip_reason", None) or "",
+            latency_breakdown=getattr(row, "latency_breakdown", None) or {},
+            token_usage=getattr(row, "token_usage", None) or {},
         )
 
     async def commit(self, dc: DecisionCommit) -> None:

@@ -10,9 +10,11 @@ import json
 import logging
 import sqlite3
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from cryptotrader._compat import UTC
 
 logger = logging.getLogger(__name__)
 

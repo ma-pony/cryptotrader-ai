@@ -7,11 +7,13 @@ risk_gate / execution / node_timeline / experience_memory_ref per data-model §2
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from cryptotrader._compat import UTC
 
 
 @pytest.fixture

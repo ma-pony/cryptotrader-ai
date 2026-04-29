@@ -529,3 +529,27 @@ Stream E (US5 Metrics):    T129→T139
 - `useChatMessages` ≤ 500 行（NFR-M-007）是硬限；超过用 `lib/chat-utils.ts` 拆出（quickstart §8 Q4）
 - 主 bundle ≤ 300 KB（NFR-P-002）：违反时检查 lazy 拆分（quickstart §8 Q5）；常见污染源：lightweight-charts / react-markdown 未 lazy
 - 提交节奏：每完成一个 phase 至少一个 commit；Phase 8 必须独立 PR
+
+---
+
+## Phase 12: Spec Evolution Maintenance (2026-04-29)
+
+实施期发现的契约漂移修复 + spec 同步补充任务（追溯性记录，已全部完成）。
+对应 spec/research/data-model 修订见 [research.md changelog](./research.md#changelog)。
+
+- [X] T-EVO-001 修复 SSE keepalive 不触发：`except TimeoutError` → `except asyncio.TimeoutError`（FR-007、Py 3.10 兼容性）— `src/api/routes/chat.py` + `src/cryptotrader/scheduler.py`
+- [X] T-EVO-002 移除 `MemorySaver()` checkpointer + 新增 `chat/runtime_registry.py`，让 `EventBus`/`RedisStateManager` 通过 session_id-keyed registry 传递（避免 msgpack 序列化失败）— FR-809
+- [X] T-EVO-003 新增 `tracing._node_trace_registry` + `journal._resolve_node_trace()`，让 graph 内部 `record_trade` 节点能读到 graph 外部 runner 累积的 trace（FR-204 真正落地 node_timeline + latency_breakdown）— `src/cryptotrader/tracing.py` / `nodes/journal.py` / `chat/analysis_runner.py`
+- [X] T-EVO-004 NFR-S-001 fail-closed 鉴权：新增 `AUTH_MODE` env、启动时 `API_KEY` 强校验、`secrets.compare_digest` 防时序攻击 — `src/api/dependencies.py` + `docker-compose.yml`
+- [X] T-EVO-005 NFR-S-002 生产 sourcemap 改 `'hidden'` + Vite 插件 `forbid-baked-api-key` 阻止 `VITE_API_KEY` 被打入 bundle — `web/vite.config.ts`
+- [X] T-EVO-006 NFR-S-005 / FR-007 移除 `useSettingsStore` → `env.VITE_API_KEY` 运行时回退；改为 dev 模式一次性 hydrate — `web/src/lib/api-client.ts`/`stream-fetch.ts`/`stores/use-settings-store.ts`/`hooks/use-analysis-progress.ts`
+- [X] T-EVO-007 NFR-S-006 CORS 改显式 allow_methods/allow_headers allowlist（与 allow_credentials=true 兼容）+ Redis-backed rate limiter (multi-process 安全) — `src/api/main.py`
+- [X] T-EVO-008 PROD-I3 RiskGate scale_adjustment 契约：`CheckResult` + `GateResult` 新增字段；`MaxTotalExposure` 改为提议而非 mutate；`risk_check` 节点聚合后通过 return delta 写回 — `src/cryptotrader/models.py` + `risk/checks/position.py` + `risk/gate.py` + `nodes/verdict.py`
+- [X] T-EVO-009 替换 `pandas_ta` 为纯 pandas/numpy `_indicators.py`（解决 talib arm64 兼容性，让 tech_agent 不再 mock 兜底）+ 移除 `pandas-ta` 依赖 — `src/cryptotrader/agents/_indicators.py` + `agents/tech.py` + `pyproject.toml`
+- [X] T-EVO-010 修复 `/api/decisions?from=&to=` 500 (tz-naive vs tz-aware 比较)；改用 `coerce_timestamp` — `src/api/routes/decisions.py` (FR-803)
+- [X] T-EVO-011 修复 `/api/backtest/run` 接受 `session_name` 但从不持久化；增加 `session_mod.save_result()` 调用 — `src/api/routes/backtest.py` (FR-806)
+- [X] T-EVO-012 实现缺失的 `MarketDataService` 类（之前 ImportError 被吞 → 接口返回 null）— `src/cryptotrader/data/market.py` (FR-810)
+- [X] T-EVO-013 `_serialize_positions` 加 `isinstance(pos, dict)` 守卫，防御非字典类型 portfolio 数据 — `src/api/routes/portfolio_v2.py` (FR-103)
+- [X] T-EVO-014 `MetricsCollector.observe_pipeline_duration` / `observe_execution_latency` 真正被调用（之前定义但从未触发）— `src/cryptotrader/chat/analysis_runner.py` + `scheduler.py` + `nodes/execution.py` (NFR-O 落地)
+- [X] T-EVO-015 `/api/risk/status` 用 `await rsm.ping()` 替代 `rsm.available`（实时连通检测，与 `/health` 一致）— `src/api/routes/risk.py`
+- [X] T-EVO-016 HITL `/api/hitl/pending` 防御性归一 dict→list shape，避免 pydantic 500 — `src/api/routes/hitl.py`

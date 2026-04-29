@@ -55,3 +55,19 @@ async def _gather(c: httpx.AsyncClient, pair: str):
         _get(f"{BASE}/futures/data/topLongShortPositionRatio", {"symbol": pair, "period": "1d", "limit": 1}),
         _get(f"{BASE}/futures/data/takerlongshortRatio", {"symbol": pair, "period": "1d", "limit": 1}),
     )
+
+
+async def fetch_funding_rate_binance(symbol: str = "BTC") -> dict:
+    """Fetch latest funding rate from Binance Futures (free, no key)."""
+    pair = f"{symbol}USDT"
+    result: dict = {"funding_rate": 0.0, "next_funding_time": 0}
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.get(f"{BASE}/fapi/v1/premiumIndex", params={"symbol": pair})
+            r.raise_for_status()
+            data = r.json()
+            result["funding_rate"] = float(data.get("lastFundingRate", 0))
+            result["next_funding_time"] = int(data.get("nextFundingTime", 0))
+    except Exception:
+        logger.warning("Binance funding rate fetch failed", exc_info=True)
+    return result

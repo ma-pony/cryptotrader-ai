@@ -30,6 +30,11 @@ export const PortfolioSchema = z.object({
   pnl_24h_pct: z.number(),
   drawdown: z.number(),
   updated_at: z.string(),
+  // Alignment with frontend prototype (2026-04-24):
+  sharpe_90d: z.number().nullable().optional(),
+  win_rate: z.number().nullable().optional(),
+  total_trades: z.number().default(0),
+  realized_pnl_30d: z.number().default(0),
 });
 
 export const EquityPointSchema = z.object({
@@ -71,6 +76,10 @@ export const DecisionListItemSchema = z.object({
   verdict: VerdictSlimSchema,
   is_filled: z.boolean().default(false),
   trace_id: z.string().nullable().optional(),
+  // Alignment with prototype (2026-04-24):
+  pnl: z.number().nullable().optional(),
+  debate_status: z.string().default(''),
+  reject_reason: z.string().nullable().optional(),
 });
 
 export const PaginatedDecisionsSchema = z.object({
@@ -93,6 +102,75 @@ export const DebateRoundSchema = z.object({
   round: z.number(),
   bull_message: z.string().default(''),
   bear_message: z.string().default(''),
+});
+
+export const DebateTurnSchema = z.object({
+  round: z.number(),
+  from: z.string(),
+  to: z.string().nullable().optional(),
+  before_direction: z.string(),
+  before_confidence: z.number(),
+  after_direction: z.string(),
+  after_confidence: z.number(),
+  move: z.string(),
+  reasoning: z.string().default(''),
+  new_findings: z.string().default(''),
+  errored: z.boolean().default(false),
+});
+
+export const DebateGateSchema = z.object({
+  decision: z.string(),
+  reason: z.string().default(''),
+  strength: z.number().default(0),
+  mean_score: z.number().default(0),
+  dispersion: z.number().default(0),
+});
+
+export const ConsensusMetricsSchema = z.object({
+  strength: z.number().default(0),
+  mean_score: z.number().default(0),
+  dispersion: z.number().default(0),
+  skip_threshold: z.number().default(0.5),
+  confusion_threshold: z.number().default(0.05),
+});
+
+export const LatencyBreakdownSchema = z.object({
+  data_ms: z.number().default(0),
+  agents_ms: z.number().default(0),
+  debate_ms: z.number().default(0),
+  verdict_ms: z.number().default(0),
+  risk_ms: z.number().default(0),
+  execute_ms: z.number().default(0),
+  other_ms: z.number().default(0),
+  total_ms: z.number().default(0),
+});
+
+export const TokenUsageSchema = z.object({
+  input_tokens: z.number().default(0),
+  output_tokens: z.number().default(0),
+  cache_hits: z.number().default(0),
+  calls: z.number().default(0),
+  cost_usd: z.number().default(0),
+  by_model: z.record(z.record(z.number())).default({}),
+});
+
+export const AgentBiasSchema = z.object({
+  agent_id: z.string(),
+  accuracy: z.number(),
+  neutral_rate: z.number(),
+  bullish_rate: z.number(),
+  bearish_rate: z.number(),
+  avg_conf_when_right: z.number(),
+  avg_conf_when_wrong: z.number(),
+  sample_size: z.number(),
+  warnings: z.array(z.string()).default([]),
+});
+
+export const BiasSchema = z.object({
+  agents: z.array(AgentBiasSchema).default([]),
+  summary: z.string().default(''),
+  severity: z.string().default('low'),
+  window_days: z.number().default(30),
 });
 
 export const RiskCheckSchema = z.object({
@@ -143,6 +221,21 @@ export const DecisionDetailSchema = z.object({
   node_timeline: z.array(NodeTimelineEntrySchema),
   experience_memory_ref: ExperienceMemoryRefSchema,
   trace_id: z.string().nullable().optional(),
+  // Alignment with prototype (2026-04-24):
+  debate_turns: z.array(DebateTurnSchema).default([]),
+  debate_gate: DebateGateSchema.nullable().optional(),
+  consensus_metrics: ConsensusMetricsSchema.nullable().optional(),
+  latency_breakdown: LatencyBreakdownSchema.default({
+    data_ms: 0, agents_ms: 0, debate_ms: 0, verdict_ms: 0,
+    risk_ms: 0, execute_ms: 0, other_ms: 0, total_ms: 0,
+  }),
+  token_usage: TokenUsageSchema.default({
+    input_tokens: 0, output_tokens: 0, cache_hits: 0, calls: 0, cost_usd: 0, by_model: {},
+  }),
+  pnl: z.number().nullable().optional(),
+  retrospective: z.string().nullable().optional(),
+  debate_skip_reason: z.string().default(''),
+  bias: BiasSchema.nullable().optional(),
 });
 
 // ── §4 Backtest (matches BacktestParams / BacktestRunStatus / sessions) ──
@@ -218,12 +311,40 @@ export const RiskThresholdsSchema = z.object({
   post_loss_cooldown_seconds: z.number(),
 });
 
+export const CorrelationGroupSchema = z.object({
+  name: z.string(),
+  open: z.number(),
+  max: z.number(),
+  pairs: z.array(z.string()),
+});
+
+export const CooldownSchema = z.object({
+  pair: z.string(),
+  until_seconds: z.number(),
+  kind: z.string(),
+});
+
+export const RecentBlockSchema = z.object({
+  ts: z.string(),
+  commit_hash: z.string(),
+  rule: z.string(),
+  detail: z.string(),
+});
+
 export const RiskStatusSchema = z.object({
   trade_count_hour: z.number().nullable(),
   trade_count_day: z.number().nullable(),
   circuit_breaker: CircuitBreakerStatusSchema,
   thresholds: RiskThresholdsSchema,
   redis_available: z.boolean(),
+  // Alignment with prototype (2026-04-24):
+  daily_loss_pct: z.number().nullable().optional(),
+  drawdown_pct: z.number().nullable().optional(),
+  total_exposure_pct: z.number().nullable().optional(),
+  cvar_95: z.number().nullable().optional(),
+  correlation_groups: z.array(CorrelationGroupSchema).default([]),
+  cooldowns: z.array(CooldownSchema).default([]),
+  recent_blocks: z.array(RecentBlockSchema).default([]),
 });
 
 export const CircuitBreakerResetSchema = z.object({
@@ -248,8 +369,96 @@ export const MetricsPercentilesSchema = z.object({
   execution_p95_ms: z.number(),
 });
 
+export const LatencyHistogramBucketSchema = z.object({
+  upper_bound_s: z.number(),
+  count: z.number(),
+});
+
+export const DailyCostPointSchema = z.object({
+  ts: z.string(),
+  cost_usd: z.number(),
+});
+
 export const MetricsSummarySchema = z.object({
   counters: MetricsCountersSchema,
   percentiles: MetricsPercentilesSchema,
   collected_at: z.string(),
+  // Alignment with prototype (2026-04-24):
+  llm_calls_24h: z.number().default(0),
+  llm_cost_24h: z.number().default(0),
+  cache_hit_rate: z.number().default(0),
+  decisions_per_day: z.number().default(0),
+  latency_histogram: z.array(LatencyHistogramBucketSchema).default([]),
+  cost_14d: z.array(DailyCostPointSchema).default([]),
+});
+
+// ── §7 Triggers ──
+
+export const TriggerTypeSchema = z.enum(['price_threshold', 'pct_change', 'candle_pattern', 'funding_rate']);
+export const ScheduleRuleSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  trigger_type: TriggerTypeSchema,
+  pair: z.string(),
+  parameters: z.record(z.unknown()),
+  cooldown_minutes: z.number(),
+  enabled: z.boolean(),
+  ttl_expires_at: z.string().nullable(),
+  created_by: z.string(),
+  schedule_depth: z.number(),
+  created_at: z.string(),
+  updated_at: z.string(),
+  in_cooldown: z.boolean(),
+  last_triggered_at: z.string().nullable(),
+});
+export const ScheduleRuleListSchema = z.array(ScheduleRuleSchema);
+export const TriggerEventSchema = z.object({
+  id: z.string(),
+  rule_id: z.string(),
+  triggered_at: z.string(),
+  trigger_reason: z.string(),
+  price_snapshot: z.record(z.unknown()),
+  analysis_commit_id: z.string().nullable(),
+  schedule_depth: z.number(),
+  cooldown_skipped: z.boolean(),
+});
+export const PaginatedTriggerEventsSchema = z.object({
+  items: z.array(TriggerEventSchema),
+  total: z.number(),
+  page: z.number(),
+  size: z.number(),
+});
+
+// ── §8 HITL Approvals ──
+
+export const AgentAnalysisSummarySchema = z.object({
+  agent: z.string(),
+  direction: z.string(),
+  confidence: z.number(),
+});
+
+export const ApprovalRequestSchema = z.object({
+  approval_id: z.string(),
+  pair: z.string(),
+  created_at: z.string().nullable(),
+  expires_at: z.string().nullable(),
+  trigger_reason: z.string(),
+  verdict_snapshot: z.object({
+    action: z.string(),
+    position_scale: z.number().optional(),
+    confidence: z.number().optional(),
+    reasoning: z.string().optional(),
+  }),
+  agent_analyses_snapshot: z.array(AgentAnalysisSummarySchema),
+  status: z.enum(['pending', 'approved', 'rejected', 'expired']),
+  decision_by: z.string().nullable(),
+  decided_at: z.string().nullable(),
+});
+
+export const HitlPendingListSchema = z.array(ApprovalRequestSchema);
+
+export const HitlRespondSchema = z.object({
+  approval_id: z.string(),
+  status: z.string(),
+  message: z.string(),
 });

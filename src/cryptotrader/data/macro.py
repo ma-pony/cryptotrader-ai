@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 
 import httpx
 
+from cryptotrader._compat import UTC
 from cryptotrader.data.store import cache_result, get_cached_or_none, get_latest
 from cryptotrader.models import MacroData
 

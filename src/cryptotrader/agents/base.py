@@ -9,7 +9,6 @@ All LLM calls go through unified LangChain gateway with SQLiteCache.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -102,18 +101,76 @@ def _build_llm_kwargs(
     return kwargs
 
 
+def _try_manifest_llm(
+    role: str,
+    cfg,
+    temperature: float,
+    timeout: int,
+    json_mode: bool,
+    retry_cfg,
+    *,
+    track_tokens: bool = True,
+) -> ChatOpenAI | None:
+    """Attempt to build an LLM via the models.toml manifest for the given role.
+
+    When ``track_tokens`` is True, the resulting runnable is bound with the shared
+    :class:`TokenTrackerCallback` so token accounting works identically to the
+    direct path (see :func:`create_llm`).
+    """
+    from cryptotrader.llm.factory import build_resilient_llm
+    from cryptotrader.llm.registry import load_manifest
+
+    manifest_path = Path(cfg.models.models_path) if cfg.models.models_path else None
+    manifest = load_manifest(manifest_path)
+    if manifest is None:
+        return None
+    role_cfg = manifest.get_role(role)
+    if role_cfg is None:
+        return None
+    resilient = build_resilient_llm(
+        role_cfg,
+        manifest,
+        temperature,
+        timeout,
+        json_mode,
+        retry_cfg,
+        role=role,
+    )
+    if track_tokens and resilient is not None:
+        from cryptotrader.llm.token_tracker import default_callback
+
+        # Runnable.with_config({'callbacks': [...]}) binds the callback for every
+        # ainvoke/invoke on the chain, including the resilient fallback wrapper.
+        try:
+            resilient = resilient.with_config({"callbacks": [default_callback()]})
+        except Exception:
+            logger.debug("manifest llm: failed to bind token tracker callback", exc_info=True)
+    return resilient
+
+
 def create_llm(
-    model: str,
+    model: str = "",
     temperature: float | None = None,
     timeout: int | None = None,
     json_mode: bool = False,
     *,
     with_fallback: bool = True,
+    role: str = "",
+    track_tokens: bool = True,
 ) -> ChatOpenAI:
     """Create a LangChain ChatOpenAI instance with unified config.
 
     All LLM calls in the project route through this factory to ensure
     consistent configuration, caching, and fallback behavior.
+
+    When ``role`` is provided and ``config/models.toml`` exists, builds a
+    multi-provider fallback chain with per-provider retry middleware.
+
+    Args:
+        track_tokens: When True (default), attaches the shared TokenTrackerCallback
+            so token usage accumulates into the context-bound ledger. Set to False
+            for zero-overhead LLMs in test/backtest contexts that manage their own
+            accounting.
     """
     from cryptotrader.config import load_config
     from cryptotrader.metrics import get_metrics_collector
@@ -122,31 +179,60 @@ def create_llm(
 
     cfg = load_config()
     llm_cfg = cfg.llm
+    retry_cfg = llm_cfg.retry
 
-    # Resolve None temperature/timeout to config defaults
     if temperature is None:
         temperature = llm_cfg.default_temperature
     if timeout is None:
         timeout = llm_cfg.timeout
 
-    # Resolve empty model to config default
+    if role:
+        get_metrics_collector().inc_llm_calls(model=role, node="create_llm")
+        resilient = _try_manifest_llm(
+            role,
+            cfg,
+            temperature,
+            timeout,
+            json_mode,
+            retry_cfg,
+            track_tokens=track_tokens,
+        )
+        if resilient is not None:
+            return resilient
+
     if not model:
         model = cfg.models.analysis or cfg.models.fallback
     if not model:
         raise ValueError("No LLM model configured — set models.analysis or models.fallback in config/default.toml")
 
-    kwargs = _build_llm_kwargs(model, temperature, timeout, llm_cfg, json_mode=json_mode)
-    llm = ChatOpenAI(**kwargs)
-
-    # Metrics instrumentation: ct_llm_calls_total[model, node=create_llm] (req 9.5)
     get_metrics_collector().inc_llm_calls(model=model, node="create_llm")
 
-    # Add fallback model
+    kwargs = _build_llm_kwargs(model, temperature, timeout, llm_cfg, json_mode=json_mode)
+    if track_tokens:
+        # Attach token tracker so each decision pipeline accumulates input/output
+        # tokens into the ContextVar-bound ledger (see llm.token_tracker).
+        from cryptotrader.llm.token_tracker import default_callback
+
+        existing = kwargs.get("callbacks") or []
+        kwargs["callbacks"] = [*existing, default_callback()]
+    llm = ChatOpenAI(**kwargs)
+
+    from cryptotrader.llm.factory import _wrap_with_retry
+
+    llm = _wrap_with_retry(llm, retry_cfg)
+
     if with_fallback:
         fallback_model = cfg.models.fallback
         if fallback_model and fallback_model != model:
+            from langchain_core.runnables import RunnableWithFallbacks
+
             fallback_kwargs = _build_llm_kwargs(fallback_model, temperature, timeout, llm_cfg, json_mode=json_mode)
-            llm = llm.with_fallbacks([ChatOpenAI(**fallback_kwargs)])
+            fb_llm = _wrap_with_retry(ChatOpenAI(**fallback_kwargs), retry_cfg)
+            llm = RunnableWithFallbacks(
+                runnable=llm,
+                fallbacks=[fb_llm],
+                exceptions_to_handle=(Exception,),
+            )
 
     return llm
 
@@ -202,6 +288,11 @@ def log_llm_usage(response: Any, *, caller: str) -> None:
     output_tokens: int = usage.get("output_tokens", 0)
     model_name: str = (response.response_metadata or {}).get("model_name", "unknown")
 
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    if not cache_read:
+        prompt_details = usage.get("input_token_details") or {}
+        cache_read = prompt_details.get("cached", 0) if isinstance(prompt_details, dict) else 0
+
     _structlog.info(
         "llm_usage",
         caller=caller,
@@ -209,6 +300,8 @@ def log_llm_usage(response: Any, *, caller: str) -> None:
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         total_tokens=input_tokens + output_tokens,
+        prompt_cache_hit=cache_read > 0,
+        cache_read_input_tokens=cache_read,
     )
 
 
@@ -225,6 +318,10 @@ async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
 
     llm = create_llm(model=model, temperature=temperature, timeout=timeout, json_mode=json_mode)
     lc_messages = _to_langchain_messages(messages)
+    from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
+
+    if should_cache(model=model):
+        lc_messages = apply_cache_control(lc_messages)
     response = await llm.ainvoke(lc_messages)
     log_llm_usage(response, caller="acompletion_with_fallback")
     return response
@@ -287,14 +384,29 @@ class BaseAgent:
         prompt = self._build_prompt(snapshot, experience)
         system = self.role_description + ANALYSIS_FRAMEWORK
         try:
-            llm = create_llm(model=self._resolve_model())
+            model = self._resolve_model()
+            llm = create_llm(model=model)
             messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
+            from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
+
+            if should_cache(model=model, role=self.agent_id):
+                messages = apply_cache_control(messages)
             response = await llm.ainvoke(messages)
             log_llm_usage(response, caller=self.agent_id)
             text = extract_content(response)
-            return self._parse_response(text, snapshot.pair)
-        except Exception:
-            logger.exception("LLM call failed for %s, returning mock analysis", self.agent_id)
+            return await self._parse_response(text, snapshot.pair, llm=llm)
+        except Exception as exc:
+            from cryptotrader.llm.errors import LLMProvidersExhaustedError
+
+            if isinstance(exc, LLMProvidersExhaustedError):
+                _structlog.warning(
+                    "llm_all_providers_exhausted",
+                    role=exc.role,
+                    providers_tried=exc.providers_tried,
+                    agent_id=self.agent_id,
+                )
+            else:
+                logger.exception("LLM call failed for %s, returning mock analysis", self.agent_id)
             return AgentAnalysis(
                 agent_id=self.agent_id,
                 pair=snapshot.pair,
@@ -387,13 +499,16 @@ class BaseAgent:
             "risk_flags": [],
         }
 
-    def _parse_response(self, response_text: str, pair: str) -> AgentAnalysis:
-        try:
-            from cryptotrader.debate.verdict import _extract_json
+    async def _parse_response(self, response_text: str, pair: str, llm=None) -> AgentAnalysis:
+        from cryptotrader.llm.json_retry import extract_json_with_retry
 
-            data = _extract_json(response_text)
-        except (ValueError, json.JSONDecodeError):
-            # Regex fallback: try to extract direction/confidence from free text
+        data = await extract_json_with_retry(
+            response_text,
+            llm=llm,
+            schema_hint="direction,confidence,reasoning,key_factors,risk_flags,data_sufficiency",
+            max_retries=2,
+        )
+        if not data:
             data = self._regex_fallback(response_text)
             if data is None:
                 logger.warning("Failed to parse LLM response for %s: %.200s", self.agent_id, response_text)
@@ -406,12 +521,6 @@ class BaseAgent:
                     is_mock=True,
                     data_sufficiency="low",
                 )
-            logger.info(
-                "Regex fallback parsed %s: direction=%s confidence=%.2f",
-                self.agent_id,
-                data.get("direction"),
-                data.get("confidence", 0.3),
-            )
             data["_regex_fallback"] = True
         # Standard fields
         standard = {
@@ -498,7 +607,7 @@ class ToolAgent(BaseAgent):
             # Extract final message text from agent output
             final_msg = result["messages"][-1]
             text = final_msg.content if hasattr(final_msg, "content") else str(final_msg)
-            return self._parse_response(text, snapshot.pair)
+            return await self._parse_response(text, snapshot.pair, llm=llm)
 
         except Exception:
             logger.exception("ToolAgent call failed for %s, falling back to single-call", self.agent_id)

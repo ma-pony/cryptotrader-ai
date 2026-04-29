@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from unittest.mock import AsyncMock
 
+from cryptotrader._compat import UTC
 from cryptotrader.config import RegimeThresholdsConfig
 from cryptotrader.journal.search import search_by_regime
 from cryptotrader.models import AgentAnalysis, DecisionCommit, TradeVerdict

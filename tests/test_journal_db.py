@@ -1,9 +1,10 @@
 """Test PostgreSQL journal store (using in-memory fallback)."""
 
-from datetime import UTC, datetime
+from datetime import datetime
 
 import pytest
 
+from cryptotrader._compat import UTC
 from cryptotrader.journal.store import JournalStore
 from cryptotrader.models import DecisionCommit, GateResult, TradeVerdict
 

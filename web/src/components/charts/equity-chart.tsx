@@ -57,14 +57,20 @@ export const EquityChart = ({ data, height = 320, className, mode = 'area', them
       timeScale: { timeVisible: true, secondsVisible: false },
       rightPriceScale: { borderVisible: false },
     });
+    // Amber accent — AI decisions heritage. Colors align with --amber-500/600 in OKLCH,
+    // approximated in sRGB hex so lightweight-charts' canvas renderer can consume them.
+    const AMBER_LINE = '#d9a74f';
+    const AMBER_TOP = 'rgba(217,167,79,0.42)';
+    const AMBER_BOTTOM = 'rgba(217,167,79,0)';
     const series =
       mode === 'area'
         ? chart.addAreaSeries({
-            lineColor: '#22c55e',
-            topColor: 'rgba(34,197,94,0.4)',
-            bottomColor: 'rgba(34,197,94,0)',
+            lineColor: AMBER_LINE,
+            topColor: AMBER_TOP,
+            bottomColor: AMBER_BOTTOM,
+            lineWidth: 2,
           })
-        : chart.addLineSeries({ color: '#22c55e', lineWidth: 2 });
+        : chart.addLineSeries({ color: AMBER_LINE, lineWidth: 2 });
     chartRef.current = chart;
     seriesRef.current = series;
 

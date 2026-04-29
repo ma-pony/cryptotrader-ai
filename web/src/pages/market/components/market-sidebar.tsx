@@ -3,17 +3,22 @@ import { type FC } from 'react';
 import { useTranslation } from 'react-i18next';
 import { z } from 'zod';
 
-import { apiClient } from '@/lib/api-client';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { WSStatusIndicator } from '@/components/ws-status-indicator';
+import { Card, CardContent } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useAdaptivePolling } from '@/hooks/use-adaptive-polling';
+import { useMarketDataWS } from '@/hooks/use-market-data-ws';
+import { apiClient } from '@/lib/api-client';
 
 const MarketDataSchema = z.object({
   funding_rate: z.number().nullable().default(null),
   open_interest: z.number().nullable().default(null),
-  liquidations_24h: z.object({
-    long: z.number().default(0),
-    short: z.number().default(0),
-  }).default({ long: 0, short: 0 }),
+  liquidations_24h: z
+    .object({
+      long: z.number().default(0),
+      short: z.number().default(0),
+    })
+    .default({ long: 0, short: 0 }),
 });
 
 type MarketData = z.output<typeof MarketDataSchema>;
@@ -23,74 +28,106 @@ interface MarketSidebarProps {
   exchange: 'binance' | 'okx';
 }
 
-const formatNumber = (value: number | null, opts?: { style?: string; maximumFractionDigits?: number }) => {
-  if (value === null) return '—';
-  return new Intl.NumberFormat('en-US', {
-    maximumFractionDigits: opts?.maximumFractionDigits ?? 2,
-    ...(opts?.style === 'percent' ? { style: 'percent' } : {}),
-  }).format(opts?.style === 'percent' ? value : value);
+const formatUSD = (value: number) =>
+  new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    notation: 'compact',
+    maximumFractionDigits: 1,
+  }).format(value);
+
+const fundingRateTone = (rate: number | null): { color: string; label: string } => {
+  if (rate == null) return { color: 'hsl(var(--muted-foreground))', label: '—' };
+  const pct = Math.abs(rate);
+  if (pct > 0.0003) return { color: 'var(--trade-short)', label: '偏热' };
+  if (pct > 0.0002) return { color: 'var(--amber-500)', label: '接近阈值' };
+  return { color: 'var(--trade-long)', label: '中性' };
 };
 
-const formatUSD = (value: number) =>
-  new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', notation: 'compact', maximumFractionDigits: 1 }).format(value);
+const StatLabel = ({ children }: { children: React.ReactNode }) => (
+  <div className="text-[10px] uppercase tracking-wider font-medium text-muted-foreground">
+    {children}
+  </div>
+);
 
 export const MarketSidebar: FC<MarketSidebarProps> = ({ pair, exchange }) => {
   const { t } = useTranslation('market');
   const encodedPair = pair.replace('/', '-');
 
+  const wsPair = exchange === 'binance' ? pair.replace('/', '') : undefined;
+  const { connectionStatus, tickerData } = useMarketDataWS(wsPair);
+
+  const { refetchInterval } = useAdaptivePolling({
+    wsStatus: exchange === 'binance' ? connectionStatus : 'disconnected',
+    priceChangePercent: tickerData?.priceChangePercent,
+  });
+
+  const effectiveInterval = exchange === 'okx' ? 30_000 : refetchInterval;
+
   const { data, isLoading } = useQuery({
     queryKey: ['market-data', pair, exchange],
     queryFn: () => apiClient.get(`/api/market/${encodedPair}?exchange=${exchange}`, MarketDataSchema),
-    refetchInterval: 30_000,
+    refetchInterval: effectiveInterval,
   });
 
   const loading = isLoading || !data;
+  const fundingTone = fundingRateTone(data?.funding_rate ?? null);
 
   return (
-    <div className="space-y-4">
-      {/* Funding rate */}
+    <div className="space-y-3">
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">{t('side_panel.funding_rate')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-2 p-4">
+          <div className="flex items-center justify-between">
+            <StatLabel>
+              {t('side_panel.funding_rate', { defaultValue: '资金费率 · 8h' })}
+            </StatLabel>
+            {exchange === 'binance' ? (
+              <WSStatusIndicator
+                status={connectionStatus}
+                refetchInterval={typeof effectiveInterval === 'number' ? effectiveInterval : undefined}
+              />
+            ) : null}
+          </div>
           {loading ? (
-            <Skeleton className="h-8 w-24" />
+            <Skeleton className="h-7 w-24" />
           ) : (
-            <p className="text-2xl font-bold tabular-nums">
-              {formatNumber(data.funding_rate, { style: 'percent', maximumFractionDigits: 4 })}
-            </p>
+            <>
+              <div
+                className="font-mono text-lg font-semibold tracking-tight leading-none"
+                style={{ color: fundingTone.color }}
+              >
+                {data.funding_rate != null
+                  ? `${data.funding_rate >= 0 ? '+' : ''}${(data.funding_rate * 100).toFixed(4)}%`
+                  : '—'}
+              </div>
+              <div className="text-[10px] text-muted-foreground">
+                阈值 0.0300% · {fundingTone.label}
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
 
-      {/* Open interest */}
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">{t('side_panel.open_interest')}</CardTitle>
-        </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-2 p-4">
+          <StatLabel>{t('side_panel.open_interest', { defaultValue: '持仓量 (OI)' })}</StatLabel>
           {loading ? (
-            <Skeleton className="h-8 w-24" />
+            <Skeleton className="h-7 w-24" />
           ) : (
-            <p className="text-2xl font-bold tabular-nums">
-              {data.open_interest !== null ? formatUSD(data.open_interest) : '—'}
-            </p>
+            <>
+              <div className="font-mono text-lg font-semibold tracking-tight leading-none">
+                {data.open_interest != null ? formatUSD(data.open_interest) : '—'}
+              </div>
+              <div className="text-[10px] text-muted-foreground">24h 快照</div>
+            </>
           )}
         </CardContent>
       </Card>
 
-      {/* Liquidations 24h */}
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-sm">{t('side_panel.liquidations')}</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {loading ? (
-            <Skeleton className="h-12 w-full" />
-          ) : (
-            <LiquidationBar data={data} />
-          )}
+        <CardContent className="flex flex-col gap-2 p-4">
+          <StatLabel>{t('side_panel.liquidations', { defaultValue: '24h 清算' })}</StatLabel>
+          {loading ? <Skeleton className="h-14 w-full" /> : <LiquidationBar data={data} />}
         </CardContent>
       </Card>
     </div>
@@ -103,14 +140,28 @@ const LiquidationBar: FC<{ data: MarketData }> = ({ data }) => {
   const longPct = total > 0 ? (liquidations_24h.long / total) * 100 : 50;
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex justify-between text-xs text-muted-foreground">
-        <span>Long {formatUSD(liquidations_24h.long)}</span>
-        <span>Short {formatUSD(liquidations_24h.short)}</span>
-      </div>
-      <div className="flex h-3 overflow-hidden rounded-full">
-        <div className="bg-success" style={{ width: `${String(longPct)}%` }} />
-        <div className="bg-destructive flex-1" />
+    <div className="space-y-2">
+      <div className="flex h-16 items-end gap-2">
+        <div className="flex-1 text-center">
+          <div
+            className="rounded border border-trade-long/60 bg-trade-long-soft"
+            style={{ height: `${longPct}%`, minHeight: 4 }}
+          />
+          <div className="mt-1 font-mono text-[11px] text-trade-long">
+            {formatUSD(liquidations_24h.long)}
+          </div>
+          <div className="text-[10px] text-muted-foreground">多头爆仓</div>
+        </div>
+        <div className="flex-1 text-center">
+          <div
+            className="rounded border border-trade-short/60 bg-trade-short-soft"
+            style={{ height: `${100 - longPct}%`, minHeight: 4 }}
+          />
+          <div className="mt-1 font-mono text-[11px] text-trade-short">
+            {formatUSD(liquidations_24h.short)}
+          </div>
+          <div className="text-[10px] text-muted-foreground">空头爆仓</div>
+        </div>
       </div>
     </div>
   );

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
+from cryptotrader._compat import UTC
 from cryptotrader.models import (
     AgentAnalysis,
+    CommitObservability,
     DecisionCommit,
     GateResult,
     NodeTraceEntry,
@@ -37,14 +39,36 @@ def build_commit(
     slippage: float | None = None,
     portfolio_after: dict[str, Any] | None = None,
     challenges: list[dict] | None = None,
+    *,
+    observability: CommitObservability | None = None,
+    # Legacy per-field kwargs (deprecated — prefer ``observability``):
     trace_id: str | None = None,
     consensus_metrics: dict[str, Any] | None = None,
     verdict_source: str = "ai",
     experience_memory: dict[str, Any] | None = None,
     node_trace: list[NodeTraceEntry] | None = None,
     debate_skip_reason: str = "",
+    latency_breakdown: dict[str, Any] | None = None,
+    token_usage: dict[str, Any] | None = None,
 ) -> DecisionCommit:
-    """Build a DecisionCommit with a generated hash."""
+    """Build a DecisionCommit with a generated hash.
+
+    Callers should prefer passing a single ``observability`` :class:`CommitObservability`
+    instance — the 8 per-field kwargs are kept for backwards compatibility with
+    existing call sites but will be removed in a future refactor.
+    """
+    # Consolidate observability: bundle takes priority when both are supplied, but
+    # individual kwargs override bundle defaults when bundle field is None/empty.
+    obs = observability or CommitObservability()
+    trace_id = trace_id if trace_id is not None else obs.trace_id
+    consensus_metrics = consensus_metrics if consensus_metrics is not None else obs.consensus_metrics
+    verdict_source = verdict_source if verdict_source != "ai" else obs.verdict_source
+    experience_memory = experience_memory if experience_memory is not None else obs.experience_memory
+    node_trace = node_trace if node_trace is not None else obs.node_trace
+    debate_skip_reason = debate_skip_reason or obs.debate_skip_reason
+    latency_breakdown = latency_breakdown if latency_breakdown is not None else obs.latency_breakdown
+    token_usage = token_usage if token_usage is not None else obs.token_usage
+
     now = datetime.now(UTC)
     verdict_action = verdict.action if verdict else "none"
     h = generate_hash(
@@ -92,4 +116,6 @@ def build_commit(
         experience_memory=experience_memory or {},
         node_trace=node_trace or [],
         debate_skip_reason=debate_skip_reason,
+        latency_breakdown=latency_breakdown or {},
+        token_usage=token_usage or {},
     )

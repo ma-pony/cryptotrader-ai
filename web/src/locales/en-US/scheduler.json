@@ -1,0 +1,105 @@
+{
+  "title": "Scheduler / Trigger Rules",
+  "tabs": {
+    "rules": "Rules",
+    "history": "Trigger History"
+  },
+  "actions": {
+    "create": "New Rule",
+    "from_template": "From Template",
+    "edit": "Edit",
+    "delete": "Delete",
+    "save": "Save",
+    "cancel": "Cancel"
+  },
+  "trigger_type": {
+    "price_threshold": "Price Threshold",
+    "pct_change": "Pct Change",
+    "candle_pattern": "Candle Pattern",
+    "funding_rate": "Funding Rate"
+  },
+  "templates": {
+    "title": "Select Template",
+    "btc_price_drop": {
+      "name": "BTC Price Drop Alert",
+      "description": "Trigger analysis when BTC falls below a target price"
+    },
+    "eth_volatility": {
+      "name": "ETH Abnormal Volatility",
+      "description": "Trigger analysis when ETH moves >3% within 15 minutes"
+    },
+    "funding_rate_alert": {
+      "name": "Abnormal Funding Rate",
+      "description": "Trigger analysis when funding rate exceeds 0.1%"
+    },
+    "btc_bearish_candles": {
+      "name": "BTC Consecutive Bearish Candles",
+      "description": "Trigger analysis on 3 consecutive 1h bearish candles"
+    }
+  },
+  "form": {
+    "create_title": "New Trigger Rule",
+    "edit_title": "Edit Trigger Rule",
+    "name": "Rule Name",
+    "name_placeholder": "e.g. BTC Price Alert",
+    "trigger_type": "Trigger Type",
+    "pair": "Pair",
+    "pair_placeholder": "e.g. BTC/USDT",
+    "cooldown_minutes": "Cooldown (minutes)",
+    "parameters": "Parameters",
+    "price_threshold": {
+      "direction": "Direction",
+      "above": "Above",
+      "below": "Below",
+      "price": "Target Price"
+    },
+    "pct_change": {
+      "window_minutes": "Window (minutes)",
+      "threshold_pct": "Threshold (%)"
+    },
+    "candle_pattern": {
+      "interval": "Interval",
+      "consecutive_count": "Consecutive Count",
+      "direction": "Direction",
+      "bearish": "Bearish",
+      "bullish": "Bullish"
+    },
+    "funding_rate": {
+      "threshold_pct": "Rate Threshold (%)"
+    }
+  },
+  "table": {
+    "name": "Name",
+    "type": "Type",
+    "pair": "Pair",
+    "enabled": "Enabled",
+    "cooldown": "Cooldown",
+    "last_triggered": "Last Triggered",
+    "actions": "Actions",
+    "in_cooldown": "In Cooldown",
+    "ready": "Ready",
+    "never": "Never",
+    "empty": "No rules yet. Click \"New Rule\" to get started."
+  },
+  "history": {
+    "time": "Time",
+    "rule": "Rule",
+    "reason": "Reason",
+    "depth": "Depth",
+    "commit": "Commit",
+    "cooldown_skipped": "Cooldown Skipped",
+    "expand": "Details",
+    "price_snapshot": "Price Snapshot",
+    "empty": "No trigger history yet",
+    "pagination": {
+      "prev": "Prev",
+      "next": "Next",
+      "info": "Page {{page}} of {{total}} total"
+    }
+  },
+  "delete": {
+    "confirm_title": "Delete Rule?",
+    "confirm_body": "This cannot be undone. Existing trigger history will be preserved.",
+    "confirm_action": "Yes, Delete"
+  }
+}

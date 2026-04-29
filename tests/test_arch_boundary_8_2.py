@@ -18,7 +18,11 @@ import shutil
 import subprocess
 import tempfile
 import textwrap
-import tomllib
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib  # type: ignore[no-redef]
 from pathlib import Path
 
 PYPROJECT_PATH = Path(__file__).parent.parent / "pyproject.toml"
@@ -199,9 +203,11 @@ class TestRuffTid251Enforcement:
 
     def test_ruff_detects_nodes_import_in_domain_file(self):
         """A temporary file simulating a domain-layer import must trigger TID251."""
-        forbidden_code = textwrap.dedent("""\
+        forbidden_code = textwrap.dedent(
+            """\
             from cryptotrader.nodes import data
-        """)
+        """
+        )
 
         with tempfile.NamedTemporaryFile(
             suffix=".py",
@@ -231,9 +237,11 @@ class TestRuffTid251Enforcement:
 
     def test_ruff_detects_graph_import_in_domain_file(self):
         """A temporary file simulating a domain-layer import of graph must trigger TID251."""
-        forbidden_code = textwrap.dedent("""\
+        forbidden_code = textwrap.dedent(
+            """\
             from cryptotrader.graph import build_trading_graph
-        """)
+        """
+        )
 
         with tempfile.NamedTemporaryFile(
             suffix=".py",

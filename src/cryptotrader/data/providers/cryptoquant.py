@@ -26,6 +26,10 @@ async def fetch_exchange_netflow(api_key: str | None = None) -> float:
             data = r.json().get("result", {}).get("data", [])
             if data:
                 return float(data[-1].get("netflow", 0.0))
+    except httpx.HTTPStatusError as e:
+        # 403/401 — invalid/expired key. Don't spam tracebacks for known auth
+        # failures; the warning text is enough.
+        logger.warning("CryptoQuant fetch failed: HTTP %d (key invalid?)", e.response.status_code)
     except Exception:
         logger.warning("CryptoQuant fetch failed", exc_info=True)
     return 0.0

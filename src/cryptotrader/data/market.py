@@ -107,3 +107,57 @@ class MarketCollector:
             )
         finally:
             await exchange.close()
+
+
+class MarketDataService:
+    """Thin aggregator over ccxt for the /api/market/{pair} route.
+
+    Returns funding rate + open interest in a single dict. Liquidation totals
+    are surfaced as zeros until a CoinGlass-style provider is wired in — the
+    route falls back gracefully on missing data.
+    """
+
+    async def get_market_snapshot(self, pair: str, exchange_id: str) -> dict:
+        snapshot: dict = {
+            "funding_rate": None,
+            "open_interest": None,
+            "liquidations_long_24h": 0.0,
+            "liquidations_short_24h": 0.0,
+        }
+        exchange_cls = getattr(ccxt, exchange_id, None)
+        if exchange_cls is None:
+            return snapshot
+        ex = exchange_cls({"enableRateLimit": True})
+        try:
+            try:
+                fr = await ex.fetch_funding_rate(pair)
+                snapshot["funding_rate"] = fr.get("fundingRate") if isinstance(fr, dict) else None
+            except Exception:
+                logger.debug("funding_rate fetch failed for %s on %s", pair, exchange_id, exc_info=True)
+            try:
+                oi = await ex.fetch_open_interest(pair)
+                snapshot["open_interest"] = (
+                    oi.get("openInterestAmount") or oi.get("openInterest") if isinstance(oi, dict) else None
+                )
+            except Exception:
+                logger.debug("open_interest fetch failed for %s on %s", pair, exchange_id, exc_info=True)
+        finally:
+            await ex.close()
+        return snapshot
+
+
+async def fetch_klines_binance(symbol: str = "BTC", interval: str = "1h", limit: int = 100) -> dict:
+    """Fetch K-line data via ccxt Binance. Returns {"klines": [{"t", "o", "h", "l", "c", "v"}, ...]}."""
+    result: dict = {"klines": []}
+    pair = f"{symbol}/USDT"
+    exchange = ccxt.binance({"enableRateLimit": True})
+    try:
+        ohlcv = await exchange.fetch_ohlcv(pair, timeframe=interval, limit=limit)
+        result["klines"] = [
+            {"t": row[0], "o": row[1], "h": row[2], "l": row[3], "c": row[4], "v": row[5]} for row in ohlcv
+        ]
+    except Exception:
+        logger.warning("Binance klines fetch failed for %s", pair, exc_info=True)
+    finally:
+        await exchange.close()
+    return result

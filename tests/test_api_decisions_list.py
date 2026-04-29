@@ -6,11 +6,13 @@ Paginated list of decision commits with optional pair / from / to filters.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from cryptotrader._compat import UTC
 
 
 @pytest.fixture

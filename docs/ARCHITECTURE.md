@@ -12,7 +12,7 @@
 | LLM 编排 | LangChain + LangGraph | >=1.2.10, >=1.0.10 |
 | LLM Provider | ChatOpenAI (兼容 API) | langchain-openai >=1.1.10 |
 | 交易所连接 | ccxt | >=4.5.42 |
-| 数据处理 | pandas + pandas-ta | >=2.3, >=0.4 |
+| 数据处理 | pandas + numpy（纯 Python 指标见 `agents/_indicators.py`，无 talib 依赖）| >=2.3 |
 | 数据验证 | Pydantic | >=2.12 |
 | Web 框架 | FastAPI + Uvicorn | >=0.135 |
 | 仪表板 | React 19 + Vite 7 + TypeScript | web/ |
@@ -42,9 +42,8 @@ cryptotrader-ai/
 │   │   │   ├── news.py        # NewsAgent（ToolAgent）
 │   │   │   ├── macro.py       # MacroAgent（BaseAgent）
 │   │   │   ├── data_tools.py  # LangChain @tool 定义（6 Chain + 3 News）
-│   │   │   ├── skills.py      # 渐进式知识加载
-│   │   │   ├── tools.py       # 技能工具包装器
-│   │   │   └── langchain_agents.py  # Supervisor 模式（备选）
+│   │   │   ├── skill_loader.py / skill_selector.py  # 配置驱动的 agent skill 注入
+│   │   │   └── _indicators.py # 纯 pandas/numpy 技术指标（替代 pandas_ta）
 │   │   ├── backtest/
 │   │   │   ├── engine.py      # BacktestEngine（LLM + SMA 模式）
 │   │   │   ├── session.py     # 回测 Session 存储（commits/results/experience）
@@ -58,7 +57,6 @@ cryptotrader-ai/
 │   │   │   ├── macro.py       # MacroCollector（FRED/CoinGecko/FnG/ETF）
 │   │   │   ├── onchain.py     # OnchainCollector（5 个 provider 并行）
 │   │   │   ├── news.py        # NewsCollector（RSS + 关键词情绪 + 社交）
-│   │   │   ├── enhanced.py    # EnhancedDataProvider（OKX + 币安情绪）
 │   │   │   ├── sync.py        # 批量历史同步（arena sync）
 │   │   │   └── providers/     # 各数据源适配器
 │   │   │       ├── binance.py
@@ -103,7 +101,11 @@ cryptotrader-ai/
 │   │   ├── models.py          # 所有数据模型
 │   │   ├── config.py          # 配置加载 + 数据类
 │   │   ├── db.py              # 共享 async DB session 工厂
-│   │   └── graph_supervisor.py # Supervisor 图（备选架构）
+│   │   ├── tracing.py         # trace_id contextvars + node trace registry
+│   │   └── chat/
+│   │       ├── runtime_registry.py # session_id-keyed EventBus / RedisStateManager
+│   │       ├── analysis_runner.py  # SSE chat 后台任务
+│   │       └── event_bus.py
 │   ├── api/
 │   │   ├── main.py            # FastAPI app（认证、限流、中间件）
 │   │   └── routes/
@@ -326,15 +328,15 @@ create_llm(model, temperature, timeout, json_mode)
 | `run_debate()` Bear | debate 模型 | 0.3 | 熊方论证 |
 | `judge_debate()` | debate 模型 | 0.1 | 法官裁决 |
 | `debate_round()` | debate 模型 | 0.3 | 交叉辩论（4 个 Agent 经 asyncio.gather 并行执行） |
-| `langchain_agents.py` | supervisor 模型 | 0.2 | 备选 supervisor |
-| `graph_supervisor.py` | supervisor 模型 | — | 备选 supervisor |
 | `learning/reflect.py` | reflection 模型 | 0.3 | Agent 自我反思 |
+
+> 历史备注：早期实验性 supervisor 架构 (`graph_supervisor.py` + `langchain_agents.py` + `agents/skills.py` + `agents/tools.py`) 已于 2026-04-28 删除。当前主路径仅保留 `build_trading_graph()` / `build_lite_graph()` / `build_debate_graph()`。
 
 **辩论门控**：`debate_gate` 节点在进入辩论轮次前评估共识强度与混沌程度。当所有 Agent 已达高度共识（`consensus_skip_threshold`）或市场信号过于混乱无法辩论（`confusion_skip_threshold` + `confusion_max_dispersion`），辩论轮次将被完全跳过，直接进入 Verdict 阶段，节省 LLM 调用开销。
 
 **JSON 解析**：所有 LLM 输出经 `_extract_json()` 平衡括号提取，处理 markdown fence 和额外文本。
 
-**deepseek-reasoner 兼容**：`extract_content()` 处理推理内容在 `additional_kwargs['reasoning_content']` 中的情况。
+**Reasoning 模型兼容**：`extract_content()` 处理推理内容在 `additional_kwargs['reasoning_content']` 中的情况（如 deepseek-reasoner / o1-style 模型）。
 
 ## 6. 数据层
 
@@ -484,15 +486,35 @@ arena live-check                                 # 实盘就绪检查
 | 方法 | 路径 | 认证 | 说明 |
 |------|------|------|------|
 | GET | `/health` | 公开 | 健康检查（API/Redis/DB 状态） |
-| GET | `/metrics` | Auth | 指标（JSON 或 Prometheus 格式） |
-| POST | `/analyze` | Auth | 触发一次完整分析 |
-| GET | `/journal/log` | Auth | 最近决策列表 |
-| GET | `/journal/{hash}` | Auth | 单条决策详情 |
-| GET | `/portfolio` | Auth | 组合状态 |
-| GET | `/risk/status` | Auth | 风控状态（交易计数、熔断） |
+| GET | `/metrics` | Public | Prometheus 指标（文本格式） |
+| GET | `/scheduler/status` | Public | 调度器心跳（LB 探测） |
+| GET | `/api/portfolio/snapshot` | Auth | 组合快照 (equity/cash/positions) |
+| GET | `/api/portfolio/equity-curve?range=24h\|7d\|30d\|all` | Auth | 权益曲线 |
+| GET | `/api/decisions?pair=&from=&to=&page=&size=` | Auth | 决策列表（分页 + 日期筛） |
+| GET | `/api/decisions/{commit_hash}` | Auth | 决策详情（含 node_timeline / latency_breakdown） |
+| GET | `/api/risk/status` | Auth | 风控状态 (live Redis ping)，含 cooldown / drawdown / cvar |
+| POST | `/api/risk/circuit-breaker/reset` | Auth | 重置熔断（409 if not active） |
+| GET | `/api/scheduler/status` | Auth | 下次触发币对 + 时间 |
+| GET / POST / PATCH / DELETE | `/api/scheduler/rules` | Auth | 触发规则 CRUD |
+| GET | `/api/metrics/summary` | Auth | 计数器 + p50/p95 延迟 |
+| POST | `/api/backtest/run` | Auth | 异步提交回测（返 run_id） |
+| GET | `/api/backtest/runs/{run_id}` | Auth | 状态 / 进度 / 结果 |
+| DELETE | `/api/backtest/runs/{run_id}` | Auth | 取消运行中的回测 |
+| GET | `/api/backtest/sessions` | Auth | 已保存的会话名列表 |
+| GET | `/api/backtest/sessions/{name}` | Auth | 加载已保存会话 |
+| POST | `/api/chat/stream` | Auth | SSE 流（30s keepalive） |
+| POST | `/api/chat/interrupt/{session_id}` | Auth | 软中断 |
+| POST | `/api/chat/steer/{session_id}` | Auth | 注入中途引导 |
+| GET | `/api/hitl/pending` | Auth | 待人工审批的请求 |
+| POST | `/api/hitl/{approval_id}/respond` | Auth | 同意 / 拒绝 |
+| GET | `/api/market/{pair}` | Auth | 资金费率 / OI / 清算 |
+| GET | `/api/market/{pair}/ohlcv?timeframe=&limit=` | Auth | OHLCV 蜡烛 |
 
-认证：`X-API-Key` header（仅当设置 `API_KEY` 环境变量时启用）
-限流：60 次/分钟/IP（health 和 metrics 豁免）
+认证：`X-API-Key` header — 默认 fail-closed (`AUTH_MODE=enabled` + `API_KEY` 必须设置；缺失则进程启动失败)。`AUTH_MODE=disabled` 是显式 dev opt-out，每请求打 WARNING。比较使用 `secrets.compare_digest` 防时序攻击。
+限流：60 次/分钟/IP — Redis-backed fixed window (multi-process 安全)，无 Redis 时降级单进程内存。`/health` 和 `/metrics` 豁免。
+CORS：显式 `allow_methods` / `allow_headers` allowlist (与 `allow_credentials=true` 配合)。
+
+> 已删路由：`POST /analyze`、`GET /journal/*`、`GET /portfolio` 已于 2026-04-28 删除（无前端消费方），等价能力分别由 `POST /api/chat/stream`、`/api/decisions/*`、`/api/portfolio/snapshot` 提供。
 
 ### 9.3 高级回测脚本（`scripts/run_backtest.py`）
 
@@ -553,15 +575,16 @@ engine = "paper"       # paper | live
 api_key = ""           # 统一 API Key
 base_url = ""          # 统一 API 端点
 
-[models]               # 每个角色可独立配置模型
-analysis = "deepseek-chat"
-debate = "deepseek-chat"
-verdict = "deepseek-reasoner"
-tech_agent = "deepseek-reasoner"
-chain_agent = "deepseek-chat"
-news_agent = "deepseek-chat"
-macro_agent = "deepseek-chat"
-fallback = "deepseek-chat"
+[models]               # 每个角色可独立配置模型 — 模型名必须存在于 LLM 网关
+analysis = "deepseek-v4-flash"
+debate = "deepseek-v4-flash"
+verdict = "gpt-5.5"
+tech_agent = "deepseek-v4-flash"
+chain_agent = "deepseek-v4-flash"
+news_agent = "deepseek-v4-flash"
+macro_agent = "deepseek-v4-flash"
+fallback = "deepseek-v4-flash"
+# 任何留空字段会回退到 models.analysis → models.fallback
 
 [debate]
 max_rounds = 3
