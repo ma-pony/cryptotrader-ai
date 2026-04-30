@@ -28,10 +28,11 @@
 - [X] T004 [P] Implement `Pair.market_type` and `Pair.settle` derived properties in `src/cryptotrader/pair.py`
 - [X] T005 [P] Add `tests/test_pair.py` covering FR-009 round-trip + FR-010 ccxt symbol shapes (OKX swap, Binance USDT-M, Binance COIN-M, Bybit) + invariant violations — 41 tests pass
 - [X] T006 [P] Add perf test in `tests/test_pair_performance.py` validating NFR-Performance (Pair instantiation < 5μs) — measured 0.4-1.5μs on M1, well under budget; uses stdlib timeit (no pytest-benchmark dependency)
-- [ ] T007 Update `src/cryptotrader/config.py` `SchedulerConfig.pairs` type from `list[str]` to `list[Pair]`; parse both legacy `list[str]` (all spot) and new `[[scheduler.pairs]]` table-array per `contracts/scheduler_pairs_config.md`
-- [ ] T008 Add `ConfigurationError` validation in `src/cryptotrader/config.py`: missing `settle` when `market != "spot"`, mixed list types, malformed `symbol`, duplicate canonical (FR-104)
-- [ ] T009 Emit `pair_init` structured log in scheduler startup path (`src/cryptotrader/scheduler.py`) per FR-103
-- [ ] T010 [P] Add `tests/test_config_pair_object_form.py` covering both TOML forms + all FR-104 validation errors
+- [X] T007 Update `src/cryptotrader/config.py` `SchedulerConfig.pairs` type from `list[str]` to `list[Pair]`; parse both legacy `list[str]` (all spot) and new `[[scheduler.pairs]]` table-array per `contracts/scheduler_pairs_config.md`
+- [X] T008 Add `ConfigurationError` validation in `src/cryptotrader/config.py`: missing `settle` when `market != "spot"`, mixed list types, malformed `symbol`, duplicate canonical (FR-104)
+- [X] T009 Emit `pair_init` structured log in scheduler startup path (`src/cryptotrader/scheduler.py`) per FR-103
+- [X] T010 [P] Add `tests/test_config_pair_object_form.py` covering both TOML forms + all FR-104 validation errors — 16 tests written
+- [X] **Phase 2 callsite migration** (uncovered by T007): `Scheduler.__init__` accepts list[Pair]∣list[str], normalizes; `self._status` keyed by canonical str; `Scheduler.{_run_pair, startup_reconcile, write_cycle_snapshot}` use `pair.canonical()` for state.metadata.pair; `cli/main.py`, `api/main.py`, `api/routes/chat.py`, `api/routes/scheduler.py` all updated to project canonical str at API/state boundaries
 
 **Checkpoint**: Pair module + config升级完成，下游可独立并行 US1/US2/US3。
 

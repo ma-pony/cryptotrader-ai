@@ -12,7 +12,9 @@ from cryptotrader.scheduler import Scheduler
 
 def test_scheduler_init():
     s = Scheduler(["BTC/USDT"], interval_minutes=60)
-    assert s.pairs == ["BTC/USDT"]
+    # Per spec 013: Scheduler stores list[Pair]; legacy list[str] callers
+    # are auto-promoted in __init__. Compare canonicals.
+    assert [p.canonical() for p in s.pairs] == ["BTC/USDT"]
     assert s.interval_minutes == 60
     assert s.daily_summary_hour == 0
 

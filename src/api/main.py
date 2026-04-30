@@ -151,7 +151,7 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
     app_instance.state.scheduler_task = task
     logger.info(
         "Scheduler autostarted: pairs=%s interval=%dm daily_summary_hour=%d",
-        config.scheduler.pairs,
+        [p.canonical() for p in config.scheduler.pairs],
         config.scheduler.interval_minutes,
         config.scheduler.daily_summary_hour,
     )

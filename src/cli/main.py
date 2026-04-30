@@ -38,7 +38,9 @@ def run(
     if pair is None:
         from cryptotrader.config import load_config
 
-        pair = load_config().scheduler.pairs or ["BTC/USDT"]
+        cfg_pairs = load_config().scheduler.pairs
+        # cfg_pairs is list[Pair] post spec 013; project canonical str expected by _run
+        pair = [p.canonical() for p in cfg_pairs] if cfg_pairs else ["BTC/USDT"]
     asyncio.run(_run(pair, mode, exchange, graph))
 
 
