@@ -94,16 +94,27 @@ class Pair:
     def from_ccxt(cls, exchange: Any, symbol: str) -> Pair:
         """Build a ``Pair`` from a ccxt exchange's market metadata.
 
-        Falls back to ``parse(symbol)`` when ``exchange.market(symbol)`` raises
-        or returns an empty/missing dict.
+        Falls back to ``parse(symbol)`` only when ``exchange.market(symbol)``
+        reports the symbol as unknown (``BadSymbol`` / missing dict). All
+        other ccxt exceptions — particularly ``AuthenticationError``,
+        ``NetworkError``, ``RateLimitExceeded`` — propagate so the caller
+        can surface them rather than silently building a ``Pair`` and
+        masking the credential / connectivity failure (deep-review S2).
 
         Raises:
             NotImplementedError: when the market type is ``option``.
+            ccxt.AuthenticationError / NetworkError / etc.: when the
+                exchange call fails for reasons OTHER than unknown symbol.
         """
         try:
+            import ccxt  # type: ignore[import-untyped]
+        except ImportError:  # pragma: no cover — ccxt not installed
+            return cls.parse(symbol)
+
+        try:
             m = exchange.market(symbol)
-        except Exception:  # pragma: no cover — narrow ccxt exception types vary
-            logger.debug("Pair.from_ccxt: market() lookup failed for %r", symbol, exc_info=True)
+        except (ccxt.BadSymbol, KeyError, AttributeError):
+            logger.debug("Pair.from_ccxt: unknown symbol %r, falling back to parse()", symbol, exc_info=True)
             return cls.parse(symbol)
         if not m:
             return cls.parse(symbol)
