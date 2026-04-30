@@ -10,6 +10,7 @@ from typing import Any
 
 from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.models import ConsensusMetrics, DecisionCommit, NodeTraceEntry
+from cryptotrader.pair import market_type_for as _market_type_for
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,9 @@ def _sa_models():
         hash = Column(String(16), primary_key=True)
         parent_hash = Column(String(16), nullable=True)
         timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
-        pair = Column(String(20), nullable=False, index=True)
+        # Spec 013 deep-review correctness FINDING-2: VARCHAR(50) accommodates
+        # ccxt futures delivery symbols (e.g., "BTC/USDT:USDT-241227" = 21 chars).
+        pair = Column(String(50), nullable=False, index=True)
         snapshot_summary = Column(JSONB, default={})
         analyses = Column(JSONB, default={})
         debate_rounds = Column(Integer, default=0)
@@ -82,6 +85,8 @@ def _sa_models():
         # Spec: frontend-prototype-alignment (2026-04-24)
         latency_breakdown = Column(JSONB, nullable=False, default={})
         token_usage = Column(JSONB, nullable=False, default={})
+        # Spec 013: market_type derived from pair (Pair.parse(pair).market_type)
+        market_type = Column(String(20), nullable=False, default="spot")
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
@@ -96,6 +101,8 @@ _OBSERVABILITY_COLUMNS = [
     ("debate_skip_reason", "VARCHAR(500)", "NOT NULL DEFAULT ''"),
     ("latency_breakdown", "JSONB", "NOT NULL DEFAULT '{}'"),
     ("token_usage", "JSONB", "NOT NULL DEFAULT '{}'"),
+    # Spec 013: market_type column for distinguishing spot vs derivatives commits.
+    ("market_type", "VARCHAR(20)", "NOT NULL DEFAULT 'spot'"),
 ]
 
 
@@ -123,6 +130,9 @@ async def _ensure_tables(database_url: str) -> None:
                             f"ALTER TABLE decision_commits ADD COLUMN IF NOT EXISTS {col_name} {col_type} {col_default}"
                         )
                     )
+                # Spec 013 deep-review: widen pair column from VARCHAR(20) to VARCHAR(50)
+                # to fit ccxt futures delivery symbols. Idempotent — re-running is a no-op.
+                await conn.execute(text("ALTER TABLE decision_commits ALTER COLUMN pair TYPE VARCHAR(50)"))
             elif dialect == "sqlite":
                 # SQLite `ALTER TABLE ADD COLUMN` has no IF NOT EXISTS — detect via PRAGMA.
                 result = await conn.execute(text("PRAGMA table_info(decision_commits)"))
@@ -269,6 +279,9 @@ class JournalStore:
             "debate_skip_reason": dc.debate_skip_reason,
             "latency_breakdown": d.get("latency_breakdown") or {},
             "token_usage": d.get("token_usage") or {},
+            # Spec 013: derived from pair string at write time. Falls back to
+            # 'spot' on parse failure so legacy / malformed pairs don't reject.
+            "market_type": _market_type_for(dc.pair),
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:

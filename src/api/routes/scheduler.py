@@ -85,7 +85,9 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
             jobs=[],
             cycle_count=0,
             interval_minutes=scheduler.interval_minutes if scheduler else 240,
-            pairs=scheduler.pairs if scheduler else [],
+            # Per spec 013: scheduler.pairs is list[Pair]; project to canonical
+            # str for the API response (frontend type is list[str]).
+            pairs=[p.canonical() for p in scheduler.pairs] if scheduler else [],
         )
 
     # Scheduler is running — collect live job data
@@ -109,7 +111,7 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
                 job_id=raw.get("id", ""),
                 name=raw.get("name", ""),
                 next_run_time=next_run,
-                pairs=scheduler.pairs,
+                pairs=[p.canonical() for p in scheduler.pairs],
             )
         )
 
@@ -118,7 +120,7 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
         jobs=job_statuses,
         cycle_count=scheduler._cycle_count,
         interval_minutes=scheduler.interval_minutes,
-        pairs=scheduler.pairs,
+        pairs=[p.canonical() for p in scheduler.pairs],
     )
 
 

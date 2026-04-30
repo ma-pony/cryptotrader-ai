@@ -117,7 +117,8 @@
       "mcp__*",
       "mcp__chrome-devtools__new_page",
       "WebFetch(domain:api.github.com)",
-      "WebFetch(domain:api.anthropic.com)"
+      "WebFetch(domain:api.anthropic.com)",
+      "Read(//private/tmp/**)"
     ]
   },
   "enableAllProjectMcpServers": true,

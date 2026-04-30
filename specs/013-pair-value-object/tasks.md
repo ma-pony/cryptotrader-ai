@@ -1,0 +1,211 @@
+# Tasks: 引入 Pair 值对象统一交易对类型语义
+
+**Feature**: `013-pair-value-object` | **Branch**: `013-pair-value-object`
+**Inputs**: spec.md, plan.md, research.md, data-model.md, contracts/, quickstart.md
+
+## Overview
+
+按 spec.md 的 4 个 User Stories（US1=P1 永续平仓 / US2=P1 消除散点 / US3=P1 DB 迁移 / US4=P2 前端徽章）+ 治本 Pair 模块作为基础。Phase 2 (Foundational) 是所有 user story 的前置。撤回 Phase 0 band-aid 在最后做。
+
+总计 **38 个 tasks**，覆盖 plan.md 估算的 5.6 day 工作量。
+
+---
+
+## Phase 1: Setup
+
+无需新建项目结构（沿用现有 monorepo）。仅一项 housekeeping。
+
+- [X] T001 Verify trait config + LangGraph version + ccxt version meet spec requirements; record actual versions in `specs/013-pair-value-object/research.md` if drift from plan
+
+---
+
+## Phase 2: Foundational (BLOCKING — must complete before US1/US2/US3/US4)
+
+依据 spec FR-001~010、FR-100~104，先建 Pair 模块和配置加载，所有下游 phase 依赖。
+
+- [X] T002 [P] Create `src/cryptotrader/pair.py` with `Pair` frozen dataclass per `contracts/pair_api.md` (base/quote/ccxt_symbol fields + `__post_init__` invariant checks)
+- [X] T003 [P] Implement `Pair.parse(s)`, `Pair.from_ccxt(exchange, symbol)`, `Pair.to_ccxt()`, `Pair.canonical()`, `Pair.display()`, `Pair.__str__` in `src/cryptotrader/pair.py`
+- [X] T004 [P] Implement `Pair.market_type` and `Pair.settle` derived properties in `src/cryptotrader/pair.py`
+- [X] T005 [P] Add `tests/test_pair.py` covering FR-009 round-trip + FR-010 ccxt symbol shapes (OKX swap, Binance USDT-M, Binance COIN-M, Bybit) + invariant violations — 41 tests pass
+- [X] T006 [P] Add perf test in `tests/test_pair_performance.py` validating NFR-Performance (Pair instantiation < 5μs) — measured 0.4-1.5μs on M1, well under budget; uses stdlib timeit (no pytest-benchmark dependency)
+- [X] T007 Update `src/cryptotrader/config.py` `SchedulerConfig.pairs` type from `list[str]` to `list[Pair]`; parse both legacy `list[str]` (all spot) and new `[[scheduler.pairs]]` table-array per `contracts/scheduler_pairs_config.md`
+- [X] T008 Add `ConfigurationError` validation in `src/cryptotrader/config.py`: missing `settle` when `market != "spot"`, mixed list types, malformed `symbol`, duplicate canonical (FR-104)
+- [X] T009 Emit `pair_init` structured log in scheduler startup path (`src/cryptotrader/scheduler.py`) per FR-103
+- [X] T010 [P] Add `tests/test_config_pair_object_form.py` covering both TOML forms + all FR-104 validation errors — 16 tests written
+- [X] **Phase 2 callsite migration** (uncovered by T007): `Scheduler.__init__` accepts list[Pair]∣list[str], normalizes; `self._status` keyed by canonical str; `Scheduler.{_run_pair, startup_reconcile, write_cycle_snapshot}` use `pair.canonical()` for state.metadata.pair; `cli/main.py`, `api/main.py`, `api/routes/chat.py`, `api/routes/scheduler.py` all updated to project canonical str at API/state boundaries
+
+**Checkpoint**: Pair module + config升级完成，下游可独立并行 US1/US2/US3。
+
+---
+
+## Phase 3 (US1): 永续合约用户能正确平仓 — Priority P1 🎯 MVP
+
+**Goal**: AI 决策 `close BTC/USDT` 在 OKX perp 账户上真实下平仓单（修复 spec.md User Story 1 三条 acceptance scenarios）。
+
+**Independent Test**: 配 OKX sandbox + perp 0.02 BTC 持仓 + `[[scheduler.pairs]] symbol="BTC/USDT" market="swap" settle="USDT"`，触发一次 cycle，DB `decision_commits.order_data` 非 null，OKX 返回 fill 确认。
+
+依据 D7 把高风险拆 3a/3b/3c。
+
+### US1 Phase 3a — Adapter Layer
+
+- [X] T011 [US1] Create `src/cryptotrader/pair_adapter.py` with `to_pair(s_or_pair) -> Pair` + `from_pair(p_or_str) -> str` helpers; documents intent for nodes still on str
+- [X] T012 [US1] [P] Add `tests/test_pair_adapter.py` covering str/Pair round-trip + idempotency — 14 tests pass
+
+### US1 Phase 3b — verdict + execution Switch to Pair
+
+- [X] T013 [US1] `nodes/execution.py` updated: `_load_balances_from_db` filters spot via `Pair.parse(...).market_type`; `_sync_portfolio_from_exchange` syncs derivatives via `exchange.get_positions()`; `_build_close_order`/`_build_entry_order` use ccxt-canonical keys (no translation needed since they treat pair as opaque)
+- [X] T014 [US1] `nodes/verdict.py` `_build_risk_portfolio`: pass-through of exchange positions (already canonical-keyed after T015) — no change needed
+- [X] T015 [US1] `execution/exchange.py` `LiveExchange.place_order` parses `order.pair` via `Pair`; balance check splits spot (asset) vs derivatives (settle margin); ccxt `create_order` receives canonical str verbatim; `LiveExchange.get_positions` returns ccxt symbol verbatim (band-aid `_canonical_pair` retired)
+- [X] T016 [US1] `execution/simulator.py` `PaperExchange.get_positions`: spot-only by design (asset-balance model); no change required, verified via existing tests
+- [X] T017 [US1] [P] `tests/test_us1_perp_close_flow.py` — 4 integration tests cover canonical key lookup, no spot-form fallback, ccxt forwarding, settle-currency margin check; `tests/test_live_exchange_pair.py` rewritten for inverted contract
+
+### US1 Phase 3c — Full Nodes + State Schema Bump
+
+依据 D2 一刀切 + R2 LangGraph state checkpoint：
+
+- [X] T018 [US1] `state.py` `build_initial_state(pair: str | Pair)` coerces str→Pair; `metadata.pair` stored as Pair instance; `metadata._state_schema_version = 2` marker added; `STATE_SCHEMA_VERSION = 2` exported
+- [X] T019 [US1] All 6 node modules (data, debate, journal, verdict, execution, hitl/gate) consume Pair via `get_pair(state).canonical()` helper; no str/split operations on metadata.pair remaining (verified by 0 hits in `rg state\["metadata"\]\["pair"\]`)
+- [X] T020 [US1] AI prompt builders in `nodes/debate.py` (`_debate_one_agent`, `judge_verdict`) use `pair.display()` so LLM sees "BTC/USDT (perp)" not raw ccxt symbol
+- [X] T021 [US1] `scheduler._run_pair` emits `_slog.bind(pair=pair, trace_id=...).info("cycle_pair_start")` per FR-203
+- [X] T022 [US1] `state.get_pair()` is the compat shim per FR-204: detects legacy str → coerces via `Pair.parse()` → WARN once per distinct pair (`_legacy_str_warned` cache)
+- [X] T023 [US1] [P] `tests/test_us1_state_schema_bump.py` — 9 tests cover str/Pair input acceptance, schema marker, compat shim WARN behavior + dedupe, type rejection, scheduler-style round-trip
+
+**Checkpoint US1**: 真盘 sandbox cycle 触发 → DB commit + OKX fill 双向确认。Acceptance scenarios 1/2/3 全过。
+
+---
+
+## Phase 4 (US2): 内部代码不再有"字符串散点"逻辑 — Priority P1
+
+**Goal**: 全代码搜索 `\.split\("/"\)` 和 `\.split\(":"\)` 在 pair 上下文 0 命中（除 `Pair` 实现内部）。
+
+**Independent Test**: `rg -nE '\.split\("/"\)' src/ | grep -v 'pair.py'` 0 行；`rg -nE 'positions.get\(' src/` 所有 key 来自 `Pair.canonical()`。
+
+依赖：US1 Phase 3a (adapter) + 3b (execution/verdict) 已完成。
+
+- [X] T024 [US2] All 14 `.split("/")` callsites in pair context migrated to `Pair.parse(pair).base` (or `_base_symbol(pair)` helper in `agents/data_tools.py`): `execution/simulator.py` (2), `risk/checks/correlation.py` (2), `backtest/engine.py` (2), `data/snapshot.py`, `data/news.py`, `data/onchain.py`, `agents/data_tools.py` (5). Defensive try/except keeps fallbacks for malformed input.
+- [X] T025 [US2] Phase 3b already established positions dict keyed by ccxt canonical (LiveExchange.get_positions returns symbol verbatim, _build_close_order looks up by canonical). No additional callsite migration required.
+- [X] T026 [US2] `src/cryptotrader/pair_adapter.py` + `tests/test_pair_adapter.py` deleted — verified zero callers via `rg "pair_adapter|to_pair\(|from_pair\("`.
+- [X] T027 [US2] [P] `tests/test_us2_no_string_split_pair.py` — regression: ripgrep for `.split("/")` in `src/` outside `pair.py` returns 0 matches; pair_adapter file absence asserted.
+
+**Checkpoint US2**: 散点消除完成。下次 add pair-related 代码无歧义入口。
+
+---
+
+## Phase 5 (US3): DB 迁移 — Priority P1
+
+**Goal**: alembic 加 `market_type VARCHAR(20) NOT NULL DEFAULT 'spot'` 列到 portfolios + decision_commits；存量数据 0 丢失（D5）。
+
+**Independent Test**: `alembic upgrade head` → `\d portfolios` 显示新列；`SELECT pair, market_type, count(*) FROM portfolios GROUP BY 1,2;` 全 'spot'；`alembic downgrade -1` + `upgrade head` 幂等。
+
+依赖：T002-T010 (Pair + config) 已完成；不依赖 US1/US2 implementation。
+
+- [X] T028 [US3] No alembic — project uses inline `Base.metadata.create_all` + ALTER TABLE ADD COLUMN IF NOT EXISTS / SQLite-PRAGMA pattern (see journal/store.py). Migration applied via `_pm_ensure_tables` (portfolio) and `_OBSERVABILITY_COLUMNS` (decision_commits): `market_type VARCHAR(20) NOT NULL DEFAULT 'spot'`
+- [X] T029 [US3] `Portfolio` ORM gets `market_type` column; `update_position` derives via `_market_type_for(pair)` (uses `Pair.parse(pair).market_type`); `get_portfolio` returns market_type in positions dict
+- [X] T030 [US3] `journal/store.py` `_dc_to_row_dict` writes `market_type` from `_market_type_for(dc.pair)`; `_row_to_dc` ignores column (DecisionCommit dataclass derives from pair on read)
+- [X] T031 [US3] [P] `tests/test_us3_journal_market_type.py` — 12 tests cover derivation (spot/swap/inverse), bad pair fallback, ORM column presence, default 'spot', migration list inclusion, dc_to_row_dict serialization
+
+**Checkpoint US3**: DB schema bump 完成；新 commit 含 market_type；存量 row 自动 spot。
+
+---
+
+## Phase 6 (US4): Frontend 渲染 pair 含市场类型徽章 — Priority P2
+
+**Goal**: `<PortfolioPositions>` 和 `<DecisionDetail>` 加 `<PairBadge>` 徽章；其他视图通过 `pair_display` 字符串字段兜底（D6）。
+
+**Independent Test**: `pnpm test pair-badge.test.tsx` 全绿；浏览器手测 `/` 和 `/decisions/<id>` 显示徽章；其他视图渲染未变。
+
+依赖：T028-T031 (DB+journal) 已完成；US1 verdict pipeline 已能产生新字段。
+
+- [X] T032 [US4] `api/routes/portfolio_v2.py` `PositionOut` adds `pair_display` + `market_type`; `_serialize_positions` derives both via `Pair.parse(pair)` (DB-stored `market_type` from Phase 5 wins when present)
+- [X] T033 [US4] `api/routes/decisions.py` `DecisionListItem` + `DecisionDetailOut` add `pair_display` + `market_type`; new `_pair_meta(pair)` helper centralizes derivation
+- [X] T034 [US4] [P] `tests/test_us4_api_pair_response.py` — 12 tests cover shape, derivation across spot/swap/inverse, DB market_type preference, malformed-pair fallback, list-item construction
+- [X] T035 [US4] [P] `web/src/types/api.schema.ts` adds `MarketTypeSchema` + `pair_display` (optional) + `market_type` (default 'spot') on PositionSchema, DecisionListItemSchema, DecisionDetailSchema
+- [X] T036 [US4] [P] `web/src/components/PairBadge.tsx` — strips ccxt suffix for compact display, shows market_type label via i18n (`common.pair.market_type.*`), tooltip preserves canonical str
+- [X] T037 [US4] `<PairBadge>` wired into `positions-table.tsx` (with WS-key spot-form derivation for perp positions) and `decision-detail-panel.tsx` heading
+- [X] T038 [US4] [P] `web/src/components/PairBadge.test.tsx` — 7 vitest cases (spot/swap/inverse/future, suffix stripping, tooltip, default) using I18nextProvider with zh-CN fixtures; common.json + en-US/common.json gain `pair.market_type.{spot,swap,future,option}` namespace
+
+**Checkpoint US4**: 前端两个 P0 视图含徽章；其他视图无回归。
+
+---
+
+## Phase 7: Polish & Withdraw Phase 0 Band-aid
+
+依据 spec FR-304 + Success Criteria。
+
+- [X] T039 `LiveExchange._canonical_pair` method removed in Phase 3b commit `d028de2` (verified via `grep _canonical_pair src/` → 0 matches). `tests/test_live_exchange_pair.py` retained but rewritten in Phase 3b to assert the *new* contract (ccxt symbol returned verbatim). It now serves as regression for the inverted design rather than the band-aid.
+
+---
+
+## Dependencies
+
+### Story Completion Order
+
+```
+Phase 1 (Setup) → Phase 2 (Foundational)
+                       │
+       ┌───────────────┼───────────────┬──────────────────┐
+       │               │               │                  │
+   Phase 3 (US1)   Phase 5 (US3)   Phase 4 (US2)*    [Phase 6 (US4)]
+       │               │               │                  │
+       └───────────────┴───────────────┘                  │
+                  Phase 7 (Polish: withdraw band-aid)     │
+                                                          │
+                          (Phase 6 depends on T028-T031 + T032-T033)
+```
+
+\* Phase 4 (US2) requires US1 Phase 3a (T011-T012) for adapter cleanup.
+
+### Parallel Opportunities
+
+**After T001 completes, the following batches can run in parallel**:
+
+**Batch A (Pair module + perf test)**: T002, T003, T004, T005, T006 — all in `src/cryptotrader/pair.py` + tests, no shared state
+
+**Batch B (Foundational integration)**: T007, T008, T009 sequential within file (`config.py` shared)
+
+**Batch C (US1 phase 3a/3b)**: T011 sequential; T012, T017 [P] tests
+
+**Batch D (US3 + US4 backend)**: T028 → T029 → T030 → T031 sequential (all touch DB layer); T032, T033, T034, T035 can parallelize (different files)
+
+**Batch E (US4 frontend)**: T035, T036, T038 [P] (different files); T037 sequential after T036
+
+---
+
+## Implementation Strategy
+
+### MVP (Stop after US1)
+
+If forced to ship something fast: T001-T023 alone. Result: perp users can `close` real positions; band-aid stays in place but works correctly. ~3 day effort.
+
+### Incremental Delivery
+
+Recommended sequence per spec phased delivery:
+1. **Day 1**: Phase 1 + Phase 2 (Foundational) → T001-T010
+2. **Day 2**: US1 Phase 3a + 3b → T011-T017
+3. **Day 3**: US1 Phase 3c → T018-T023 (state schema bump; **要求停 scheduler 部署窗口**)
+4. **Day 4**: US2 (cleanup) + US3 (DB) → T024-T031 (parallel)
+5. **Day 5**: US4 (frontend) → T032-T038
+6. **End of Day 5**: Phase 7 polish → T039
+
+### Independent Test Criteria per Story
+
+| Story | Test |
+|---|---|
+| US1 | OKX sandbox cycle → DB `order_data NOT NULL` + OKX fill confirmation (spec.md User Story 1 acceptance) |
+| US2 | `rg '\.split\("/"\)' src/ \| grep -v 'pair.py'` returns 0 lines |
+| US3 | `\d portfolios` shows market_type column; `alembic downgrade && upgrade` idempotent |
+| US4 | `pnpm test pair-badge.test.tsx` green; manual browser inspection of `/` and `/decisions/<id>` |
+
+---
+
+## Format Validation
+
+✅ All 38 tasks follow checklist format: `- [ ] TXXX [P?] [USX?] description with file path`
+✅ Setup/Foundational/Polish phases have NO story label
+✅ User Story phases have `[USx]` label
+✅ Parallel `[P]` only on tasks with no file conflicts
+✅ Every task names exact file path
+
+---
+
+**Status**: Tasks generated. Ready for `{Skill: spex:review-plan}` (ship pipeline stage 5).

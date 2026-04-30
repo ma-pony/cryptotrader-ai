@@ -99,7 +99,7 @@ async def _run_chat_stream_legacy(req: ChatStreamRequest):
         pair = (
             req.message.strip().upper()
             if "/" in req.message
-            else (config.scheduler.pairs[0] if config.scheduler.pairs else "BTC/USDT")
+            else (config.scheduler.pairs[0].canonical() if config.scheduler.pairs else "BTC/USDT")
         )
 
         graph = build_trading_graph()
@@ -312,7 +312,7 @@ async def _handle_new_analysis(session_id: str, req: ChatStreamRequest) -> Strea
     pair = (
         req.message.strip().upper()
         if "/" in req.message
-        else (config.scheduler.pairs[0] if config.scheduler.pairs else "BTC/USDT")
+        else (config.scheduler.pairs[0].canonical() if config.scheduler.pairs else "BTC/USDT")
     )
 
     state_mgr = RedisStateManager(config.infrastructure.redis_url or None)

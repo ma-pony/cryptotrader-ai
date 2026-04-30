@@ -106,7 +106,12 @@ def _truncate(text: str, max_len: int = _MAX_SUMMARY_LEN) -> str:
 
 class NewsCollector:
     async def collect(self, pair: str, date: str | None = None) -> NewsSentiment:
-        symbol = pair.split("/")[0]
+        from cryptotrader.pair import Pair
+
+        try:
+            symbol = Pair.parse(pair).base
+        except (ValueError, NotImplementedError):
+            symbol = pair.split("/", 1)[0] if "/" in pair else pair
 
         # Check RSS cache first — use symbol-specific key for stored data,
         # but "live_news_rss" as the rate-limit key (matches _RATE_LIMITS entry).

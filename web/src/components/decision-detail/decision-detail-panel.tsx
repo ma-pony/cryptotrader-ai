@@ -3,6 +3,7 @@ import { useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
+import { PairBadge } from '@/components/PairBadge';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDecisionDetail } from '@/hooks/use-decision-detail';
@@ -124,12 +125,17 @@ export const DecisionDetailPanel = ({ commitHash }: Props) => {
                 <span className="text-muted-foreground">·</span>
                 <span className="text-muted-foreground">{formatDateTime(data.ts)}</span>
               </div>
-              <h2 className="text-lg font-semibold mt-1.5">
-                <span className="font-mono">{data.pair}</span> · {data.verdict.action}{' '}
+              <h2 className="text-lg font-semibold mt-1.5 flex flex-wrap items-center gap-2">
+                <PairBadge
+                  pair={data.pair}
+                  pairDisplay={data.pair_display}
+                  marketType={data.market_type}
+                />
+                <span>· {data.verdict.action}</span>
                 <span className="text-amber-500 font-mono">
                   {(data.verdict.size * 100).toFixed(0)}%
-                </span>{' '}
-                仓位
+                </span>
+                <span>仓位</span>
               </h2>
               {data.verdict.reasoning ? (
                 <p className="text-sm text-muted-foreground mt-1.5 leading-relaxed">

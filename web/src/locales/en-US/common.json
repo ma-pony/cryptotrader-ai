@@ -63,5 +63,13 @@
     "degraded": "Data delayed, polling mode",
     "degraded_interval": "Data delayed, polling interval {{interval}}",
     "polling_mode": "Polling mode"
+  },
+  "pair": {
+    "market_type": {
+      "spot": "Spot",
+      "swap": "Perp",
+      "future": "Futures",
+      "option": "Option"
+    }
   }
 }

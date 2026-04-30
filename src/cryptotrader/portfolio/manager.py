@@ -9,11 +9,13 @@ from typing import TYPE_CHECKING, Any
 
 from cryptotrader._compat import UTC
 from cryptotrader.db import get_async_session, get_engine
+from cryptotrader.pair import market_type_for as _market_type_for
 
 if TYPE_CHECKING:
     from cryptotrader.state import ArenaState
 
 logger = logging.getLogger(__name__)
+
 
 # Track which URLs have had their schema initialised
 _pm_table_ready: set[str] = set()
@@ -36,7 +38,14 @@ def _pm_models():
     class Portfolio(Base):
         __tablename__ = "portfolios"
         id = Column(String, primary_key=True)
-        pair = Column(String(20), nullable=False)
+        # Spec 013 deep-review correctness FINDING-2: bumped from VARCHAR(20)
+        # to VARCHAR(50) — futures delivery symbols like "1000PEPE/USDT:USDT-241227"
+        # are 25 chars, "BTC/USDT:USDT-241227" is 21 chars. The old 20-char limit
+        # was inherited from spot-only days and would reject these inserts.
+        pair = Column(String(50), nullable=False)
+        # spec 013: market_type is derived from pair via Pair.parse(pair).market_type
+        # Default 'spot' keeps legacy rows backward-compatible.
+        market_type = Column(String(20), nullable=False, default="spot")
         amount = Column(Float, default=0.0)
         avg_price = Column(Float, default=0.0)
         updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
@@ -60,12 +69,39 @@ def _pm_models():
 
 
 async def _pm_ensure_tables(database_url: str) -> None:
-    """Create portfolio schema on first call per database URL."""
+    """Create portfolio schema on first call per database URL.
+
+    Mirrors the pattern in journal/store.py: ``create_all`` only adds new
+    tables, not new columns. spec-013 added ``portfolios.market_type``
+    after some deployments already had the table — backfill it here.
+    """
+    from sqlalchemy import text
+
     if database_url not in _pm_table_ready:
         Base, _, _, _ = _pm_models()
         engine = await get_engine(database_url)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            dialect = conn.dialect.name
+            if dialect == "postgresql":
+                # Idempotent — both ADD COLUMN IF NOT EXISTS and ALTER COLUMN TYPE
+                # are no-ops on already-migrated tables. Type widening (20→50) does
+                # not require a table rewrite and holds ACCESS EXCLUSIVE briefly.
+                await conn.execute(
+                    text(
+                        "ALTER TABLE portfolios "
+                        "ADD COLUMN IF NOT EXISTS market_type VARCHAR(20) NOT NULL DEFAULT 'spot'"
+                    )
+                )
+                await conn.execute(text("ALTER TABLE portfolios ALTER COLUMN pair TYPE VARCHAR(50)"))
+            elif dialect == "sqlite":
+                result = await conn.execute(text("PRAGMA table_info(portfolios)"))
+                existing = {row[1] for row in result.fetchall()}
+                if "market_type" not in existing:
+                    await conn.execute(
+                        text("ALTER TABLE portfolios ADD COLUMN market_type VARCHAR(20) NOT NULL DEFAULT 'spot'")
+                    )
+                # SQLite ignores VARCHAR length — pair widening is a no-op there.
         _pm_table_ready.add(database_url)
 
 
@@ -95,7 +131,11 @@ class PortfolioManager:
                 async with await _pm_session(self._db_url) as session:
                     rows = await session.execute(select(Portfolio).where(Portfolio.id.startswith(f"{account_id}:")))
                     for r in rows.scalars():
-                        positions[r.pair] = {"amount": r.amount, "avg_price": r.avg_price}
+                        positions[r.pair] = {
+                            "amount": r.amount,
+                            "avg_price": r.avg_price,
+                            "market_type": r.market_type or "spot",
+                        }
                     # Load cash
                     acct = (
                         await session.execute(select(AccountBalance).where(AccountBalance.id == account_id))
@@ -122,6 +162,7 @@ class PortfolioManager:
         }
 
     async def update_position(self, account_id: str, pair: str, amount: float, price: float) -> None:
+        market_type = _market_type_for(pair)
         if self._db_url:
             try:
                 _, Portfolio, _, _ = _pm_models()
@@ -133,16 +174,19 @@ class PortfolioManager:
                     if row:
                         row.amount = amount
                         row.avg_price = price
+                        row.market_type = market_type
                         row.updated_at = datetime.now(UTC)
                     else:
-                        session.add(Portfolio(id=key, pair=pair, amount=amount, avg_price=price))
+                        session.add(
+                            Portfolio(id=key, pair=pair, market_type=market_type, amount=amount, avg_price=price)
+                        )
                     await session.commit()
                 return
             except Exception as e:
                 logger.warning("DB position update failed: %s", e)
         if account_id not in self._memory:
             self._memory[account_id] = {}
-        self._memory[account_id][pair] = {"amount": amount, "avg_price": price}
+        self._memory[account_id][pair] = {"amount": amount, "avg_price": price, "market_type": market_type}
 
     async def update_cash(self, account_id: str = "default", cash: float = 0.0) -> None:
         """Persist current cash balance."""
@@ -312,8 +356,12 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
     # All cross-layer imports inside nodes.execution are already lazy, so this
     # late binding is safe and consistent with the existing pattern.
     from cryptotrader.nodes.execution import _get_exchange
+    from cryptotrader.state import get_pair
 
-    pair = state["metadata"].get("pair", "BTC/USDT")
+    try:
+        pair = get_pair(state).canonical()
+    except (KeyError, TypeError, ValueError):
+        pair = "BTC/USDT"
     current_price = state["data"].get("snapshot_summary", {}).get("price", 0)
 
     try:

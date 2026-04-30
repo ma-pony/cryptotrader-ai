@@ -6,6 +6,8 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.pair import Pair
+
 if TYPE_CHECKING:
     from cryptotrader.models import Order
 
@@ -28,7 +30,7 @@ class PaperExchange:
         self._cost_basis: dict[str, dict[str, float]] = {}
         if initial_positions:
             for pair, pos in initial_positions.items():
-                asset = pair.split("/")[0]
+                asset = Pair.parse(pair).base
                 amount = pos.get("amount", 0.0)
                 avg_price = pos.get("avg_price", 0.0)
                 if amount != 0 and avg_price > 0:
@@ -48,7 +50,7 @@ class PaperExchange:
             fill_price = order.price * (1 + slippage if order.side == "buy" else 1 - slippage)
             fee = order.amount * fill_price * self._fee_bps / 10000
             cost = order.amount * fill_price
-            base = order.pair.split("/")[0]
+            base = Pair.parse(order.pair).base
 
             # Balance pre-check (include fee in buy cost)
             if order.side == "buy":

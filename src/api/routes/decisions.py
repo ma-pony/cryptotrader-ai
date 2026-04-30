@@ -29,7 +29,9 @@ class VerdictSlim(BaseModel):
 class DecisionListItem(BaseModel):
     commit_hash: str
     ts: str
-    pair: str
+    pair: str  # ccxt canonical: "BTC/USDT" (spot) or "BTC/USDT:USDT" (perp)
+    pair_display: str  # spec 013: human form, e.g. "BTC/USDT (perp)"
+    market_type: str = "spot"  # "spot" | "swap" | "future" | "option"
     price: float = 0.0
     verdict: VerdictSlim
     is_filled: bool = False
@@ -183,7 +185,9 @@ class ExperienceMemoryRefOut(BaseModel):
 class DecisionDetailOut(BaseModel):
     commit_hash: str
     ts: str
-    pair: str
+    pair: str  # ccxt canonical
+    pair_display: str  # spec 013: human form
+    market_type: str = "spot"
     price: float
     agent_analyses: list[AgentAnalysisOut]
     debate_rounds: list[DebateRoundOut]
@@ -203,6 +207,17 @@ class DecisionDetailOut(BaseModel):
     retrospective: str | None = None
     debate_skip_reason: str = ""
     bias: BiasOut | None = None
+
+
+def _pair_meta(pair: str) -> tuple[str, str]:
+    """Return (pair_display, market_type) for a canonical pair str (spec 013)."""
+    from cryptotrader.pair import Pair
+
+    try:
+        p = Pair.parse(pair)
+        return p.display(), p.market_type
+    except (ValueError, NotImplementedError):
+        return pair, "spot"
 
 
 def _verdict_to_slim(v: Any) -> VerdictSlim:
@@ -240,10 +255,13 @@ def _commit_to_list_item(c: Any) -> DecisionListItem:
         rejected_by = getattr(gate, "rejected_by", "") or ""
         reason = getattr(gate, "reason", "") or ""
         reject_reason = f"{rejected_by} · {reason}" if rejected_by and reason else (rejected_by or reason or None)
+    pair_display, market_type = _pair_meta(c.pair)
     return DecisionListItem(
         commit_hash=c.hash,
         ts=c.timestamp.isoformat() if hasattr(c.timestamp, "isoformat") else str(c.timestamp),
         pair=c.pair,
+        pair_display=pair_display,
+        market_type=market_type,
         price=float(snapshot.get("price", 0.0) or 0.0),
         verdict=_verdict_to_slim(c.verdict),
         is_filled=bool(c.fill_price is not None and c.fill_price > 0) or bool(c.order),
@@ -617,10 +635,13 @@ async def get_decision(commit_hash: str) -> DecisionDetailOut:
         raise HTTPException(status_code=404, detail=f"Commit {commit_hash} not found")
 
     snapshot = commit.snapshot_summary or {}
+    pair_display, market_type = _pair_meta(commit.pair)
     return DecisionDetailOut(
         commit_hash=commit.hash,
         ts=commit.timestamp.isoformat() if hasattr(commit.timestamp, "isoformat") else str(commit.timestamp),
         pair=commit.pair,
+        pair_display=pair_display,
+        market_type=market_type,
         price=float(snapshot.get("price", 0.0) or 0.0),
         agent_analyses=_serialize_analyses(commit.analyses),
         debate_rounds=_serialize_challenges(commit.challenges),

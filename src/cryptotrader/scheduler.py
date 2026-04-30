@@ -7,31 +7,54 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any
 
+import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from cryptotrader._compat import UTC
+from cryptotrader.pair import Pair
 
 logger = logging.getLogger(__name__)
+_slog = structlog.get_logger(__name__)
 
 
 class Scheduler:
     def __init__(
         self,
-        pairs: list[str],
+        pairs: list,
         interval_minutes: int = 240,
         daily_summary_hour: int = 0,
         trigger_engine: Any | None = None,
     ):
-        self.pairs = pairs
+        # Per spec 013-pair-value-object: scheduler holds list[Pair]; legacy
+        # callers passing list[str] are auto-promoted to spot Pair instances
+        # (matches D4 backwards-compat for ``[scheduler].pairs`` legacy form).
+        normalized: list[Pair] = []
+        for p in pairs:
+            if isinstance(p, Pair):
+                normalized.append(p)
+            elif isinstance(p, str):
+                normalized.append(Pair.parse(p))
+            else:
+                raise TypeError(f"Scheduler.pairs item must be Pair or str; got {type(p).__name__}")
+        self.pairs: list[Pair] = normalized
         self.interval_minutes = interval_minutes
         self.daily_summary_hour = daily_summary_hour
         self._cycle_count = 0
-        self._status: dict[str, dict[str, Any]] = {p: {} for p in pairs}
+        # Status dict keyed by canonical pair string for stable lookups across
+        # the trading-cycle / daily-summary / API surface.
+        self._status: dict[str, dict[str, Any]] = {p.canonical(): {} for p in self.pairs}
         self._scheduler = AsyncIOScheduler()
         self._stop_event: asyncio.Event | None = None
         self._trigger_engine = trigger_engine
+
+        # FR-103: structured boot log so ops can grep `pair_init` for
+        # spot/swap/future split at startup.
+        spot = [p.canonical() for p in self.pairs if p.market_type == "spot"]
+        swap = [p.canonical() for p in self.pairs if p.market_type == "swap"]
+        future = [p.canonical() for p in self.pairs if p.market_type == "future"]
+        _slog.info("pair_init", spot=spot, swap=swap, future=future)
 
     async def start(self) -> None:
         # Startup reconciliation for live mode
@@ -93,7 +116,7 @@ class Scheduler:
         self._scheduler.start()
         logger.info(
             "Scheduler started: pairs=%s interval=%dm daily_summary_hour=%d",
-            self.pairs,
+            [p.canonical() for p in self.pairs],
             self.interval_minutes,
             self.daily_summary_hour,
         )
@@ -133,12 +156,12 @@ class Scheduler:
     async def _run_cycle(self) -> None:
         """Single trading cycle — run all pairs concurrently."""
         try:
-            tasks = [self._run_pair(p) for p in self.pairs]
+            tasks = [self._run_pair(p.canonical()) for p in self.pairs]
             await asyncio.gather(*tasks, return_exceptions=True)
             self._cycle_count += 1
             for p in self.pairs:
                 next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
-                self._status[p]["next_run"] = next_run.isoformat()
+                self._status[p.canonical()]["next_run"] = next_run.isoformat()
             # Persist a portfolio snapshot every cycle so risk gate's
             # get_daily_pnl has a real time series. nodes/execution.snapshot only
             # fires on actual trades; on quiet days that meant zero rows for
@@ -182,7 +205,11 @@ class Scheduler:
                 # Build a minimal state for the exchange call; price=0 is fine —
                 # exchange.get_balance/get_positions don't need it for the cash leg.
                 state = {
-                    "metadata": {"engine": "live", "exchange_id": config.scheduler.exchange_id, "pair": self.pairs[0]},
+                    "metadata": {
+                        "engine": "live",
+                        "exchange_id": config.scheduler.exchange_id,
+                        "pair": self.pairs[0].canonical(),
+                    },
                     "data": {"snapshot_summary": {"price": 0}},
                 }
                 ex_portfolio = await read_portfolio_from_exchange(state)
@@ -231,7 +258,7 @@ class Scheduler:
             from cryptotrader.nodes.execution import _get_exchange
 
             dummy_state = {"metadata": {"engine": "live", "exchange_id": config.scheduler.exchange_id}, "data": {}}
-            exchange, _ = await _get_exchange(dummy_state, self.pairs[0])
+            exchange, _ = await _get_exchange(dummy_state, self.pairs[0].canonical())
             reconciler = Reconciler(exchange)
             orphans = await reconciler.detect_orphans(set())
             if orphans:
@@ -262,6 +289,9 @@ class Scheduler:
         from cryptotrader.tracing import set_trace_id
 
         trace_id = set_trace_id()
+        # Spec 013 FR-203 / T021: bind canonical pair so every log line in this
+        # cycle is greppable by ccxt symbol regardless of which node logs.
+        _slog.bind(pair=pair, trace_id=trace_id).info("cycle_pair_start")
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:

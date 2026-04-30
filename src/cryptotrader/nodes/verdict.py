@@ -61,8 +61,10 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
     redis_url = state["metadata"].get("redis_url")
     redis_state = RedisStateManager(redis_url)
     try:
+        from cryptotrader.state import get_pair
+
         constraints["circuit_breaker_active"] = await redis_state.is_circuit_breaker_active()
-        pair = state["metadata"].get("pair", "")
+        pair = get_pair(state).canonical()
         cooldown_val = await redis_state.get(f"cooldown:{pair}")
         if cooldown_val:
             constraints["cooldown_pairs"] = [pair]
@@ -257,12 +259,15 @@ async def _process_schedule_follow_up(state: ArenaState, verdict_data: dict) -> 
         session_factory = partial(get_async_session, config.infrastructure.database_url)
         store = TriggerRuleStore(session_factory)
 
+        from cryptotrader.state import get_pair
+
         ttl_hours = min(int(follow_up.get("ttl_hours", 24)), 72)
+        pair_str = get_pair(state).canonical()
         await store.create_rule(
             {
-                "name": follow_up.get("name", f"agent-follow-up-{state['metadata'].get('pair', '')}"),
+                "name": follow_up.get("name", f"agent-follow-up-{pair_str}"),
                 "trigger_type": follow_up.get("trigger_type", "price_threshold"),
-                "pair": state["metadata"].get("pair", "BTC/USDT"),
+                "pair": pair_str,
                 "parameters": follow_up.get("parameters", {}),
                 "cooldown_minutes": int(follow_up.get("cooldown_minutes", 60)),
                 "created_by": "agent",
@@ -338,8 +343,9 @@ async def _measure_api_latency(state: ArenaState) -> int:
     import time
 
     from cryptotrader.nodes.execution import _get_exchange
+    from cryptotrader.state import get_pair
 
-    pair = state["metadata"].get("pair", "BTC/USDT")
+    pair = get_pair(state).canonical()
     try:
         exchange, _ = await _get_exchange(state, pair)
         t0 = time.monotonic()
@@ -354,6 +360,7 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
     """Assemble the portfolio dict for risk checks. Returns None when the live exchange
     reports zero balance and trading must be rejected upstream."""
     from cryptotrader.portfolio.manager import PortfolioManager, read_portfolio_from_exchange
+    from cryptotrader.state import get_pair
 
     recent_prices, returns_daily = _extract_ohlcv_returns(state)
     exchange_portfolio = await read_portfolio_from_exchange(state)
@@ -390,24 +397,27 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
         "recent_prices": recent_prices,
         "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
         "api_latency_ms": api_latency_ms,
-        "pair": state["metadata"]["pair"],
+        "pair": get_pair(state).canonical(),
     }
 
 
 def _log_risk_outcome(state: ArenaState, result, vd_action: str) -> None:
+    from cryptotrader.state import get_pair
+
+    pair_str = get_pair(state).canonical()
     if result.passed:
-        logger.info("Risk gate PASSED for %s (action=%s)", state["metadata"]["pair"], vd_action)
+        logger.info("Risk gate PASSED for %s (action=%s)", pair_str, vd_action)
         return
     # Structured rejection log — check_name + reason carry the full context for alerting.
     _structlog.warning(
         "risk_gate_rejected",
-        pair=state["metadata"]["pair"],
+        pair=pair_str,
         check_name=result.rejected_by or "unknown",
         reason=result.reason or "",
     )
     logger.warning(
         "Risk gate REJECTED for %s: check_name=%s reason=%s",
-        state["metadata"]["pair"],
+        pair_str,
         result.rejected_by,
         result.reason,
     )
@@ -451,11 +461,15 @@ async def risk_check(state: ArenaState) -> dict:
     result = await gate.check(verdict, portfolio)
     _log_risk_outcome(state, result, verdict.action)
 
+    from cryptotrader.state import get_pair
+
+    pair_str = get_pair(state).canonical()
+
     # Fire circuit_breaker notification if triggered
     if not result.passed and result.rejected_by == "daily_loss_limit" and "Circuit breaker" in (result.reason or ""):
         try:
             notifier = _get_notifier(state)
-            await notifier.notify("circuit_breaker", {"pair": state["metadata"]["pair"], "reason": result.reason})
+            await notifier.notify("circuit_breaker", {"pair": pair_str, "reason": result.reason})
         except Exception:
             logger.debug("Circuit-breaker notification failed", exc_info=True)
 
@@ -470,7 +484,7 @@ async def risk_check(state: ArenaState) -> dict:
                 "Position scale adjusted by risk gate: %.2f -> %.2f for %s",
                 vd.get("position_scale", 1.0),
                 final_scale,
-                state["metadata"]["pair"],
+                pair_str,
             )
 
     risk_gate_data = {

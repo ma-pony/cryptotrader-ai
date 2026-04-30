@@ -55,7 +55,12 @@ class SnapshotAggregator:
         onchain_data = await self.onchain.collect(pair, market_data.funding_rate)
 
         if adapter is not None:
-            symbol = pair.split("/")[0] if "/" in pair else pair.replace("USDT", "")
+            from cryptotrader.pair import Pair
+
+            try:
+                symbol = Pair.parse(pair).base
+            except (ValueError, NotImplementedError):
+                symbol = pair.replace("USDT", "")
             await self._enrich_via_mcp(adapter, symbol, market_data, onchain_data, backtest_mode)
 
         logger.info("Snapshot complete: market + %d news + onchain + macro", len(news_data.headlines))

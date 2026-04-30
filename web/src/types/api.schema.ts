@@ -10,10 +10,16 @@ export const ApiErrorSchema = z.object({
 });
 export type ApiError = z.infer<typeof ApiErrorSchema>;
 
+// ── Spec 013: market_type for Pair semantics ──
+export const MarketTypeSchema = z.enum(['spot', 'swap', 'future', 'option']);
+export type MarketType = z.infer<typeof MarketTypeSchema>;
+
 // ── §1 Portfolio (matches PortfolioSnapshotOut / EquityCurveOut) ──
 
 export const PositionSchema = z.object({
-  pair: z.string(),
+  pair: z.string(), // ccxt canonical: "BTC/USDT" (spot) or "BTC/USDT:USDT" (perp)
+  pair_display: z.string(), // spec 013: "BTC/USDT (perp)"
+  market_type: MarketTypeSchema.default('spot'),
   side: z.enum(['long', 'short']),
   size: z.number(),
   avg_price: z.number(),
@@ -71,7 +77,9 @@ export const VerdictSlimSchema = z.object({
 export const DecisionListItemSchema = z.object({
   commit_hash: z.string(),
   ts: z.string(),
-  pair: z.string(),
+  pair: z.string(), // ccxt canonical
+  pair_display: z.string().optional(), // spec 013 — fallback to `pair` if absent
+  market_type: MarketTypeSchema.default('spot'),
   price: z.number().default(0),
   verdict: VerdictSlimSchema,
   is_filled: z.boolean().default(false),
@@ -211,7 +219,9 @@ export const ExperienceMemoryRefSchema = z.object({
 export const DecisionDetailSchema = z.object({
   commit_hash: z.string(),
   ts: z.string(),
-  pair: z.string(),
+  pair: z.string(), // ccxt canonical
+  pair_display: z.string().optional(), // spec 013
+  market_type: MarketTypeSchema.default('spot'),
   price: z.number(),
   agent_analyses: z.array(AgentAnalysisSchema),
   debate_rounds: z.array(DebateRoundSchema),

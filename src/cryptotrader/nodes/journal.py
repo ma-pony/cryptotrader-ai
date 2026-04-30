@@ -155,12 +155,14 @@ async def journal_trade(state: ArenaState) -> dict:
         from cryptotrader.journal.commit import build_commit
         from cryptotrader.journal.store import JournalStore
         from cryptotrader.models import GateResult, Order, TradeVerdict
+        from cryptotrader.state import get_pair
         from cryptotrader.tracing import get_trace_id
 
         db_url = state["metadata"].get("database_url")
         store = JournalStore(db_url)
 
-        analyses = _to_agent_analyses(state["data"].get("analyses", {}), state["metadata"]["pair"])
+        pair_str = get_pair(state).canonical()
+        analyses = _to_agent_analyses(state["data"].get("analyses", {}), pair_str)
 
         raw_verdict = state["data"].get("verdict")
         verdict = None
@@ -186,7 +188,7 @@ async def journal_trade(state: ArenaState) -> dict:
         parent_hash = state["data"].get("journal_hash")
         node_trace = _resolve_node_trace(state)
         commit = build_commit(
-            pair=state["metadata"]["pair"],
+            pair=pair_str,
             snapshot_summary=state["data"].get("snapshot_summary", {}),
             analyses=analyses,
             debate_rounds=state.get("debate_round", 0),
@@ -212,7 +214,7 @@ async def journal_trade(state: ArenaState) -> dict:
         logger.info(
             "Journal trade committed: hash=%s pair=%s action=%s",
             commit.hash,
-            state["metadata"]["pair"],
+            pair_str,
             raw_verdict.get("action") if raw_verdict else "unknown",
         )
         return {"data": {"journal_hash": commit.hash}}
@@ -233,12 +235,14 @@ async def journal_rejection(state: ArenaState) -> dict:
         from cryptotrader.journal.store import JournalStore
         from cryptotrader.models import GateResult, TradeVerdict
         from cryptotrader.nodes.verdict import _get_notifier
+        from cryptotrader.state import get_pair
         from cryptotrader.tracing import get_trace_id
 
         db_url = state["metadata"].get("database_url")
         store = JournalStore(db_url)
 
-        analyses = _to_agent_analyses(state["data"].get("analyses", {}), state["metadata"]["pair"])
+        pair_str = get_pair(state).canonical()
+        analyses = _to_agent_analyses(state["data"].get("analyses", {}), pair_str)
 
         raw_verdict = state["data"].get("verdict")
         verdict = None
@@ -253,7 +257,7 @@ async def journal_rejection(state: ArenaState) -> dict:
         parent_hash = state["data"].get("journal_hash")
         node_trace = _resolve_node_trace(state)
         commit = build_commit(
-            pair=state["metadata"]["pair"],
+            pair=pair_str,
             snapshot_summary=state["data"].get("snapshot_summary", {}),
             analyses=analyses,
             debate_rounds=state.get("debate_round", 0),
@@ -276,7 +280,7 @@ async def journal_rejection(state: ArenaState) -> dict:
         logger.info(
             "Journal rejection committed: hash=%s pair=%s rejected_by=%s",
             commit.hash,
-            state["metadata"]["pair"],
+            pair_str,
             raw_gate.get("rejected_by") if raw_gate else "unknown",
         )
 
@@ -287,7 +291,7 @@ async def journal_rejection(state: ArenaState) -> dict:
             await notifier.notify(
                 "rejection",
                 {
-                    "pair": state["metadata"]["pair"],
+                    "pair": pair_str,
                     "rejected_by": raw_gate.get("rejected_by"),
                     "reason": raw_gate.get("reason"),
                 },

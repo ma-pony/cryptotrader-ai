@@ -14,6 +14,7 @@ except ModuleNotFoundError:
     import tomli as tomllib  # type: ignore[no-redef]
 
 from cryptotrader.mcp.config import MCPConfig, MCPServerConfig
+from cryptotrader.pair import Pair
 
 logger = logging.getLogger(__name__)
 
@@ -220,7 +221,13 @@ class ExecutionConfig:
 @dataclass
 class SchedulerConfig:
     enabled: bool = False
-    pairs: list[str] = field(default_factory=lambda: ["BTC/USDT", "ETH/USDT"])
+    # Per spec 013-pair-value-object D4: pairs is list[Pair].
+    # Legacy ``pairs = ["BTC/USDT"]`` form in TOML and new
+    # ``[[scheduler.pairs]] symbol=... market=... settle=...`` form are both
+    # accepted by ``_build_scheduler_config()``; this dataclass stores the
+    # parsed result (list of Pair instances). When constructed without
+    # arguments (tests, programmatic use), defaults to two spot pairs.
+    pairs: list[Pair] = field(default_factory=lambda: [Pair.parse("BTC/USDT"), Pair.parse("ETH/USDT")])
     interval_minutes: int = 240
     exchange_id: str = "binance"
     daily_summary_hour: int = 0
@@ -814,6 +821,86 @@ def _build_mcp_config(toml_data: dict) -> MCPConfig:
     )
 
 
+def _build_scheduler_config(toml_data: dict) -> SchedulerConfig:
+    """Parse ``[scheduler]`` section into ``SchedulerConfig`` with ``list[Pair]``.
+
+    Two TOML forms are accepted (per spec 013-pair-value-object FR-100):
+
+    - **Legacy** ``pairs = ["BTC/USDT", "ETH/USDT"]`` — all spot
+    - **New table-array**::
+
+          [[scheduler.pairs]]
+          symbol = "BTC/USDT"
+          market = "swap"      # optional, defaults to "spot"
+          settle = "USDT"      # required when market != "spot"
+
+    Mixed (some str, some dict) raises ``ConfigurationError``.
+    """
+    raw = dict(toml_data.get("scheduler", {}))
+    raw_pairs = raw.pop("pairs", None)
+
+    if raw_pairs is None:
+        # No explicit config -> SchedulerConfig dataclass default kicks in
+        return SchedulerConfig(**raw)
+
+    if len(raw_pairs) == 0:
+        return SchedulerConfig(pairs=[], **raw)
+
+    if all(isinstance(p, str) for p in raw_pairs):
+        pairs = [Pair.parse(p) for p in raw_pairs]
+    elif all(isinstance(p, dict) for p in raw_pairs):
+        pairs = [_parse_pair_dict(p, idx) for idx, p in enumerate(raw_pairs)]
+    else:
+        raise ConfigurationError(
+            field_path="scheduler.pairs",
+            expected="all-strings (legacy) or all-tables ([[scheduler.pairs]]); mixing is not allowed",
+        )
+
+    seen: set[str] = set()
+    for p in pairs:
+        c = p.canonical()
+        if c in seen:
+            raise ConfigurationError(
+                field_path="scheduler.pairs",
+                expected=f"unique canonical pairs; duplicate pair: {c}",
+            )
+        seen.add(c)
+
+    return SchedulerConfig(pairs=pairs, **raw)
+
+
+def _parse_pair_dict(d: dict, idx: int) -> Pair:
+    """Parse a single ``[[scheduler.pairs]]`` table entry into a ``Pair``."""
+    symbol = d.get("symbol")
+    if not symbol or not isinstance(symbol, str):
+        raise ConfigurationError(
+            field_path=f"scheduler.pairs[{idx}].symbol",
+            expected=f"non-empty string (got {symbol!r})",
+        )
+    market = d.get("market", "spot")
+    if market not in ("spot", "swap", "future"):
+        raise ConfigurationError(
+            field_path=f"scheduler.pairs[{idx}].market",
+            expected=f"one of spot/swap/future (got {market!r})",
+        )
+    settle = d.get("settle")
+    if market != "spot":
+        if not settle or not isinstance(settle, str):
+            raise ConfigurationError(
+                field_path=f"scheduler.pairs[{idx}].settle",
+                expected=f"required when market={market!r} (got {settle!r})",
+            )
+        ccxt_symbol = f"{symbol}:{settle}"
+    else:
+        if settle:
+            raise ConfigurationError(
+                field_path=f"scheduler.pairs[{idx}].settle",
+                expected="must be omitted when market='spot'",
+            )
+        ccxt_symbol = symbol
+    return Pair.parse(ccxt_symbol)
+
+
 def _build_config(toml_data: dict) -> AppConfig:
     """Build AppConfig from parsed TOML dict."""
     app = toml_data.get("app", {})
@@ -863,7 +950,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         risk=risk,
         backtest=backtest,
         experience=_build_experience_config(toml_data),
-        scheduler=SchedulerConfig(**toml_data.get("scheduler", {})),
+        scheduler=_build_scheduler_config(toml_data),
         providers=providers,
         execution=ExecutionConfig(**toml_data.get("execution", {})),
         notifications=_build_notifications_config(toml_data),

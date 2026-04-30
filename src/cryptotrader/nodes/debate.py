@@ -159,6 +159,12 @@ async def debate_round(state: ArenaState) -> dict:
     model = state["metadata"].get("debate_model", _default_debate_model)
     timeout_seconds: float = _dcfg.models.timeout_seconds
 
+    from cryptotrader.state import get_pair
+
+    # AI prompt — use Pair.display() for human-readable form ("BTC/USDT (perp)")
+    # so the LLM understands market type context (FR-202, T020).
+    pair_display = get_pair(state).display()
+
     tasks = []
     agent_ids = list(analyses.keys())
     for agent_id in agent_ids:
@@ -169,7 +175,7 @@ async def debate_round(state: ArenaState) -> dict:
                 agent_id,
                 analysis,
                 others,
-                state["metadata"]["pair"],
+                pair_display,
                 model,
                 timeout_seconds,
                 round_number,
@@ -361,9 +367,11 @@ async def judge_verdict(state: ArenaState) -> dict:
     """Judge evaluates bull/bear debate and issues verdict."""
     from cryptotrader.config import load_config as _load_config
     from cryptotrader.debate.researchers import judge_debate
+    from cryptotrader.state import get_pair
 
     debate = state["data"]["debate"]
-    pair = state["metadata"]["pair"]
+    # AI prompt — use display() form per FR-202 / T020
+    pair = get_pair(state).display()
     _jcfg = _load_config()
     _default_judge_model = _jcfg.models.verdict or _jcfg.models.fallback
     model = state["metadata"].get("verdict_model", state["metadata"].get("debate_model", _default_judge_model))
