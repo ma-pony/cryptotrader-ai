@@ -357,8 +357,12 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
     # All cross-layer imports inside nodes.execution are already lazy, so this
     # late binding is safe and consistent with the existing pattern.
     from cryptotrader.nodes.execution import _get_exchange
+    from cryptotrader.state import get_pair
 
-    pair = state["metadata"].get("pair", "BTC/USDT")
+    try:
+        pair = get_pair(state).canonical()
+    except (KeyError, TypeError, ValueError):
+        pair = "BTC/USDT"
     current_price = state["data"].get("snapshot_summary", {}).get("price", 0)
 
     try:

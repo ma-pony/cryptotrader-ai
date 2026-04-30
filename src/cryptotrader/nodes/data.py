@@ -92,8 +92,9 @@ async def collect_snapshot(state: ArenaState) -> dict:
 
     from cryptotrader.config import load_config
     from cryptotrader.data.snapshot import SnapshotAggregator
+    from cryptotrader.state import get_pair
 
-    pair = state["metadata"]["pair"]
+    pair = get_pair(state).canonical()
     exchange_id = state["metadata"].get("exchange_id", "binance")
     timeframe = state["metadata"].get("timeframe", "1h")
     limit = state["metadata"].get("ohlcv_limit", 100)
@@ -135,6 +136,25 @@ async def collect_snapshot(state: ArenaState) -> dict:
     return {"data": {"snapshot": snapshot, "snapshot_summary": summary, "snapshot_hash": snapshot_hash}}
 
 
+async def _update_one_commit_pnl(store, dc, current_price: float) -> bool:
+    """Compute unrealized PnL for a single commit; returns True if updated."""
+    if dc.order is None:
+        return False  # No trade was placed
+    if dc.pnl is not None and dc.fill_price is not None:
+        return False  # Realized PnL already recorded
+    entry_price = dc.order.price
+    if not entry_price or entry_price <= 0:
+        return False
+    if dc.order.side == "buy":
+        pnl_pct = (current_price - entry_price) / entry_price
+    else:
+        pnl_pct = (entry_price - current_price) / entry_price
+    pnl_abs = pnl_pct * dc.order.amount * entry_price
+    retro = f"Entry {entry_price:.2f} → Current {current_price:.2f} = {pnl_pct:+.2%} (unrealized)"
+    await store.update_pnl(dc.hash, pnl_abs, retro)
+    return True
+
+
 @node_logger()
 async def update_past_pnl(state: ArenaState) -> dict:
     """Back-fill PnL for recent trades that haven't been evaluated yet.
@@ -149,34 +169,21 @@ async def update_past_pnl(state: ArenaState) -> dict:
     if state["metadata"].get("backtest_mode"):
         return {"data": {}}
 
+    from cryptotrader.state import get_pair
+
     db_url = state["metadata"].get("database_url")
     store = JournalStore(db_url)
     current_price = state["data"].get("snapshot_summary", {}).get("price", 0)
-    pair = state["metadata"].get("pair")
+    try:
+        pair = get_pair(state).canonical()
+    except (KeyError, TypeError, ValueError):
+        pair = None
     if not current_price or not pair:
         return {"data": {}}
 
     try:
         commits = await store.log(limit=50, pair=pair)
-        updated = 0
-        for dc in commits:
-            if dc.order is None:
-                continue  # No trade was placed
-            # Skip trades that have a fill_price — those are closed/realized
-            if dc.pnl is not None and dc.fill_price is not None:
-                continue  # Realized PnL already recorded with actual close price
-            entry_price = dc.order.price
-            if not entry_price or entry_price <= 0:
-                continue
-            # Calculate unrealized PnL (will be updated each cycle until position is closed)
-            if dc.order.side == "buy":
-                pnl_pct = (current_price - entry_price) / entry_price
-            else:
-                pnl_pct = (entry_price - current_price) / entry_price
-            pnl_abs = pnl_pct * dc.order.amount * entry_price
-            retro = f"Entry {entry_price:.2f} → Current {current_price:.2f} = {pnl_pct:+.2%} (unrealized)"
-            await store.update_pnl(dc.hash, pnl_abs, retro)
-            updated += 1
+        updated = sum([await _update_one_commit_pnl(store, dc, current_price) for dc in commits])
         if updated:
             logger.info("Updated PnL for %d past trades on %s", updated, pair)
     except Exception:
@@ -345,7 +352,12 @@ async def enrich_verdict_context(state: ArenaState) -> dict:
         # Already set by caller (e.g., backtest script) — keep it
         pass
     else:
-        pair = state["metadata"].get("pair", "")
+        from cryptotrader.state import get_pair
+
+        try:
+            pair = get_pair(state).canonical()
+        except (KeyError, TypeError, ValueError):
+            pair = ""
         price = state["data"].get("snapshot_summary", {}).get("price", 0)
         db_url = state["metadata"].get("database_url")
         pos_ctx = await _build_position_from_portfolio(pair, price, db_url)

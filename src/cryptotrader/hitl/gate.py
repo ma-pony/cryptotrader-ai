@@ -89,10 +89,15 @@ async def hitl_gate(state: dict[str, Any]) -> dict:
     if not should:
         return {"hitl": {"skipped": True, "decision": "approve"}}
 
+    from cryptotrader.state import get_pair
+
     data = state.get("data") or {}
     verdict = data.get("verdict") or {}
     analyses = data.get("analyses") or {}
-    pair = metadata.get("pair", "unknown")
+    try:
+        pair = get_pair(state).canonical()
+    except (KeyError, TypeError, ValueError):
+        pair = "unknown"
     thread_id = metadata.get("thread_id", "")
 
     approval_id = str(uuid4())

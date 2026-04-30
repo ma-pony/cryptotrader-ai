@@ -63,12 +63,12 @@
 
 依据 D2 一刀切 + R2 LangGraph state checkpoint：
 
-- [ ] T018 [US1] Update `src/cryptotrader/state.py` `ArenaState` TypedDict: `metadata.pair: Pair`; bump `_state_schema_version` field to `2`
-- [ ] T019 [US1] Update remaining nodes (`src/cryptotrader/nodes/data.py`, `nodes/agents.py`, `nodes/debate.py`, `nodes/journal.py`) to accept `Pair` (no str/split operations)
-- [ ] T020 [US1] Update AI prompt builders to use `pair.display()` (search agents/base.py + nodes/debate.py for `state["metadata"]["pair"]` usage)
-- [ ] T021 [US1] Add structlog binding `pair=pair.canonical()` in scheduler `_run_pair` for grep-ability (FR-203)
-- [ ] T022 [US1] Add LangGraph state checkpoint compat shim: legacy `pair: str` in checkpoint deserialized via `Pair.parse(saved_str)` with WARNING log (FR-204)
-- [ ] T023 [US1] [P] Add `tests/test_us1_state_schema_bump.py`: cycle round-trip with new schema; legacy checkpoint backwards-compat
+- [X] T018 [US1] `state.py` `build_initial_state(pair: str | Pair)` coerces str→Pair; `metadata.pair` stored as Pair instance; `metadata._state_schema_version = 2` marker added; `STATE_SCHEMA_VERSION = 2` exported
+- [X] T019 [US1] All 6 node modules (data, debate, journal, verdict, execution, hitl/gate) consume Pair via `get_pair(state).canonical()` helper; no str/split operations on metadata.pair remaining (verified by 0 hits in `rg state\["metadata"\]\["pair"\]`)
+- [X] T020 [US1] AI prompt builders in `nodes/debate.py` (`_debate_one_agent`, `judge_verdict`) use `pair.display()` so LLM sees "BTC/USDT (perp)" not raw ccxt symbol
+- [X] T021 [US1] `scheduler._run_pair` emits `_slog.bind(pair=pair, trace_id=...).info("cycle_pair_start")` per FR-203
+- [X] T022 [US1] `state.get_pair()` is the compat shim per FR-204: detects legacy str → coerces via `Pair.parse()` → WARN once per distinct pair (`_legacy_str_warned` cache)
+- [X] T023 [US1] [P] `tests/test_us1_state_schema_bump.py` — 9 tests cover str/Pair input acceptance, schema marker, compat shim WARN behavior + dedupe, type rejection, scheduler-style round-trip
 
 **Checkpoint US1**: 真盘 sandbox cycle 触发 → DB commit + OKX fill 双向确认。Acceptance scenarios 1/2/3 全过。
 

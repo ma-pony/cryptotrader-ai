@@ -2,15 +2,51 @@
 
 from __future__ import annotations
 
+import logging
 import operator
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Annotated, Any, TypedDict
 
 from langchain_core.messages import BaseMessage
 
+from cryptotrader.pair import Pair
+
 if TYPE_CHECKING:
     from cryptotrader.config import AppConfig
     from cryptotrader.models import DataSnapshot
+
+logger = logging.getLogger(__name__)
+
+# Spec 013 (Phase 3c) — bumped from implicit v1 (str pair) to v2 (Pair pair).
+# Used by checkpoint deserialization to detect legacy state and apply the
+# str→Pair compat shim per FR-204.
+STATE_SCHEMA_VERSION = 2
+
+# One-time-per-pair WARN cache for the legacy-str compat shim (FR-204).
+_legacy_str_warned: set[str] = set()
+
+
+def get_pair(state: ArenaState) -> Pair:
+    """Read ``state.metadata.pair`` as a ``Pair`` instance.
+
+    Backward-compatibility shim per FR-204: if a legacy state checkpoint or
+    older caller stored ``pair`` as a str (state schema v1), parse it on
+    read and emit one WARN per distinct pair. Saves us a global migration
+    of every old checkpoint while making the new contract authoritative.
+    """
+    raw = state["metadata"]["pair"]
+    if isinstance(raw, Pair):
+        return raw
+    if not isinstance(raw, str):
+        raise TypeError(f"state.metadata.pair must be Pair or str, got {type(raw).__name__}")
+    if raw not in _legacy_str_warned:
+        logger.warning(
+            "state.metadata.pair stored as str (%r) — legacy v1 schema; coercing to Pair. "
+            "Update producer to pass Pair (spec 013 FR-204).",
+            raw,
+        )
+        _legacy_str_warned.add(raw)
+    return Pair.parse(raw)
 
 
 def merge_dicts(a: dict, b: dict) -> dict:
@@ -41,7 +77,7 @@ class ArenaState(TypedDict):
 
 
 def build_initial_state(
-    pair: str,
+    pair: str | Pair,
     *,
     engine: str = "paper",
     exchange_id: str = "",
@@ -55,7 +91,8 @@ def build_initial_state(
     """Build the initial state dict for graph invocation.
 
     Args:
-        pair: Trading pair, e.g. ``"BTC/USDT"``.
+        pair: Trading pair as :class:`~cryptotrader.pair.Pair` (preferred) or
+            a canonical str (auto-coerced via ``Pair.parse``).
         engine: Execution engine — ``"paper"`` or ``"live"``.
         exchange_id: Exchange identifier, e.g. ``"binance"``.
         timeframe: OHLCV timeframe; falls back to ``config.data.default_timeframe``.
@@ -77,8 +114,11 @@ def build_initial_state(
 
         config = load_config()
 
+    pair_obj = pair if isinstance(pair, Pair) else Pair.parse(pair)
+
     metadata: dict[str, Any] = {
-        "pair": pair,
+        "pair": pair_obj,
+        "_state_schema_version": STATE_SCHEMA_VERSION,
         "engine": engine,
         "exchange_id": exchange_id or config.exchange_id,
         "timeframe": timeframe if timeframe is not None else config.data.default_timeframe,

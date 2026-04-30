@@ -289,6 +289,9 @@ class Scheduler:
         from cryptotrader.tracing import set_trace_id
 
         trace_id = set_trace_id()
+        # Spec 013 FR-203 / T021: bind canonical pair so every log line in this
+        # cycle is greppable by ccxt symbol regardless of which node logs.
+        _slog.bind(pair=pair, trace_id=trace_id).info("cycle_pair_start")
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:

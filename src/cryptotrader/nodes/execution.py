@@ -282,7 +282,9 @@ async def check_stop_loss(state: ArenaState) -> dict:
     Triggers automatic exit when:
     - Unrealized loss exceeds max_stop_loss_pct (default 5%)
     """
-    pair = state["metadata"]["pair"]
+    from cryptotrader.state import get_pair
+
+    pair = get_pair(state).canonical()
     price = state["data"].get("snapshot_summary", {}).get("price", 0)
     if not price:
         return {"data": {}}
@@ -405,12 +407,13 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
 async def place_order(state: ArenaState) -> dict:
     """Place order via exchange (paper or live)."""
     from cryptotrader.nodes.verdict import _get_notifier
+    from cryptotrader.state import get_pair
 
     verdict = state["data"]["verdict"]
     if verdict["action"] == "hold":
         return {"data": {"order": None}}
 
-    pair = state["metadata"]["pair"]
+    pair = get_pair(state).canonical()
     price = state["data"].get("snapshot_summary", {}).get("price", 0)
     if price <= 0:
         return {"data": {"order": None}}
