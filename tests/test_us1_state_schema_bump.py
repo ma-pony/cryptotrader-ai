@@ -47,17 +47,29 @@ class TestBuildInitialStateAcceptsBoth:
         assert STATE_SCHEMA_VERSION == 2
 
 
+@pytest.fixture
+def reset_legacy_warn_cache():
+    """Auto-clean ``_legacy_str_warned`` so each test starts from a known state.
+
+    spec 014 followup: previously the cache leaked across tests, making the
+    "warns only once" property order-dependent and silently broken.
+    """
+    from cryptotrader.state import _legacy_str_warned
+
+    snapshot = set(_legacy_str_warned)
+    yield _legacy_str_warned
+    _legacy_str_warned.clear()
+    _legacy_str_warned.update(snapshot)
+
+
 class TestGetPairCompatShim:
     def test_pair_input_passthrough(self) -> None:
         p = Pair.parse("BTC/USDT:USDT")
         state = {"metadata": {"pair": p}}
         assert get_pair(state) is p  # type: ignore[arg-type]
 
-    def test_legacy_str_input_coerced_with_warn(self, caplog) -> None:
-        # Reset compat-shim warn cache so the WARN re-fires for this pair.
-        from cryptotrader.state import _legacy_str_warned
-
-        _legacy_str_warned.discard("XRP/USDT")
+    def test_legacy_str_input_coerced_with_warn(self, caplog, reset_legacy_warn_cache) -> None:
+        reset_legacy_warn_cache.discard("XRP/USDT")
         state = {"metadata": {"pair": "XRP/USDT"}}
         with caplog.at_level(logging.WARNING, logger="cryptotrader.state"):
             result = get_pair(state)  # type: ignore[arg-type]
@@ -67,10 +79,8 @@ class TestGetPairCompatShim:
             "expected WARN on str-pair compat shim per FR-204"
         )
 
-    def test_legacy_str_warns_only_once_per_pair(self, caplog) -> None:
-        from cryptotrader.state import _legacy_str_warned
-
-        _legacy_str_warned.discard("DOGE/USDT")
+    def test_legacy_str_warns_only_once_per_pair(self, caplog, reset_legacy_warn_cache) -> None:
+        reset_legacy_warn_cache.discard("DOGE/USDT")
         state = {"metadata": {"pair": "DOGE/USDT"}}
         with caplog.at_level(logging.WARNING, logger="cryptotrader.state"):
             get_pair(state)  # type: ignore[arg-type]
