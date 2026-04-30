@@ -78,23 +78,37 @@ async def test_build_close_order_returns_none_when_no_perp_position():
     assert order is None, "spot-form key must not satisfy perp canonical lookup"
 
 
+def _stub_okx_perp(*, position_amount: float = 0.02):
+    """Build a stub ccxt OKX instance reflecting an open long perp position."""
+    mock_inst = MagicMock()
+    mock_inst.load_markets = AsyncMock()
+    mock_inst.markets = {"BTC/USDT:USDT": {"limits": {"amount": {"min": 0.001}}}}
+    mock_inst.amount_to_precision = MagicMock(side_effect=lambda _sym, a: a)
+    mock_inst.price_to_precision = MagicMock(side_effect=lambda _sym, p: p)
+    mock_inst.fetch_balance = AsyncMock(return_value={"total": {"USDT": 1500.0}, "free": {"USDT": 1500.0}, "used": {}})
+    mock_inst.fetch_positions = AsyncMock(
+        return_value=(
+            [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "contracts": abs(position_amount),
+                    "side": "long" if position_amount > 0 else "short",
+                    "entryPrice": 84708.8,
+                }
+            ]
+            if position_amount != 0
+            else []
+        )
+    )
+    mock_inst.create_order = AsyncMock(return_value={"id": "abc", "status": "closed", "filled": 0.02, "price": 84500.0})
+    return mock_inst
+
+
 @pytest.mark.asyncio
 async def test_live_exchange_place_order_forwards_perp_symbol_to_ccxt():
     """LiveExchange.place_order calls create_order with the perp canonical."""
     with patch("ccxt.async_support.okx") as mock_cls:
-        mock_inst = MagicMock()
-        mock_inst.load_markets = AsyncMock()
-        mock_inst.markets = {
-            "BTC/USDT:USDT": {"limits": {"amount": {"min": 0.001}}},
-        }
-        mock_inst.amount_to_precision = MagicMock(side_effect=lambda _sym, a: a)
-        mock_inst.price_to_precision = MagicMock(side_effect=lambda _sym, p: p)
-        mock_inst.fetch_balance = AsyncMock(
-            return_value={"total": {"USDT": 1500.0}, "free": {"USDT": 1500.0}, "used": {}}
-        )
-        mock_inst.create_order = AsyncMock(
-            return_value={"id": "abc", "status": "closed", "filled": 0.02, "price": 84500.0}
-        )
+        mock_inst = _stub_okx_perp()
         mock_cls.return_value = mock_inst
 
         ex = LiveExchange("okx", "k", "s", sandbox=True, passphrase="p")
@@ -103,10 +117,80 @@ async def test_live_exchange_place_order_forwards_perp_symbol_to_ccxt():
 
     assert result["status"] == "closed"
     args, _kwargs = mock_inst.create_order.call_args
-    # ccxt create_order positional args: (symbol, type, side, amount, price)
+    # ccxt create_order positional args: (symbol, type, side, amount, price, params)
     assert args[0] == "BTC/USDT:USDT", "ccxt receives the perp canonical symbol verbatim"
     assert args[2] == "sell"
     assert args[3] == 0.02
+
+
+@pytest.mark.asyncio
+async def test_perp_close_passes_pos_side_long_for_existing_long():
+    """Closing an open long perp must send posSide=long (OKX sCode 51000 fix)."""
+    with patch("ccxt.async_support.okx") as mock_cls:
+        mock_inst = _stub_okx_perp(position_amount=0.02)
+        mock_cls.return_value = mock_inst
+
+        ex = LiveExchange("okx", "k", "s", sandbox=True, passphrase="p")
+        order = Order(pair="BTC/USDT:USDT", side="sell", amount=0.02, price=84500.0, order_type="market")
+        await ex.place_order(order)
+
+    args, _ = mock_inst.create_order.call_args
+    # ccxt positional: (symbol, type, side, amount, price, params)
+    assert len(args) == 6, "params dict must be passed positionally"
+    assert args[5] == {"posSide": "long"}, f"expected posSide=long, got {args[5]}"
+
+
+@pytest.mark.asyncio
+async def test_perp_close_passes_pos_side_short_for_existing_short():
+    """Closing an open short perp must send posSide=short."""
+    with patch("ccxt.async_support.okx") as mock_cls:
+        mock_inst = _stub_okx_perp(position_amount=-0.05)
+        mock_cls.return_value = mock_inst
+
+        ex = LiveExchange("okx", "k", "s", sandbox=True, passphrase="p")
+        order = Order(pair="BTC/USDT:USDT", side="buy", amount=0.05, price=84500.0, order_type="market")
+        await ex.place_order(order)
+
+    args, _ = mock_inst.create_order.call_args
+    assert args[5] == {"posSide": "short"}
+
+
+@pytest.mark.asyncio
+async def test_perp_open_with_no_existing_position_infers_pos_side_from_side():
+    """Opening a new perp position derives posSide from order.side (buy→long, sell→short)."""
+    with patch("ccxt.async_support.okx") as mock_cls:
+        mock_inst = _stub_okx_perp(position_amount=0.0)
+        mock_cls.return_value = mock_inst
+
+        ex = LiveExchange("okx", "k", "s", sandbox=True, passphrase="p")
+        order = Order(pair="BTC/USDT:USDT", side="buy", amount=0.01, price=84500.0, order_type="market")
+        await ex.place_order(order)
+
+    args, _ = mock_inst.create_order.call_args
+    assert args[5] == {"posSide": "long"}, "buy with no existing position → posSide=long"
+
+
+@pytest.mark.asyncio
+async def test_spot_order_does_not_send_pos_side():
+    """Spot orders don't get a posSide param (only perp/swap need it)."""
+    with patch("ccxt.async_support.okx") as mock_cls:
+        mock_inst = MagicMock()
+        mock_inst.load_markets = AsyncMock()
+        mock_inst.markets = {"BTC/USDT": {"limits": {"amount": {"min": 0.0001}}}}
+        mock_inst.amount_to_precision = MagicMock(side_effect=lambda _sym, a: a)
+        mock_inst.price_to_precision = MagicMock(side_effect=lambda _sym, p: p)
+        mock_inst.fetch_balance = AsyncMock(
+            return_value={"total": {"USDT": 1500.0, "BTC": 0.5}, "free": {}, "used": {}}
+        )
+        mock_inst.create_order = AsyncMock(return_value={"id": "abc", "status": "closed"})
+        mock_cls.return_value = mock_inst
+
+        ex = LiveExchange("okx", "k", "s", sandbox=True, passphrase="p")
+        order = Order(pair="BTC/USDT", side="sell", amount=0.01, price=84500.0, order_type="market")
+        await ex.place_order(order)
+
+    args, _ = mock_inst.create_order.call_args
+    assert args[5] == {}, f"spot must pass empty params, got {args[5]}"
 
 
 @pytest.mark.asyncio

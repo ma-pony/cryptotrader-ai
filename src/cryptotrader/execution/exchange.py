@@ -116,6 +116,15 @@ class LiveExchange:
         if min_amount and float(amount) < min_amount:
             raise ValueError(f"Order amount {amount} below minimum {min_amount}")
 
+        # OKX perp/swap (and similar derivative venues) require ``posSide`` in
+        # long_short position mode. Without it OKX returns sCode=51000
+        # "Parameter posSide error". Derive it from the existing position when
+        # one exists (we're closing or adjusting), else infer from order.side.
+        # Spot trades skip this (params remains empty).
+        params: dict[str, Any] = {}
+        if pair.market_type != "spot":
+            params["posSide"] = await self._derive_pos_side(order)
+
         result = await self._retry(
             self._exchange.create_order,
             order.pair,
@@ -123,6 +132,7 @@ class LiveExchange:
             order.side,
             float(amount),
             float(price) if order.order_type == "limit" else None,
+            params,
         )
 
         # Order timeout: cancel if not filled
@@ -135,6 +145,32 @@ class LiveExchange:
                 result = await self._wait_or_cancel(order_id, order.pair, wait_seconds=wait_s)
 
         return result
+
+    async def _derive_pos_side(self, order: Order) -> str:
+        """Return ``posSide`` for an OKX-style perp order.
+
+        - If a position already exists for this pair, use its side
+          (closing long → posSide=long, closing short → posSide=short).
+          Same rule covers "add to existing" since posSide stays the same.
+        - If no position exists (new entry), infer from ``order.side``:
+          buy → long, sell → short.
+
+        Falls back to side-inference if the position lookup raises so that
+        a transient venue error does not block order placement entirely.
+        """
+        try:
+            positions = await self.get_positions()
+        except Exception:
+            logger.debug("derive_pos_side: get_positions failed, using side-inference", exc_info=True)
+            return "long" if order.side == "buy" else "short"
+
+        existing = positions.get(order.pair) or {}
+        amount = existing.get("amount", 0)
+        if amount > 0:
+            return "long"
+        if amount < 0:
+            return "short"
+        return "long" if order.side == "buy" else "short"
 
     async def _wait_or_cancel(self, order_id: str, pair: str, wait_seconds: int = 30) -> dict:
         for _ in range(wait_seconds // 2):
