@@ -178,3 +178,16 @@ class Pair:
         _, _, tail = self.ccxt_symbol.partition(":")
         settle, _, _ = tail.partition("-")
         return settle or None
+
+
+def market_type_for(pair: str) -> str:
+    """Derive market_type from a pair str. Defaults to ``"spot"`` on parse failure
+    so unknown legacy data never blocks a write — matches DB column DEFAULTs.
+
+    Shared helper to avoid the duplicate definitions previously in
+    portfolio/manager.py and journal/store.py (review-code A1).
+    """
+    try:
+        return Pair.parse(pair).market_type
+    except (ValueError, NotImplementedError):
+        return "spot"

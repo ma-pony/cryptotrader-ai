@@ -10,6 +10,7 @@ from typing import Any
 
 from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.models import ConsensusMetrics, DecisionCommit, NodeTraceEntry
+from cryptotrader.pair import market_type_for as _market_type_for
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +33,6 @@ def _to_node_trace_entries(raw: list) -> list[NodeTraceEntry]:
             )
         )
     return out
-
-
-def _market_type_for(pair: str) -> str:
-    """Derive market_type from a pair str. Defaults to 'spot' on parse failure
-    so unknown legacy data never blocks a write — matches the column DEFAULT."""
-    from cryptotrader.pair import Pair
-
-    try:
-        return Pair.parse(pair).market_type
-    except (ValueError, NotImplementedError):
-        return "spot"
 
 
 # Track which URLs have had their schema initialised

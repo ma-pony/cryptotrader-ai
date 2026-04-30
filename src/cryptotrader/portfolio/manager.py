@@ -9,22 +9,12 @@ from typing import TYPE_CHECKING, Any
 
 from cryptotrader._compat import UTC
 from cryptotrader.db import get_async_session, get_engine
+from cryptotrader.pair import market_type_for as _market_type_for
 
 if TYPE_CHECKING:
     from cryptotrader.state import ArenaState
 
 logger = logging.getLogger(__name__)
-
-
-def _market_type_for(pair: str) -> str:
-    """Derive market_type from a pair str. Defaults to 'spot' on parse failure
-    so unknown legacy data never blocks a write — matches the column DEFAULT."""
-    from cryptotrader.pair import Pair
-
-    try:
-        return Pair.parse(pair).market_type
-    except (ValueError, NotImplementedError):
-        return "spot"
 
 
 # Track which URLs have had their schema initialised
