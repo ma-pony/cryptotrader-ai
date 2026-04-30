@@ -14,6 +14,7 @@ import structlog
 from cryptotrader._compat import UTC
 from cryptotrader.config import HitlConfig, load_config
 from cryptotrader.hitl.store import ApprovalStore
+from cryptotrader.state import get_pair
 
 logger = logging.getLogger(__name__)
 _slog = structlog.get_logger(__name__)
@@ -88,8 +89,6 @@ async def hitl_gate(state: dict[str, Any]) -> dict:
 
     if not should:
         return {"hitl": {"skipped": True, "decision": "approve"}}
-
-    from cryptotrader.state import get_pair
 
     data = state.get("data") or {}
     verdict = data.get("verdict") or {}

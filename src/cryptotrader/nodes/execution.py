@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from cryptotrader.portfolio.manager import read_portfolio_from_exchange
-from cryptotrader.state import ArenaState
+from cryptotrader.state import ArenaState, get_pair
 from cryptotrader.tracing import node_logger
 
 # Re-export for callers that already import read_portfolio_from_exchange
@@ -291,7 +291,6 @@ async def check_stop_loss(state: ArenaState) -> dict:
     Triggers automatic exit when:
     - Unrealized loss exceeds max_stop_loss_pct (default 5%)
     """
-    from cryptotrader.state import get_pair
 
     pair = get_pair(state).canonical()
     price = state["data"].get("snapshot_summary", {}).get("price", 0)
@@ -416,7 +415,6 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
 async def place_order(state: ArenaState) -> dict:
     """Place order via exchange (paper or live)."""
     from cryptotrader.nodes.verdict import _get_notifier
-    from cryptotrader.state import get_pair
 
     verdict = state["data"]["verdict"]
     if verdict["action"] == "hold":

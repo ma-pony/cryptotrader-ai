@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from cryptotrader._compat import UTC
 from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.pair import market_type_for as _market_type_for
+from cryptotrader.state import get_pair
 
 if TYPE_CHECKING:
     from cryptotrader.state import ArenaState
@@ -356,7 +357,6 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
     # All cross-layer imports inside nodes.execution are already lazy, so this
     # late binding is safe and consistent with the existing pattern.
     from cryptotrader.nodes.execution import _get_exchange
-    from cryptotrader.state import get_pair
 
     try:
         pair = get_pair(state).canonical()

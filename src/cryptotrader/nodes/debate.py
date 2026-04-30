@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.agents.base import create_llm, extract_content
-from cryptotrader.state import ArenaState
+from cryptotrader.state import ArenaState, get_pair
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
@@ -158,8 +158,6 @@ async def debate_round(state: ArenaState) -> dict:
     _default_debate_model = _dcfg.models.debate or _dcfg.models.fallback
     model = state["metadata"].get("debate_model", _default_debate_model)
     timeout_seconds: float = _dcfg.models.timeout_seconds
-
-    from cryptotrader.state import get_pair
 
     # AI prompt — use Pair.display() for human-readable form ("BTC/USDT (perp)")
     # so the LLM understands market type context (FR-202, T020).
@@ -367,7 +365,6 @@ async def judge_verdict(state: ArenaState) -> dict:
     """Judge evaluates bull/bear debate and issues verdict."""
     from cryptotrader.config import load_config as _load_config
     from cryptotrader.debate.researchers import judge_debate
-    from cryptotrader.state import get_pair
 
     debate = state["data"]["debate"]
     # AI prompt — use display() form per FR-202 / T020

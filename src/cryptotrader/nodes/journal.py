@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from cryptotrader.state import ArenaState
+from cryptotrader.state import ArenaState, get_pair
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
@@ -155,7 +155,6 @@ async def journal_trade(state: ArenaState) -> dict:
         from cryptotrader.journal.commit import build_commit
         from cryptotrader.journal.store import JournalStore
         from cryptotrader.models import GateResult, Order, TradeVerdict
-        from cryptotrader.state import get_pair
         from cryptotrader.tracing import get_trace_id
 
         db_url = state["metadata"].get("database_url")
@@ -235,7 +234,6 @@ async def journal_rejection(state: ArenaState) -> dict:
         from cryptotrader.journal.store import JournalStore
         from cryptotrader.models import GateResult, TradeVerdict
         from cryptotrader.nodes.verdict import _get_notifier
-        from cryptotrader.state import get_pair
         from cryptotrader.tracing import get_trace_id
 
         db_url = state["metadata"].get("database_url")

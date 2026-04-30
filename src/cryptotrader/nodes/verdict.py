@@ -8,7 +8,7 @@ from typing import Any
 import structlog
 
 from cryptotrader.metrics import get_metrics_collector
-from cryptotrader.state import ArenaState
+from cryptotrader.state import ArenaState, get_pair
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
@@ -61,8 +61,6 @@ async def _gather_risk_constraints(state: ArenaState) -> dict:
     redis_url = state["metadata"].get("redis_url")
     redis_state = RedisStateManager(redis_url)
     try:
-        from cryptotrader.state import get_pair
-
         constraints["circuit_breaker_active"] = await redis_state.is_circuit_breaker_active()
         pair = get_pair(state).canonical()
         cooldown_val = await redis_state.get(f"cooldown:{pair}")
@@ -259,8 +257,6 @@ async def _process_schedule_follow_up(state: ArenaState, verdict_data: dict) -> 
         session_factory = partial(get_async_session, config.infrastructure.database_url)
         store = TriggerRuleStore(session_factory)
 
-        from cryptotrader.state import get_pair
-
         ttl_hours = min(int(follow_up.get("ttl_hours", 24)), 72)
         pair_str = get_pair(state).canonical()
         await store.create_rule(
@@ -343,7 +339,6 @@ async def _measure_api_latency(state: ArenaState) -> int:
     import time
 
     from cryptotrader.nodes.execution import _get_exchange
-    from cryptotrader.state import get_pair
 
     pair = get_pair(state).canonical()
     try:
@@ -360,7 +355,6 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
     """Assemble the portfolio dict for risk checks. Returns None when the live exchange
     reports zero balance and trading must be rejected upstream."""
     from cryptotrader.portfolio.manager import PortfolioManager, read_portfolio_from_exchange
-    from cryptotrader.state import get_pair
 
     recent_prices, returns_daily = _extract_ohlcv_returns(state)
     exchange_portfolio = await read_portfolio_from_exchange(state)
@@ -402,8 +396,6 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
 
 
 def _log_risk_outcome(state: ArenaState, result, vd_action: str) -> None:
-    from cryptotrader.state import get_pair
-
     pair_str = get_pair(state).canonical()
     if result.passed:
         logger.info("Risk gate PASSED for %s (action=%s)", pair_str, vd_action)
@@ -460,8 +452,6 @@ async def risk_check(state: ArenaState) -> dict:
 
     result = await gate.check(verdict, portfolio)
     _log_risk_outcome(state, result, verdict.action)
-
-    from cryptotrader.state import get_pair
 
     pair_str = get_pair(state).canonical()
 

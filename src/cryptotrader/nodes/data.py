@@ -6,7 +6,7 @@ import hashlib
 import json
 import logging
 
-from cryptotrader.state import ArenaState
+from cryptotrader.state import ArenaState, get_pair
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,6 @@ async def collect_snapshot(state: ArenaState) -> dict:
 
     from cryptotrader.config import load_config
     from cryptotrader.data.snapshot import SnapshotAggregator
-    from cryptotrader.state import get_pair
 
     pair = get_pair(state).canonical()
     exchange_id = state["metadata"].get("exchange_id", "binance")
@@ -168,8 +167,6 @@ async def update_past_pnl(state: ArenaState) -> dict:
     # Skip in backtest mode — no real journal to update, and would corrupt live data
     if state["metadata"].get("backtest_mode"):
         return {"data": {}}
-
-    from cryptotrader.state import get_pair
 
     db_url = state["metadata"].get("database_url")
     store = JournalStore(db_url)
@@ -352,8 +349,6 @@ async def enrich_verdict_context(state: ArenaState) -> dict:
         # Already set by caller (e.g., backtest script) — keep it
         pass
     else:
-        from cryptotrader.state import get_pair
-
         try:
             pair = get_pair(state).canonical()
         except (KeyError, TypeError, ValueError):
