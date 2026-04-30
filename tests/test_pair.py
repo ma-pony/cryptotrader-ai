@@ -194,6 +194,12 @@ class TestRoundTrip:
         assert p1 == p2
         assert p1.canonical() == symbol
 
+    def test_parse_rejects_oversized_input(self) -> None:
+        """spec 014 followup: bound caller-controlled pair string at 64 chars."""
+        oversized = "BTC/" + ("X" * 200)
+        with pytest.raises(ValueError, match="too long"):
+            Pair.parse(oversized)
+
 
 # ── ccxt symbol shapes per exchange (FR-010) ──────────────────────────────
 

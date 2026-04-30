@@ -21,6 +21,11 @@ logger = logging.getLogger(__name__)
 
 MarketType = Literal["spot", "swap", "future", "option"]
 
+# Longest realistic ccxt unified symbol is futures delivery like
+# "1000PEPE/USDT:USDT-241227" = 25 chars. 64 leaves generous headroom and
+# bounds the heap cost of any caller-controlled pair string (DoS guard).
+_MAX_PAIR_LEN = 64
+
 
 @dataclass(frozen=True)
 class Pair:
@@ -78,6 +83,8 @@ class Pair:
         """
         if not s or "/" not in s:
             raise ValueError(f"Pair.parse: missing '/' in {s!r}")
+        if len(s) > _MAX_PAIR_LEN:
+            raise ValueError(f"Pair.parse: input too long ({len(s)} > {_MAX_PAIR_LEN})")
         # Spot: "BTC/USDT" → base="BTC", quote="USDT"
         # Swap: "BTC/USDT:USDT" → base="BTC", quote="USDT", suffix="USDT"
         # Future: "BTC/USDT:USDT-241227" → quote tail before ':'
