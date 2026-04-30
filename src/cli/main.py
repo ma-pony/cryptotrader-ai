@@ -46,8 +46,7 @@ def run(
 
 async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = "full"):
     from cryptotrader.config import load_config
-    from cryptotrader.graph import ArenaState, build_debate_graph, build_lite_graph, build_trading_graph
-    from cryptotrader.tracing import set_trace_id
+    from cryptotrader.graph import build_debate_graph, build_lite_graph, build_trading_graph
 
     config = load_config()
     if not exchange_id:
@@ -71,13 +70,30 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
         if creds.sandbox:
             console.print("[yellow]WARNING: Running in SANDBOX mode (sandbox=true in config)[/yellow]")
 
+    # Cleanup hook — runs on every exit path so the cached LiveExchange (ccxt
+    # async aiohttp connector) gets explicitly closed. Without this, every
+    # `arena run --mode live` exit logs an aiohttp "Unclosed connector" warning
+    # and a deque of dangling ResponseHandlers.
+    try:
+        await _run_pairs_loop(pairs, mode, exchange_id, graph, config)
+    finally:
+        from cryptotrader.nodes.execution import close_live_exchanges
+
+        await close_live_exchanges()
+
+
+async def _run_pairs_loop(pairs, mode, exchange_id, graph, config):
+    from cryptotrader.tracing import set_trace_id
+
     for pair in pairs:
         trace_id = set_trace_id()
         console.print(
             f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
         )
 
-        initial: ArenaState = {
+        # ArenaState is a TypedDict (type-only annotation); the dict literal
+        # below satisfies it structurally without an explicit annotation.
+        initial = {
             "messages": [],
             "data": {},
             "metadata": {

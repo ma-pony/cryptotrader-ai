@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  macOS launchd plist for the CryptoTrader scheduler.
+
+  Why: `arena scheduler start` is a foreground process. When run from a
+  terminal it dies on Ctrl-C, ssh disconnect, terminal close, or sleep.
+  This plist makes launchd own the process: KeepAlive=true restarts it
+  immediately on any non-zero exit; ThrottleInterval=30 prevents tight
+  crash loops.
+
+  Install (once):
+    cp scripts/com.cryptotrader.scheduler.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.cryptotrader.scheduler.plist
+    launchctl enable gui/$UID/com.cryptotrader.scheduler
+
+  Stop / start / restart:
+    launchctl kickstart -k gui/$UID/com.cryptotrader.scheduler   # restart
+    launchctl bootout   gui/$UID/com.cryptotrader.scheduler      # stop+unload
+
+  Status:
+    launchctl print gui/$UID/com.cryptotrader.scheduler | head
+
+  Logs (rotated by macOS, ~50MB cap):
+    tail -f /tmp/cryptotrader-scheduler.log
+    tail -f /tmp/cryptotrader-scheduler.err
+
+  IMPORTANT: this plist hardcodes the working directory and the absolute
+  path to `uv`. If you move the repo or reinstall uv, regenerate or edit
+  manually. Both paths are pinned because launchd starts with a sparse
+  PATH that does NOT include $HOME/.local/bin.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.cryptotrader.scheduler</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/rccpony/.local/bin/uv</string>
+    <string>run</string>
+    <string>arena</string>
+    <string>scheduler</string>
+    <string>start</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>/Users/rccpony/Projects/cryptotrader-ai</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <true/>
+
+  <!-- Wait 30s between restart attempts to avoid crash-loop hammering -->
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/cryptotrader-scheduler.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/tmp/cryptotrader-scheduler.err</string>
+
+  <!-- Inherit user's locale + add common bin paths so uv finds python etc. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/Users/rccpony/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    <key>HOME</key>
+    <string>/Users/rccpony</string>
+    <key>LANG</key>
+    <string>en_US.UTF-8</string>
+  </dict>
+</dict>
+</plist>
