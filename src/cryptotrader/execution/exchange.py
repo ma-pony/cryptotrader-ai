@@ -147,8 +147,36 @@ class LiveExchange:
         bal = await self._retry(self._exchange.fetch_balance)
         return {k: float(v) for k, v in bal.get("total", {}).items() if float(v) > 0}
 
+    def _canonical_pair(self, ccxt_symbol: str) -> str:
+        """Return the project's canonical ``BASE/QUOTE`` pair for any ccxt symbol.
+
+        ccxt's unified symbol for derivatives is ``BASE/QUOTE:SETTLE`` (e.g.
+        ``BTC/USDT:USDT``); the rest of this codebase — config, state metadata,
+        DB ``portfolios`` table, journal — uses the spot form ``BASE/QUOTE``.
+        We pick one canonical form at this boundary so every downstream
+        ``positions.get(pair)`` lookup matches. The conversion is derived from
+        ccxt's market metadata (``base`` + ``quote``) rather than string
+        surgery so the intent is explicit: "ask ccxt for the underlying
+        instrument's base/quote".
+        """
+        try:
+            m = self._exchange.market(ccxt_symbol)
+            base = m.get("base") or ""
+            quote = m.get("quote") or ""
+            if base and quote:
+                return f"{base}/{quote}"
+        except Exception:
+            logger.debug("market() lookup failed for %s; falling back to symbol prefix", ccxt_symbol, exc_info=True)
+        # Fallback only if ccxt has no market metadata — strip suffix.
+        return ccxt_symbol.split(":", 1)[0] if ccxt_symbol else ccxt_symbol
+
     async def get_positions(self) -> dict[str, dict[str, Any]]:
-        """Fetch open positions from exchange.
+        """Fetch open positions, keyed by the project's canonical pair format.
+
+        Single boundary, single canonical key: this is the only place ccxt
+        derivatives symbols enter the system, and ``_canonical_pair`` reduces
+        each one to ``BASE/QUOTE`` so every downstream caller sees the same
+        key as ``state["metadata"]["pair"]`` and ``config.scheduler.pairs``.
 
         Returns: {pair: {"amount": float, "side": str, "avg_price": float,
                          "unrealized_pnl": float, "liquidation_price": float | None}}
@@ -162,9 +190,36 @@ class LiveExchange:
                 if contracts == 0:
                     continue
                 symbol = p.get("symbol", "")
+                pair = self._canonical_pair(symbol)
                 side = p.get("side", "long")
                 amount = contracts if side == "long" else -contracts
-                positions[symbol] = {
+                if pair in positions:
+                    # Same underlying instrument already aggregated (cross +
+                    # isolated margin, or spot + perp on the same market).
+                    # Keep the larger absolute size and warn so the divergence
+                    # is visible in logs.
+                    existing = abs(positions[pair].get("amount", 0) or 0)
+                    if abs(amount) > existing:
+                        logger.warning(
+                            "ccxt position pair collision after canonicalization: %s overrides existing entry for %s",
+                            symbol,
+                            pair,
+                        )
+                        positions[pair] = {
+                            "amount": amount,
+                            "side": side,
+                            "avg_price": float(p.get("entryPrice", 0) or 0),
+                            "unrealized_pnl": float(p.get("unrealizedPnl", 0) or 0),
+                            "liquidation_price": float(p["liquidationPrice"]) if p.get("liquidationPrice") else None,
+                        }
+                    else:
+                        logger.warning(
+                            "ccxt position pair collision after canonicalization: %s ignored, existing %s entry kept",
+                            symbol,
+                            pair,
+                        )
+                    continue
+                positions[pair] = {
                     "amount": amount,
                     "side": side,
                     "avg_price": float(p.get("entryPrice", 0) or 0),
