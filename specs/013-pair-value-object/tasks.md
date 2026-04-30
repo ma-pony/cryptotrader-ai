@@ -48,8 +48,8 @@
 
 ### US1 Phase 3a — Adapter Layer
 
-- [ ] T011 [US1] Create `src/cryptotrader/pair_adapter.py` with `to_pair(s_or_pair) -> Pair` + `from_pair(p_or_str) -> str` helpers; documents intent for nodes still on str
-- [ ] T012 [US1] [P] Add `tests/test_pair_adapter.py` covering str/Pair round-trip + idempotency
+- [X] T011 [US1] Create `src/cryptotrader/pair_adapter.py` with `to_pair(s_or_pair) -> Pair` + `from_pair(p_or_str) -> str` helpers; documents intent for nodes still on str
+- [X] T012 [US1] [P] Add `tests/test_pair_adapter.py` covering str/Pair round-trip + idempotency — 14 tests pass
 
 ### US1 Phase 3b — verdict + execution Switch to Pair
 
