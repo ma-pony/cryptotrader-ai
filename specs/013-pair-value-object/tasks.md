@@ -99,10 +99,10 @@
 
 依赖：T002-T010 (Pair + config) 已完成；不依赖 US1/US2 implementation。
 
-- [ ] T028 [US3] Create alembic migration `migrations/versions/XXXX_add_market_type.py` per data-model.md schema; only `op.add_column` no row updates (D5)
-- [ ] T029 [US3] Update `src/cryptotrader/portfolio/manager.py` SQLAlchemy `Portfolio` ORM model + `PortfolioSnapshot` (if applicable) to include `market_type` column
-- [ ] T030 [US3] Update `src/cryptotrader/journal/store.py` `_serialize` to write `market_type = pair.market_type`; `_deserialize` to round-trip via `Pair.parse(pair_str)` (FR-403)
-- [ ] T031 [US3] [P] Add `tests/test_us3_journal_market_type.py` covering double-write of market_type, downgrade idempotency, legacy row default value
+- [X] T028 [US3] No alembic — project uses inline `Base.metadata.create_all` + ALTER TABLE ADD COLUMN IF NOT EXISTS / SQLite-PRAGMA pattern (see journal/store.py). Migration applied via `_pm_ensure_tables` (portfolio) and `_OBSERVABILITY_COLUMNS` (decision_commits): `market_type VARCHAR(20) NOT NULL DEFAULT 'spot'`
+- [X] T029 [US3] `Portfolio` ORM gets `market_type` column; `update_position` derives via `_market_type_for(pair)` (uses `Pair.parse(pair).market_type`); `get_portfolio` returns market_type in positions dict
+- [X] T030 [US3] `journal/store.py` `_dc_to_row_dict` writes `market_type` from `_market_type_for(dc.pair)`; `_row_to_dc` ignores column (DecisionCommit dataclass derives from pair on read)
+- [X] T031 [US3] [P] `tests/test_us3_journal_market_type.py` — 12 tests cover derivation (spot/swap/inverse), bad pair fallback, ORM column presence, default 'spot', migration list inclusion, dc_to_row_dict serialization
 
 **Checkpoint US3**: DB schema bump 完成；新 commit 含 market_type；存量 row 自动 spot。
 

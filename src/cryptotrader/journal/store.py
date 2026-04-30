@@ -34,6 +34,17 @@ def _to_node_trace_entries(raw: list) -> list[NodeTraceEntry]:
     return out
 
 
+def _market_type_for(pair: str) -> str:
+    """Derive market_type from a pair str. Defaults to 'spot' on parse failure
+    so unknown legacy data never blocks a write — matches the column DEFAULT."""
+    from cryptotrader.pair import Pair
+
+    try:
+        return Pair.parse(pair).market_type
+    except (ValueError, NotImplementedError):
+        return "spot"
+
+
 # Track which URLs have had their schema initialised
 _table_ready: set[str] = set()
 
@@ -82,6 +93,8 @@ def _sa_models():
         # Spec: frontend-prototype-alignment (2026-04-24)
         latency_breakdown = Column(JSONB, nullable=False, default={})
         token_usage = Column(JSONB, nullable=False, default={})
+        # Spec 013: market_type derived from pair (Pair.parse(pair).market_type)
+        market_type = Column(String(20), nullable=False, default="spot")
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
@@ -96,6 +109,8 @@ _OBSERVABILITY_COLUMNS = [
     ("debate_skip_reason", "VARCHAR(500)", "NOT NULL DEFAULT ''"),
     ("latency_breakdown", "JSONB", "NOT NULL DEFAULT '{}'"),
     ("token_usage", "JSONB", "NOT NULL DEFAULT '{}'"),
+    # Spec 013: market_type column for distinguishing spot vs derivatives commits.
+    ("market_type", "VARCHAR(20)", "NOT NULL DEFAULT 'spot'"),
 ]
 
 
@@ -269,6 +284,9 @@ class JournalStore:
             "debate_skip_reason": dc.debate_skip_reason,
             "latency_breakdown": d.get("latency_breakdown") or {},
             "token_usage": d.get("token_usage") or {},
+            # Spec 013: derived from pair string at write time. Falls back to
+            # 'spot' on parse failure so legacy / malformed pairs don't reject.
+            "market_type": _market_type_for(dc.pair),
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:

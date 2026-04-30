@@ -15,6 +15,18 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def _market_type_for(pair: str) -> str:
+    """Derive market_type from a pair str. Defaults to 'spot' on parse failure
+    so unknown legacy data never blocks a write — matches the column DEFAULT."""
+    from cryptotrader.pair import Pair
+
+    try:
+        return Pair.parse(pair).market_type
+    except (ValueError, NotImplementedError):
+        return "spot"
+
+
 # Track which URLs have had their schema initialised
 _pm_table_ready: set[str] = set()
 
@@ -37,6 +49,9 @@ def _pm_models():
         __tablename__ = "portfolios"
         id = Column(String, primary_key=True)
         pair = Column(String(20), nullable=False)
+        # spec 013: market_type is derived from pair via Pair.parse(pair).market_type
+        # Default 'spot' keeps legacy rows backward-compatible.
+        market_type = Column(String(20), nullable=False, default="spot")
         amount = Column(Float, default=0.0)
         avg_price = Column(Float, default=0.0)
         updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
@@ -60,12 +75,34 @@ def _pm_models():
 
 
 async def _pm_ensure_tables(database_url: str) -> None:
-    """Create portfolio schema on first call per database URL."""
+    """Create portfolio schema on first call per database URL.
+
+    Mirrors the pattern in journal/store.py: ``create_all`` only adds new
+    tables, not new columns. spec-013 added ``portfolios.market_type``
+    after some deployments already had the table — backfill it here.
+    """
+    from sqlalchemy import text
+
     if database_url not in _pm_table_ready:
         Base, _, _, _ = _pm_models()
         engine = await get_engine(database_url)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
+            dialect = conn.dialect.name
+            if dialect == "postgresql":
+                await conn.execute(
+                    text(
+                        "ALTER TABLE portfolios "
+                        "ADD COLUMN IF NOT EXISTS market_type VARCHAR(20) NOT NULL DEFAULT 'spot'"
+                    )
+                )
+            elif dialect == "sqlite":
+                result = await conn.execute(text("PRAGMA table_info(portfolios)"))
+                existing = {row[1] for row in result.fetchall()}
+                if "market_type" not in existing:
+                    await conn.execute(
+                        text("ALTER TABLE portfolios ADD COLUMN market_type VARCHAR(20) NOT NULL DEFAULT 'spot'")
+                    )
         _pm_table_ready.add(database_url)
 
 
@@ -95,7 +132,11 @@ class PortfolioManager:
                 async with await _pm_session(self._db_url) as session:
                     rows = await session.execute(select(Portfolio).where(Portfolio.id.startswith(f"{account_id}:")))
                     for r in rows.scalars():
-                        positions[r.pair] = {"amount": r.amount, "avg_price": r.avg_price}
+                        positions[r.pair] = {
+                            "amount": r.amount,
+                            "avg_price": r.avg_price,
+                            "market_type": r.market_type or "spot",
+                        }
                     # Load cash
                     acct = (
                         await session.execute(select(AccountBalance).where(AccountBalance.id == account_id))
@@ -122,6 +163,7 @@ class PortfolioManager:
         }
 
     async def update_position(self, account_id: str, pair: str, amount: float, price: float) -> None:
+        market_type = _market_type_for(pair)
         if self._db_url:
             try:
                 _, Portfolio, _, _ = _pm_models()
@@ -133,16 +175,19 @@ class PortfolioManager:
                     if row:
                         row.amount = amount
                         row.avg_price = price
+                        row.market_type = market_type
                         row.updated_at = datetime.now(UTC)
                     else:
-                        session.add(Portfolio(id=key, pair=pair, amount=amount, avg_price=price))
+                        session.add(
+                            Portfolio(id=key, pair=pair, market_type=market_type, amount=amount, avg_price=price)
+                        )
                     await session.commit()
                 return
             except Exception as e:
                 logger.warning("DB position update failed: %s", e)
         if account_id not in self._memory:
             self._memory[account_id] = {}
-        self._memory[account_id][pair] = {"amount": amount, "avg_price": price}
+        self._memory[account_id][pair] = {"amount": amount, "avg_price": price, "market_type": market_type}
 
     async def update_cash(self, account_id: str = "default", cash: float = 0.0) -> None:
         """Persist current cash balance."""
