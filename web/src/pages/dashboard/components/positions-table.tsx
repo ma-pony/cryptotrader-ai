@@ -2,6 +2,7 @@ import { ChevronRight } from 'lucide-react';
 import { memo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { PairBadge } from '@/components/PairBadge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DirChip } from '@/components/ui/dir-chip';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -28,7 +29,11 @@ interface PositionRowProps {
 }
 
 const PositionRow = memo(function PositionRow({ pos }: PositionRowProps) {
-  const pairKey = pos.pair.replace('/', '');
+  // Strip ccxt derivative suffix and the slash → "BTC/USDT:USDT" → "BTCUSDT"
+  // for ticker subscription (spec 013: only spot tickers exist on the WS feed).
+  const colon = pos.pair.indexOf(':');
+  const spotPair = colon === -1 ? pos.pair : pos.pair.slice(0, colon);
+  const pairKey = spotPair.replace('/', '');
   const { tickerData } = useMarketDataWS(pairKey);
 
   let pnl = pos.unrealized_pnl;
@@ -51,10 +56,10 @@ const PositionRow = memo(function PositionRow({ pos }: PositionRowProps) {
     <div
       className={cn(
         'grid items-center gap-3 border-b border-border px-4 py-3 transition-colors hover:bg-muted/40',
-        'grid-cols-[minmax(92px,92px)_minmax(72px,72px)_1fr_minmax(90px,90px)_minmax(90px,90px)_minmax(24px,24px)]',
+        'grid-cols-[minmax(140px,140px)_minmax(72px,72px)_1fr_minmax(90px,90px)_minmax(90px,90px)_minmax(24px,24px)]',
       )}
     >
-      <div className="font-mono text-xs font-medium">{pos.pair}</div>
+      <PairBadge pair={pos.pair} pairDisplay={pos.pair_display} marketType={pos.market_type} />
       <DirChip dir={pos.side} />
       <div className="min-w-0">
         <div className="truncate text-xs text-muted-foreground">
@@ -144,7 +149,7 @@ export const PositionsTable = ({ positions, isLoading }: PositionsTableProps) =>
             <div
               className={cn(
                 'grid items-center gap-3 border-b border-border bg-muted/30 px-4 py-2',
-                'grid-cols-[minmax(92px,92px)_minmax(72px,72px)_1fr_minmax(90px,90px)_minmax(90px,90px)_minmax(24px,24px)]',
+                'grid-cols-[minmax(140px,140px)_minmax(72px,72px)_1fr_minmax(90px,90px)_minmax(90px,90px)_minmax(24px,24px)]',
                 'text-[10px] uppercase tracking-wider font-medium text-muted-foreground',
               )}
             >

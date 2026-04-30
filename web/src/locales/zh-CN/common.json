@@ -63,5 +63,13 @@
     "degraded": "数据延迟中，轮询模式",
     "degraded_interval": "数据延迟中，当前轮询间隔 {{interval}}",
     "polling_mode": "轮询模式"
+  },
+  "pair": {
+    "market_type": {
+      "spot": "现货",
+      "swap": "永续",
+      "future": "交割",
+      "option": "期权"
+    }
   }
 }

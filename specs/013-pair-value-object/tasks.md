@@ -116,13 +116,13 @@
 
 依赖：T028-T031 (DB+journal) 已完成；US1 verdict pipeline 已能产生新字段。
 
-- [ ] T032 [US4] Update `src/api/routes/portfolio_v2.py` `PositionOut` Pydantic model + handler to add `pair_display` and `market_type` fields per `contracts/api_response_schema.md`
-- [ ] T033 [US4] Update `src/api/routes/decisions.py` `DecisionListItem` and detail response to add `pair_display` + `market_type` top-level fields
-- [ ] T034 [US4] [P] Add `tests/test_us4_api_pair_response.py` validating shape + values for both endpoints under spot and swap fixtures
-- [ ] T035 [US4] [P] Update `web/src/lib/api/types.ts` to mirror new fields in DTOs
-- [ ] T036 [US4] [P] Create `web/src/components/PairBadge.tsx` per `contracts/api_response_schema.md` component contract (display + colored badge by market_type)
-- [ ] T037 [US4] Wire `<PairBadge>` into `web/src/pages/dashboard/components/portfolio-positions.tsx` and `web/src/pages/decisions/decision-detail.tsx` (replace pair string render)
-- [ ] T038 [US4] [P] Add `web/tests/unit/pair-badge.test.tsx` (vitest) covering 3 market types
+- [X] T032 [US4] `api/routes/portfolio_v2.py` `PositionOut` adds `pair_display` + `market_type`; `_serialize_positions` derives both via `Pair.parse(pair)` (DB-stored `market_type` from Phase 5 wins when present)
+- [X] T033 [US4] `api/routes/decisions.py` `DecisionListItem` + `DecisionDetailOut` add `pair_display` + `market_type`; new `_pair_meta(pair)` helper centralizes derivation
+- [X] T034 [US4] [P] `tests/test_us4_api_pair_response.py` — 12 tests cover shape, derivation across spot/swap/inverse, DB market_type preference, malformed-pair fallback, list-item construction
+- [X] T035 [US4] [P] `web/src/types/api.schema.ts` adds `MarketTypeSchema` + `pair_display` (optional) + `market_type` (default 'spot') on PositionSchema, DecisionListItemSchema, DecisionDetailSchema
+- [X] T036 [US4] [P] `web/src/components/PairBadge.tsx` — strips ccxt suffix for compact display, shows market_type label via i18n (`common.pair.market_type.*`), tooltip preserves canonical str
+- [X] T037 [US4] `<PairBadge>` wired into `positions-table.tsx` (with WS-key spot-form derivation for perp positions) and `decision-detail-panel.tsx` heading
+- [X] T038 [US4] [P] `web/src/components/PairBadge.test.tsx` — 7 vitest cases (spot/swap/inverse/future, suffix stripping, tooltip, default) using I18nextProvider with zh-CN fixtures; common.json + en-US/common.json gain `pair.market_type.{spot,swap,future,option}` namespace
 
 **Checkpoint US4**: 前端两个 P0 视图含徽章；其他视图无回归。
 

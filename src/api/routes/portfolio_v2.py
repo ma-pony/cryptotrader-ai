@@ -27,7 +27,9 @@ _MAX_POINTS = 1000  # NFR-P-004
 
 
 class PositionOut(BaseModel):
-    pair: str
+    pair: str  # ccxt canonical: "BTC/USDT" (spot) or "BTC/USDT:USDT" (perp)
+    pair_display: str  # spec 013: human form, e.g. "BTC/USDT (perp)"
+    market_type: Literal["spot", "swap", "future", "option"] = "spot"
     side: Literal["long", "short"] = "long"
     size: float
     avg_price: float
@@ -187,6 +189,8 @@ async def _compute_extras(database_url: str | None) -> dict[str, object]:
 
 
 def _serialize_positions(raw_positions: dict) -> list[PositionOut]:
+    from cryptotrader.pair import Pair
+
     out: list[PositionOut] = []
     for pair, pos in (raw_positions or {}).items():
         if not isinstance(pos, dict):
@@ -200,9 +204,22 @@ def _serialize_positions(raw_positions: dict) -> list[PositionOut]:
         unrealized = float(pos.get("unrealized_pnl", 0.0) or 0.0)
         cost_basis = abs(amount) * avg_price
         unrealized_pct = (unrealized / cost_basis) if cost_basis > 0 else 0.0
+        # Spec 013: prefer DB-stored market_type when present (Phase 5 column);
+        # fall back to deriving from pair via Pair.parse.
+        market_type = pos.get("market_type")
+        try:
+            p_obj = Pair.parse(pair)
+            display = p_obj.display()
+            if not market_type:
+                market_type = p_obj.market_type
+        except (ValueError, NotImplementedError):
+            display = pair
+            market_type = market_type or "spot"
         out.append(
             PositionOut(
                 pair=pair,
+                pair_display=display,
+                market_type=market_type,  # type: ignore[arg-type]
                 side=side,
                 size=amount,
                 avg_price=avg_price,
