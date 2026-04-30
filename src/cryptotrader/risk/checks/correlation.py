@@ -37,8 +37,13 @@ class CorrelationCheck:
         if verdict.action == "hold":
             return CheckResult(passed=True)
 
+        from cryptotrader.pair import Pair
+
         pair = getattr(verdict, "pair", "") or ""
-        symbol = pair.split("/")[0] if "/" in pair else pair
+        try:
+            symbol = Pair.parse(pair).base
+        except (ValueError, NotImplementedError):
+            symbol = pair
         group = _find_group(symbol)
         if not group:
             return CheckResult(passed=True)
@@ -47,7 +52,10 @@ class CorrelationCheck:
         positions = portfolio.get("positions", {})
         correlated_count = 0
         for pos_pair, pos_data in positions.items():
-            pos_symbol = pos_pair.split("/")[0] if "/" in pos_pair else pos_pair
+            try:
+                pos_symbol = Pair.parse(pos_pair).base
+            except (ValueError, NotImplementedError):
+                pos_symbol = pos_pair
             amount = pos_data if isinstance(pos_data, int | float) else pos_data.get("amount", 0)
             if pos_symbol.upper() in group and amount != 0:
                 correlated_count += 1

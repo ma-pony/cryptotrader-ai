@@ -82,10 +82,10 @@
 
 依赖：US1 Phase 3a (adapter) + 3b (execution/verdict) 已完成。
 
-- [ ] T024 [US2] Audit all `\.split\("/"\)` / `\.split\(":"\)` occurrences in pair context (`rg -nE` + manual review); migrate to `Pair.parse` / `pair.base` / `pair.quote`
-- [ ] T025 [US2] Audit all `positions.get(pair)` / `positions[pair]` lookups; ensure key consistency via Pair.canonical() everywhere
-- [ ] T026 [US2] Remove `src/cryptotrader/pair_adapter.py` (T011-T012) once T024-T025 confirm no callers need str fallback
-- [ ] T027 [US2] [P] Add `tests/test_us2_no_string_split_pair.py` regression: grep for `.split("/")` in pair context returns 0 matches outside `pair.py`
+- [X] T024 [US2] All 14 `.split("/")` callsites in pair context migrated to `Pair.parse(pair).base` (or `_base_symbol(pair)` helper in `agents/data_tools.py`): `execution/simulator.py` (2), `risk/checks/correlation.py` (2), `backtest/engine.py` (2), `data/snapshot.py`, `data/news.py`, `data/onchain.py`, `agents/data_tools.py` (5). Defensive try/except keeps fallbacks for malformed input.
+- [X] T025 [US2] Phase 3b already established positions dict keyed by ccxt canonical (LiveExchange.get_positions returns symbol verbatim, _build_close_order looks up by canonical). No additional callsite migration required.
+- [X] T026 [US2] `src/cryptotrader/pair_adapter.py` + `tests/test_pair_adapter.py` deleted — verified zero callers via `rg "pair_adapter|to_pair\(|from_pair\("`.
+- [X] T027 [US2] [P] `tests/test_us2_no_string_split_pair.py` — regression: ripgrep for `.split("/")` in `src/` outside `pair.py` returns 0 matches; pair_adapter file absence asserted.
 
 **Checkpoint US2**: 散点消除完成。下次 add pair-related 代码无歧义入口。
 
@@ -132,7 +132,7 @@
 
 依据 spec FR-304 + Success Criteria。
 
-- [ ] T039 Remove `LiveExchange._canonical_pair` method from `src/cryptotrader/execution/exchange.py`; remove `tests/test_live_exchange_pair.py` (Phase 0 band-aid no longer needed)
+- [X] T039 `LiveExchange._canonical_pair` method removed in Phase 3b commit `d028de2` (verified via `grep _canonical_pair src/` → 0 matches). `tests/test_live_exchange_pair.py` retained but rewritten in Phase 3b to assert the *new* contract (ccxt symbol returned verbatim). It now serves as regression for the inverted design rather than the band-aid.
 
 ---
 

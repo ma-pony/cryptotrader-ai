@@ -14,6 +14,7 @@ from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import _TF_MS, fetch_historical
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
+from cryptotrader.pair import Pair
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -243,7 +244,7 @@ class BacktestEngine:
         lookback_ms = self.lookback * tf_ms
         self._candles = await fetch_historical(self.pair, self.interval, self.start_ms - lookback_ms, self.end_ms)
 
-        symbol = self.pair.split("/")[0]
+        symbol = Pair.parse(self.pair).base
         logger.info("Fetching historical macro data for %s...", self.pair)
 
         self._fng = await fetch_fear_greed(self.start, self.end)
@@ -316,7 +317,7 @@ class BacktestEngine:
 
         start, end = self.start, self.end
 
-        symbol = self.pair.split("/")[0]
+        symbol = Pair.parse(self.pair).base
         self._etf_flows = self._load_dict_range("sosovalue_etf", start, end)
         self._oi = self._load_dict_range(f"binance_oi_{symbol}", start, end)
         self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", start, end)

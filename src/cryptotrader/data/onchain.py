@@ -45,8 +45,12 @@ class OnchainCollector:
         from cryptotrader.data.providers.cryptoquant import fetch_exchange_netflow
         from cryptotrader.data.providers.defillama import fetch_tvl
         from cryptotrader.data.providers.whale_alert import fetch_whale_transfers
+        from cryptotrader.pair import Pair
 
-        symbol = pair.split("/")[0]
+        try:
+            symbol = Pair.parse(pair).base
+        except (ValueError, NotImplementedError):
+            symbol = pair.split("/", 1)[0] if "/" in pair else pair
         cfg = self._cfg
 
         # Check enabled flags (default True if no config)

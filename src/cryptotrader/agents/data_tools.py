@@ -11,7 +11,18 @@ import logging
 
 from langchain_core.tools import tool
 
+from cryptotrader.pair import Pair
+
 logger = logging.getLogger(__name__)
+
+
+def _base_symbol(pair: str) -> str:
+    """Return the base asset symbol for a pair (spec 013). Falls back to a
+    naive split for malformed inputs to keep tool calls best-effort."""
+    try:
+        return Pair.parse(pair).base
+    except (ValueError, NotImplementedError):
+        return pair.split("/", 1)[0] if "/" in pair else pair
 
 
 # ── Chain / Derivatives Tools ──
@@ -27,7 +38,7 @@ async def get_derivatives_data(pair: str) -> str:
     """
     from cryptotrader.data.providers.binance import fetch_derivatives_binance
 
-    symbol = pair.split("/")[0]
+    symbol = _base_symbol(pair)
     data = await fetch_derivatives_binance(symbol)
     return json.dumps(data, default=str)
 
@@ -43,7 +54,7 @@ async def get_funding_rate_history(pair: str, periods: int = 8) -> str:
     """
     import httpx
 
-    symbol = pair.split("/")[0] + "USDT"
+    symbol = _base_symbol(pair) + "USDT"
     try:
         async with httpx.AsyncClient(timeout=10) as c:
             r = await c.get(
@@ -72,7 +83,7 @@ async def get_liquidation_data(pair: str) -> str:
     from cryptotrader.data.providers.coinglass import fetch_derivatives
 
     cfg = load_config().providers
-    symbol = pair.split("/")[0]
+    symbol = _base_symbol(pair)
     data = await fetch_derivatives(cfg.coinglass_api_key, symbol)
     return json.dumps(data, default=str)
 
@@ -91,7 +102,7 @@ async def get_whale_transfers(pair: str) -> str:
     cfg = load_config().providers
     transfers = await _fetch(cfg.whale_alert_api_key)
     # Filter by asset if possible
-    symbol = pair.split("/")[0].upper()
+    symbol = _base_symbol(pair).upper()
     relevant = [t for t in transfers if t.get("symbol", "").upper() == symbol] or transfers
     return json.dumps(relevant[:10], default=str)
 
@@ -159,7 +170,7 @@ async def get_social_buzz(pair: str) -> str:
     """
     from cryptotrader.data.news import _fetch_social_buzz
 
-    symbol = pair.split("/")[0]
+    symbol = _base_symbol(pair)
     buzz = await _fetch_social_buzz(symbol)
     return json.dumps({"social_buzz": buzz, "symbol": symbol})
 
