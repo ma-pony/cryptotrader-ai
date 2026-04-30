@@ -96,6 +96,7 @@ async def _load_balances_from_db(
     if not db_url:
         return None, None
     try:
+        from cryptotrader.pair import Pair
         from cryptotrader.portfolio.manager import PortfolioManager
 
         pm = PortfolioManager(db_url)
@@ -106,13 +107,22 @@ async def _load_balances_from_db(
             return None, None  # No saved state, use default
         balances: dict[str, float] = {"USDT": cash}
         pos_data: dict[str, dict[str, float]] = {}
-        for pair, pos in positions.items():
-            asset = pair.split("/")[0]
+        for pair_str, pos in positions.items():
+            try:
+                p_obj = Pair.parse(pair_str)
+            except ValueError:
+                logger.debug("Invalid pair %s in DB; skipping for PaperExchange seed", pair_str)
+                continue
+            # PaperExchange tracks asset balances ("BTC", "USDT"); only spot
+            # positions map cleanly to that model. Derivatives are margin-
+            # denominated and don't survive the asset-balance translation.
+            if p_obj.market_type != "spot":
+                continue
             amount = pos.get("amount", 0.0)
             if amount != 0:
-                balances[asset] = amount
+                balances[p_obj.base] = amount
                 avg_price = pos.get("avg_price", 0.0)
-                pos_data[pair] = {"amount": amount, "avg_price": avg_price}
+                pos_data[pair_str] = {"amount": amount, "avg_price": avg_price}
         return balances, pos_data if pos_data else None
     except Exception:
         logger.debug("Failed to load balances from DB for PaperExchange", exc_info=True)
@@ -156,51 +166,113 @@ async def _update_portfolio(
         return False
 
 
-async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_price: float) -> None:
-    """Read actual balances from exchange and persist to DB.
-
-    Exchange.get_balance() returns {asset: amount} — this is the single source
-    of truth for both paper and live trading.
-    """
-    balances = await exchange.get_balance()
-    cash = balances.pop("USDT", 0.0)
-
-    # Persist cash
-    await pm.update_cash("default", cash)
-
-    # Persist each non-zero asset as a position
-    # For the just-traded pair, use fill price. For others, keep existing avg_price.
-    old_portfolio = await pm.get_portfolio()
-    old_positions = old_portfolio.get("positions", {})
-
-    total_pos_value = 0.0
-    seen_pairs = set()
-
+async def _sync_spot_from_balances(
+    pm,
+    balances: dict[str, float],
+    old_positions: dict[str, dict],
+    traded_pair: str,
+    current_price: float,
+) -> tuple[float, set[str]]:
+    """Persist spot positions from {asset: amount} balances. Returns (value, seen)."""
+    total = 0.0
+    seen: set[str] = set()
     for asset, amount in balances.items():
         if amount == 0:
             continue
         pair = f"{asset}/USDT"
-        seen_pairs.add(pair)
-
-        # Determine price: use fill price for just-traded pair, else keep old avg_price
+        seen.add(pair)
         old_pos = old_positions.get(pair, {})
-        if pair == traded_pair:
-            price = current_price
-        elif old_pos.get("avg_price", 0) > 0:
-            price = old_pos["avg_price"]
-        else:
-            price = current_price  # new position, use current price
-
+        price = current_price if pair == traded_pair else (old_pos.get("avg_price", 0) or current_price)
         await pm.update_position("default", pair, amount, price)
-        total_pos_value += abs(amount) * price
+        total += abs(amount) * price
+    return total, seen
 
-    # Clear positions that are no longer on the exchange
+
+async def _sync_derivatives_from_positions(
+    pm,
+    derivs: dict[str, dict],
+    traded_pair: str,
+    current_price: float,
+) -> tuple[float, set[str]]:
+    """Persist non-spot positions from get_positions(). Returns (value, seen)."""
+    from cryptotrader.pair import Pair
+
+    total = 0.0
+    seen: set[str] = set()
+    for pair, pos in (derivs or {}).items():
+        try:
+            p_obj = Pair.parse(pair)
+        except ValueError:
+            continue
+        if p_obj.market_type == "spot":
+            continue
+        amount = pos.get("amount", 0.0)
+        if amount == 0:
+            continue
+        seen.add(pair)
+        price = current_price if pair == traded_pair else (pos.get("avg_price", 0.0) or current_price)
+        await pm.update_position("default", pair, amount, price)
+        total += abs(amount) * price
+    return total, seen
+
+
+async def _sweep_orphaned_positions(
+    pm,
+    old_positions: dict[str, dict],
+    seen_pairs: set[str],
+    *,
+    derivatives_observed: bool,
+) -> None:
+    """Zero out DB rows the exchange no longer reports.
+
+    Skip non-spot rows when ``derivatives_observed`` is False — we cannot
+    distinguish "position closed" from "get_positions transiently failed".
+    """
+    from cryptotrader.pair import Pair
+
     for pair in old_positions:
-        if pair not in seen_pairs:
-            await pm.update_position("default", pair, 0.0, 0.0)
+        if pair in seen_pairs:
+            continue
+        if not derivatives_observed:
+            try:
+                if Pair.parse(pair).market_type != "spot":
+                    continue
+            except ValueError:
+                continue
+        await pm.update_position("default", pair, 0.0, 0.0)
 
-    total = cash + total_pos_value
-    await pm.snapshot("default", total, cash)
+
+async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_price: float) -> None:
+    """Read balances + positions from exchange and persist to DB.
+
+    Spot derives from ``get_balance()``; derivatives from ``get_positions()``
+    (keyed by ccxt unified symbol per spec 013).
+    """
+    balances = await exchange.get_balance()
+    cash = balances.pop("USDT", 0.0)
+    await pm.update_cash("default", cash)
+
+    old_portfolio = await pm.get_portfolio()
+    old_positions = old_portfolio.get("positions", {})
+
+    spot_value, spot_seen = await _sync_spot_from_balances(pm, balances, old_positions, traded_pair, current_price)
+
+    try:
+        derivs = await exchange.get_positions()
+    except Exception:
+        logger.debug("exchange.get_positions() failed during portfolio sync", exc_info=True)
+        derivs = {}
+    deriv_value, deriv_seen = await _sync_derivatives_from_positions(pm, derivs, traded_pair, current_price)
+
+    seen = spot_seen | deriv_seen
+    await _sweep_orphaned_positions(
+        pm,
+        old_positions,
+        seen,
+        derivatives_observed=bool(derivs) or len(balances) == 0,
+    )
+
+    await pm.snapshot("default", cash + spot_value + deriv_value, cash)
 
 
 @node_logger()

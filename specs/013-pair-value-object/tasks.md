@@ -53,11 +53,11 @@
 
 ### US1 Phase 3b — verdict + execution Switch to Pair
 
-- [ ] T013 [US1] Update `src/cryptotrader/nodes/execution.py` `_get_exchange`, `_load_balances_from_db`, `_build_close_order`, `_build_entry_order` to use `Pair` for positions lookup (key by canonical str = ccxt unified symbol)
-- [ ] T014 [US1] Update `src/cryptotrader/nodes/verdict.py` `_build_risk_portfolio` to construct positions dict with canonical keys (ccxt unified symbols)
-- [ ] T015 [US1] Update `src/cryptotrader/execution/exchange.py` `LiveExchange.place_order` to accept `Order.pair` (str = canonical) and pass directly to ccxt without translation (FR-301)
-- [ ] T016 [US1] Update `src/cryptotrader/execution/simulator.py` `PaperExchange.get_positions` to return dict keyed by canonical (consistency with LiveExchange after Phase 0 band-aid)
-- [ ] T017 [US1] [P] Add `tests/test_us1_perp_close_flow.py` integration test: mock LiveExchange returns perp positions; verdict.action=close; assert `_build_close_order` returns Order with correct amount; assert `place_order` calls `create_order` with `BTC/USDT:USDT`
+- [X] T013 [US1] `nodes/execution.py` updated: `_load_balances_from_db` filters spot via `Pair.parse(...).market_type`; `_sync_portfolio_from_exchange` syncs derivatives via `exchange.get_positions()`; `_build_close_order`/`_build_entry_order` use ccxt-canonical keys (no translation needed since they treat pair as opaque)
+- [X] T014 [US1] `nodes/verdict.py` `_build_risk_portfolio`: pass-through of exchange positions (already canonical-keyed after T015) — no change needed
+- [X] T015 [US1] `execution/exchange.py` `LiveExchange.place_order` parses `order.pair` via `Pair`; balance check splits spot (asset) vs derivatives (settle margin); ccxt `create_order` receives canonical str verbatim; `LiveExchange.get_positions` returns ccxt symbol verbatim (band-aid `_canonical_pair` retired)
+- [X] T016 [US1] `execution/simulator.py` `PaperExchange.get_positions`: spot-only by design (asset-balance model); no change required, verified via existing tests
+- [X] T017 [US1] [P] `tests/test_us1_perp_close_flow.py` — 4 integration tests cover canonical key lookup, no spot-form fallback, ccxt forwarding, settle-currency margin check; `tests/test_live_exchange_pair.py` rewritten for inverted contract
 
 ### US1 Phase 3c — Full Nodes + State Schema Bump
 

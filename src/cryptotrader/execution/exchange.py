@@ -79,17 +79,28 @@ class LiveExchange:
 
     async def place_order(self, order: Order) -> dict[str, Any]:
         await self._ensure_markets()
-        # Balance pre-check
+
+        from cryptotrader.pair import Pair
+
+        pair = Pair.parse(order.pair)
+
+        # Balance pre-check. Spot is asset-denominated (need quote on buy,
+        # base on sell). Derivatives are margin-denominated in the settle
+        # currency; we only verify margin currency is non-zero and let the
+        # exchange enforce leverage/maintenance margin.
         bal = await self.get_balance()
-        if order.side == "buy":
-            quote = order.pair.split("/")[1]
-            needed = order.amount * order.price
-            if bal.get(quote, 0) < needed:
-                raise ValueError(f"Insufficient {quote}: need {needed}, have {bal.get(quote, 0)}")
+        if pair.market_type == "spot":
+            if order.side == "buy":
+                needed = order.amount * order.price
+                if bal.get(pair.quote, 0) < needed:
+                    raise ValueError(f"Insufficient {pair.quote}: need {needed}, have {bal.get(pair.quote, 0)}")
+            else:
+                if bal.get(pair.base, 0) < order.amount:
+                    raise ValueError(f"Insufficient {pair.base}: need {order.amount}, have {bal.get(pair.base, 0)}")
         else:
-            base = order.pair.split("/")[0]
-            if bal.get(base, 0) < order.amount:
-                raise ValueError(f"Insufficient {base}: need {order.amount}, have {bal.get(base, 0)}")
+            margin_ccy = pair.settle or pair.quote
+            if bal.get(margin_ccy, 0) <= 0:
+                raise ValueError(f"No {margin_ccy} margin available for {pair.canonical()}")
 
         # Precision
         market = self._exchange.markets.get(order.pair, {})
@@ -147,36 +158,13 @@ class LiveExchange:
         bal = await self._retry(self._exchange.fetch_balance)
         return {k: float(v) for k, v in bal.get("total", {}).items() if float(v) > 0}
 
-    def _canonical_pair(self, ccxt_symbol: str) -> str:
-        """Return the project's canonical ``BASE/QUOTE`` pair for any ccxt symbol.
-
-        ccxt's unified symbol for derivatives is ``BASE/QUOTE:SETTLE`` (e.g.
-        ``BTC/USDT:USDT``); the rest of this codebase — config, state metadata,
-        DB ``portfolios`` table, journal — uses the spot form ``BASE/QUOTE``.
-        We pick one canonical form at this boundary so every downstream
-        ``positions.get(pair)`` lookup matches. The conversion is derived from
-        ccxt's market metadata (``base`` + ``quote``) rather than string
-        surgery so the intent is explicit: "ask ccxt for the underlying
-        instrument's base/quote".
-        """
-        try:
-            m = self._exchange.market(ccxt_symbol)
-            base = m.get("base") or ""
-            quote = m.get("quote") or ""
-            if base and quote:
-                return f"{base}/{quote}"
-        except Exception:
-            logger.debug("market() lookup failed for %s; falling back to symbol prefix", ccxt_symbol, exc_info=True)
-        # Fallback only if ccxt has no market metadata — strip suffix.
-        return ccxt_symbol.split(":", 1)[0] if ccxt_symbol else ccxt_symbol
-
     async def get_positions(self) -> dict[str, dict[str, Any]]:
-        """Fetch open positions, keyed by the project's canonical pair format.
+        """Fetch open positions, keyed by ccxt unified symbol.
 
-        Single boundary, single canonical key: this is the only place ccxt
-        derivatives symbols enter the system, and ``_canonical_pair`` reduces
-        each one to ``BASE/QUOTE`` so every downstream caller sees the same
-        key as ``state["metadata"]["pair"]`` and ``config.scheduler.pairs``.
+        Per spec 013, ccxt's unified symbol IS the project canonical (spot
+        ``BTC/USDT``, linear perp ``BTC/USDT:USDT``, inverse perp
+        ``BTC/USD:BTC``). No translation; downstream callers use the same
+        key as ``state["metadata"]["pair"]`` and ``Pair.canonical()``.
 
         Returns: {pair: {"amount": float, "side": str, "avg_price": float,
                          "unrealized_pnl": float, "liquidation_price": float | None}}
@@ -185,41 +173,16 @@ class LiveExchange:
         positions: dict[str, dict[str, Any]] = {}
         try:
             raw = await self._retry(self._exchange.fetch_positions)
-            for p in raw:
+            for p in raw or []:
                 contracts = float(p.get("contracts", 0) or 0)
                 if contracts == 0:
                     continue
                 symbol = p.get("symbol", "")
-                pair = self._canonical_pair(symbol)
+                if not symbol:
+                    continue
                 side = p.get("side", "long")
                 amount = contracts if side == "long" else -contracts
-                if pair in positions:
-                    # Same underlying instrument already aggregated (cross +
-                    # isolated margin, or spot + perp on the same market).
-                    # Keep the larger absolute size and warn so the divergence
-                    # is visible in logs.
-                    existing = abs(positions[pair].get("amount", 0) or 0)
-                    if abs(amount) > existing:
-                        logger.warning(
-                            "ccxt position pair collision after canonicalization: %s overrides existing entry for %s",
-                            symbol,
-                            pair,
-                        )
-                        positions[pair] = {
-                            "amount": amount,
-                            "side": side,
-                            "avg_price": float(p.get("entryPrice", 0) or 0),
-                            "unrealized_pnl": float(p.get("unrealizedPnl", 0) or 0),
-                            "liquidation_price": float(p["liquidationPrice"]) if p.get("liquidationPrice") else None,
-                        }
-                    else:
-                        logger.warning(
-                            "ccxt position pair collision after canonicalization: %s ignored, existing %s entry kept",
-                            symbol,
-                            pair,
-                        )
-                    continue
-                positions[pair] = {
+                positions[symbol] = {
                     "amount": amount,
                     "side": side,
                     "avg_price": float(p.get("entryPrice", 0) or 0),
