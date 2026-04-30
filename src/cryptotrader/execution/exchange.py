@@ -189,8 +189,25 @@ class LiveExchange:
                     "unrealized_pnl": float(p.get("unrealizedPnl", 0) or 0),
                     "liquidation_price": float(p["liquidationPrice"]) if p.get("liquidationPrice") else None,
                 }
-        except Exception:
-            # Spot exchanges don't support fetchPositions — derive from balance
+        except Exception as exc:
+            # Spec 013 deep-review production FINDING-2: narrow the catch.
+            # Transient ccxt errors (network blip / rate limit) MUST propagate so
+            # the caller knows positions are unknown, not silently fall back to
+            # balance-derived spot positions (which masks open perp exposure and
+            # re-introduces the close-on-flat bug via a different path).
+            import ccxt
+
+            transient = (
+                getattr(ccxt, "NetworkError", Exception),
+                getattr(ccxt, "RateLimitExceeded", Exception),
+                getattr(ccxt, "ExchangeNotAvailable", Exception),
+                getattr(ccxt, "RequestTimeout", Exception),
+            )
+            if isinstance(exc, transient):
+                logger.warning("fetchPositions transient failure (%s) — re-raising", type(exc).__name__)
+                raise
+            # Spot exchanges that don't support fetchPositions raise ccxt.NotSupported
+            # or BadSymbol. Fall through and derive from balance.
             logger.debug("fetchPositions not available, deriving from balance", exc_info=True)
             bal = await self.get_balance()
             for asset, amount in bal.items():

@@ -38,7 +38,11 @@ def _pm_models():
     class Portfolio(Base):
         __tablename__ = "portfolios"
         id = Column(String, primary_key=True)
-        pair = Column(String(20), nullable=False)
+        # Spec 013 deep-review correctness FINDING-2: bumped from VARCHAR(20)
+        # to VARCHAR(50) — futures delivery symbols like "1000PEPE/USDT:USDT-241227"
+        # are 25 chars, "BTC/USDT:USDT-241227" is 21 chars. The old 20-char limit
+        # was inherited from spot-only days and would reject these inserts.
+        pair = Column(String(50), nullable=False)
         # spec 013: market_type is derived from pair via Pair.parse(pair).market_type
         # Default 'spot' keeps legacy rows backward-compatible.
         market_type = Column(String(20), nullable=False, default="spot")
@@ -80,12 +84,16 @@ async def _pm_ensure_tables(database_url: str) -> None:
             await conn.run_sync(Base.metadata.create_all)
             dialect = conn.dialect.name
             if dialect == "postgresql":
+                # Idempotent — both ADD COLUMN IF NOT EXISTS and ALTER COLUMN TYPE
+                # are no-ops on already-migrated tables. Type widening (20→50) does
+                # not require a table rewrite and holds ACCESS EXCLUSIVE briefly.
                 await conn.execute(
                     text(
                         "ALTER TABLE portfolios "
                         "ADD COLUMN IF NOT EXISTS market_type VARCHAR(20) NOT NULL DEFAULT 'spot'"
                     )
                 )
+                await conn.execute(text("ALTER TABLE portfolios ALTER COLUMN pair TYPE VARCHAR(50)"))
             elif dialect == "sqlite":
                 result = await conn.execute(text("PRAGMA table_info(portfolios)"))
                 existing = {row[1] for row in result.fetchall()}
@@ -93,6 +101,7 @@ async def _pm_ensure_tables(database_url: str) -> None:
                     await conn.execute(
                         text("ALTER TABLE portfolios ADD COLUMN market_type VARCHAR(20) NOT NULL DEFAULT 'spot'")
                     )
+                # SQLite ignores VARCHAR length — pair widening is a no-op there.
         _pm_table_ready.add(database_url)
 
 

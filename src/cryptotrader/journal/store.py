@@ -59,7 +59,9 @@ def _sa_models():
         hash = Column(String(16), primary_key=True)
         parent_hash = Column(String(16), nullable=True)
         timestamp = Column(DateTime(timezone=True), nullable=False, index=True)
-        pair = Column(String(20), nullable=False, index=True)
+        # Spec 013 deep-review correctness FINDING-2: VARCHAR(50) accommodates
+        # ccxt futures delivery symbols (e.g., "BTC/USDT:USDT-241227" = 21 chars).
+        pair = Column(String(50), nullable=False, index=True)
         snapshot_summary = Column(JSONB, default={})
         analyses = Column(JSONB, default={})
         debate_rounds = Column(Integer, default=0)
@@ -128,6 +130,9 @@ async def _ensure_tables(database_url: str) -> None:
                             f"ALTER TABLE decision_commits ADD COLUMN IF NOT EXISTS {col_name} {col_type} {col_default}"
                         )
                     )
+                # Spec 013 deep-review: widen pair column from VARCHAR(20) to VARCHAR(50)
+                # to fit ccxt futures delivery symbols. Idempotent — re-running is a no-op.
+                await conn.execute(text("ALTER TABLE decision_commits ALTER COLUMN pair TYPE VARCHAR(50)"))
             elif dialect == "sqlite":
                 # SQLite `ALTER TABLE ADD COLUMN` has no IF NOT EXISTS — detect via PRAGMA.
                 result = await conn.execute(text("PRAGMA table_info(decision_commits)"))

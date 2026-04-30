@@ -74,11 +74,20 @@ def _compute_pnl_pct(equity: float, pnl_24h: float) -> float:
     return pnl_24h / baseline
 
 
-def _build_state(pair: str = "BTC/USDT") -> dict:
-    """Minimum ArenaState shape for read_portfolio_from_exchange."""
+def _build_state(pair: str | None = None) -> dict:
+    """Minimum ArenaState shape for read_portfolio_from_exchange.
+
+    Spec 013 deep-review fix: when ``pair`` is None, derive from the first
+    configured scheduler pair (canonical str). Hardcoded ``BTC/USDT`` was
+    silently under-reporting equity on perp accounts because ``BTC/USDT``
+    !=  ``BTC/USDT:USDT`` in the position dict.
+    """
     from cryptotrader.config import load_config
 
     config = load_config()
+    if pair is None:
+        configured = list(getattr(config.scheduler, "pairs", []) or [])
+        pair = configured[0].canonical() if configured else "BTC/USDT"
     return {
         "metadata": {"pair": pair, "engine": config.engine, "exchange_id": config.exchange_id},
         "data": {"snapshot_summary": {}},

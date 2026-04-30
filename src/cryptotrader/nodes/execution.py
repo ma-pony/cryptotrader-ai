@@ -257,11 +257,20 @@ async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_
 
     spot_value, spot_seen = await _sync_spot_from_balances(pm, balances, old_positions, traded_pair, current_price)
 
+    # Track success explicitly: an empty positions list is legitimate (no open
+    # derivatives), but an exception is NOT — sweeping perp rows on a transient
+    # get_positions() failure re-introduces the close-on-flat production bug
+    # via a different code path (deep-review correctness FINDING-1).
+    derivs_success = True
+    derivs: dict[str, dict] = {}
     try:
         derivs = await exchange.get_positions()
     except Exception:
-        logger.debug("exchange.get_positions() failed during portfolio sync", exc_info=True)
-        derivs = {}
+        logger.warning(
+            "exchange.get_positions() failed during portfolio sync — skipping derivative sweep",
+            exc_info=True,
+        )
+        derivs_success = False
     deriv_value, deriv_seen = await _sync_derivatives_from_positions(pm, derivs, traded_pair, current_price)
 
     seen = spot_seen | deriv_seen
@@ -269,7 +278,7 @@ async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_
         pm,
         old_positions,
         seen,
-        derivatives_observed=bool(derivs) or len(balances) == 0,
+        derivatives_observed=derivs_success,
     )
 
     await pm.snapshot("default", cash + spot_value + deriv_value, cash)

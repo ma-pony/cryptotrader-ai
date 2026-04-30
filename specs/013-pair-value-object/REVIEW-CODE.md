@@ -288,8 +288,55 @@ Important 中 2 项已在本次 review 周期内修复（I2/T1 验证通过、A1
 
 ### Final Status
 
-**APPROVED-WITH-FOLLOWUPS**
+**APPROVED-WITH-FOLLOWUPS** （初评 stage 7 单 agent 视角）
 
-spec 013 的核心目标——把 `BTC/USDT:USDT` vs `BTC/USDT` lookup 不匹配的生产 bug 根治、引入 `Pair` 值对象作为全代码库的统一类型——已完整实现，96% 合规率，8 个 commit 均有对应测试。关键 followup 项：（1）验证 `test_us2_no_string_split_pair.py` 对 fallback guard 行是否真正通过；（2）消除 `_market_type_for()` 的重复定义；（3）修复 `_build_state()` 在 perp 配置下的 hardcoded pair。这些不阻断合并，建议在下一个 iteration 或单独 fix PR 中处理。
+> 见下方 **Round 2 — 5 并行 agent 复评 + fix loop** 的补充结论。
 
 > **注**：CodeRabbit CLI（`coderabbit review --agent --type all`）在本环境未安装（`which coderabbit` → not found），已跳过。建议在 PR 创建后于 GitHub PR 页面触发 CodeRabbit bot 自动审查。
+
+---
+
+## Round 2 — 5 并行 Agent 复评 (2026-04-30)
+
+第二轮通过 `/spex:deep-review` 触发 5 个并行 agent（correctness / architecture / security / production / tests）独立复评。每个 agent 在隔离 context 中工作，最终汇总：
+
+**Round 2 总计**：2 Critical + 7 Important + 12 Minor （比 stage 7 单 agent 多识别出 2 个 Critical）。
+
+### Round 2 Critical 发现 + Fix Loop（已全部修复）
+
+| # | 发现 | File | 处置 |
+|---|---|---|---|
+| **C1 (correctness)** | `_sweep_orphaned_positions` 的 `derivatives_observed = bool(derivs) or len(balances) == 0` 在纯 perp 账户（balances 仅 USDT 被 pop 后为 `{}`）+ `get_positions()` 异常时为 `True`，反向把所有 perp 仓清零 → 重新引入 close-on-flat bug | `nodes/execution.py:260` | ✅ **已修复**：改用显式 `derivs_success` 标志，异常时设 `False` 并跳过 sweep；同时把 DEBUG 日志升级为 WARNING |
+| **C2 (production)** | `_build_state(pair="BTC/USDT")` 硬编码 spot pair → perp 账户的 `/api/portfolio/snapshot` equity 字段会少算衍生品仓位价值（`p_pair == pair` 比较恒为 False，`price = 0`） | `api/routes/portfolio_v2.py:75` | ✅ **已修复**：`pair: str \| None = None`，从 `config.scheduler.pairs[0].canonical()` 派生，与 spec D7 一致 |
+
+### Round 2 Important 发现（5/7 已修复，2 deferred）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| **I3 (correctness)** | `pair` 列定义为 `VARCHAR(20)`，但 ccxt 期货交割符号 `1000PEPE/USDT:USDT-241227` 长度 25，`BTC/USDT:USDT-241227` 长度 21，PostgreSQL 会 `DataError: value too long` | ✅ **已修复**：ORM 模型 `String(50)`；postgres ALTER 路径加 `ALTER COLUMN pair TYPE VARCHAR(50)`；SQLite 不强制长度但模型对齐 |
+| **I4 (production)** | `LiveExchange.get_positions()` 裸 `except Exception` 把 `ccxt.RateLimitExceeded` / `NetworkError` 静默吞掉，fallback 到 balance-derived spot positions → 同样会触发 close-on-flat | ✅ **已修复**：捕获后判 `isinstance(exc, (NetworkError, RateLimitExceeded, ExchangeNotAvailable, RequestTimeout))` 则 re-raise，让调度器把本 cycle 标记为 errored |
+| **I5 (production)** | `market_type_for()` 静默 fallback 到 `"spot"`，hide config 错误 | ✅ **已修复**：加 `_market_type_warn_cache` 去重 WARN 日志，每个 distinct bad pair 告警一次 |
+| **I6 (test)** | `_SPLIT_SLASH` regex 不匹配 `split("/", N)` 形式，且对 `entry.model_id.split("/")` 这种非 pair 上下文误报 | ✅ **已修复**：regex 扩展为 `\.split\(\s*["\']\s*/\s*["\']`，加 `_PAIR_TOKEN` 同行联合匹配避免误报，加 `_FALLBACK_ALLOWLIST` 排除 Phase 4 defensive guard 文件 |
+| **I7 (architecture)** | `get_pair` 在 13+ 个 node 文件用 inline import；可改成 module-level | ⏸ **deferred**：纯风格清理，不阻断；下次 refactor cycle 处理 |
+| **I8 (architecture)** | `ArenaState.metadata` 是 `dict[str, Any]`，`pair` 字段类型不强制 | ⏸ **deferred**：需要 TypedDict 大改，规划进 spec 014 |
+| **I9 (test)** | Phase 5 的 ALTER TABLE migration path 没有针对 pre-existing schema 的集成测试 | ⏸ **deferred**：Followup test PR；当前 ORM column presence + DEFAULT 已覆盖大部分 |
+
+### Round 2 Minor 发现（12 项）
+
+全部为 cosmetic / documentation 级别，按 deep-review 规则 Minor 不进 fix loop。汇总：
+- Pair.parse 接受空白字符 / 空 settle suffix（`Pair.parse("BTC/USDT:")` → `swap` + None）
+- `Pair.parse` 无长度上限（DoS via `?pair=` query 参数）
+- `_OBSERVABILITY_COLUMNS` DDL f-string 看起来像 SQL 注入 sink（实际是硬编码安全的）
+- `from_ccxt()` 吞 `AuthenticationError`（mask credential 失败）
+- `_pair_meta` / `basePairOf` 是小型 parsing 重复
+- frontend `PairBadge` test 只覆盖 zh-CN，en-US 静默
+- `_legacy_str_warned` set 没有 teardown fixture
+- `test_market_type_property_cost` 10μs 阈值太紧
+- 没有 metric counter 跟踪 legacy str shim 触发次数
+- ALTER TABLE 在 50M 行 Postgres 上的 lock duration（runbook 类，非 code）
+
+### Round 2 最终状态
+
+**APPROVED**
+
+第二轮 5-agent 视角发现的所有 Critical + 5/7 Important 已修复，剩 2 个 Important 全部为 architecture-level deferred (I7 inline imports / I8 TypedDict)，无功能性 / 安全性风险。验证：122 测试全绿。

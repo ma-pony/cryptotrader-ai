@@ -180,14 +180,21 @@ class Pair:
         return settle or None
 
 
+_market_type_warn_cache: set[str] = set()
+
+
 def market_type_for(pair: str) -> str:
     """Derive market_type from a pair str. Defaults to ``"spot"`` on parse failure
     so unknown legacy data never blocks a write — matches DB column DEFAULTs.
 
-    Shared helper to avoid the duplicate definitions previously in
-    portfolio/manager.py and journal/store.py (review-code A1).
+    Spec 013 deep-review production FINDING-4: the silent fallback was masking
+    real config errors. We now WARN once per distinct bad pair so ops have a
+    grep-able signal that malformed pair data reached the DB writer.
     """
     try:
         return Pair.parse(pair).market_type
     except (ValueError, NotImplementedError):
+        if pair not in _market_type_warn_cache:
+            logger.warning("market_type_for: parse failed for %r, defaulting to 'spot'", pair)
+            _market_type_warn_cache.add(pair)
         return "spot"

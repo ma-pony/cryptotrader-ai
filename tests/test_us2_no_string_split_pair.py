@@ -18,8 +18,24 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "src"
 
-_SPLIT_SLASH = re.compile(r'\.split\(\s*"\s*/\s*"\s*\)')
-_SPLIT_COLON = re.compile(r"\.split\(\s*['\"]\s*:\s*['\"]\s*\)")
+# Match `.split("/")` and `.split("/", N)` forms — the second form is the
+# natural Python idiom and was the escape hatch that let Phase 4 fallback
+# guards slip past the original regex (deep-review test FINDING-1).
+_SPLIT_SLASH = re.compile(r'\.split\(\s*["\']\s*/\s*["\']')
+_SPLIT_COLON = re.compile(r"\.split\(\s*['\"]\s*:\s*['\"]")
+
+# Files with intentional defensive fallback to .split("/", 1) inside a try/except
+# guarded by Pair.parse — these are NOT regressions, they are belt-and-suspenders.
+_FALLBACK_ALLOWLIST = {
+    "agents/data_tools.py",
+    "data/news.py",
+    "data/onchain.py",
+    "data/snapshot.py",
+    "risk/checks/correlation.py",
+}
+
+
+_PAIR_TOKEN = re.compile(r"\bpair\b|\bpos_pair\b|\bself\.pair\b|\bo(rder)?\.pair\b|\bp\.pair\b")
 
 
 def _scan(pattern: re.Pattern[str], *, exclude_basenames: set[str]) -> list[str]:
@@ -27,12 +43,18 @@ def _scan(pattern: re.Pattern[str], *, exclude_basenames: set[str]) -> list[str]
     for path in SRC.rglob("*.py"):
         if path.name in exclude_basenames:
             continue
+        # Skip files in the fallback allowlist (Phase 4 defensive guards).
+        rel = str(path.relative_to(REPO).as_posix())
+        if any(rel.endswith(suffix) for suffix in (f"src/cryptotrader/{p}" for p in _FALLBACK_ALLOWLIST)):
+            continue
         try:
             text = path.read_text(encoding="utf-8")
         except OSError:
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if pattern.search(line):
+            # Only flag if the line both does a split("/") AND mentions a pair-like token.
+            # Eliminates false positives from `entry.model_id.split("/")` and similar.
+            if pattern.search(line) and _PAIR_TOKEN.search(line):
                 hits.append(f"{path.relative_to(REPO)}:{lineno}: {line.strip()}")
     return hits
 
