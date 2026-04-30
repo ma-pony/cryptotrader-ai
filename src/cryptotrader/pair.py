@@ -215,4 +215,12 @@ def market_type_for(pair: str) -> str:
         if pair not in _market_type_warn_cache:
             logger.warning("market_type_for: parse failed for %r, defaulting to 'spot'", pair)
             _market_type_warn_cache.add(pair)
+        # Bump the fallback counter every time (not just on first WARN) so
+        # ops can see the rate, not just unique misconfigured pairs.
+        try:
+            from cryptotrader.metrics import get_metrics_collector
+
+            get_metrics_collector().inc_pair_market_type_fallback()
+        except Exception:  # pragma: no cover — metrics is optional
+            logger.debug("market_type_for: metrics counter unavailable", exc_info=True)
         return "spot"

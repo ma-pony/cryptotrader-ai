@@ -52,6 +52,14 @@ _ct_pipeline_duration_ms = Histogram(
     buckets=[500, 1000, 2000, 5000, 10000, 30000, 60000],
 )
 
+# spec 014 followup (deep-review production minor): track
+# market_type_for() parse-failure fallback rate. A persistently non-zero
+# counter signals malformed pair strings reaching the DB writer.
+_ct_pair_market_type_fallback_total = Counter(
+    "ct_pair_market_type_fallback_total",
+    "Pair.parse 失败、market_type_for 退回 'spot' 的总次数",
+)
+
 
 # -- MetricsCollector --
 
@@ -100,6 +108,10 @@ class MetricsCollector:
             _ct_execution_latency_ms.labels(engine=engine).observe(ms)
         except Exception:
             logger.warning("记录 ct_execution_latency_ms 失败", exc_info=True)
+
+    def inc_pair_market_type_fallback(self) -> None:
+        """递增 market_type_for() 解析失败计数 (spec 014 followup)."""
+        _ct_pair_market_type_fallback_total.inc()
 
     def observe_pipeline_duration(self, *, ms: float) -> None:
         """记录流水线执行时长观测值。"""
