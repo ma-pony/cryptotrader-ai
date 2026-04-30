@@ -139,6 +139,11 @@ class Scheduler:
             for p in self.pairs:
                 next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
                 self._status[p]["next_run"] = next_run.isoformat()
+            # Persist a portfolio snapshot every cycle so risk gate's
+            # get_daily_pnl has a real time series. nodes/execution.snapshot only
+            # fires on actual trades; on quiet days that meant zero rows for
+            # hours and the daily-loss check fell back to "unknown".
+            await self._write_cycle_snapshot()
             # Heartbeat: write timestamp to disk after every cycle so docker
             # healthcheck ("arena scheduler healthcheck") can detect a hung
             # scheduler (file mtime older than 2x interval = unhealthy).
@@ -154,6 +159,54 @@ class Scheduler:
                 logger.debug("Failed to write scheduler heartbeat", exc_info=True)
         except Exception:
             logger.warning("Unexpected error in trading cycle", exc_info=True)
+
+    async def _write_cycle_snapshot(self) -> None:
+        """Write a fresh portfolio_snapshots row for the cycle.
+
+        Live mode: pull real exchange equity via read_portfolio_from_exchange.
+        Paper / fallback: read whatever PortfolioManager already knows from DB.
+        Either way, swallow errors — a missed snapshot is far less harmful than
+        crashing the cycle.
+        """
+        from cryptotrader.config import load_config
+        from cryptotrader.portfolio.manager import PortfolioManager, read_portfolio_from_exchange
+
+        config = load_config()
+        db_url = config.infrastructure.database_url
+        pm = PortfolioManager(db_url)
+
+        total = 0.0
+        cash = 0.0
+        try:
+            if config.engine == "live" and self.pairs:
+                # Build a minimal state for the exchange call; price=0 is fine —
+                # exchange.get_balance/get_positions don't need it for the cash leg.
+                state = {
+                    "metadata": {"engine": "live", "exchange_id": config.scheduler.exchange_id, "pair": self.pairs[0]},
+                    "data": {"snapshot_summary": {"price": 0}},
+                }
+                ex_portfolio = await read_portfolio_from_exchange(state)
+                if ex_portfolio:
+                    total = float(ex_portfolio.get("total_value", 0.0) or 0.0)
+                    cash = float(ex_portfolio.get("cash", 0.0) or 0.0)
+            if total <= 0:
+                # Fallback to DB-known portfolio (paper mode, or live read failed)
+                pm_portfolio = await pm.get_portfolio()
+                total = float(pm_portfolio.get("total_value", 0.0) or 0.0)
+                cash = float(pm_portfolio.get("cash", 0.0) or 0.0)
+        except Exception:
+            logger.debug("cycle snapshot: portfolio read failed", exc_info=True)
+            return
+
+        if total <= 0:
+            logger.debug("cycle snapshot: total_value=0, skipping write")
+            return
+
+        try:
+            await pm.snapshot("default", total, cash)
+            logger.info("cycle snapshot written: total=%.2f cash=%.2f", total, cash)
+        except Exception:
+            logger.debug("cycle snapshot: write failed", exc_info=True)
 
     async def _close_live_exchanges(self) -> None:
         from cryptotrader.nodes.execution import _live_exchanges

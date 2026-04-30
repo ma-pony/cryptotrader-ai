@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -229,3 +229,80 @@ def test_add_job_trading_cycle_has_max_instances_and_misfire():
     assert ds["max_instances"] == 1, "daily_summary must have max_instances=1"
     assert tc["misfire_grace_time"] == 1, "trading_cycle must have misfire_grace_time=1"
     assert ds["misfire_grace_time"] == 1, "daily_summary must have misfire_grace_time=1"
+
+
+# ---------------------------------------------------------------------------
+# Cycle-end portfolio snapshot write
+# ---------------------------------------------------------------------------
+
+
+def test_write_cycle_snapshot_paper_uses_pm_get_portfolio():
+    """In paper mode, cycle snapshot reads PortfolioManager.get_portfolio
+    (no exchange call) and writes via pm.snapshot."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+
+    pm_mock = AsyncMock()
+    pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 12345.67, "cash": 1000.0})
+    pm_mock.snapshot = AsyncMock()
+
+    cfg_mock = MagicMock()
+    cfg_mock.engine = "paper"
+    cfg_mock.infrastructure.database_url = "postgresql+asyncpg://x"
+    cfg_mock.scheduler.exchange_id = "binance"
+
+    with (
+        patch("cryptotrader.config.load_config", return_value=cfg_mock),
+        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
+        patch("cryptotrader.portfolio.manager.read_portfolio_from_exchange", new_callable=AsyncMock),
+    ):
+        asyncio.run(s._write_cycle_snapshot())
+
+    pm_mock.snapshot.assert_awaited_once_with("default", 12345.67, 1000.0)
+
+
+def test_write_cycle_snapshot_live_uses_exchange_read():
+    """In live mode, cycle snapshot prefers read_portfolio_from_exchange."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+
+    pm_mock = AsyncMock()
+    pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 0.0, "cash": 0.0})
+    pm_mock.snapshot = AsyncMock()
+
+    read_mock = AsyncMock(return_value={"total_value": 9876.5, "cash": 4321.0, "positions": {}})
+
+    cfg_mock = MagicMock()
+    cfg_mock.engine = "live"
+    cfg_mock.infrastructure.database_url = "postgresql+asyncpg://x"
+    cfg_mock.scheduler.exchange_id = "okx"
+
+    with (
+        patch("cryptotrader.config.load_config", return_value=cfg_mock),
+        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
+        patch("cryptotrader.portfolio.manager.read_portfolio_from_exchange", read_mock),
+    ):
+        asyncio.run(s._write_cycle_snapshot())
+
+    pm_mock.snapshot.assert_awaited_once_with("default", 9876.5, 4321.0)
+
+
+def test_write_cycle_snapshot_zero_total_skips_write():
+    """If both exchange and PM report total_value=0, no row is written."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+
+    pm_mock = AsyncMock()
+    pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 0.0, "cash": 0.0})
+    pm_mock.snapshot = AsyncMock()
+
+    cfg_mock = MagicMock()
+    cfg_mock.engine = "paper"
+    cfg_mock.infrastructure.database_url = "postgresql+asyncpg://x"
+    cfg_mock.scheduler.exchange_id = "binance"
+
+    with (
+        patch("cryptotrader.config.load_config", return_value=cfg_mock),
+        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
+        patch("cryptotrader.portfolio.manager.read_portfolio_from_exchange", new_callable=AsyncMock),
+    ):
+        asyncio.run(s._write_cycle_snapshot())
+
+    pm_mock.snapshot.assert_not_awaited()
