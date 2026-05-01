@@ -194,6 +194,14 @@ class LiveExchange:
         bal = await self._retry(self._exchange.fetch_balance)
         return {k: float(v) for k, v in bal.get("total", {}).items() if float(v) > 0}
 
+    async def fetch_ticker(self, symbol: str) -> dict[str, Any]:
+        """Live market ticker. Used by portfolio sync to price non-traded
+        balances when no historical cost basis exists (avoids inheriting the
+        traded pair's price — spec ledger 2026-04-30 sync bug).
+        """
+        await self._ensure_markets()
+        return await self._retry(self._exchange.fetch_ticker, symbol)
+
     async def get_positions(self) -> dict[str, dict[str, Any]]:
         """Fetch open positions, keyed by ccxt unified symbol.
 

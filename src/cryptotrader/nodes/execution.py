@@ -166,12 +166,39 @@ async def _update_portfolio(
         return False
 
 
+async def _get_market_price(exchange: Any, pair: str) -> float:
+    """Fetch live ticker price for ``pair`` via the exchange.
+
+    Returns 0.0 when the exchange does not expose ``fetch_ticker`` (e.g.
+    ``PaperExchange``) or the call fails. Callers MUST treat 0.0 as
+    "unknown" — never substitute another pair's price (production bug
+    2026-04-30: BTC trade price was being assigned to ETH/OKB rows when
+    cost basis was missing, inflating total_value to ~$7.3M).
+    """
+    fetcher = getattr(exchange, "fetch_ticker", None)
+    if fetcher is None:
+        return 0.0
+    try:
+        ticker = await fetcher(pair)
+    except Exception:
+        logger.debug("fetch_ticker failed for %s; writing avg_price=0", pair, exc_info=True)
+        return 0.0
+    if not isinstance(ticker, dict):
+        return 0.0
+    last = ticker.get("last") or ticker.get("close")
+    try:
+        return float(last) if last is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
 async def _sync_spot_from_balances(
     pm,
     balances: dict[str, float],
     old_positions: dict[str, dict],
     traded_pair: str,
     current_price: float,
+    exchange: Any = None,
 ) -> tuple[float, set[str]]:
     """Persist spot positions from {asset: amount} balances. Returns (value, seen)."""
     total = 0.0
@@ -181,8 +208,11 @@ async def _sync_spot_from_balances(
             continue
         pair = f"{asset}/USDT"
         seen.add(pair)
-        old_pos = old_positions.get(pair, {})
-        price = current_price if pair == traded_pair else (old_pos.get("avg_price", 0) or current_price)
+        if pair == traded_pair:
+            price = current_price
+        else:
+            old_avg = float(old_positions.get(pair, {}).get("avg_price", 0) or 0.0)
+            price = old_avg if old_avg > 0 else await _get_market_price(exchange, pair)
         await pm.update_position("default", pair, amount, price)
         total += abs(amount) * price
     return total, seen
@@ -193,6 +223,7 @@ async def _sync_derivatives_from_positions(
     derivs: dict[str, dict],
     traded_pair: str,
     current_price: float,
+    exchange: Any = None,
 ) -> tuple[float, set[str]]:
     """Persist non-spot positions from get_positions(). Returns (value, seen)."""
     from cryptotrader.pair import Pair
@@ -210,7 +241,11 @@ async def _sync_derivatives_from_positions(
         if amount == 0:
             continue
         seen.add(pair)
-        price = current_price if pair == traded_pair else (pos.get("avg_price", 0.0) or current_price)
+        if pair == traded_pair:
+            price = current_price
+        else:
+            entry = float(pos.get("avg_price", 0.0) or 0.0)
+            price = entry if entry > 0 else await _get_market_price(exchange, pair)
         await pm.update_position("default", pair, amount, price)
         total += abs(amount) * price
     return total, seen
@@ -255,7 +290,9 @@ async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_
     old_portfolio = await pm.get_portfolio()
     old_positions = old_portfolio.get("positions", {})
 
-    spot_value, spot_seen = await _sync_spot_from_balances(pm, balances, old_positions, traded_pair, current_price)
+    spot_value, spot_seen = await _sync_spot_from_balances(
+        pm, balances, old_positions, traded_pair, current_price, exchange=exchange
+    )
 
     # Track success explicitly: an empty positions list is legitimate (no open
     # derivatives), but an exception is NOT — sweeping perp rows on a transient
@@ -271,7 +308,9 @@ async def _sync_portfolio_from_exchange(pm, exchange, traded_pair: str, current_
             exc_info=True,
         )
         derivs_success = False
-    deriv_value, deriv_seen = await _sync_derivatives_from_positions(pm, derivs, traded_pair, current_price)
+    deriv_value, deriv_seen = await _sync_derivatives_from_positions(
+        pm, derivs, traded_pair, current_price, exchange=exchange
+    )
 
     seen = spot_seen | deriv_seen
     await _sweep_orphaned_positions(

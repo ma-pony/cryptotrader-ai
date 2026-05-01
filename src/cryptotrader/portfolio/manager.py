@@ -381,11 +381,45 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
 
     cash = balances.get("USDT", 0.0)
 
-    # Calculate total position value
+    # Spec ledger 2026-05-01: ccxt's fetchPositions only returns derivatives.
+    # Spot non-USDT balances (e.g. ETH from a spot market buy) were silently
+    # dropped here, so the API saw cash drain with no offsetting position
+    # ($8540 → $4697 with positions=[] after a real ETH long fill).
+    # Merge them in, priced via fetch_ticker — never substitute the active
+    # cycle's price (would inherit the wrong pair's price; same class of bug
+    # the avg_price write fix addresses on the persistence side).
+    from cryptotrader.nodes.execution import _get_market_price
+
+    for asset, amount in balances.items():
+        if asset == "USDT" or amount == 0:
+            continue
+        spot_pair = f"{asset}/USDT"
+        if spot_pair in positions:
+            # Perp/derivative already reported for this symbol — preserve it.
+            continue
+        avg_price = await _get_market_price(exchange, spot_pair)
+        positions[spot_pair] = {
+            "amount": amount,
+            "side": "long" if amount > 0 else "short",
+            "avg_price": avg_price,
+            "unrealized_pnl": 0.0,
+            "liquidation_price": None,
+        }
+
+    # Prefer the row's stored avg_price (perp entryPrice / freshly-fetched
+    # spot ticker) — both reflect a real quote for the row's actual symbol.
+    # Only fall back to ``current_price`` for the active cycle pair when no
+    # quote is available (e.g. PaperExchange perps with no cost basis).
     total_pos_value = 0.0
     for p_pair, pos in positions.items():
-        amount = pos.get("amount", 0)
-        price = current_price if p_pair == pair else 0.0
+        amount = pos.get("amount", 0) or 0
+        avg = float(pos.get("avg_price", 0) or 0)
+        if avg > 0:
+            price = avg
+        elif p_pair == pair and current_price:
+            price = current_price
+        else:
+            price = 0.0
         total_pos_value += abs(amount) * price
 
     return {
