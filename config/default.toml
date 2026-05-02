@@ -53,8 +53,13 @@ max_total_exposure_pct = 0.50
 max_correlated_positions = 2
 
 [risk.loss]
-max_daily_loss_pct = 0.03
-max_drawdown_pct = 0.10
+# Tight 3% / 10% defaults caused circuit-breaker re-arm storms: a single
+# down day put the bot in a 24h lockout and any subsequent cycle whose
+# computed drawdown stayed above 10% reset the 24h TTL on every tick.
+# 8% / 30% leaves headroom for normal sandbox/live volatility while
+# still catching catastrophic drawdowns. Adjust per risk appetite.
+max_daily_loss_pct = 0.08
+max_drawdown_pct = 0.30
 max_cvar_95 = 0.05
 cvar_min_returns = 20
 
