@@ -143,7 +143,19 @@ def _next_trading_run(scheduler: Scheduler | None) -> tuple[str | None, datetime
     if scheduler is None:
         return (None, None)
 
-    next_pair = scheduler.pairs[0] if scheduler.pairs else None
+    # spec 013: scheduler.pairs is list[Pair]; SchedulerContractStatus.next_pair
+    # is str. Coerce via canonical() — never let a Pair object escape into
+    # the API response (production observation 2026-05-02: SchedulerContractStatus
+    # validation 500'd because triggers got enabled and the page started fetching
+    # /api/scheduler/status, which had been silently broken behind the disabled flag).
+    raw_pair = scheduler.pairs[0] if scheduler.pairs else None
+    next_pair: str | None
+    if raw_pair is None:
+        next_pair = None
+    elif hasattr(raw_pair, "canonical"):
+        next_pair = raw_pair.canonical()
+    else:
+        next_pair = str(raw_pair)
 
     next_run: datetime | None = None
     for raw in scheduler.jobs:

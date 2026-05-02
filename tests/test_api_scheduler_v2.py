@@ -109,6 +109,37 @@ class TestSchedulerStatusV2:
         assert resp.status_code == 200
         assert resp.json()["redis_available"] is False
 
+    def test_pair_value_object_is_coerced_to_str(self, client: TestClient) -> None:
+        """Spec 013 regression: scheduler.pairs is list[Pair], next_pair is str.
+
+        Production observation 2026-05-02 — once the trigger engine got enabled
+        and the frontend started polling /api/scheduler/status, the endpoint
+        500'd because a ``Pair`` object was being passed straight into a
+        ``str | None`` Pydantic field. The scheduler-stored list was never
+        exercised by the test mocks (which all used plain str).
+        """
+        from cryptotrader.pair import Pair
+
+        next_run = datetime(2026, 4, 16, 13, 35, 0, tzinfo=UTC)
+        mock_sched = MagicMock()
+        mock_sched.pairs = [Pair.parse("BTC/USDT"), Pair.parse("ETH/USDT")]
+        mock_sched.jobs = [{"id": "trading_cycle", "name": "Trading cycle", "next_run_time": next_run.isoformat()}]
+
+        app.state.scheduler = mock_sched
+        try:
+            with (
+                patch("cryptotrader.config.load_config", return_value=_mock_config()),
+                patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)),
+            ):
+                resp = client.get("/api/scheduler/status")
+        finally:
+            del app.state.scheduler
+
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        # MUST be the canonical str — not the Pair repr or anything weird.
+        assert data["next_pair"] == "BTC/USDT"
+
     def test_no_scheduler_registered_returns_null_fields(self, client: TestClient) -> None:
         """API-only deployment: app.state.scheduler is not set → next_* are null."""
         # Ensure no leftover state

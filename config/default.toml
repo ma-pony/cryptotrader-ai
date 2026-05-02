@@ -161,7 +161,13 @@ chat_id = ""
 enabled = false
 
 [triggers]
-enabled = false
+# Event-driven trigger rules (price thresholds, % moves, funding rates,
+# candle patterns) — see web frontend at /scheduler. The engine subscribes
+# to Binance's public WebSocket ticker stream (no API key needed) and
+# fires a full analysis cycle when a rule's condition matches. Defaults to
+# enabled so the frontend page works out of the box; rules are off until
+# you create them, so an empty rule set is a no-op.
+enabled = true
 max_rules = 50
 ws_reconnect_max_s = 60
 funding_rate_poll_interval_minutes = 5
