@@ -45,28 +45,21 @@ async def get_derivatives_data(pair: str) -> str:
 
 @tool
 async def get_funding_rate_history(pair: str, periods: int = 8) -> str:
-    """Fetch recent funding rate snapshots from Binance futures.
+    """Fetch recent funding rate snapshots from Binance perp futures via ccxt.
 
     Use to detect persistent funding bias (sustained positive = crowded long).
     Args:
         pair: Trading pair like "BTC/USDT"
         periods: Number of 8h periods to fetch (default 8 = last 2.67 days)
     """
-    import httpx
+    from cryptotrader.data.providers.binance import fetch_funding_history_ccxt
 
-    symbol = _base_symbol(pair) + "USDT"
     try:
-        async with httpx.AsyncClient(timeout=10) as c:
-            r = await c.get(
-                "https://fapi.binance.com/fapi/v1/fundingRate",
-                params={"symbol": symbol, "limit": min(periods, 100)},
-            )
-            r.raise_for_status()
-            rows = r.json()
-            return json.dumps(
-                [{"time": r["fundingTime"], "rate": float(r["fundingRate"])} for r in rows],
-                default=str,
-            )
+        rows = await fetch_funding_history_ccxt(pair, limit=min(periods, 100), pause_seconds=0)
+        return json.dumps(
+            [{"time": row["fundingTime"], "rate": row["fundingRate"]} for row in rows],
+            default=str,
+        )
     except Exception as e:
         return json.dumps({"error": str(e)})
 

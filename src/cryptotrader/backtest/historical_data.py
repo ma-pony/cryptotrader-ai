@@ -97,25 +97,16 @@ async def fetch_funding_rate(symbol: str, start_date: str, end_date: str) -> dic
     if len(cached) >= expected * 0.9:
         return cached
 
-    # Paginate: Binance returns max 1000 records, 3 per day (8h intervals)
+    # Paginate via ccxt fetch_funding_rate_history (Binance perps).
+    from cryptotrader.data.providers.binance import fetch_funding_history_ccxt
+
     pair = symbol.replace("/", "") if "/" in symbol else symbol + "USDT"
-    all_records: list[dict] = []
     cursor_ms = int(start_dt.timestamp() * 1000)
     end_ms = int(end_dt.timestamp() * 1000) + 86400000
 
-    async with httpx.AsyncClient() as client:
-        while cursor_ms < end_ms:
-            r = await client.get(
-                "https://fapi.binance.com/fapi/v1/fundingRate",
-                params={"symbol": pair, "startTime": cursor_ms, "limit": 1000},
-                timeout=30,
-            )
-            r.raise_for_status()
-            batch = r.json()
-            if not batch:
-                break
-            all_records.extend(batch)
-            cursor_ms = batch[-1]["fundingTime"] + 1
+    all_records = await fetch_funding_history_ccxt(pair, since_ms=cursor_ms)
+    # Stop at the requested end window (helper only takes ``since``).
+    all_records = [r for r in all_records if r["fundingTime"] < end_ms]
 
     # Aggregate to daily average
     daily: dict[str, list[float]] = {}

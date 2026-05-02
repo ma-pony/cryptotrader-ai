@@ -605,46 +605,30 @@ async def sync_binance_funding_history(symbols: list[str] | None = None) -> int:
     if symbols is None:
         symbols = ["BTC", "ETH", "SOL", "BNB", "XRP"]
 
+    from cryptotrader.data.providers.binance import fetch_funding_history_ccxt
+
     total = 0
     start_ms = int((datetime.now(UTC) - timedelta(days=90)).timestamp() * 1000)
 
-    async with httpx.AsyncClient(timeout=15) as c:
-        for symbol in symbols:
-            try:
-                pair = f"{symbol}USDT"
-                all_records: list[dict] = []
-                cursor = start_ms
+    for symbol in symbols:
+        try:
+            all_records = await fetch_funding_history_ccxt(symbol, since_ms=start_ms)
 
-                while True:
-                    r = await c.get(
-                        "https://fapi.binance.com/fapi/v1/fundingRate",
-                        params={"symbol": pair, "startTime": cursor, "limit": 1000},
-                    )
-                    r.raise_for_status()
-                    batch = r.json()
-                    if not batch:
-                        break
-                    all_records.extend(batch)
-                    cursor = batch[-1]["fundingTime"] + 1
-                    if len(batch) < 1000:
-                        break
-                    await asyncio.sleep(0.1)
+            # Aggregate to daily average
+            daily: dict[str, list[float]] = {}
+            for rec in all_records:
+                date = datetime.fromtimestamp(rec["fundingTime"] / 1000, UTC).strftime("%Y-%m-%d")
+                daily.setdefault(date, []).append(float(rec["fundingRate"]))
 
-                # Aggregate to daily average
-                daily: dict[str, list[float]] = {}
-                for rec in all_records:
-                    date = datetime.fromtimestamp(rec["fundingTime"] / 1000, UTC).strftime("%Y-%m-%d")
-                    daily.setdefault(date, []).append(float(rec["fundingRate"]))
-
-                records = [
-                    (date, {"avg_rate": sum(rates) / len(rates), "count": len(rates)}) for date, rates in daily.items()
-                ]
-                store_batch(f"binance_funding_{symbol}", records)
-                total += len(records)
-                logger.info("Synced %d days of funding rate for %s", len(records), symbol)
-                await asyncio.sleep(0.2)
-            except Exception:
-                logger.warning("Binance funding %s sync failed", symbol, exc_info=True)
+            records = [
+                (date, {"avg_rate": sum(rates) / len(rates), "count": len(rates)}) for date, rates in daily.items()
+            ]
+            store_batch(f"binance_funding_{symbol}", records)
+            total += len(records)
+            logger.info("Synced %d days of funding rate for %s", len(records), symbol)
+            await asyncio.sleep(0.2)
+        except Exception:
+            logger.warning("Binance funding %s sync failed", symbol, exc_info=True)
 
     _record_fetch("binance_funding")
     return total
@@ -942,45 +926,29 @@ async def sync_binance_funding_full(symbols: list[str] | None = None) -> int:
         symbols = ["BTC", "ETH"]
 
     total = 0
+    from cryptotrader.data.providers.binance import fetch_funding_history_ccxt
+
     start_ms = int((datetime.now(UTC) - timedelta(days=730)).timestamp() * 1000)
 
-    async with httpx.AsyncClient(timeout=15) as c:
-        for symbol in symbols:
-            try:
-                pair = f"{symbol}USDT"
-                all_records: list[dict] = []
-                cursor = start_ms
+    for symbol in symbols:
+        try:
+            all_records = await fetch_funding_history_ccxt(symbol, since_ms=start_ms)
 
-                while True:
-                    r = await c.get(
-                        "https://fapi.binance.com/fapi/v1/fundingRate",
-                        params={"symbol": pair, "startTime": cursor, "limit": 1000},
-                    )
-                    r.raise_for_status()
-                    batch = r.json()
-                    if not batch:
-                        break
-                    all_records.extend(batch)
-                    cursor = batch[-1]["fundingTime"] + 1
-                    if len(batch) < 1000:
-                        break
-                    await asyncio.sleep(0.1)
+            # Aggregate to daily average
+            daily: dict[str, list[float]] = {}
+            for rec in all_records:
+                date = datetime.fromtimestamp(rec["fundingTime"] / 1000, UTC).strftime("%Y-%m-%d")
+                daily.setdefault(date, []).append(float(rec["fundingRate"]))
 
-                # Aggregate to daily average
-                daily: dict[str, list[float]] = {}
-                for rec in all_records:
-                    date = datetime.fromtimestamp(rec["fundingTime"] / 1000, UTC).strftime("%Y-%m-%d")
-                    daily.setdefault(date, []).append(float(rec["fundingRate"]))
-
-                records = [
-                    (date, {"avg_rate": sum(rates) / len(rates), "count": len(rates)}) for date, rates in daily.items()
-                ]
-                store_batch(f"binance_funding_full_{symbol}", records)
-                total += len(records)
-                logger.info("Synced %d days of full funding rate for %s (2yr)", len(records), symbol)
-                await asyncio.sleep(0.2)
-            except Exception:
-                logger.warning("Binance full funding %s sync failed", symbol, exc_info=True)
+            records = [
+                (date, {"avg_rate": sum(rates) / len(rates), "count": len(rates)}) for date, rates in daily.items()
+            ]
+            store_batch(f"binance_funding_full_{symbol}", records)
+            total += len(records)
+            logger.info("Synced %d days of full funding rate for %s (2yr)", len(records), symbol)
+            await asyncio.sleep(0.2)
+        except Exception:
+            logger.warning("Binance full funding %s sync failed", symbol, exc_info=True)
 
     _record_fetch("binance_funding_full")
     return total
