@@ -83,57 +83,68 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
 
 
 async def _run_pairs_loop(pairs, mode, exchange_id, graph, config):
-    from cryptotrader.tracing import set_trace_id
+    from cryptotrader.cycle_lock import cycle_lock
+    from cryptotrader.risk.state import RedisStateManager
+
+    redis_state = RedisStateManager(config.infrastructure.redis_url)
 
     for pair in pairs:
-        trace_id = set_trace_id()
-        console.print(
-            f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
-        )
+        async with cycle_lock(redis_state, pair) as acquired:
+            if not acquired:
+                console.print(f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]")
+                continue
+            await _run_one_pair(pair, mode, exchange_id, graph, config)
 
-        # ArenaState is a TypedDict (type-only annotation); the dict literal
-        # below satisfies it structurally without an explicit annotation.
-        initial = {
-            "messages": [],
-            "data": {},
-            "metadata": {
-                "pair": pair,
-                "engine": mode,
-                "exchange_id": exchange_id,
-                "timeframe": config.data.default_timeframe,
-                "ohlcv_limit": config.data.ohlcv_limit,
-                "analysis_model": config.models.analysis,
-                "debate_model": config.models.debate,
-                "verdict_model": config.models.verdict,
-                "models": {
-                    "tech_agent": config.models.tech_agent,
-                    "chain_agent": config.models.chain_agent,
-                    "news_agent": config.models.news_agent,
-                    "macro_agent": config.models.macro_agent,
-                },
-                "database_url": config.infrastructure.database_url,
-                "redis_url": config.infrastructure.redis_url,
-                "convergence_threshold": config.debate.convergence_threshold,
-                "max_single_pct": config.risk.position.max_single_pct,
+
+async def _run_one_pair(pair: str, mode: str, exchange_id: str, graph, config) -> None:
+    from cryptotrader.tracing import add_timing_to_trace, run_graph_traced, set_trace_id
+
+    trace_id = set_trace_id()
+    console.print(
+        f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
+    )
+
+    # ArenaState is a TypedDict (type-only annotation); the dict literal
+    # below satisfies it structurally without an explicit annotation.
+    initial = {
+        "messages": [],
+        "data": {},
+        "metadata": {
+            "pair": pair,
+            "engine": mode,
+            "exchange_id": exchange_id,
+            "timeframe": config.data.default_timeframe,
+            "ohlcv_limit": config.data.ohlcv_limit,
+            "analysis_model": config.models.analysis,
+            "debate_model": config.models.debate,
+            "verdict_model": config.models.verdict,
+            "models": {
+                "tech_agent": config.models.tech_agent,
+                "chain_agent": config.models.chain_agent,
+                "news_agent": config.models.news_agent,
+                "macro_agent": config.models.macro_agent,
             },
-            "debate_round": 0,
-            "max_debate_rounds": config.debate.max_rounds,
-            "divergence_scores": [],
-        }
+            "database_url": config.infrastructure.database_url,
+            "redis_url": config.infrastructure.redis_url,
+            "convergence_threshold": config.debate.convergence_threshold,
+            "max_single_pct": config.risk.position.max_single_pct,
+        },
+        "debate_round": 0,
+        "max_debate_rounds": config.debate.max_rounds,
+        "divergence_scores": [],
+    }
 
-        from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
+    try:
+        result, node_trace = await run_graph_traced(graph, initial)
+        add_timing_to_trace(node_trace)
+    except Exception as exc:
+        if mode == "live":
+            console.print(f"[red]ERROR: {exc}[/red]")
+            console.print("[yellow]Check logs — a partial trade may have been placed.[/yellow]")
+            raise typer.Exit(1) from None
+        raise
 
-        try:
-            result, node_trace = await run_graph_traced(graph, initial)
-            add_timing_to_trace(node_trace)
-        except Exception as exc:
-            if mode == "live":
-                console.print(f"[red]ERROR: {exc}[/red]")
-                console.print("[yellow]Check logs — a partial trade may have been placed.[/yellow]")
-                raise typer.Exit(1) from None
-            raise
-
-        _print_result(pair, result, node_trace)
+    _print_result(pair, result, node_trace)
 
 
 def _print_result(pair: str, result: dict, node_trace: list[dict]):

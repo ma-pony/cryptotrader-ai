@@ -286,6 +286,22 @@ class Scheduler:
         )
 
     async def _run_pair(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
+        from cryptotrader.config import load_config
+        from cryptotrader.cycle_lock import cycle_lock
+        from cryptotrader.risk.state import RedisStateManager
+
+        # Per-pair mutex prevents concurrent cycles on the same pair (e.g. a
+        # manual ``arena run`` overlapping with a scheduler tick). The lock
+        # holder writes its uuid; release is owner-checked so a TTL-expired
+        # holder cannot wipe a fresh holder's key.
+        redis_state = RedisStateManager(load_config().infrastructure.redis_url)
+        async with cycle_lock(redis_state, pair) as acquired:
+            if not acquired:
+                logger.warning("cycle_lock held for %s — skipping this scheduler tick", pair)
+                return
+            await self._run_pair_locked(pair, trigger_meta)
+
+    async def _run_pair_locked(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
         from cryptotrader.tracing import set_trace_id
 
         trace_id = set_trace_id()
