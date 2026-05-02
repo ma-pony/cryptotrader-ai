@@ -40,14 +40,15 @@ def check_candle_pattern(candles: list[dict[str, float]], parameters: dict[str, 
     """Check for consecutive candle pattern.
 
     Parameters:
-        candle_count: int (minimum consecutive candles)
+        consecutive_count (or legacy ``candle_count``): int — minimum consecutive candles
         direction: "bearish" | "bullish"
 
-    Each candle dict must have "open" and "close" keys.
+    Each candle dict must have "open" and "close" keys. The frontend persists
+    ``consecutive_count``; the legacy alias keeps existing rules working.
     """
-    count = int(parameters.get("candle_count", 3))
+    count = int(parameters.get("consecutive_count", parameters.get("candle_count", 3)))
     direction = parameters.get("direction", "bearish")
-    if len(candles) < count:
+    if count <= 0 or len(candles) < count:
         return False
 
     recent = candles[-count:]

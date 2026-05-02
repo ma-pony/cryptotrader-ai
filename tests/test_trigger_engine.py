@@ -156,32 +156,43 @@ class TestEvaluateRule:
     def test_price_threshold_dispatches_correctly(self) -> None:
         engine, _, _ = _make_engine()
         rule = _make_rule(trigger_type="price_threshold", parameters={"direction": "below", "price": 50_000.0})
-        # price below threshold => True
-        assert engine._evaluate_rule(rule, 49_000.0, 50_000.0) is True
-        assert engine._evaluate_rule(rule, 51_000.0, 50_000.0) is False
+        # price below threshold => True (signature: rule, current_price, now)
+        assert engine._evaluate_rule(rule, 49_000.0, 0.0) is True
+        assert engine._evaluate_rule(rule, 51_000.0, 0.0) is False
 
     def test_pct_change_dispatches_correctly(self) -> None:
+        # Reference now comes from the rolling price buffer instead of the
+        # previous tick, so the test must seed the buffer with the reference
+        # price BEFORE the window cutoff.
         engine, _, _ = _make_engine()
-        rule = _make_rule(trigger_type="pct_change", parameters={"threshold_pct": 5.0})
-        # 10% drop => True
-        assert engine._evaluate_rule(rule, 90.0, 100.0) is True
+        rule = _make_rule(
+            trigger_type="pct_change",
+            parameters={"window_minutes": 15, "threshold_pct": 5.0},
+        )
+        now = 10_000_000.0
+        engine._append_price_buffer("BTC/USDT", now - 16 * 60, 100.0)
+        # 10% drop relative to 15-min-ago price => True
+        assert engine._evaluate_rule(rule, 90.0, now) is True
         # 1% change => False
-        assert engine._evaluate_rule(rule, 101.0, 100.0) is False
+        assert engine._evaluate_rule(rule, 101.0, now) is False
 
     def test_candle_pattern_dispatches_correctly(self) -> None:
         engine, _, _ = _make_engine()
-        rule = _make_rule(trigger_type="candle_pattern", parameters={"candle_count": 2, "direction": "bearish"})
-        engine._price_history["BTC/USDT"] = [
+        rule = _make_rule(
+            trigger_type="candle_pattern",
+            parameters={"interval": "1h", "consecutive_count": 2, "direction": "bearish"},
+        )
+        engine._klines[("BTC/USDT", "1h")] = [
             {"open": 100.0, "close": 99.0},
             {"open": 99.0, "close": 98.0},
         ]
-        assert engine._evaluate_rule(rule, 98.0, 100.0) is True
+        assert engine._evaluate_rule(rule, 98.0, 0.0) is True
 
     def test_funding_rate_dispatches_correctly(self) -> None:
         engine, _, _ = _make_engine()
         rule = _make_rule(trigger_type="funding_rate", parameters={"threshold_pct": 0.1})
         engine._funding_rates["BTC/USDT"] = 0.003  # 0.3% > 0.1%
-        assert engine._evaluate_rule(rule, 50_000.0, 50_000.0) is True
+        assert engine._evaluate_rule(rule, 50_000.0, 0.0) is True
 
     def test_unknown_trigger_type_returns_false(self) -> None:
         engine, _, _ = _make_engine()
