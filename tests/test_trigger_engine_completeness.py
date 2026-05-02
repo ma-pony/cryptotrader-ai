@@ -219,29 +219,86 @@ async def test_kline_specs_skips_disabled_rules():
 # ── kline REST shape ──
 
 
-async def test_fetch_klines_parses_binance_response_shape():
+async def test_fetch_klines_parses_ccxt_response_shape():
+    """ccxt fetch_ohlcv returns [[ts, open, high, low, close, volume], …]."""
     engine = _make_engine()
-    fake_rows = [
-        # [open_time, open, high, low, close, ...]
-        [1700000000000, "100.5", "101.0", "99.5", "100.0"],
-        [1700003600000, "100.0", "100.2", "98.0", "98.5"],
-    ]
-    fake_response = MagicMock()
-    fake_response.json = MagicMock(return_value=fake_rows)
-    fake_response.raise_for_status = MagicMock()
-
     fake_client = MagicMock()
-    fake_client.get = AsyncMock(return_value=fake_response)
-    fake_client.__aenter__ = AsyncMock(return_value=fake_client)
-    fake_client.__aexit__ = AsyncMock()
+    fake_client.fetch_ohlcv = AsyncMock(
+        return_value=[
+            [1700000000000, 100.5, 101.0, 99.5, 100.0, 12.34],
+            [1700003600000, 100.0, 100.2, 98.0, 98.5, 5.67],
+        ]
+    )
+    engine._market_client = fake_client
 
-    with patch("httpx.AsyncClient", return_value=fake_client):
-        candles = await engine._fetch_klines("BTC/USDT", "1h", 2)
+    candles = await engine._fetch_klines("BTC/USDT", "1h", 2)
 
+    fake_client.fetch_ohlcv.assert_awaited_once_with("BTC/USDT", timeframe="1h", limit=2)
     assert candles == [
         {"open": 100.5, "high": 101.0, "low": 99.5, "close": 100.0, "open_time": 1700000000000.0},
         {"open": 100.0, "high": 100.2, "low": 98.0, "close": 98.5, "open_time": 1700003600000.0},
     ]
+
+
+async def test_poll_funding_rates_uses_ccxt_fetch_funding_rates():
+    """funding_rate uses ccxt; spot pairs get mapped to linear perp symbols."""
+    engine = _make_engine()
+    engine._rules = [
+        _make_rule(id="r1", pair="BTC/USDT", trigger_type="funding_rate"),
+        _make_rule(id="r2", pair="ETH/USDT", trigger_type="funding_rate"),
+    ]
+
+    fake_client = MagicMock()
+    fake_client.fetch_funding_rates = AsyncMock(
+        return_value={
+            "BTC/USDT:USDT": {"fundingRate": 0.0012},
+            "ETH/USDT:USDT": {"fundingRate": -0.0003},
+        }
+    )
+    engine._market_client = fake_client
+
+    rates = await engine.poll_funding_rates()
+
+    fake_client.fetch_funding_rates.assert_awaited_once()
+    requested = fake_client.fetch_funding_rates.call_args.args[0]
+    assert set(requested) == {"BTC/USDT:USDT", "ETH/USDT:USDT"}
+    assert rates == {"BTC/USDT": 0.0012, "ETH/USDT": -0.0003}
+    # Engine state updated for the trigger condition lookup.
+    assert engine._funding_rates["BTC/USDT"] == 0.0012
+
+
+async def test_poll_funding_rates_swallows_ccxt_errors():
+    engine = _make_engine(rules=[_make_rule(trigger_type="funding_rate")])
+    engine._rules = [_make_rule(trigger_type="funding_rate")]
+    fake_client = MagicMock()
+    fake_client.fetch_funding_rates = AsyncMock(side_effect=RuntimeError("network"))
+    engine._market_client = fake_client
+    rates = await engine.poll_funding_rates()
+    assert rates == {}
+    # Existing cached rates aren't wiped on error.
+
+
+async def test_poll_funding_rates_skips_when_no_rules():
+    """No rules means no perp listings to query — don't even hit ccxt."""
+    engine = _make_engine()
+    engine._rules = []
+    fake_client = MagicMock()
+    fake_client.fetch_funding_rates = AsyncMock()
+    engine._market_client = fake_client
+    rates = await engine.poll_funding_rates()
+    assert rates == {}
+    fake_client.fetch_funding_rates.assert_not_awaited()
+
+
+def test_to_swap_symbol_maps_spot_to_linear_perp():
+    from cryptotrader.triggers.engine import _to_swap_symbol
+
+    assert _to_swap_symbol("BTC/USDT") == "BTC/USDT:USDT"
+    assert _to_swap_symbol("ETH/USDC") == "ETH/USDC:USDC"
+    # Already-perp passes through.
+    assert _to_swap_symbol("BTC/USDT:USDT") == "BTC/USDT:USDT"
+    # Malformed input is preserved (caller's problem).
+    assert _to_swap_symbol("garbage") == "garbage"
 
 
 # ── funding rate scheduling ──

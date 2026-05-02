@@ -288,22 +288,13 @@ class TestPollFundingRates:
     async def test_poll_updates_funding_rates(self) -> None:
         engine, _, _ = _make_engine(rules=[_make_rule(pair="BTC/USDT")])
         engine._rules = [_make_rule(pair="BTC/USDT")]
-        mock_response = MagicMock()
-        mock_response.raise_for_status = MagicMock()
-        mock_response.json = MagicMock(
-            return_value=[
-                {"symbol": "BTCUSDT", "lastFundingRate": "0.0003"},
-                {"symbol": "ETHUSDT", "lastFundingRate": "0.0001"},
-            ]
-        )
+        # Pre-stash a mocked ccxt client so _get_market_client doesn't try to
+        # build a real ``ccxt.async_support.binance`` instance during the test.
+        mock_client = MagicMock()
+        mock_client.fetch_funding_rates = AsyncMock(return_value={"BTC/USDT:USDT": {"fundingRate": 0.0003}})
+        engine._market_client = mock_client
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(return_value=mock_response)
-
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            rates = await engine.poll_funding_rates()
+        rates = await engine.poll_funding_rates()
 
         assert "BTC/USDT" in rates
         assert abs(rates["BTC/USDT"] - 0.0003) < 1e-9
@@ -312,16 +303,15 @@ class TestPollFundingRates:
         engine, _, _ = _make_engine(rules=[_make_rule(pair="BTC/USDT")])
         engine._rules = [_make_rule(pair="BTC/USDT")]
 
-        mock_client = AsyncMock()
-        mock_client.__aenter__ = AsyncMock(return_value=mock_client)
-        mock_client.__aexit__ = AsyncMock(return_value=False)
-        mock_client.get = AsyncMock(side_effect=OSError("network error"))
+        mock_client = MagicMock()
+        mock_client.fetch_funding_rates = AsyncMock(side_effect=OSError("network error"))
+        engine._market_client = mock_client
 
-        with patch("httpx.AsyncClient", return_value=mock_client):
-            rates = await engine.poll_funding_rates()
+        rates = await engine.poll_funding_rates()
 
         # Should return empty dict and not raise
         assert isinstance(rates, dict)
+        assert rates == {}
 
 
 # ---------------------------------------------------------------------------

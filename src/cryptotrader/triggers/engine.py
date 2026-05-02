@@ -21,8 +21,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 BINANCE_WS_BASE = "wss://stream.binance.com/stream"
-BINANCE_REST_BASE = "https://api.binance.com"
-BINANCE_FAPI_BASE = "https://fapi.binance.com"
 
 # Klines REST poll cadence — Binance allows 1200 weight/min and each klines
 # call is weight 1. With 2 pairs and 1 interval that's 120 calls/h; trivial.
@@ -31,6 +29,21 @@ _KLINE_POLL_SECONDS = 60
 # Rolling window we keep for pct_change reference lookup. Templates currently
 # use 15 min; oversize so longer windows still work without reconfig.
 _PCT_CHANGE_BUFFER_MIN = 60
+
+
+def _to_swap_symbol(pair: str) -> str:
+    """Map a spot pair (``BTC/USDT``) to its linear perp (``BTC/USDT:USDT``).
+
+    ccxt's ``fetch_funding_rates`` is a perp-only API. Funding-rate trigger
+    rules are typically configured against the spot symbol they reference,
+    so we coerce here. Already-perp inputs are returned unchanged.
+    """
+    if ":" in pair:
+        return pair
+    base, _, quote = pair.partition("/")
+    if not base or not quote:
+        return pair
+    return f"{pair}:{quote}"
 
 
 class PriceTriggerEngine:
@@ -52,6 +65,9 @@ class PriceTriggerEngine:
         self._ws_task: asyncio.Task[None] | None = None
         self._funding_task: asyncio.Task[None] | None = None
         self._kline_task: asyncio.Task[None] | None = None
+        # Public-only ccxt client for kline + funding-rate REST. Lazy-init on
+        # first use so test runs that never reach a poll don't pay the import.
+        self._market_client: Any = None
         self._funding_rates: dict[str, float] = {}
         self._last_prices: dict[str, float] = {}
         # Rolling (timestamp_seconds, price) buffer per pair, used by pct_change
@@ -86,7 +102,33 @@ class PriceTriggerEngine:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             setattr(self, task_attr, None)
+        # ccxt async clients hold an aiohttp connector; closing here avoids
+        # the "Unclosed connector" warning ``arena run --mode live`` already
+        # carefully avoids in cli/main._run.
+        if self._market_client is not None:
+            with contextlib.suppress(Exception):
+                await self._market_client.close()
+            self._market_client = None
         logger.info("PriceTriggerEngine stopped")
+
+    async def _get_market_client(self) -> Any:
+        """Return a lazy-initialized public ccxt async client.
+
+        The trigger engine only needs read-only public data (klines, funding
+        rates, ticker) so no API key is required. Using ccxt instead of raw
+        ``httpx`` calls keeps a single source of truth for symbol mapping
+        and rate-limit handling, and matches ``LiveExchange`` for the
+        order-side path.
+        """
+        if self._market_client is None:
+            import ccxt.async_support as ccxt_async
+
+            # Binance public endpoints are the only source these polls
+            # support today; can be made configurable later by reading
+            # ``config.scheduler.exchange_id`` if other exchanges grow
+            # equivalent ``fetch_ohlcv`` / ``fetch_funding_rates`` coverage.
+            self._market_client = ccxt_async.binance({"enableRateLimit": True})
+        return self._market_client
 
     async def reload_rules(self) -> None:
         self._rules = await self._store.list_rules(enabled_only=True)
@@ -317,46 +359,58 @@ class PriceTriggerEngine:
         return [(p, i, c) for (p, i), c in specs.items()]
 
     async def _fetch_klines(self, pair: str, interval: str, limit: int) -> list[dict[str, float]]:
-        """Fetch the last ``limit`` klines from Binance REST. Public endpoint,
-        no auth. Returns list of dicts with ``open``/``close`` floats so
-        ``check_candle_pattern`` can read them directly."""
-        import httpx
+        """Fetch the last ``limit`` klines via ccxt ``fetch_ohlcv``.
 
-        symbol = pair.replace("/", "").upper()
-        params = {"symbol": symbol, "interval": interval, "limit": limit}
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{BINANCE_REST_BASE}/api/v3/klines", params=params)
-            resp.raise_for_status()
-            raw = resp.json()
-        # Binance kline format: [open_time, open, high, low, close, ...]
+        ccxt returns ``[[ts, open, high, low, close, volume], ...]`` ascending
+        — already the order ``check_candle_pattern`` expects (last N entries =
+        most recent N candles).
+        """
+        client = await self._get_market_client()
+        raw = await client.fetch_ohlcv(pair, timeframe=interval, limit=limit)
         return [
             {
+                "open_time": float(row[0]),
                 "open": float(row[1]),
                 "high": float(row[2]),
                 "low": float(row[3]),
                 "close": float(row[4]),
-                "open_time": float(row[0]),
             }
-            for row in raw
+            for row in raw or []
         ]
 
     async def poll_funding_rates(self) -> dict[str, float]:
-        """Poll Binance REST API for funding rates of tracked pairs."""
-        import httpx
+        """Refresh funding rates for every active rule's pair via ccxt.
 
-        pairs = {r.pair for r in self._rules}
+        ``fetch_funding_rates`` operates on swap (perp) symbols. Spot pairs
+        configured on a rule (e.g. ``BTC/USDT``) are mapped to their linear
+        perp equivalent (``BTC/USDT:USDT``). Pairs without a perp listing
+        (or any other ccxt error) are skipped — the rate stays absent and
+        the rule simply doesn't fire that cycle.
+        """
         rates: dict[str, float] = {}
+        if not self._rules:
+            return rates
+        client = await self._get_market_client()
+        # Build a unique perp-symbol list to ask ccxt for in one call.
+        perp_for: dict[str, str] = {}
+        for rule in self._rules:
+            perp_for.setdefault(rule.pair, _to_swap_symbol(rule.pair))
         try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get("https://fapi.binance.com/fapi/v1/premiumIndex")
-                resp.raise_for_status()
-                for item in resp.json():
-                    symbol = item.get("symbol", "")
-                    pair = self._symbol_to_pair(symbol)
-                    if pair in pairs:
-                        rates[pair] = float(item.get("lastFundingRate", 0))
+            payload = await client.fetch_funding_rates(list(perp_for.values()))
         except Exception:
             logger.warning("Failed to poll funding rates", exc_info=True)
+            return rates
+        for pair, perp in perp_for.items():
+            entry = (payload or {}).get(perp)
+            if not entry:
+                continue
+            rate = entry.get("fundingRate")
+            if rate is None:
+                continue
+            try:
+                rates[pair] = float(rate)
+            except (TypeError, ValueError):
+                continue
         self._funding_rates.update(rates)
         return rates
 
