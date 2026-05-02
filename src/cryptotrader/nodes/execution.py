@@ -166,6 +166,19 @@ async def _update_portfolio(
         return False
 
 
+# Sub-threshold residue exchanges leave behind after a close (production
+# observation: ETH=2.91e-07, BTC=3.19e-09 after successful flatten).
+# Persisting these creates phantom positions that the orphan sweep won't
+# clear — the pair is still "seen" by the exchange, just essentially zero.
+# 1e-6 is comfortably below any economically meaningful position size for
+# any asset we trade (0.000001 BTC ≈ $0.08, 0.000001 ETH ≈ $0.002).
+_DUST_AMOUNT_THRESHOLD = 1e-6
+
+
+def _is_dust(amount: float) -> bool:
+    return abs(amount) < _DUST_AMOUNT_THRESHOLD
+
+
 async def _get_market_price(exchange: Any, pair: str) -> float:
     """Fetch live ticker price for ``pair`` via the exchange.
 
@@ -204,7 +217,9 @@ async def _sync_spot_from_balances(
     total = 0.0
     seen: set[str] = set()
     for asset, amount in balances.items():
-        if amount == 0:
+        # Treat dust (post-close residue like 2.91e-07) as zero — don't add to
+        # ``seen`` so the orphan sweep can clear any stale DB row for it.
+        if _is_dust(amount):
             continue
         pair = f"{asset}/USDT"
         seen.add(pair)
@@ -238,7 +253,9 @@ async def _sync_derivatives_from_positions(
         if p_obj.market_type == "spot":
             continue
         amount = pos.get("amount", 0.0)
-        if amount == 0:
+        # See ``_DUST_AMOUNT_THRESHOLD`` — same dust handling as spot path so
+        # closed perps don't linger as 1e-09-sized phantom positions.
+        if _is_dust(amount):
             continue
         seen.add(pair)
         if pair == traded_pair:
