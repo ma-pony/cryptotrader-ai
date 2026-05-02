@@ -388,10 +388,14 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
     # Merge them in, priced via fetch_ticker — never substitute the active
     # cycle's price (would inherit the wrong pair's price; same class of bug
     # the avg_price write fix addresses on the persistence side).
-    from cryptotrader.nodes.execution import _get_market_price
+    from cryptotrader.nodes.execution import _get_market_price, _is_dust
 
     for asset, amount in balances.items():
-        if asset == "USDT" or amount == 0:
+        # Skip stablecoin (cash) AND post-close dust residue (ETH=2.91e-07
+        # type values) — same threshold as the persistence-side filter so
+        # the API view doesn't surface phantom microscopic positions even
+        # when OKX still reports the rounding crumbs.
+        if asset == "USDT" or _is_dust(amount):
             continue
         spot_pair = f"{asset}/USDT"
         if spot_pair in positions:

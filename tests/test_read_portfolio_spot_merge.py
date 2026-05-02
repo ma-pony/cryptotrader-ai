@@ -163,3 +163,27 @@ async def test_zero_amount_balance_is_skipped():
 
     assert result is not None
     assert "ETH/USDT" not in result["positions"]
+
+
+@pytest.mark.asyncio
+async def test_dust_balance_is_skipped():
+    """Post-close exchange residue (e.g. ETH=2.91e-07) must NOT appear in API.
+
+    Production observation 2026-05-02: OKX kept dust on the balance after a
+    successful market sell. Without this filter, /api/portfolio/snapshot
+    surfaced microscopic phantom long positions to the AI.
+    """
+    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+
+    ex = _make_exchange(
+        balances={"USDT": 1000.0, "ETH": 2.91e-07, "BTC": 3.19e-09},
+        perps={},
+        ticker_prices={"ETH/USDT": 2200.0, "BTC/USDT": 77000.0},
+    )
+    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
+        result = await read_portfolio_from_exchange(_build_state("BTC/USDT"))
+
+    assert result is not None
+    assert "ETH/USDT" not in result["positions"]
+    assert "BTC/USDT" not in result["positions"]
+    assert result["total_value"] == pytest.approx(1000.0)
