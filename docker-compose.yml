@@ -12,6 +12,11 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Keep DB up across laptop sleep/wake. Without this, Docker Desktop
+    # restarting the engine on resume would leave postgres dead and the
+    # API would self-report ``db: unavailable`` indefinitely (observed
+    # 2026-05-03 morning recovery).
+    restart: unless-stopped
 
   redis:
     image: redis:7-alpine
@@ -22,6 +27,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    # Same reasoning as postgres above — auto-resume after Docker engine
+    # restart so cooldowns / cycle locks / breaker state stay reachable.
+    restart: unless-stopped
 
   api:
     build: .
