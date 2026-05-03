@@ -1,0 +1,52 @@
+# Caddy reverse-proxy for the CryptoTrader bot.
+#
+# Replace ``trader.example.com`` with the actual hostname pointed at this
+# VPS (A record). Caddy will request a Let's Encrypt cert the first time
+# it serves an HTTPS request for that name and auto-renew thereafter.
+#
+# See docs/DEPLOYMENT.md for full setup. Compose service that uses this
+# file:
+#
+#   caddy:
+#     image: caddy:2-alpine
+#     ports: ["80:80", "443:443"]
+#     volumes:
+#       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+#       - caddydata:/data
+#       - caddyconfig:/config
+#     restart: unless-stopped
+
+trader.example.com {
+	# Frontend (React SPA served by web container)
+	handle /* {
+		reverse_proxy web:80
+	}
+
+	# REST + SSE backend
+	handle /api/* {
+		reverse_proxy api:8003
+	}
+
+	# /health is publicly probed by UptimeRobot (no auth on /health by design)
+	handle /health {
+		reverse_proxy api:8003
+	}
+
+	# Logs go to docker via stdout (json-file driver with built-in rotation)
+	log {
+		output stdout
+		format console
+	}
+
+	# Reasonable defaults — disable server header leak, deny iframe embedding
+	header {
+		Server "cryptotrader"
+		X-Frame-Options "DENY"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# HSTS — only enable AFTER you've confirmed the cert is valid for
+		# the parent domain. Once set, browsers cache the directive for a
+		# year and you can't downgrade to HTTP without breaking clients.
+		# Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+}

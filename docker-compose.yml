@@ -118,7 +118,28 @@ services:
           memory: 512m
           cpus: "1.0"
 
+  # Reverse proxy with automatic Let's Encrypt — only used in VPS
+  # deployment (see docs/DEPLOYMENT.md). Local-dev runs ``api`` and
+  # ``web`` on host ports directly without Caddy. Use ``--profile prod``
+  # to opt in: ``docker compose --profile prod up -d``.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["prod"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - api
+      - web
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
   ctdata:
+  caddydata:
+  caddyconfig:
