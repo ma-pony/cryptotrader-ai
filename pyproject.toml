@@ -38,6 +38,7 @@ dependencies = [
     "nest-asyncio>=1.6.0",
     "prometheus-client>=0.20",
     "websockets>=13.0",
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -159,7 +160,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # N806 — SQLAlchemy declarative class assigned in function (Base = declarative_base()).
 # S104 — uvicorn's --host default is 0.0.0.0 by design (containers expose the port).
 # S603/S607 — `arena web` shells out to the user's local pnpm with hardcoded argv.
-"src/cli/main.py" = ["N806", "S104", "S603", "S607", "TID251"]
+# E402 — load_dotenv() must run before project imports that read env at import-time.
+"src/cli/main.py" = ["N806", "S104", "S603", "S607", "TID251", "E402"]
 # state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
 # (LangGraph calls get_type_hints() to extract channel reducers at class creation)
 "src/cryptotrader/state.py" = ["TCH002", "TCH003"]
@@ -177,7 +179,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # routes layer is entry-level above nodes/graph and may import the assembler.
 "src/api/routes/chat.py" = ["TID251"]
 # main.py is FastAPI entry-layer -- lifespan hook may import nodes for shutdown.
-"src/api/main.py" = ["TID251"]
+# E402 — load_dotenv() must run before api.dependencies import-time AUTH_MODE/API_KEY check.
+"src/api/main.py" = ["TID251", "E402"]
 # tests are allowed to import any module for integration and boundary testing.
 # S603 exempted: subprocess.run calls in tests invoke known, trusted CLI tools (ruff, pytest).
 "tests/*.py" = ["TID251", "S603"]

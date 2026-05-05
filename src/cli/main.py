@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# Load .env into os.environ BEFORE any project import. Several CLI
+# commands (`arena migrate`, `arena scheduler start`) need DATABASE_URL /
+# REDIS_URL / API keys from .env.
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import asyncio
 import logging
 from typing import Annotated

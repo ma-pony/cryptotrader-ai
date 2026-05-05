@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+# Load .env into os.environ BEFORE any project import. api.dependencies
+# validates AUTH_MODE / API_KEY at module-import time and SystemExits if
+# misconfigured, so dotenv has to land first.
+from dotenv import load_dotenv
+
+load_dotenv()
+
 import logging
 import os
 import time
