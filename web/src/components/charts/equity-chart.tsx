@@ -27,11 +27,27 @@ const aggregate = (points: EquityPoint[], buckets = 1000): EquityPoint[] => {
   return out;
 };
 
-const toSeriesData = (points: EquityPoint[]): { time: Time; value: number }[] =>
-  points.map((p) => ({
-    time: Math.floor(new Date(p.ts).getTime() / 1000) as Time,
-    value: p.equity,
-  }));
+// lightweight-charts requires strictly ascending `time`. Backend snapshots are
+// ordered by timestamp ASC at sub-second precision, but flooring to whole
+// seconds can collapse two adjacent points into the same second and trigger
+// "Assertion failed: data must be asc ordered by time". Dedupe in place,
+// keeping the later value at each duplicate second.
+const toSeriesData = (points: EquityPoint[]): { time: Time; value: number }[] => {
+  const result: { time: Time; value: number }[] = [];
+  for (const p of points) {
+    const t = Math.floor(new Date(p.ts).getTime() / 1000);
+    const prev = result[result.length - 1];
+    if (prev && (prev.time as number) === t) {
+      prev.value = p.equity;
+      continue;
+    }
+    if (prev && (prev.time as number) > t) {
+      continue;
+    }
+    result.push({ time: t as Time, value: p.equity });
+  }
+  return result;
+};
 
 export const EquityChart = ({ data, height = 320, className, mode = 'area', theme = 'dark' }: EquityChartProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
