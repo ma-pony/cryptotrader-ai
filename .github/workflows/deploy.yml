@@ -1,0 +1,100 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 同一分支同时只允许一个部署在跑，避免 git pull / docker build 互相踩。
+# cancel-in-progress=false：让正在进行的部署跑完，新提交在队列里等。
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: ci
+    environment: production
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.DEPLOY_PORT || 22 }}
+          envs: DEPLOY_DIR
+          script_stop: true
+          script: |
+            set -euo pipefail
+
+            DEPLOY_DIR="${DEPLOY_DIR:-/home/trader/cryptotrader-ai}"
+            cd "$DEPLOY_DIR"
+
+            echo ">>> 拉取最新代码 ($(git rev-parse --short HEAD) -> origin/main)..."
+            git fetch --prune origin main
+            git reset --hard origin/main
+
+            echo ">>> 构建镜像（api + web）..."
+            docker compose --profile prod build
+
+            echo ">>> 启动 postgres + redis..."
+            docker compose --profile prod up -d postgres redis
+
+            echo ">>> 等待 postgres 健康（最多 60s）..."
+            for i in $(seq 1 30); do
+              if docker compose ps postgres --format json 2>/dev/null | grep -q '"Health":"healthy"'; then
+                echo "postgres healthy"
+                break
+              fi
+              sleep 2
+              if [ "$i" -eq 30 ]; then
+                echo "❌ postgres 健康检查超时" >&2
+                docker compose logs --tail=50 postgres
+                exit 1
+              fi
+            done
+
+            echo ">>> 执行数据库迁移（arena migrate）..."
+            docker compose --profile prod run --rm --no-deps api arena migrate
+
+            echo ">>> 启动所有服务..."
+            docker compose --profile prod up -d --remove-orphans
+
+            echo ">>> 等待服务就绪..."
+            sleep 10
+
+            echo ">>> 服务状态："
+            docker compose --profile prod ps
+
+            echo ">>> API 健康检查..."
+            for i in $(seq 1 12); do
+              if curl -fsS http://localhost:8003/health >/dev/null; then
+                echo "✅ /health OK"
+                break
+              fi
+              sleep 5
+              if [ "$i" -eq 12 ]; then
+                echo "❌ API 健康检查失败" >&2
+                docker compose --profile prod logs --tail=80 api
+                exit 1
+              fi
+            done
+
+            echo ">>> 清理悬挂镜像..."
+            docker image prune -f
+
+            echo ">>> 部署完成 ($(git rev-parse --short HEAD))"
+
+      - name: Notify status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            echo "✅ Deploy succeeded for ${{ github.sha }}"
+          else
+            echo "❌ Deploy failed for ${{ github.sha }}"
+          fi

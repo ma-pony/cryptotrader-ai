@@ -187,30 +187,42 @@ Restart api+scheduler. Real fills will buzz your phone.
 
 ## Updates / CI
 
-The simplest pattern is a deploy SSH key on GitHub + a workflow:
+The repo ships two GitHub Actions workflows:
 
-```yaml
-# .github/workflows/deploy.yml
-on:
-  push: { branches: [main] }
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - name: ssh deploy
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: trader
-          key: ${{ secrets.VPS_SSH_KEY }}
-          script: |
-            cd cryptotrader-ai
-            git pull --ff-only
-            docker compose up -d --build
-            docker compose logs --tail=30 scheduler
+- `.github/workflows/ci.yml` — lint + test + docker build, runs on every PR
+  and push to main. Reusable via `workflow_call`.
+- `.github/workflows/deploy.yml` — calls `ci.yml` first, then SSHs into the
+  VPS, pulls main, runs `arena migrate`, brings the stack up under
+  `--profile prod` (Caddy + api + web + scheduler + postgres + redis), and
+  fails if `/health` doesn't return 200.
+
+### Required secrets (Settings → Secrets → Actions)
+
+| Secret | Example | Notes |
+|---|---|---|
+| `DEPLOY_HOST` | `203.0.113.42` | VPS IP or hostname |
+| `DEPLOY_USER` | `trader` | Non-root user from "host setup" above |
+| `SSH_PRIVATE_KEY` | full ed25519 private key (PEM) | A *deploy-only* keypair, public half in `~trader/.ssh/authorized_keys` on the VPS |
+| `DEPLOY_PORT` | `22` | Optional, defaults to 22 |
+
+Optional environment variable on the runner (set as a repo Variable, not a
+Secret) — `DEPLOY_DIR`, defaults to `/home/trader/cryptotrader-ai`.
+
+The workflow runs in the `production` GitHub Environment, so you can add a
+required reviewer there if you want a human to approve every deploy.
+
+### Generate a deploy key
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/cryptotrader-deploy -C "github-actions-deploy" -N ""
+# Add the public half on the VPS:
+ssh-copy-id -i ~/.ssh/cryptotrader-deploy.pub trader@<vps-ip>
+# Paste the *private* half into the GitHub secret SSH_PRIVATE_KEY.
 ```
 
-Manual fallback: `ssh trader@<vps> 'cd cryptotrader-ai && git pull && docker compose up -d --build'`.
+### Manual fallback
+
+`ssh trader@<vps> 'cd cryptotrader-ai && git pull && docker compose --profile prod up -d --build'`.
 
 ## Rolling cost
 
