@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 
 import { Card } from '@/components/ui/card';
+import { PageHeader } from '@/components/ui/page-header';
 import type { CandlestickChartHandle, ChartCapturePayload, OHLCVBar } from '@/types/chart-analysis';
 import { useChartAnalysis } from '@/hooks/use-chart-analysis';
 import { generateDescription } from '@/lib/indicators';
@@ -69,39 +70,47 @@ const MarketPage = () => {
   const isAnalyzing = result.status === 'loading' || result.status === 'streaming';
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-foreground">{t('title')}</h1>
-        <div className="flex items-center gap-3">
-          <select
-            value={timeframe}
-            onChange={(e) => {
-              setTimeframe(e.target.value);
-              if (e.target.value === secondaryTimeframe) setSecondaryTimeframe(null);
-            }}
-            className="rounded border border-border bg-card px-2 py-1 text-sm"
-            aria-label={t('ai_analysis.tab_candlestick')}
-          >
-            {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
-          </select>
-          <select
-            value={secondaryTimeframe ?? ''}
-            onChange={(e) => setSecondaryTimeframe(e.target.value || null)}
-            className="rounded border border-border bg-card px-2 py-1 text-sm"
-            aria-label={t('ai_analysis.secondary_timeframe', '对比时间周期')}
-          >
-            <option value="">{t('ai_analysis.no_secondary', '—')}</option>
-            {TIMEFRAMES.filter((tf) => tf !== timeframe).map((tf) => (
-              <option key={tf} value={tf}>{tf}</option>
-            ))}
-          </select>
-          <ExchangeSelector value={exchange} onChange={setExchange} />
-        </div>
-      </div>
+    // Mobile: natural document flow with min-height on chart card.
+    // lg+ : flex column locked to <main>'s available height (viewport - topbar
+    // - main padding) so the chart card can flex-1 and fill the screen.
+    <div className="flex flex-col gap-4 lg:h-full lg:min-h-[640px]">
+      <PageHeader
+        title={t('title')}
+        actions={
+          <>
+            <select
+              value={timeframe}
+              onChange={(e) => {
+                setTimeframe(e.target.value);
+                if (e.target.value === secondaryTimeframe) setSecondaryTimeframe(null);
+              }}
+              className="rounded border border-border bg-card px-2 py-1 text-sm"
+              aria-label={t('ai_analysis.tab_candlestick')}
+            >
+              {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+            </select>
+            <select
+              value={secondaryTimeframe ?? ''}
+              onChange={(e) => setSecondaryTimeframe(e.target.value || null)}
+              className="rounded border border-border bg-card px-2 py-1 text-sm"
+              aria-label={t('ai_analysis.secondary_timeframe', '对比时间周期')}
+            >
+              <option value="">{t('ai_analysis.no_secondary', '—')}</option>
+              {TIMEFRAMES.filter((tf) => tf !== timeframe).map((tf) => (
+                <option key={tf} value={tf}>{tf}</option>
+              ))}
+            </select>
+            <ExchangeSelector value={exchange} onChange={setExchange} />
+          </>
+        }
+      />
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px]">
-        <div className="space-y-2">
-          <Card className="overflow-hidden">
+      {/* grid-rows-[minmax(0,1fr)] makes the single row fill the parent's
+          flex-1 height while still allowing inner overflow-auto to work
+          (default 'auto' rows would size to content, breaking flex-1). */}
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_280px] lg:grid-rows-[minmax(0,1fr)] lg:min-h-0 lg:flex-1">
+        <div className="flex min-w-0 flex-col gap-2 lg:min-h-0">
+          <Card className="h-[480px] overflow-hidden lg:h-auto lg:min-h-[420px] lg:flex-1">
             <ChartTabPanel
               symbol={pair}
               exchange={exchange}
@@ -137,11 +146,15 @@ const MarketPage = () => {
             </button>
           </div>
 
-          <AiAnalysisPanel
-            result={result}
-            onStop={stop}
-            onRetry={() => triggerFast(chartRef, bars, pair, timeframe, undefined, buildExtraPayloads())}
-          />
+          {/* Cap analysis panel height on lg+ so a long markdown response
+              cannot push the chart card off-screen. Mobile: full content. */}
+          <div className="lg:max-h-[28vh] lg:overflow-auto">
+            <AiAnalysisPanel
+              result={result}
+              onStop={stop}
+              onRetry={() => triggerFast(chartRef, bars, pair, timeframe, undefined, buildExtraPayloads())}
+            />
+          </div>
         </div>
 
         <MarketSidebar pair={pair} exchange={exchange} />

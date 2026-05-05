@@ -1,10 +1,10 @@
-import { Suspense, useCallback, useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router';
 
 import { DecisionDetailPanel } from '@/components/decision-detail/decision-detail-panel';
-import { ErrorBoundary } from '@/components/error-boundary';
-import { Skeleton } from '@/components/ui/skeleton';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { useDecisions } from '@/hooks/use-decisions';
 import type { DecisionListFilter } from '@/types/api';
 
@@ -39,12 +39,12 @@ const DecisionsContent = () => {
   );
 
   return (
-    <div className="space-y-4">
-      <h1 className="text-2xl font-semibold text-foreground">{t('title')}</h1>
+    <div className="space-y-6">
+      <PageHeader title={t('title')} />
       <DecisionsFilterBar filter={filter} onFilterChange={setFilter} pairs={pairs} />
 
-      <div className="grid grid-cols-5 gap-4 min-h-[600px]">
-        <div className="col-span-2 overflow-y-auto border rounded-md">
+      <div className="grid min-h-[600px] grid-cols-1 gap-4 lg:grid-cols-5">
+        <div className="overflow-y-auto rounded-md border lg:col-span-2">
           <DecisionsTable
             data={data}
             isLoading={isLoading}
@@ -53,7 +53,7 @@ const DecisionsContent = () => {
             onPageChange={handlePageChange}
           />
         </div>
-        <div className="col-span-3 border rounded-md overflow-hidden">
+        <div className="overflow-hidden rounded-md border lg:col-span-3">
           <DecisionDetailPanel commitHash={commitId} />
         </div>
       </div>
@@ -62,11 +62,9 @@ const DecisionsContent = () => {
 };
 
 const DecisionsPage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-      <DecisionsContent />
-    </Suspense>
-  </ErrorBoundary>
+  <PageBoundary>
+    <DecisionsContent />
+  </PageBoundary>
 );
 
 export default DecisionsPage;

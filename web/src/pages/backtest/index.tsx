@@ -1,9 +1,9 @@
-import { Suspense, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { EquityChart } from '@/components/charts/equity-chart';
-import { ErrorBoundary } from '@/components/error-boundary';
-import { Skeleton } from '@/components/ui/skeleton';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { useBacktestRun } from '@/hooks/use-backtest';
 
 import { BacktestForm } from './components/backtest-form';
@@ -19,7 +19,7 @@ const BacktestContent = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-foreground">{t('title')}</h1>
+      <PageHeader title={t('title')} />
       <BacktestForm onRunStarted={setRunId} />
 
       {run && <BacktestProgress run={run} />}
@@ -28,7 +28,7 @@ const BacktestContent = () => {
         <>
           <BacktestMetricsRow metrics={result.metrics} />
           <section aria-label={t('chart.equity')}>
-            <h3 className="text-sm font-medium mb-2">{t('chart.equity')}</h3>
+            <h3 className="mb-2 text-sm font-medium">{t('chart.equity')}</h3>
             <EquityChart data={result.equity_curve} height={360} />
           </section>
         </>
@@ -38,11 +38,9 @@ const BacktestContent = () => {
 };
 
 const BacktestPage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-      <BacktestContent />
-    </Suspense>
-  </ErrorBoundary>
+  <PageBoundary>
+    <BacktestContent />
+  </PageBoundary>
 );
 
 export default BacktestPage;

@@ -64,7 +64,11 @@ const ChatPage = () => {
   );
 
   return (
-    <div className="flex h-[calc(100vh-4rem)] gap-4">
+    // h-full fills the <main> flex-child height (viewport minus topbar minus
+    // main padding). Previous h-[calc(100vh-4rem)] hardcoded the topbar at
+    // 4rem but the actual topbar is h-14 (3.5rem) and ignored main's py-6,
+    // leaving an 8px gap at the bottom and an awkward overflow on tall screens.
+    <div className="flex h-full gap-4">
       <Card className="hidden w-64 shrink-0 overflow-hidden lg:block">
         <SessionList
           sessions={sessions}

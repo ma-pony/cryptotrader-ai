@@ -1,11 +1,10 @@
 import { AlertTriangle, Clock, ShieldAlert } from 'lucide-react';
-import { Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ErrorBoundary } from '@/components/error-boundary';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ErrorState } from '@/components/ui/error-state';
-import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { StatusPill } from '@/components/ui/status-pill';
 import { useRiskStatus } from '@/hooks/use-risk-status';
 import { formatDateTime } from '@/lib/format';
@@ -21,16 +20,18 @@ const RISK_CHECK_COUNT = 11;
 
 const RiskContent = () => {
   const { t } = useTranslation('risk');
-  const { data, isLoading, isError, refetch } = useRiskStatus();
+  const { data } = useRiskStatus();
 
-  if (isLoading) return <Skeleton className="h-64 w-full" />;
-  if (isError || !data) return <ErrorState title={t('title')} onRetry={() => void refetch()} />;
+  // RiskPage's PageBoundary already handles loading + error; if data is still
+  // null here it's a transient gap (data refetching in the background) — render
+  // nothing rather than flash a skeleton.
+  if (!data) return null;
 
   const thresholds = data.thresholds;
 
   return (
-    <div className="space-y-5">
-      <h1 className="text-2xl font-semibold text-foreground">{t('title')}</h1>
+    <div className="space-y-6">
+      <PageHeader title={t('title')} />
 
       {!data.redis_available ? (
         <div className="flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-500">
@@ -48,7 +49,7 @@ const RiskContent = () => {
         checksOnline={RISK_CHECK_COUNT}
       />
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <RiskMeter
           label={t('meters.daily_loss', { defaultValue: '当日亏损' })}
           value={data.daily_loss_pct ?? null}
@@ -77,7 +78,7 @@ const RiskContent = () => {
         />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-sm">
@@ -89,7 +90,10 @@ const RiskContent = () => {
           </CardHeader>
           <CardContent className="flex flex-col gap-2.5 p-4 pt-0">
             {data.correlation_groups.length === 0 ? (
-              <div className="text-xs text-muted-foreground">暂无相关性数据</div>
+              <EmptyState
+                size="compact"
+                title={t('corr.empty', { defaultValue: '暂无相关性数据' })}
+              />
             ) : (
               data.correlation_groups.map((g) => (
                 <div key={g.name} className="flex items-center gap-2.5">
@@ -147,7 +151,10 @@ const RiskContent = () => {
               </div>
             </div>
             {data.cooldowns.length === 0 ? (
-              <div className="text-xs text-muted-foreground">所有交易对均可交易</div>
+              <EmptyState
+                size="compact"
+                title={t('cooldown.empty', { defaultValue: '所有交易对均可交易' })}
+              />
             ) : (
               <div className="space-y-1.5">
                 {data.cooldowns.map((c) => (
@@ -182,7 +189,12 @@ const RiskContent = () => {
         </CardHeader>
         <CardContent className="p-4 pt-0">
           {data.recent_blocks.length === 0 ? (
-            <div className="text-xs text-muted-foreground">近期无拦截记录</div>
+            <EmptyState
+              size="compact"
+              icon={<ShieldAlert className="h-5 w-5" />}
+              title={t('blocks.empty', { defaultValue: '近期无拦截记录' })}
+              description={t('blocks.empty_hint', { defaultValue: '风控引擎运行正常' })}
+            />
           ) : (
             <div className="divide-y divide-border">
               {data.recent_blocks.map((b) => (
@@ -210,12 +222,19 @@ const RiskContent = () => {
   );
 };
 
-const RiskPage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+const RiskPage = () => {
+  const { t } = useTranslation('risk');
+  const { isLoading, isError, refetch } = useRiskStatus();
+  return (
+    <PageBoundary
+      loading={isLoading}
+      isError={isError}
+      onRetry={() => void refetch()}
+      errorTitle={t('title')}
+    >
       <RiskContent />
-    </Suspense>
-  </ErrorBoundary>
-);
+    </PageBoundary>
+  );
+};
 
 export default RiskPage;

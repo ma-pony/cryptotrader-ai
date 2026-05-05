@@ -1,11 +1,11 @@
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { TrendChart, type TrendSeries } from '@/components/charts/trend-chart';
-import { ErrorBoundary } from '@/components/error-boundary';
 import { Card, CardContent } from '@/components/ui/card';
-import { ErrorState } from '@/components/ui/error-state';
-import { Skeleton } from '@/components/ui/skeleton';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { useMetricsSummary } from '@/hooks/use-metrics-summary';
 import { appendSample, loadHistory } from '@/lib/metrics-history';
 
@@ -26,7 +26,7 @@ const Kpi = ({ label, value, sub }: { label: string; value: string; sub?: string
 
 const MetricsContent = () => {
   const { t } = useTranslation('metrics');
-  const { data, isLoading, isError, refetch } = useMetricsSummary();
+  const { data } = useMetricsSummary();
   const [trendSeries, setTrendSeries] = useState<TrendSeries[]>([]);
 
   const refreshHistory = useCallback(async () => {
@@ -68,8 +68,9 @@ const MetricsContent = () => {
     void appendSample(data).then(refreshHistory);
   }, [data, refreshHistory]);
 
-  if (isLoading) return <Skeleton className="h-64 w-full" />;
-  if (isError || !data) return <ErrorState title={t('title')} onRetry={() => void refetch()} />;
+  // MetricsPage's PageBoundary handles loading + error; null data here is a
+  // transient gap (background refetch).
+  if (!data) return null;
 
   // Server returns a raw Prometheus cumulative histogram (upper-bound ascending).
   // For the bar chart we want per-bucket (non-cumulative) counts.
@@ -79,10 +80,10 @@ const MetricsContent = () => {
   const costMax = Math.max(0.001, ...data.cost_14d.map((p) => p.cost_usd));
 
   return (
-    <div className="space-y-5">
-      <h1 className="text-2xl font-semibold text-foreground">{t('title')}</h1>
+    <div className="space-y-6">
+      <PageHeader title={t('title')} />
 
-      <div className="grid grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Kpi
           label={t('summary.calls_24h', { defaultValue: 'LLM 调用 (24h)' })}
           value={data.llm_calls_24h.toLocaleString()}
@@ -111,16 +112,18 @@ const MetricsContent = () => {
       <CountersRow counters={data.counters} />
       <LatencyTable percentiles={data.percentiles} />
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardContent className="p-4">
             <div className="mb-2 text-sm font-medium">
               {t('histogram.title', { defaultValue: '延迟分布直方图' })}
             </div>
             {rawBuckets.length === 0 ? (
-              <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
-                尚无观测样本
-              </div>
+              <EmptyState
+                size="compact"
+                className="h-32"
+                title={t('histogram.empty', { defaultValue: '尚无观测样本' })}
+              />
             ) : (
               <div className="flex h-40 items-end gap-1">
                 {rawBuckets.map((b, i) => {
@@ -157,9 +160,11 @@ const MetricsContent = () => {
               {t('cost_14d.title', { defaultValue: 'LLM 成本 · 最近 14 天' })}
             </div>
             {data.cost_14d.length === 0 ? (
-              <div className="flex h-32 items-center justify-center text-xs text-muted-foreground">
-                尚无成本数据
-              </div>
+              <EmptyState
+                size="compact"
+                className="h-32"
+                title={t('cost_14d.empty', { defaultValue: '尚无成本数据' })}
+              />
             ) : (
               <div className="flex h-32 items-end gap-1">
                 {data.cost_14d.map((p, i) => {
@@ -193,21 +198,32 @@ const MetricsContent = () => {
         {trendSeries.length > 0 && trendSeries[0]!.points.length > 1 ? (
           <TrendChart series={trendSeries} height={260} />
         ) : (
-          <p className="text-sm text-muted-foreground py-8 text-center">
-            {t('trend.empty', { defaultValue: '尚无足够样本' })}
-          </p>
+          <EmptyState
+            size="compact"
+            title={t('trend.empty', { defaultValue: '尚无足够样本' })}
+            description={t('trend.empty_hint', {
+              defaultValue: '运行几个调度周期后，曲线会自动出现在这里',
+            })}
+          />
         )}
       </section>
     </div>
   );
 };
 
-const MetricsPage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+const MetricsPage = () => {
+  const { t } = useTranslation('metrics');
+  const { isLoading, isError, refetch } = useMetricsSummary();
+  return (
+    <PageBoundary
+      loading={isLoading}
+      isError={isError}
+      onRetry={() => void refetch()}
+      errorTitle={t('title')}
+    >
       <MetricsContent />
-    </Suspense>
-  </ErrorBoundary>
-);
+    </PageBoundary>
+  );
+};
 
 export default MetricsPage;

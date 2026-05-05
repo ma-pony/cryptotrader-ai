@@ -1,8 +1,10 @@
-import { ArrowLeft, Check, Filter, MessageSquare, Zap } from 'lucide-react';
-import { Suspense, useMemo } from 'react';
+import { Check, Filter, MessageSquare, Zap } from 'lucide-react';
+import { useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router';
 
-import { ErrorBoundary } from '@/components/error-boundary';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useDecisionDetail } from '@/hooks/use-decision-detail';
 import { useDecisions } from '@/hooks/use-decisions';
@@ -146,10 +148,7 @@ const toScenario = (d: DecisionDetail): DebateScenario => {
 };
 
 const DebateEmpty = ({ message }: { message: string }) => (
-  <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border p-12 text-center text-sm text-muted-foreground">
-    <MessageSquare size={24} className="opacity-60" />
-    <span>{message}</span>
-  </div>
+  <EmptyState icon={<MessageSquare className="h-6 w-6" />} title={message} />
 );
 
 const DebateContent = () => {
@@ -212,44 +211,26 @@ const DebateContent = () => {
   ];
 
   return (
-    <div className="flex flex-col gap-5 p-6">
-      <div className="flex items-start gap-4">
-        <button
-          onClick={() => {
-            void navigate(-1);
-          }}
-          className="p-1.5 text-muted-foreground hover:text-foreground transition-colors"
-          aria-label="返回"
-        >
-          <ArrowLeft size={18} />
-        </button>
-        <div className="flex-1">
-          <div
-            className="text-[11px] uppercase tracking-wider font-medium mb-1"
-            style={{ color: 'oklch(62% 0.180 295)' }}
-          >
-            辩论可视化 · 决策 {d.id.slice(0, 10)}
-          </div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {hasDebate ? `${d.rounds.length} 轮交叉挑战辩论` : '无辩论（门控跳过）'}
-          </h1>
-          <div className="text-sm text-muted-foreground mt-1.5">
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        onBack={() => void navigate(-1)}
+        eyebrow={`辩论可视化 · 决策 ${d.id.slice(0, 10)}`}
+        title={hasDebate ? `${d.rounds.length} 轮交叉挑战辩论` : '无辩论（门控跳过）'}
+        subtitle={
+          <>
             <span className="font-mono">{d.pair}</span> @{' '}
             <span className="font-mono">${d.price.toLocaleString()}</span>
-            {hasDebate ? (
-              <>
-                {' '}
-                · 初始分歧度 {d.convergence.before.toFixed(2)} 触发辩论
-              </>
-            ) : null}
-          </div>
-        </div>
-        <DivergenceMeter
-          before={d.convergence.before}
-          after={d.convergence.after}
-          target={d.convergence.target}
-        />
-      </div>
+            {hasDebate ? <> · 初始分歧度 {d.convergence.before.toFixed(2)} 触发辩论</> : null}
+          </>
+        }
+        actions={
+          <DivergenceMeter
+            before={d.convergence.before}
+            after={d.convergence.after}
+            target={d.convergence.target}
+          />
+        }
+      />
 
       <div className="flex items-stretch mt-2">
         {steps.map((step, i) => {
@@ -392,15 +373,14 @@ const DebateContent = () => {
   );
 };
 
-// FE-m8: wrap with page-scoped ErrorBoundary + Suspense so a runtime failure in
+// FE-m8: wrap with page-scoped PageBoundary so a runtime failure in
 // DebateContent stays localised to the content area and doesn't collapse the
-// AppShell-level sidebar (matches the pattern used by RiskPage / MetricsPage).
+// AppShell-level sidebar. DebateContent renders its own loading/empty states
+// because it depends on a chained query (decisions list -> detail).
 const DebatePage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-      <DebateContent />
-    </Suspense>
-  </ErrorBoundary>
+  <PageBoundary>
+    <DebateContent />
+  </PageBoundary>
 );
 
 export default DebatePage;

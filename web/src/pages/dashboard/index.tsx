@@ -1,8 +1,7 @@
-import { Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ErrorBoundary } from '@/components/error-boundary';
-import { Skeleton } from '@/components/ui/skeleton';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { usePortfolioSnapshot } from '@/hooks/use-portfolio-snapshot';
 import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 
@@ -18,12 +17,12 @@ const DashboardContent = () => {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold text-foreground">{t('title', { defaultValue: '总览' })}</h1>
+      <PageHeader title={t('title', { defaultValue: '总览' })} />
 
       <MetricCardsRow data={portfolio.data} isLoading={portfolio.isLoading} connectionStatus={portfolio.connectionStatus} />
 
-      <div className="grid grid-cols-3 gap-4">
-        <div className="col-span-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
           <EquityChartSection />
         </div>
         <div className="space-y-4">
@@ -37,11 +36,9 @@ const DashboardContent = () => {
 };
 
 const DashboardPage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
-      <DashboardContent />
-    </Suspense>
-  </ErrorBoundary>
+  <PageBoundary>
+    <DashboardContent />
+  </PageBoundary>
 );
 
 export default DashboardPage;

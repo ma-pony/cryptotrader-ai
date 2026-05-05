@@ -1,10 +1,10 @@
-import { Suspense, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ErrorBoundary } from '@/components/error-boundary';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Skeleton } from '@/components/ui/skeleton';
+import { PageBoundary } from '@/components/ui/page-boundary';
+import { PageHeader } from '@/components/ui/page-header';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import type { ScheduleRule } from '@/types/api';
 
@@ -18,7 +18,9 @@ import type { RuleFormValues } from './components/template-selector';
 
 const SchedulerContent = () => {
   const { t } = useTranslation('scheduler');
-  const { data: rules, isLoading, isError, refetch } = useRules();
+  // SchedulerPage's PageBoundary owns isLoading / isError / refetch — this
+  // hook here only reads `data` from the shared React Query cache.
+  const { data: rules } = useRules();
   const [historyPage, setHistoryPage] = useState(1);
   const { data: historyData } = useTriggerHistory(undefined, historyPage);
 
@@ -54,31 +56,21 @@ const SchedulerContent = () => {
     }
   };
 
-  if (isLoading) return <Skeleton className="h-64 w-full" />;
-  if (isError) {
-    return (
-      <div className="py-10 text-center">
-        <p className="text-sm text-destructive">{t('table.empty')}</p>
-        <Button variant="ghost" size="sm" className="mt-2" onClick={() => void refetch()}>
-          {t('actions.cancel')}
-        </Button>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-foreground">{t('title')}</h1>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => setTemplateOpen(true)}>
-            {t('actions.from_template')}
-          </Button>
-          <Button size="sm" onClick={handleCreate}>
-            {t('actions.create')}
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        title={t('title')}
+        actions={
+          <>
+            <Button variant="outline" size="sm" onClick={() => setTemplateOpen(true)}>
+              {t('actions.from_template')}
+            </Button>
+            <Button size="sm" onClick={handleCreate}>
+              {t('actions.create')}
+            </Button>
+          </>
+        }
+      />
 
       <Tabs defaultValue="rules">
         <TabsList>
@@ -119,12 +111,19 @@ const SchedulerContent = () => {
   );
 };
 
-const SchedulerPage = () => (
-  <ErrorBoundary>
-    <Suspense fallback={<Skeleton className="h-96 w-full" />}>
+const SchedulerPage = () => {
+  const { t } = useTranslation('scheduler');
+  const { isLoading, isError, refetch } = useRules();
+  return (
+    <PageBoundary
+      loading={isLoading}
+      isError={isError}
+      onRetry={() => void refetch()}
+      errorTitle={t('table.empty')}
+    >
       <SchedulerContent />
-    </Suspense>
-  </ErrorBoundary>
-);
+    </PageBoundary>
+  );
+};
 
 export default SchedulerPage;
