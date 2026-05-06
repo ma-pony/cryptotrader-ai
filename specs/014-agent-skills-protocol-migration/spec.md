@@ -38,6 +38,10 @@
 2. **Given** `agent_skills/shared/funding_rate.md` 含 funding rate 阈值定义，**When** 任意 agent 节点运行，**Then** 4 个节点的 system prompt 都包含 funding_rate.md 的 description
 3. **Given** middleware 加载 tech 的 skills 时遭遇某个文件 frontmatter 损坏，**When** 节点继续运行，**Then** 该损坏文件被跳过且 logger.warning 输出文件路径 + 解析错误，其他文件正常注入，cycle 不崩
 4. **Given** middleware 注入完毕，**When** 检查 prompt token 数，**Then** 同一 regime 下的 token 总数较旧 GSSC 系统下降 ≥ 30%
+5. **Given** tech 节点运行中决定调用 `load_skill("funding_squeeze_long")`，**When** 该 skill 存在于 `agent_skills/tech/patterns/`，**Then** tool 返回该文件完整 body 作为 ToolMessage 内容
+6. **Given** tech 节点调用 `load_skill("nonexistent_pattern")`，**When** 该 skill 在任何 agent 目录都不存在，**Then** tool 返回结构化 error 响应（含字段 `{"error": "skill_not_found", "name": "nonexistent_pattern"}`），agent 不崩
+7. **Given** verdict 节点运行中调用 `load_skill("tech::funding_squeeze_long")`，**When** 该 skill 存在于 tech 目录，**Then** tool 返回 tech/patterns/funding_squeeze_long.md 的 body
+8. **Given** 同名 skill `funding_squeeze_long` 同时存在于 tech/patterns 和 chain/patterns，**When** verdict 节点调用 `load_skill("funding_squeeze_long")` 而未加 agent 前缀，**Then** tool 返回 error（`{"error": "ambiguous_name", "candidates": ["tech::funding_squeeze_long", "chain::funding_squeeze_long"]}`）
 
 ---
 
@@ -100,6 +104,8 @@
 - **shared/ 文件被 agent 私有覆盖意图**：禁止；shared/ 严格只读，agent 不能 override
 - **reflection job 失败**：trading cycle 必须**继续运行**，使用上一次成功蒸馏的快照；reflection 失败不阻塞下一个 cycle
 - **频繁 git diff noise**：reflection 的自动写入应单独 commit（如有 commit 流程），与代码 commit 物理分离；不在本 spec 强制要求
+- **`load_skill` 调用 archived skill**：tool MUST 拒绝（archived 不再适用），返回 `{"error": "skill_archived", "archived_at": "..."}`，避免 agent 应用已废弃的 pattern
+- **`load_skill` 调用频率失控**：若同一 cycle 内 agent 调用 `load_skill` > 10 次（hallucination loop 信号），后续调用 MUST 返回 `{"error": "rate_limit_per_cycle"}`，避免 token 失控
 
 ## Requirements *(mandatory)*
 
@@ -115,14 +121,16 @@
 
 #### 加载与注入
 
-- **FR-006**: 系统 MUST 提供一个 `SkillsInjectionMiddleware`，可挂载到 LangChain `create_agent` 的 `middleware=` 参数
+- **FR-006**: 系统 MUST 提供一个 `SkillsInjectionMiddleware`（继承 LangChain `AgentMiddleware`），可挂载到 LangChain `create_agent` 的 `middleware=` 参数；参考实现 https://docs.langchain.com/oss/python/langchain/multi-agent/skills-sql-assistant
 - **FR-007**: 4 个 agent 节点（tech_analyze / chain_analyze / news_analyze / macro_analyze）MUST 通过该 middleware 自动加载并注入对应 agent 的 skills
-- **FR-008**: 注入策略 MUST 是**静态注入**（每次 LLM 调用前拼接到 system_prompt），非 tool-calling 动态加载
-- **FR-009**: 系统 MUST 按当前 regime_tags 过滤 patterns / forbidden（仅注入 regime 匹配或 regime_tags 为空的 skill），instructions / shared 不过滤
-- **FR-010**: 注入到 prompt 的 MUST 是 skill 的 description（来自 frontmatter），非完整 body
-- **FR-011**: shared/ 目录的所有文件 MUST 同时注入到 4 个 agent 节点的 prompt
-- **FR-012**: 加载过程中遇到 frontmatter 损坏的文件 MUST 跳过且 logger.warning，不阻塞其他文件加载
-- **FR-013**: 加载结果 MUST 是 read-only——agent 节点禁止写入 `agent_skills/`
+- **FR-008**: middleware MUST 通过 override `wrap_model_call(request, handler)` 在每次 LLM 调用前**静态注入** skill descriptions 到 `request.system_message.content_blocks`（Anthropic Skills 协议的"description 可见"层）
+- **FR-008a**: middleware MUST 同时注册一个 `load_skill(name: str) -> str` tool（通过 `AgentMiddleware.tools` 类变量），允许 agent 在 reasoning 中按需拉取**完整 body**（Anthropic Skills 协议的"按需加载"层）。tool 实现 MUST 从对应 agent 的目录读取 markdown 文件 body，未找到时返回带 `error` 字段的结构化响应
+- **FR-008b**: `load_skill` 的 name 解析 MUST 支持两种形式：(1) `<name>`（同 agent 内）；(2) `<agent>::<name>`（跨 agent，如 verdict 节点引用 tech 的 skill）。简短形式按调用方 agent 自身的目录解析；歧义时 tool 返回错误
+- **FR-009**: 系统 MUST 按当前 regime_tags 过滤 patterns / forbidden 的 description 注入（仅注入 regime 匹配或 regime_tags 为空的 skill），instructions / shared 不过滤；`load_skill` tool 调用 MUST 不受 regime 过滤限制（agent 已明确指定 name → 信任其判断）
+- **FR-010**: 静态注入到 prompt 的 MUST 是 skill 的 description（来自 frontmatter），非完整 body；body 仅在 agent 调 `load_skill` 时通过 ToolMessage 返回
+- **FR-011**: shared/ 目录的所有文件 MUST 同时注入 description 到 4 个 agent 节点的 prompt；4 个 agent 都可通过 `load_skill` 拉取 shared/ 文件 body
+- **FR-012**: 加载过程中遇到 frontmatter 损坏的文件 MUST 跳过且 logger.warning，不阻塞其他文件加载；`load_skill` 拉取损坏文件时 MUST 返回 error 而非崩溃
+- **FR-013**: 加载结果 MUST 是 read-only——agent 节点 + `load_skill` tool 禁止写入 `agent_skills/`
 
 #### 反思与写文件
 
@@ -171,7 +179,7 @@
 
 ### Measurable Outcomes
 
-- **SC-001**：迁移完成后，单个 trading cycle 中 4 个 agent 的 prompt token 数总和较当前系统下降 ≥ 30%（基线测量取迁移前最近 100 个 cycle 的 token 中位数）
+- **SC-001**：迁移完成后，单个 trading cycle 中 4 个 agent 的 prompt token 数总和（含 system message + load_skill tool 调用累计）较当前系统下降 ≥ 30%（基线测量取迁移前最近 100 个 cycle 的 token 中位数）。允许 load_skill 调用次数上升带来的 round-trip 成本，但综合 token 必须下降
 - **SC-002**：迁移完成后，运维者无需查询 PostgreSQL 即可在 ≤ 30 秒内审查任意 agent 当前所有 active patterns（通过 `cat agent_skills/{agent}/patterns/*.md`）
 - **SC-003**：完成 ≥ 14 天 reflection 运行后，reflection job 自动产生 ≥ 1 条 maturity=active 的 pattern（验证防过拟合算法在新存储下仍可正常晋升 skill）
 - **SC-004**：完成 ≥ 14 天 reflection 运行后，verdict reasoning 中 `applied: <skill>` 引用率 ≥ 60%（在有 active pattern 可用的 cycle 中）
@@ -179,6 +187,7 @@
 - **SC-006**：全套件测试通过率 100%；新增测试覆盖加载（≥ 6）、middleware 注入（≥ 4）、reflection 写文件（≥ 6）、防过拟合算法等价（≥ 4）共 ≥ 20 项
 - **SC-007**：reflection job 失败注入测试中，trading cycle 完成率 100%（即 reflection 异常不阻塞下一个 cycle）
 - **SC-008**：从仓库 clone 到运行起 trading cycle 的时间（含 docker compose up + arena migrate + arena run），相比当前系统不变或下降（不引入额外初始化负担）
+- **SC-009**：`load_skill` tool 在 ≥ 14 天 reflection 运行后，被 agent 实际调用的频率 > 0（验证 agent 真在使用动态加载机制，非纯静态推理）；调用结果中不存在 skill 的 error 比例 < 20%（验证描述与 body 内容协调，agent 不大量幻觉）
 
 ## Assumptions
 
@@ -198,6 +207,6 @@
 - A/B 模式比较框架（同时跑 legacy + skills 双轨）：不做，单线推进
 - 向量检索 / embedding-based 相似度：不引入
 - 部署 OpenViking server / VikingDB / Rust crates：不引入
-- Anthropic Skills API 的 tool-calling 动态加载（agent 自己 `load_skill()`）：本期采用静态注入，将来可作为 follow-up
 - Cross-trading-pair 的经验泛化（同 agent 在 BTC vs ETH 上分别有独立 skills 还是共享）：保持当前行为（按 agent 不按 pair）
+- `load_skill` 的缓存层（如 LRU 缓存 body 内容）：本期每次调用都直接读文件（4-agent × 偶发调用频次完全可接受），有性能压力时再加
 - 自动化的 skill 命名冲突解决（同 agent 同 kind 下重名）：reflection 写入前手动检测 + 仅更新 `pnl_track`，更复杂的 merge / split 不在范围
