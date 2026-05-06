@@ -2,9 +2,9 @@
 
 Validates:
 - Install target uses .[test] not .[dev]
-- CI steps execute in the correct order: lint -> format -> pytest -> docker build
-- docker build step only runs on main branch
-- Any step failure blocks subsequent steps (sequential dependency)
+- Job ordering: lint -> test -> docker-build (via `needs`)
+- docker-build job only runs on main branch
+- No critical step has continue-on-error: true
 """
 
 from pathlib import Path
@@ -19,6 +19,11 @@ def _load_workflow() -> dict:
         return yaml.safe_load(f)
 
 
+def _all_run_commands(job: dict) -> str:
+    """Concatenate all `run` strings in a job's steps for substring search."""
+    return "\n".join(s.get("run", "") for s in job.get("steps", []))
+
+
 class TestInstallTarget:
     """Verify the install command uses the [test] optional-dependency group."""
 
@@ -27,108 +32,85 @@ class TestInstallTarget:
 
     def test_install_uses_test_group_not_dev(self):
         workflow = _load_workflow()
-        test_job = workflow["jobs"]["test"]
-        steps = test_job["steps"]
-        install_steps = [s for s in steps if "run" in s and "pip install" in s.get("run", "")]
-        assert install_steps, "Must have at least one pip install step"
-        for step in install_steps:
-            cmd = step["run"]
-            assert ".[dev]" not in cmd, f"Install must not use .[dev], got: {cmd}"
-            assert ".[test]" in cmd, f"Install must use .[test], got: {cmd}"
+        # Each job that runs Python tooling installs deps via `uv sync --extra test`
+        # (replacing the legacy `pip install .[test]`). Verify both forms are
+        # acceptable but [dev] is forbidden.
+        for job_name in ("lint", "test"):
+            cmds = _all_run_commands(workflow["jobs"][job_name])
+            assert ".[dev]" not in cmds, f"{job_name} job must not use .[dev], got: {cmds}"
+            uses_test_extra = "--extra test" in cmds or ".[test]" in cmds
+            assert uses_test_extra, f"{job_name} job must install with [test] extras, got: {cmds}"
 
-    def test_install_step_name_descriptive(self):
+
+class TestJobOrdering:
+    """Verify CI jobs execute in the correct sequence via `needs`."""
+
+    def test_lint_job_exists(self):
         workflow = _load_workflow()
-        test_job = workflow["jobs"]["test"]
-        steps = test_job["steps"]
-        install_steps = [s for s in steps if "run" in s and "pip install" in s.get("run", "")]
-        for step in install_steps:
-            assert step.get("name"), "Install step must have a descriptive name"
+        assert "lint" in workflow["jobs"], "Must have a lint job"
 
-
-class TestStepOrdering:
-    """Verify CI steps execute in the correct sequence."""
-
-    def _get_step_names(self, steps: list[dict]) -> list[str]:
-        return [s.get("name", "") for s in steps if "run" in s]
-
-    def _find_step_index(self, steps: list[dict], keyword: str) -> int:
-        """Return index of first step whose run command contains keyword."""
-        for i, step in enumerate(steps):
-            if keyword in step.get("run", ""):
-                return i
-        return -1
-
-    def test_lint_step_exists(self):
+    def test_test_job_exists(self):
         workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        idx = self._find_step_index(steps, "ruff check")
-        assert idx >= 0, "Must have a ruff check (lint) step"
+        assert "test" in workflow["jobs"], "Must have a test job"
 
-    def test_format_check_step_exists(self):
+    def test_lint_runs_ruff_check(self):
         workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        idx = self._find_step_index(steps, "ruff format --check")
-        assert idx >= 0, "Must have a ruff format --check step"
+        cmds = _all_run_commands(workflow["jobs"]["lint"])
+        assert "ruff check" in cmds, "lint job must run `ruff check`"
 
-    def test_pytest_step_exists(self):
+    def test_lint_runs_ruff_format_check(self):
         workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        idx = self._find_step_index(steps, "pytest")
-        assert idx >= 0, "Must have a pytest step"
+        cmds = _all_run_commands(workflow["jobs"]["lint"])
+        assert "ruff format --check" in cmds, "lint job must run `ruff format --check`"
 
-    def test_lint_before_format_check(self):
+    def test_test_runs_pytest(self):
         workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        lint_idx = self._find_step_index(steps, "ruff check")
-        format_idx = self._find_step_index(steps, "ruff format --check")
-        assert lint_idx < format_idx, (
-            f"ruff check (lint) must come before ruff format --check; lint_idx={lint_idx}, format_idx={format_idx}"
-        )
+        cmds = _all_run_commands(workflow["jobs"]["test"])
+        assert "pytest" in cmds, "test job must run pytest"
 
-    def test_format_check_before_pytest(self):
+    def test_test_depends_on_lint(self):
         workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        format_idx = self._find_step_index(steps, "ruff format --check")
-        pytest_idx = self._find_step_index(steps, "pytest")
-        assert format_idx < pytest_idx, (
-            f"ruff format --check must come before pytest; format_idx={format_idx}, pytest_idx={pytest_idx}"
-        )
-
-    def test_install_before_lint(self):
-        workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        install_idx = self._find_step_index(steps, "pip install")
-        lint_idx = self._find_step_index(steps, "ruff check")
-        assert install_idx < lint_idx, f"install must come before lint; install_idx={install_idx}, lint_idx={lint_idx}"
+        needs = workflow["jobs"]["test"].get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        assert "lint" in needs, "test job must depend on lint via `needs`"
 
 
 class TestDockerBuildJob:
-    """Verify docker build job only runs on main branch."""
+    """Verify docker-build job depends on test and only runs on main branch."""
+
+    def _docker_job(self, workflow: dict) -> dict:
+        # Accept either name to be tolerant of future renames.
+        for name in ("docker-build", "docker"):
+            if name in workflow["jobs"]:
+                return workflow["jobs"][name]
+        raise AssertionError("Must have a docker-build (or docker) job")
 
     def test_docker_job_exists(self):
         workflow = _load_workflow()
-        assert "docker" in workflow["jobs"], "Must have a docker job"
+        self._docker_job(workflow)
 
     def test_docker_job_depends_on_test_job(self):
         workflow = _load_workflow()
-        docker_job = workflow["jobs"]["docker"]
+        docker_job = self._docker_job(workflow)
         needs = docker_job.get("needs", [])
         if isinstance(needs, str):
             needs = [needs]
-        assert "test" in needs, "docker job must depend on test job via 'needs'"
+        assert "test" in needs, "docker-build job must depend on test job via 'needs'"
 
     def test_docker_job_runs_only_on_main(self):
         workflow = _load_workflow()
-        docker_job = workflow["jobs"]["docker"]
+        docker_job = self._docker_job(workflow)
         condition = docker_job.get("if", "")
-        assert "main" in condition, f"docker job must have 'if' condition restricting to main branch; got: {condition}"
+        assert "main" in condition, (
+            f"docker-build job must have 'if' condition restricting to main branch; got: {condition}"
+        )
 
     def test_docker_build_step_exists(self):
         workflow = _load_workflow()
-        docker_job = workflow["jobs"]["docker"]
-        steps = docker_job["steps"]
-        build_steps = [s for s in steps if "docker build" in s.get("run", "")]
-        assert build_steps, "docker job must have a docker build step"
+        docker_job = self._docker_job(workflow)
+        cmds = _all_run_commands(docker_job)
+        assert "docker build" in cmds, "docker-build job must have a docker build step"
 
 
 class TestStepFailureBlocking:
@@ -144,14 +126,16 @@ class TestStepFailureBlocking:
         keywords = ["ruff check", "ruff format --check", "pytest"]
         return [s for s in steps if any(kw in s.get("run", "") for kw in keywords)]
 
-    def test_lint_step_does_not_continue_on_error(self):
+    def test_critical_steps_do_not_continue_on_error(self):
         workflow = _load_workflow()
-        steps = workflow["jobs"]["test"]["steps"]
-        critical = self._get_critical_steps(steps)
-        for step in critical:
-            assert not step.get("continue-on-error", False), (
-                f"Critical step '{step.get('name', step.get('run', ''))}' must not have continue-on-error: true"
-            )
+        for job_name in ("lint", "test"):
+            steps = workflow["jobs"][job_name]["steps"]
+            critical = self._get_critical_steps(steps)
+            for step in critical:
+                assert not step.get("continue-on-error", False), (
+                    f"Critical step '{step.get('name', step.get('run', ''))}' "
+                    f"in {job_name} must not have continue-on-error: true"
+                )
 
     def test_test_job_has_no_fail_fast_false(self):
         """Verify strategy.fail-fast is not set to false (default is true)."""
@@ -159,4 +143,4 @@ class TestStepFailureBlocking:
         test_job = workflow["jobs"]["test"]
         strategy = test_job.get("strategy", {})
         fail_fast = strategy.get("fail-fast", True)
-        assert fail_fast is not False, "test job strategy.fail-fast must not be false - steps must block on failure"
+        assert fail_fast is not False, "test job strategy.fail-fast must not be false"

@@ -30,7 +30,8 @@ class TestBuildInitialState:
     def test_default(self):
         cfg = self._mock_config()
         result = build_initial_state("BTC/USDT", config=cfg)
-        assert result["metadata"]["pair"] == "BTC/USDT"
+        # spec 013 FR-204: metadata.pair is a Pair object, not a string.
+        assert result["metadata"]["pair"].canonical() == "BTC/USDT"
         assert result["metadata"]["exchange_id"] == "binance"
         assert result["metadata"]["timeframe"] == "1h"
         assert result["metadata"]["ohlcv_limit"] == 200
@@ -49,7 +50,7 @@ class TestBuildInitialState:
             ohlcv_limit=500,
             config=cfg,
         )
-        assert result["metadata"]["pair"] == "ETH/USDT"
+        assert result["metadata"]["pair"].canonical() == "ETH/USDT"
         assert result["metadata"]["engine"] == "live"
         assert result["metadata"]["exchange_id"] == "okx"
         assert result["metadata"]["timeframe"] == "4h"
@@ -84,5 +85,5 @@ class TestBuildInitialState:
         cfg = self._mock_config()
         with patch("cryptotrader.config.load_config", return_value=cfg):
             result = build_initial_state("BTC/USDT")
-        assert result["metadata"]["pair"] == "BTC/USDT"
+        assert result["metadata"]["pair"].canonical() == "BTC/USDT"
         assert result["metadata"]["analysis_model"] == "gpt-4o"
