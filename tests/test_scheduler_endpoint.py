@@ -263,6 +263,31 @@ def test_get_scheduler_status_returns_pairs(client, real_scheduler):
     assert "ETH/USDT" in data["pairs"]
 
 
+def test_get_scheduler_status_surfaces_pair_last_error(client, real_scheduler):
+    """When a pair's last cycle errored, pair_statuses must surface the
+    last_error string so the dashboard can show "what went wrong" without
+    grep-ing the scheduler log."""
+    real_scheduler._status["BTC/USDT"] = {
+        "last_run": "2026-05-06T14:00:00+00:00",
+        "last_action": "short",
+        "risk_passed": True,
+        "last_error": "execution_failed: Insufficient ETH",
+        "trace_id": "abc-123",
+    }
+    fake_jobs: list = []
+    p1, p2 = _patch_scheduler_running(real_scheduler, fake_jobs)
+    with p1, p2, patch("api.routes.scheduler._get_scheduler", return_value=real_scheduler):
+        resp = client.get("/scheduler/status")
+
+    data = resp.json()
+    btc = next((s for s in data["pair_statuses"] if s["pair"] == "BTC/USDT"), None)
+    assert btc is not None
+    assert btc["last_error"] == "execution_failed: Insufficient ETH"
+    assert btc["last_action"] == "short"
+    assert btc["risk_passed"] is True
+    assert btc["trace_id"] == "abc-123"
+
+
 def test_get_scheduler_status_jobs_shape(client, real_scheduler):
     """Each job object has job_id, name, next_run_time, pairs fields."""
     fake_jobs = [

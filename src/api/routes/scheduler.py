@@ -44,6 +44,17 @@ class SchedulerJobStatus(BaseModel):
     pairs: list[str]
 
 
+class PairStatus(BaseModel):
+    """Per-pair last-cycle status surfaced from Scheduler._status."""
+
+    pair: str
+    last_run: datetime | None = None
+    last_action: str | None = None
+    risk_passed: bool | None = None
+    last_error: str | None = None
+    trace_id: str | None = None
+
+
 class SchedulerStatusResponse(BaseModel):
     """Full scheduler status response."""
 
@@ -52,6 +63,8 @@ class SchedulerStatusResponse(BaseModel):
     cycle_count: int
     interval_minutes: int
     pairs: list[str]
+    # Per-pair last-cycle outcome — empty when scheduler hasn't run yet.
+    pair_statuses: list[PairStatus] = []
 
 
 # ---------------------------------------------------------------------------
@@ -115,12 +128,35 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
             )
         )
 
+    pair_statuses: list[PairStatus] = []
+    for p, s in (scheduler._status or {}).items():
+        last_run_raw = s.get("last_run")
+        last_run: datetime | None = None
+        if isinstance(last_run_raw, str):
+            try:
+                last_run = datetime.fromisoformat(last_run_raw)
+            except ValueError:
+                last_run = None
+        elif isinstance(last_run_raw, datetime):
+            last_run = last_run_raw
+        pair_statuses.append(
+            PairStatus(
+                pair=p,
+                last_run=last_run,
+                last_action=s.get("last_action"),
+                risk_passed=s.get("risk_passed"),
+                last_error=s.get("last_error"),
+                trace_id=s.get("trace_id"),
+            )
+        )
+
     return SchedulerStatusResponse(
         running=True,
         jobs=job_statuses,
         cycle_count=scheduler._cycle_count,
         interval_minutes=scheduler.interval_minutes,
         pairs=[p.canonical() for p in scheduler.pairs],
+        pair_statuses=pair_statuses,
     )
 
 
