@@ -135,7 +135,7 @@ class MacroCollector:
                 if isinstance(val, int | float):
                     result[key] = float(val)
         except Exception:
-            logger.debug("Failed to load store supplements", exc_info=True)
+            logger.info("Failed to load store supplements", exc_info=True)
         return result
 
     async def collect(self, date: str | None = None) -> MacroData:

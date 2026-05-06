@@ -57,7 +57,7 @@ def _config_model_costs() -> dict[str, tuple[float, float]]:
 
         entries = load_config().llm.model_costs or []
     except Exception:
-        logger.debug("model_costs: config read failed", exc_info=True)
+        logger.warning("model_costs: config read failed", exc_info=True)
         return {}
     return {e.name: (float(e.input_usd_per_mtok), float(e.output_usd_per_mtok)) for e in entries if e.name}
 
@@ -204,7 +204,7 @@ class TokenTrackerCallback(BaseCallbackHandler):
                 cache_hit=cache_hit,
             )
         except Exception:  # pragma: no cover — never break the pipeline
-            logger.debug("token tracker on_llm_end failed", exc_info=True)
+            logger.info("token tracker on_llm_end failed", exc_info=True)
 
     def on_chat_model_end(self, response: LLMResult, **_: Any) -> None:
         # Some provider integrations dispatch the chat variant instead.

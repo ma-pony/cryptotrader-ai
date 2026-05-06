@@ -261,7 +261,7 @@ async def chat_stream(req: ChatStreamRequest):
     try:
         return await _handle_new_analysis(session_id, req)
     except Exception:
-        logger.debug("Background task mode unavailable, falling back to legacy", exc_info=True)
+        logger.info("Background task mode unavailable, falling back to legacy", exc_info=True)
         return StreamingResponse(
             _run_chat_stream_legacy(req),
             media_type="text/event-stream",

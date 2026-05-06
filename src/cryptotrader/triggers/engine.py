@@ -175,7 +175,7 @@ class PriceTriggerEngine:
                 if data.get("e") == "24hrTicker":
                     await self._handle_ticker(data)
             except Exception:
-                logger.debug("Failed to parse WS message", exc_info=True)
+                logger.info("Failed to parse WS message", exc_info=True)
 
     async def _handle_ticker(self, data: dict[str, Any]) -> None:
         symbol = data.get("s", "").upper()
@@ -196,7 +196,7 @@ class PriceTriggerEngine:
                 if triggered:
                     await self._dispatch(rule, {"pair": pair, "price": price, "ts": now})
             except Exception:
-                logger.debug("Error evaluating rule %s", rule.id, exc_info=True)
+                logger.info("Error evaluating rule %s", rule.id, exc_info=True)
 
     def _append_price_buffer(self, pair: str, ts: float, price: float) -> None:
         """Push (ts, price) to the rolling buffer and prune entries older than
@@ -333,7 +333,7 @@ class PriceTriggerEngine:
                     if candles:
                         self._klines[(pair, interval)] = candles
                 except Exception:
-                    logger.debug("kline fetch failed for %s %s", pair, interval, exc_info=True)
+                    logger.info("kline fetch failed for %s %s", pair, interval, exc_info=True)
             try:
                 await asyncio.sleep(_KLINE_POLL_SECONDS)
             except asyncio.CancelledError:

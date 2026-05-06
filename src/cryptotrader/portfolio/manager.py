@@ -375,8 +375,10 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
             positions = await exchange.get_positions(current_prices=current_prices)
         except TypeError:
             positions = await exchange.get_positions()
-    except Exception:
-        logger.debug("Failed to read portfolio from exchange", exc_info=True)
+    except Exception as e:
+        logger.warning("Failed to read portfolio from exchange: %s: %s", type(e).__name__, e, exc_info=True)
+        # Stash error context on state so the rejection event can carry it (规范 3).
+        state["data"]["_portfolio_read_error"] = {"type": type(e).__name__, "msg": str(e)}
         return None
 
     cash = balances.get("USDT", 0.0)

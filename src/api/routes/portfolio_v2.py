@@ -138,7 +138,7 @@ async def _load_snapshots(database_url: str | None) -> list[dict]:
         pm = PortfolioManager(database_url)
         return await pm.load_snapshots("default")
     except Exception:
-        logger.debug("equity snapshot read failed for sharpe", exc_info=True)
+        logger.info("equity snapshot read failed for sharpe", exc_info=True)
         return []
 
 
@@ -149,7 +149,7 @@ async def _load_commits(database_url: str | None) -> list:
         store = JournalStore(database_url)
         return await store.log(limit=1000)
     except Exception:
-        logger.debug("journal log read failed for pnl stats", exc_info=True)
+        logger.info("journal log read failed for pnl stats", exc_info=True)
         return []
 
 
@@ -259,7 +259,7 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
             timeout=15.0,
         )
     except Exception:
-        logger.debug("read_portfolio_from_exchange failed", exc_info=True)
+        logger.warning("read_portfolio_from_exchange failed", exc_info=True)
         live = None
 
     try:

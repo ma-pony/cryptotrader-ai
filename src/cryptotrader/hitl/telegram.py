@@ -103,7 +103,7 @@ async def update_telegram_message(
                 text=status_text,
             )
     except Exception:
-        logger.debug("Failed to update Telegram HITL message", exc_info=True)
+        logger.info("Failed to update Telegram HITL message", exc_info=True)
 
 
 class TelegramApprovalBot:
@@ -175,7 +175,7 @@ class TelegramApprovalBot:
         try:
             await query.edit_message_text(text=status_text)
         except Exception:
-            logger.debug("Failed to edit callback message", exc_info=True)
+            logger.info("Failed to edit callback message", exc_info=True)
 
         from cryptotrader.hitl.notifier import notify_hitl_decision
 

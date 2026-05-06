@@ -50,7 +50,7 @@ def disable_llm_cache() -> None:
         set_llm_cache(None)  # type: ignore[arg-type]
         _logger.info("LLM cache disabled (backtest mode)")
     except Exception:
-        _logger.debug("Failed to disable LLM cache", exc_info=True)
+        _logger.info("Failed to disable LLM cache", exc_info=True)
 
 
 def restore_llm_cache() -> None:
@@ -144,7 +144,7 @@ def _try_manifest_llm(
         try:
             resilient = resilient.with_config({"callbacks": [default_callback()]})
         except Exception:
-            logger.debug("manifest llm: failed to bind token tracker callback", exc_info=True)
+            logger.info("manifest llm: failed to bind token tracker callback", exc_info=True)
     return resilient
 
 

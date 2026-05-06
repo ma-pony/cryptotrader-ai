@@ -136,9 +136,11 @@ class RedisStateManager:
             return False
         try:
             await self._redis.ping()
+            self._last_ping_error: dict[str, str] | None = None
             return True
-        except Exception:
-            logger.debug("Redis ping failed", exc_info=True)
+        except Exception as e:
+            logger.warning("Redis ping failed: %s: %s", type(e).__name__, e, exc_info=True)
+            self._last_ping_error = {"type": type(e).__name__, "msg": str(e)}
             return False
 
     async def get(self, key: str) -> str | None:

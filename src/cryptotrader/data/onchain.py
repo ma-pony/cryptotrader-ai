@@ -31,7 +31,7 @@ def _load_btc_network_metrics() -> dict[str, float]:
             if isinstance(val, int | float):
                 result[source] = float(val)
     except Exception:
-        logger.debug("Failed to load BTC network metrics from store", exc_info=True)
+        logger.info("Failed to load BTC network metrics from store", exc_info=True)
     return result
 
 

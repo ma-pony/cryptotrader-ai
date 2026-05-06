@@ -372,7 +372,7 @@ class BacktestEngine:
                 try:
                     self.progress_callback((i - lookback) / max(total_bars, 1))
                 except Exception:
-                    logger.debug("progress_callback raised", exc_info=True)
+                    logger.info("progress_callback raised", exc_info=True)
             await self._process_backtest_bar(i, candles, st)
 
         equity, final_trades = self._close_final_position(

@@ -49,11 +49,13 @@ class RiskGate:
 
         # If Redis was configured but is now unavailable, reject conservatively
         if self._redis_was_configured and not await self.redis_state.ping():
-            logger.warning("Redis configured but unreachable — rejecting trade conservatively")
+            err = getattr(self.redis_state, "_last_ping_error", None) or {}
+            err_suffix = f" [{err['type']}: {err['msg']}]" if err else ""
+            logger.warning("Redis configured but unreachable — rejecting trade conservatively%s", err_suffix)
             return GateResult(
                 passed=False,
                 rejected_by="redis_unavailable",
-                reason="Redis configured but unreachable — cannot verify risk state",
+                reason=f"Redis configured but unreachable — cannot verify risk state{err_suffix}",
             )
 
         failed: GateResult | None = None

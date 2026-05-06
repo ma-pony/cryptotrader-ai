@@ -98,7 +98,7 @@ async def _fetch_long_short(pair_symbol: str, exchange: str) -> tuple[float | No
                     if isinstance(data, list) and data:
                         ls_ratio = float(data[0].get("longShortRatio", 0.0) or 0.0)
                 except (ValueError, KeyError, TypeError):
-                    logger.debug("long/short global parse failed", exc_info=True)
+                    logger.info("long/short global parse failed", exc_info=True)
             if not isinstance(t_resp, Exception) and t_resp.status_code == 200:
                 try:
                     data = t_resp.json()
@@ -106,9 +106,9 @@ async def _fetch_long_short(pair_symbol: str, exchange: str) -> tuple[float | No
                         long_share = float(data[0].get("longAccount", 0.0) or 0.0)
                         top_share = long_share if long_share > 0 else None
                 except (ValueError, KeyError, TypeError):
-                    logger.debug("long/short top parse failed", exc_info=True)
+                    logger.info("long/short top parse failed", exc_info=True)
     except Exception:
-        logger.debug("long/short ratio fetch failed for %s", pair_symbol, exc_info=True)
+        logger.info("long/short ratio fetch failed for %s", pair_symbol, exc_info=True)
     return ls_ratio, top_share
 
 
@@ -134,7 +134,7 @@ async def get_market_data(pair: str, exchange: str = Query(default="binance")):
             top_traders_long_share=top_share,
         )
     except Exception:
-        logger.debug("Market data fetch failed for %s on %s", pair_symbol, exchange, exc_info=True)
+        logger.info("Market data fetch failed for %s on %s", pair_symbol, exchange, exc_info=True)
         return MarketDataResponse()
 
 
@@ -183,5 +183,5 @@ async def get_ohlcv(
         bars = [OHLCVBar(time=int(c[0]), open=c[1], high=c[2], low=c[3], close=c[4], volume=c[5]) for c in raw]
         return OHLCVResponse(bars=bars)
     except Exception:
-        logger.debug("OHLCV fetch failed for %s %s on %s", pair_symbol, timeframe, exchange, exc_info=True)
+        logger.info("OHLCV fetch failed for %s %s on %s", pair_symbol, timeframe, exchange, exc_info=True)
         return OHLCVResponse()

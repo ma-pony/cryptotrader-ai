@@ -224,7 +224,7 @@ def _load_session(name: str) -> dict | None:
             with open(params_path) as f:
                 params = json.load(f)
         except (OSError, json.JSONDecodeError):
-            logger.debug("Failed to load session params %s", params_path, exc_info=True)
+            logger.info("Failed to load session params %s", params_path, exc_info=True)
 
     saved_at = datetime.fromtimestamp(result_path.stat().st_mtime, tz=UTC).isoformat()
     return {

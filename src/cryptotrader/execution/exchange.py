@@ -161,7 +161,7 @@ class LiveExchange:
         try:
             positions = await self.get_positions()
         except Exception:
-            logger.debug("derive_pos_side: get_positions failed, using side-inference", exc_info=True)
+            logger.warning("derive_pos_side: get_positions failed, using side-inference", exc_info=True)
             return "long" if order.side == "buy" else "short"
 
         existing = positions.get(order.pair) or {}
@@ -252,7 +252,7 @@ class LiveExchange:
                 raise
             # Spot exchanges that don't support fetchPositions raise ccxt.NotSupported
             # or BadSymbol. Fall through and derive from balance.
-            logger.debug("fetchPositions not available, deriving from balance", exc_info=True)
+            logger.warning("fetchPositions not available, deriving from balance", exc_info=True)
             bal = await self.get_balance()
             for asset, amount in bal.items():
                 if asset == "USDT" or amount == 0:

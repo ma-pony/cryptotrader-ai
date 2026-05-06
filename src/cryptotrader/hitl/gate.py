@@ -73,7 +73,7 @@ async def _should_trigger_with_cold_start(state: dict[str, Any], config: HitlCon
             if count < config.cold_start_min_trades:
                 return True, "cold_start"
         except Exception:
-            logger.debug("Cold-start check failed, skipping", exc_info=True)
+            logger.warning("Cold-start check failed, skipping", exc_info=True)
 
     return False, ""
 

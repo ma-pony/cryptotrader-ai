@@ -83,7 +83,7 @@ async def _fetch_social_buzz(symbol: str, date: str | None = None) -> float:
         cache_result(cache_key, result)
         return result
     except Exception:
-        logger.debug("Social buzz fetch failed for %s", symbol, exc_info=True)
+        logger.info("Social buzz fetch failed for %s", symbol, exc_info=True)
         return 0.0
 
 
@@ -270,5 +270,5 @@ class NewsCollector:
                     )
                 return result
         except Exception:
-            logger.debug("News fetch failed", exc_info=True)
+            logger.info("News fetch failed", exc_info=True)
             return []

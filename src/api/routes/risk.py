@@ -109,7 +109,7 @@ async def _build_correlation_groups(
             portfolio = await pm.get_portfolio()
             raw_positions = portfolio.get("positions", {}) or {}
         except Exception:
-            logger.debug("correlation groups: portfolio read failed", exc_info=True)
+            logger.info("correlation groups: portfolio read failed", exc_info=True)
             raw_positions = {}
 
     open_pairs = {p for p, pos in raw_positions.items() if float(pos.get("amount", 0.0) or 0.0) != 0.0}
@@ -144,7 +144,7 @@ async def _known_pairs(
                 if float(pos.get("amount", 0.0) or 0.0) != 0.0:
                     pairs.add(p)
         except Exception:
-            logger.debug("known pairs: portfolio read failed", exc_info=True)
+            logger.info("known pairs: portfolio read failed", exc_info=True)
 
     try:
         from cryptotrader.journal.store import JournalStore
@@ -155,7 +155,7 @@ async def _known_pairs(
             if c.pair:
                 pairs.add(c.pair)
     except Exception:
-        logger.debug("known pairs: journal read failed", exc_info=True)
+        logger.info("known pairs: journal read failed", exc_info=True)
 
     return sorted(pairs)
 
@@ -191,7 +191,7 @@ async def _build_cooldowns(
         if post_loss_ttl > 0:
             out.insert(0, CooldownOut(pair="*", until_seconds=post_loss_ttl, kind="post-loss"))
     except Exception:
-        logger.debug("cooldown TTL read failed", exc_info=True)
+        logger.info("cooldown TTL read failed", exc_info=True)
     return out
 
 
@@ -203,7 +203,7 @@ async def _build_recent_blocks(database_url: str | None) -> list[RecentBlockOut]
         store = JournalStore(database_url)
         commits = await store.log(limit=200)
     except Exception:
-        logger.debug("recent blocks: journal read failed", exc_info=True)
+        logger.info("recent blocks: journal read failed", exc_info=True)
         return []
 
     blocks: list[RecentBlockOut] = []
@@ -249,7 +249,7 @@ async def _compute_drawdown_pct(
         pm = PortfolioManager(database_url)
         return round(abs(float(await pm.get_drawdown())) * 100.0, 2)
     except Exception:
-        logger.debug("drawdown_pct: read failed", exc_info=True)
+        logger.info("drawdown_pct: read failed", exc_info=True)
         return None
 
 
@@ -277,7 +277,7 @@ async def _compute_daily_loss_pct(
         # Positive value = loss magnitude; negative = profit. Frontend meter expects percent.
         return round(-float(pnl_24h) / equity * 100.0, 2)
     except Exception:
-        logger.debug("daily_loss_pct: read failed", exc_info=True)
+        logger.info("daily_loss_pct: read failed", exc_info=True)
         return None
 
 
@@ -304,7 +304,7 @@ async def _compute_total_exposure_pct(
             notional += amount * price
         return round(notional / equity * 100.0, 2)
     except Exception:
-        logger.debug("total_exposure_pct: read failed", exc_info=True)
+        logger.info("total_exposure_pct: read failed", exc_info=True)
         return None
 
 
@@ -326,7 +326,7 @@ async def _compute_cvar_95(
             pm = PortfolioManager(database_url)
             snaps = await pm.load_snapshots("default")
         except Exception:
-            logger.debug("cvar_95: read failed", exc_info=True)
+            logger.info("cvar_95: read failed", exc_info=True)
             return None
 
     daily_last: dict[str, float] = {}

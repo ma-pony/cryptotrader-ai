@@ -99,4 +99,4 @@ class SnapshotAggregator:
             if derivatives.get("liquidations_24h") and not onchain_data.liquidations_24h:
                 onchain_data.liquidations_24h = derivatives["liquidations_24h"]
         except Exception:
-            logger.debug("MCP enrichment failed for derivatives", exc_info=True)
+            logger.info("MCP enrichment failed for derivatives", exc_info=True)

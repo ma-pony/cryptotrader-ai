@@ -91,7 +91,7 @@ class TelegramBackend:
             except asyncio.CancelledError:
                 return
             except Exception:
-                logger.debug("Telegram polling error", exc_info=True)
+                logger.info("Telegram polling error", exc_info=True)
                 await asyncio.sleep(5)
 
     async def _handle_update(self, update: dict[str, Any]) -> None:
@@ -112,7 +112,7 @@ class TelegramBackend:
                         json={"chat_id": chat_id, "text": status_text},
                     )
             except Exception:
-                logger.debug("Failed to send /status reply", exc_info=True)
+                logger.info("Failed to send /status reply", exc_info=True)
 
     @staticmethod
     def _format_message(event: str, data: dict[str, Any]) -> str:

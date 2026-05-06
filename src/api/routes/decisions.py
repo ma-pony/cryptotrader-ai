@@ -423,7 +423,7 @@ async def _build_bias(store: Any) -> BiasOut | None:
     try:
         stats = await detect_biases(store, days=30)
     except Exception:
-        logger.debug("detect_biases failed", exc_info=True)
+        logger.info("detect_biases failed", exc_info=True)
         _bias_cache[cache_key] = (now, None)
         return None
     if not stats:

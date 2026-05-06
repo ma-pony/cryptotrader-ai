@@ -77,4 +77,4 @@ async def notify_hitl_decision(
                 },
             )
     except Exception:
-        logger.debug("Notifier dispatch failed for hitl_decision", exc_info=True)
+        logger.info("Notifier dispatch failed for hitl_decision", exc_info=True)

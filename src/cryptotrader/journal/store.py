@@ -373,7 +373,7 @@ class JournalStore:
                     await session.commit()
                 flushed.append(rec)
             except Exception:
-                logger.debug("Flush pending commit %s failed, will retry later", rec.get("hash"), exc_info=True)
+                logger.warning("Flush pending commit %s failed, will retry later", rec.get("hash"), exc_info=True)
         if flushed:
             for rec in flushed:
                 self._memory.remove(rec)

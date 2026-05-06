@@ -111,7 +111,7 @@ async def collect_snapshot(state: ArenaState) -> dict:
             registry = MCPRegistry.from_config(cfg.mcp)
             adapter = MCPAdapter(registry, cfg.mcp)
         except Exception:
-            logger.debug("MCP adapter creation failed, using direct providers", exc_info=True)
+            logger.warning("MCP adapter creation failed, using direct providers", exc_info=True)
 
     snapshot = await agg.collect(
         pair,
@@ -184,7 +184,7 @@ async def update_past_pnl(state: ArenaState) -> dict:
         if updated:
             logger.info("Updated PnL for %d past trades on %s", updated, pair)
     except Exception:
-        logger.debug("PnL back-fill failed", exc_info=True)
+        logger.warning("PnL back-fill failed", exc_info=True)
 
     return {"data": {}}
 
@@ -234,13 +234,13 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
             agent_corrections = generate_per_agent_corrections(biases)
             verdict_calibration = generate_verdict_calibration(biases)
         except Exception:
-            logger.debug("Bias detection failed, continuing without calibration", exc_info=True)
+            logger.warning("Bias detection failed, continuing without calibration", exc_info=True)
 
         # Load structured experience memory (fast SQLite read)
         try:
             experience_memory = await load_reflections()
         except Exception:
-            logger.debug("Failed to load experience memory", exc_info=True)
+            logger.warning("Failed to load experience memory", exc_info=True)
 
         # Maybe trigger background reflection (fire-and-forget, doesn't block trading)
         cycle_count = state["metadata"].get("cycle_count", 0)
@@ -253,7 +253,7 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
                     name="reflect",
                 )
             except Exception:
-                logger.debug("Failed to schedule reflection", exc_info=True)
+                logger.info("Failed to schedule reflection", exc_info=True)
 
     return {
         "data": {
@@ -321,7 +321,7 @@ async def _build_position_from_portfolio(pair: str, price: float, db_url: str | 
             "amount": abs(amount),
         }
     except Exception:
-        logger.debug("Portfolio fetch for position context failed", exc_info=True)
+        logger.warning("Portfolio fetch for position context failed", exc_info=True)
         return {"side": "flat"}
 
 

@@ -200,7 +200,7 @@ async def _init_hitl_telegram(app_instance: FastAPI) -> None:
             if expired:
                 logger.info("Expired %d stale HITL approvals on startup", expired)
         except Exception:
-            logger.debug("Failed to expire stale HITL approvals", exc_info=True)
+            logger.info("Failed to expire stale HITL approvals", exc_info=True)
 
     if not config.hitl.telegram.enabled or not config.hitl.telegram.bot_token:
         return
@@ -344,7 +344,7 @@ def _get_redis_for_rate_limit() -> Any:
         _redis_client = redis.from_url(url, decode_responses=True)
         return _redis_client
     except Exception:
-        logger.debug("Rate-limit Redis client unavailable", exc_info=True)
+        logger.info("Rate-limit Redis client unavailable", exc_info=True)
         return None
 
 

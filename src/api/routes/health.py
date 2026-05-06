@@ -87,7 +87,7 @@ async def _check_llm(base_url: str, api_key: str) -> str:
                 return "ok"
         return "unavailable"
     except Exception:
-        logger.debug("LLM health check failed", exc_info=True)
+        logger.info("LLM health check failed", exc_info=True)
         return "unavailable"
 
 
@@ -118,7 +118,7 @@ async def health():
             await r.ping()
             checks["redis"] = "ok"
         except Exception:
-            logger.debug("Redis health check failed", exc_info=True)
+            logger.info("Redis health check failed", exc_info=True)
             checks["redis"] = "unavailable"
             # Drop dead client so next probe rebuilds it.
             _redis_clients.pop(redis_url, None)
@@ -137,7 +137,7 @@ async def health():
                 await conn.execute(text("SELECT 1"))
             checks["db"] = "ok"
         except Exception:
-            logger.debug("DB health check failed", exc_info=True)
+            logger.info("DB health check failed", exc_info=True)
             checks["db"] = "unavailable"
             # Dispose + drop dead engine so next probe rebuilds it.
             old = _db_engines.pop(db_url, None)
@@ -145,7 +145,7 @@ async def health():
                 try:
                     await old.dispose()  # type: ignore[union-attr]
                 except Exception:
-                    logger.debug("Engine dispose failed", exc_info=True)
+                    logger.info("Engine dispose failed", exc_info=True)
     else:
         checks["db"] = "not_configured"
 

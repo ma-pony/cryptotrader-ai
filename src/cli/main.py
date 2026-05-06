@@ -352,7 +352,7 @@ async def _scheduler_status():
         daily_pnl = await pm.get_daily_pnl()
         drawdown = await pm.get_drawdown()
     except Exception:
-        logger.debug("Failed to load portfolio status", exc_info=True)
+        logger.info("Failed to load portfolio status", exc_info=True)
         portfolio = {"total_value": 0, "positions": {}}
         daily_pnl = 0.0
         drawdown = 0.0

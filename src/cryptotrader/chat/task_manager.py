@@ -128,7 +128,7 @@ class BackgroundTaskManager:
             )
             await state_mgr.publish("analysis:new_workflow", payload)
         except Exception:
-            logger.debug("Failed to broadcast new_workflow", exc_info=True)
+            logger.info("Failed to broadcast new_workflow", exc_info=True)
 
     def _on_task_done(self, session_id: str) -> None:
         task = self._tasks.get(session_id)

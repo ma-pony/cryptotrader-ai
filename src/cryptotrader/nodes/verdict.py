@@ -97,7 +97,7 @@ async def _should_downgrade_to_weighted(state: ArenaState) -> bool:
         if await rsm.is_circuit_breaker_active():
             return False
     except Exception:
-        logger.debug("Redis unavailable for downgrade check, keeping AI verdict", exc_info=True)
+        logger.warning("Redis unavailable for downgrade check, keeping AI verdict", exc_info=True)
         return False
     return True
 
@@ -366,7 +366,7 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
         drawdown = await pm.get_drawdown()
         pm_returns = await pm.get_returns()
     except Exception:
-        logger.debug("Portfolio snapshot data fetch failed", exc_info=True)
+        logger.warning("Portfolio snapshot data fetch failed", exc_info=True)
         daily_pnl = None  # surface "unknown" downstream rather than synthetic 0
         drawdown = 0.0
         pm_returns = []
@@ -439,13 +439,15 @@ async def risk_check(state: ArenaState) -> dict:
     if portfolio is None:
         portfolio = await _build_risk_portfolio(state, config)
         if portfolio is None:
-            logger.warning("Exchange returned 0 total_value in live mode — rejecting")
+            err = state["data"].get("_portfolio_read_error") or {}
+            err_suffix = f" [{err['type']}: {err['msg']}]" if err else ""
+            logger.warning("Exchange returned 0 total_value in live mode — rejecting%s", err_suffix)
             return {
                 "data": {
                     "risk_gate": {
                         "passed": False,
                         "rejected_by": "portfolio_unknown",
-                        "reason": "Exchange returned 0 balance — cannot trade safely",
+                        "reason": f"Exchange returned 0 balance — cannot trade safely{err_suffix}",
                     }
                 }
             }
@@ -461,7 +463,7 @@ async def risk_check(state: ArenaState) -> dict:
             notifier = _get_notifier(state)
             await notifier.notify("circuit_breaker", {"pair": pair_str, "reason": result.reason})
         except Exception:
-            logger.debug("Circuit-breaker notification failed", exc_info=True)
+            logger.info("Circuit-breaker notification failed", exc_info=True)
 
     # PROD-I3: Apply scale proposals via the return delta (LangGraph contract),
     # not by mutating state["data"]["verdict"] in place. ``GateResult.scale_adjustment``

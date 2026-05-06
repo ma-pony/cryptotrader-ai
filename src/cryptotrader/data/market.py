@@ -84,7 +84,7 @@ class MarketCollector:
                     funding_rate = float(funding.get("fundingRate", 0.0) or 0.0)
                     cache_result(funding_key, funding_rate)
                 except Exception:
-                    logger.debug("Funding rate fetch failed for %s", pair, exc_info=True)
+                    logger.warning("Funding rate fetch failed for %s", pair, exc_info=True)
                     funding_rate = 0.0
 
             # Orderbook — always fetch live
@@ -133,14 +133,14 @@ class MarketDataService:
                 fr = await ex.fetch_funding_rate(pair)
                 snapshot["funding_rate"] = fr.get("fundingRate") if isinstance(fr, dict) else None
             except Exception:
-                logger.debug("funding_rate fetch failed for %s on %s", pair, exchange_id, exc_info=True)
+                logger.warning("funding_rate fetch failed for %s on %s", pair, exchange_id, exc_info=True)
             try:
                 oi = await ex.fetch_open_interest(pair)
                 snapshot["open_interest"] = (
                     oi.get("openInterestAmount") or oi.get("openInterest") if isinstance(oi, dict) else None
                 )
             except Exception:
-                logger.debug("open_interest fetch failed for %s on %s", pair, exchange_id, exc_info=True)
+                logger.warning("open_interest fetch failed for %s on %s", pair, exchange_id, exc_info=True)
         finally:
             await ex.close()
         return snapshot

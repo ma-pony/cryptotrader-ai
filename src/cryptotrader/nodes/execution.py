@@ -40,7 +40,7 @@ async def close_live_exchanges() -> None:
             await exchange.close()
             logger.info("Closed live exchange: %s", exchange_id)
         except Exception:
-            logger.debug("Failed to close exchange %s", exchange_id, exc_info=True)
+            logger.info("Failed to close exchange %s", exchange_id, exc_info=True)
     _live_exchanges.clear()
 
 
@@ -125,7 +125,7 @@ async def _load_balances_from_db(
                 pos_data[pair_str] = {"amount": amount, "avg_price": avg_price}
         return balances, pos_data if pos_data else None
     except Exception:
-        logger.debug("Failed to load balances from DB for PaperExchange", exc_info=True)
+        logger.warning("Failed to load balances from DB for PaperExchange", exc_info=True)
         return None, None
 
 
@@ -194,7 +194,7 @@ async def _get_market_price(exchange: Any, pair: str) -> float:
     try:
         ticker = await fetcher(pair)
     except Exception:
-        logger.debug("fetch_ticker failed for %s; writing avg_price=0", pair, exc_info=True)
+        logger.warning("fetch_ticker failed for %s; writing avg_price=0", pair, exc_info=True)
         return 0.0
     if not isinstance(ticker, dict):
         return 0.0
@@ -357,7 +357,7 @@ async def check_stop_loss(state: ArenaState) -> dict:
     try:
         exchange_portfolio = await read_portfolio_from_exchange(state)
     except Exception:
-        logger.debug("Exchange portfolio fetch failed, skipping stop-loss check", exc_info=True)
+        logger.warning("Exchange portfolio fetch failed, skipping stop-loss check", exc_info=True)
         return {"data": {}}
 
     if not exchange_portfolio:
@@ -418,7 +418,7 @@ async def _build_close_order(pair: str, price: float, state: ArenaState):
         pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {})
         pos_amount = pos.get("amount", 0)
     except Exception:
-        logger.debug("Exchange portfolio fetch for close failed", exc_info=True)
+        logger.warning("Exchange portfolio fetch for close failed", exc_info=True)
         pos_amount = 0
     if pos_amount == 0:
         return None
@@ -452,7 +452,7 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
         pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {})
         existing_amount = pos.get("amount", 0.0)
     except Exception:
-        logger.debug("Position sizing from exchange failed", exc_info=True)
+        logger.warning("Position sizing from exchange failed", exc_info=True)
 
     if side == "buy" and existing_amount > 0:
         amount = max(0.0, target_amount - existing_amount)
@@ -543,6 +543,6 @@ async def place_order(state: ArenaState) -> dict:
         if not portfolio_ok:
             await notifier.notify("portfolio_stale", {"pair": order.pair, "order": order_data})
     except Exception:
-        logger.debug("Notification send failed", exc_info=True)
+        logger.info("Notification send failed", exc_info=True)
 
     return {"data": {"order": order_data}}

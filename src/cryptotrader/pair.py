@@ -121,7 +121,7 @@ class Pair:
         try:
             m = exchange.market(symbol)
         except (ccxt.BadSymbol, KeyError, AttributeError):
-            logger.debug("Pair.from_ccxt: unknown symbol %r, falling back to parse()", symbol, exc_info=True)
+            logger.info("Pair.from_ccxt: unknown symbol %r, falling back to parse()", symbol, exc_info=True)
             return cls.parse(symbol)
         if not m:
             return cls.parse(symbol)
@@ -222,5 +222,5 @@ def market_type_for(pair: str) -> str:
 
             get_metrics_collector().inc_pair_market_type_fallback()
         except Exception:  # pragma: no cover — metrics is optional
-            logger.debug("market_type_for: metrics counter unavailable", exc_info=True)
+            logger.info("market_type_for: metrics counter unavailable", exc_info=True)
         return "spot"

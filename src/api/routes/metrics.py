@@ -306,7 +306,7 @@ async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float
         store = JournalStore(database_url)
         commits = await store.log(limit=2000)
     except Exception:
-        logger.debug("metrics: journal read failed", exc_info=True)
+        logger.info("metrics: journal read failed", exc_info=True)
         return 0, 0.0, 0.0, 0.0
 
     now = datetime.datetime.now(UTC)
@@ -354,7 +354,7 @@ async def _cost_14d_series(database_url: str | None) -> list[DailyCostPointOut]:
         store = JournalStore(database_url)
         commits = await store.log(limit=3000)
     except Exception:
-        logger.debug("cost_14d: journal read failed", exc_info=True)
+        logger.info("cost_14d: journal read failed", exc_info=True)
         return []
 
     now = datetime.datetime.now(UTC)

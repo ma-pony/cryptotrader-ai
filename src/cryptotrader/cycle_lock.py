@@ -64,4 +64,4 @@ async def cycle_lock(
             try:
                 await redis_state.release_lock(key, owner_id)
             except Exception:
-                logger.debug("cycle_lock release failed for %s", key, exc_info=True)
+                logger.info("cycle_lock release failed for %s", key, exc_info=True)

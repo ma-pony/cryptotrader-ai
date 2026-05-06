@@ -93,7 +93,7 @@ async def extract_json_with_retry(
                 _slog.info("json_parse_retry_success", attempt=attempt)
                 return result
         except Exception:
-            logger.debug("JSON retry attempt %d failed", attempt, exc_info=True)
+            logger.info("JSON retry attempt %d failed", attempt, exc_info=True)
 
     _slog.warning("json_parse_exhausted", schema_hint=schema_hint[:100], attempts=max_retries)
     return {}

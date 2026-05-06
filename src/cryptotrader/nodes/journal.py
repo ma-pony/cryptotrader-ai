@@ -144,7 +144,7 @@ async def _get_portfolio_snapshot(state: ArenaState) -> dict:
             "positions": portfolio.get("positions", {}),
         }
     except Exception:
-        logger.debug("Portfolio snapshot for journal failed", exc_info=True)
+        logger.info("Portfolio snapshot for journal failed", exc_info=True)
         return {}
 
 
@@ -295,7 +295,7 @@ async def journal_rejection(state: ArenaState) -> dict:
                 },
             )
         except Exception:
-            logger.debug("Rejection notification failed", exc_info=True)
+            logger.info("Rejection notification failed", exc_info=True)
 
         return {"data": {"journal_hash": commit.hash}}
     except Exception:

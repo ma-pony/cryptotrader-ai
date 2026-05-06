@@ -179,7 +179,7 @@ class Scheduler:
                     datetime.now(UTC).isoformat(),
                 )
             except Exception:
-                logger.debug("Failed to write scheduler heartbeat", exc_info=True)
+                logger.info("Failed to write scheduler heartbeat", exc_info=True)
         except Exception:
             logger.warning("Unexpected error in trading cycle", exc_info=True)
 
@@ -222,7 +222,7 @@ class Scheduler:
                 total = float(pm_portfolio.get("total_value", 0.0) or 0.0)
                 cash = float(pm_portfolio.get("cash", 0.0) or 0.0)
         except Exception:
-            logger.debug("cycle snapshot: portfolio read failed", exc_info=True)
+            logger.info("cycle snapshot: portfolio read failed", exc_info=True)
             return
 
         if total <= 0:
@@ -233,7 +233,7 @@ class Scheduler:
             await pm.snapshot("default", total, cash)
             logger.info("cycle snapshot written: total=%.2f cash=%.2f", total, cash)
         except Exception:
-            logger.debug("cycle snapshot: write failed", exc_info=True)
+            logger.info("cycle snapshot: write failed", exc_info=True)
 
     async def _close_live_exchanges(self) -> None:
         from cryptotrader.nodes.execution import _live_exchanges
@@ -242,7 +242,7 @@ class Scheduler:
             try:
                 await exchange.close()
             except Exception:
-                logger.debug("Failed to close exchange %s", ex_id, exc_info=True)
+                logger.info("Failed to close exchange %s", ex_id, exc_info=True)
         _live_exchanges.clear()
 
     async def _startup_reconcile(self) -> None:

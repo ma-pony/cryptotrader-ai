@@ -182,7 +182,7 @@ async def _inject_steering(
             suffix = f"\n\n[用户实时引导]\n{joined}"
             return f"{experience}{suffix}" if experience else suffix
     except Exception:
-        logger.debug("Failed to read steering queue for %s", agent_type, exc_info=True)
+        logger.warning("Failed to read steering queue for %s", agent_type, exc_info=True)
     return experience
 
 
