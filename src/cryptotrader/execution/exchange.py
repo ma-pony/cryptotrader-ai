@@ -12,6 +12,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Max attempts for set_leverage before giving up and caching the symbol.
+# A typical reason for failure is "position already open" — once that
+# position closes, the next order will retry. 3 attempts is enough to
+# distinguish transient errors from permanent locks without spamming.
+_LEVERAGE_RETRY_LIMIT = 3
+
 
 @runtime_checkable
 class ExchangeAdapter(Protocol):
@@ -66,10 +72,13 @@ class LiveExchange:
         self._markets_loaded = False
         self._leverage = leverage
         self._margin_mode = margin_mode
-        # Symbols on which we have already attempted to set leverage. Tracked
-        # regardless of success so we don't retry (an "already-open position"
-        # error means leverage is fixed for that symbol anyway).
+        # Symbols where leverage has been confirmed (or given up after
+        # _LEVERAGE_RETRY_LIMIT failed attempts).
         self._leveraged_symbols: set[str] = set()
+        # Per-symbol failure counter: failures don't immediately cache so a
+        # later retry (e.g. after the user closes the open position that was
+        # locking leverage) can still apply the new value.
+        self._leverage_attempts: dict[str, int] = {}
 
     async def _ensure_markets(self) -> None:
         if not self._markets_loaded:
@@ -77,14 +86,17 @@ class LiveExchange:
             self._markets_loaded = True
 
     async def _ensure_leverage(self, symbol: str) -> None:
-        """Apply configured leverage to a perp ``symbol`` once.
+        """Apply configured leverage to a perp ``symbol``.
 
         - ``leverage <= 1``: no-op (matches OKX default; saves an API call).
-        - Spot symbol: no-op.
+        - Spot symbol: no-op (cached so we don't re-parse).
         - Long-short position mode: set both posSides (OKX requires this).
-        - Errors are logged as warnings and swallowed — typically the symbol
-          already has an open position, in which case leverage is locked and
-          the order should still proceed with whatever leverage OKX has.
+        - On full success (both posSides) → cache and never retry.
+        - On failure (e.g. position already open → OKX locks leverage) → log
+          warning, increment a per-symbol fail counter; once it hits
+          ``_LEVERAGE_RETRY_LIMIT``, give up and cache. This lets users change
+          ``leverage`` config without restarting the process: the next order
+          after they close the position triggers a successful retry.
         """
         if self._leverage <= 1 or symbol in self._leveraged_symbols:
             return
@@ -96,6 +108,7 @@ class LiveExchange:
                 return
         except (ValueError, NotImplementedError):
             return
+        all_ok = True
         for pos_side in ("long", "short"):
             try:
                 await self._exchange.set_leverage(
@@ -105,6 +118,7 @@ class LiveExchange:
                 )
                 logger.info("set_leverage %dx %s posSide=%s ok", self._leverage, symbol, pos_side)
             except Exception as e:
+                all_ok = False
                 logger.warning(
                     "set_leverage %dx failed for %s posSide=%s: %s: %s",
                     self._leverage,
@@ -113,7 +127,18 @@ class LiveExchange:
                     type(e).__name__,
                     e,
                 )
-        self._leveraged_symbols.add(symbol)
+        if all_ok:
+            self._leveraged_symbols.add(symbol)
+            return
+        attempts = self._leverage_attempts.get(symbol, 0) + 1
+        self._leverage_attempts[symbol] = attempts
+        if attempts >= _LEVERAGE_RETRY_LIMIT:
+            logger.warning(
+                "set_leverage giving up on %s after %d attempts; orders will use exchange-side leverage",
+                symbol,
+                attempts,
+            )
+            self._leveraged_symbols.add(symbol)
 
     async def _retry(self, coro_fn, *args, attempts: int | None = None):
         import ccxt

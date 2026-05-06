@@ -157,19 +157,54 @@ async def test_ensure_leverage_idempotent_on_repeat_calls():
 
 
 @pytest.mark.asyncio
-async def test_ensure_leverage_swallows_errors_and_caches_attempt():
-    """A failure (e.g. already-open position) must not crash place_order;
-    the symbol is still marked as attempted so we don't keep retrying."""
+async def test_ensure_leverage_swallows_errors_and_retries_until_limit():
+    """Failure (e.g. already-open position) must not crash place_order. We
+    retry on the next order so a config change can take effect once the
+    locking position closes — but cap retries to avoid log spam.
+    """
     ex = _make_exchange(leverage=3)
     ex._exchange.set_leverage = AsyncMock(side_effect=RuntimeError("position already open"))
 
-    # Must not raise
+    # First call: 2 set_leverage attempts, both fail; not cached yet (retryable)
     await ex._ensure_leverage("BTC/USDT:USDT")
+    assert "BTC/USDT:USDT" not in ex._leveraged_symbols
+    assert ex._leverage_attempts["BTC/USDT:USDT"] == 1
+    assert ex._exchange.set_leverage.call_count == 2
 
+    # Second call: another 2 attempts; still retryable
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    assert "BTC/USDT:USDT" not in ex._leveraged_symbols
+    assert ex._leverage_attempts["BTC/USDT:USDT"] == 2
+    assert ex._exchange.set_leverage.call_count == 4
+
+    # Third call: hits limit (3) → cached, no further retries
+    await ex._ensure_leverage("BTC/USDT:USDT")
     assert "BTC/USDT:USDT" in ex._leveraged_symbols
-    # Both posSides attempted before giving up
-    assert ex._exchange.set_leverage.call_count == 2
+    assert ex._exchange.set_leverage.call_count == 6
 
-    # Subsequent call is a no-op (cached as attempted)
+    # Fourth call: cached → no-op
     await ex._ensure_leverage("BTC/USDT:USDT")
-    assert ex._exchange.set_leverage.call_count == 2
+    assert ex._exchange.set_leverage.call_count == 6
+
+
+@pytest.mark.asyncio
+async def test_ensure_leverage_retries_succeed_after_intermittent_failure():
+    """Once the locking position closes (or the venue recovers), the next
+    retry should apply the configured leverage."""
+    ex = _make_exchange(leverage=3)
+    # First call fails, second succeeds.
+    call_count = {"n": 0}
+
+    async def flaky(_lev, _sym, _params):
+        call_count["n"] += 1
+        if call_count["n"] <= 2:
+            raise RuntimeError("position already open")
+        return {}
+
+    ex._exchange.set_leverage = AsyncMock(side_effect=flaky)
+
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    assert "BTC/USDT:USDT" not in ex._leveraged_symbols  # both posSides failed
+
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    assert "BTC/USDT:USDT" in ex._leveraged_symbols  # both posSides ok this time

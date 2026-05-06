@@ -724,10 +724,13 @@ async def test_place_order_spot_short_blocks_with_reason():
         _paper_exchanges.pop(("BTC/USDT", False), None)
 
     assert result["data"]["order"] is None
-    gate = result["data"]["risk_gate"]
-    assert gate["passed"] is False
-    assert gate["rejected_by"] == "execution_skipped"
-    assert "spot_short_no_inventory" in gate["reason"]
+    # Execution-layer failures live on `execution_status`, NOT `risk_gate` —
+    # gate-pass-rate analytics must not be polluted by exchange constraints.
+    es = result["data"]["execution_status"]
+    assert es["succeeded"] is False
+    assert es["stage"] == "execution_skipped"
+    assert "spot_short_no_inventory" in es["reason"]
+    assert "risk_gate" not in result["data"]  # untouched
 
 
 @pytest.mark.asyncio

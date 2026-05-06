@@ -49,6 +49,10 @@ def _pm_models():
         market_type = Column(String(20), nullable=False, default="spot")
         amount = Column(Float, default=0.0)
         avg_price = Column(Float, default=0.0)
+        # 2026-05-06: persist unrealized_pnl from exchange so DB-backed equity
+        # (used when live exchange is briefly unreachable) accounts for the
+        # last-known mark-to-market on derivatives. Spot positions write 0.0.
+        unrealized_pnl = Column(Float, nullable=False, default=0.0)
         updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
     class PortfolioSnapshot(Base):
@@ -94,6 +98,12 @@ async def _pm_ensure_tables(database_url: str) -> None:
                         "ADD COLUMN IF NOT EXISTS market_type VARCHAR(20) NOT NULL DEFAULT 'spot'"
                     )
                 )
+                await conn.execute(
+                    text(
+                        "ALTER TABLE portfolios "
+                        "ADD COLUMN IF NOT EXISTS unrealized_pnl DOUBLE PRECISION NOT NULL DEFAULT 0.0"
+                    )
+                )
                 await conn.execute(text("ALTER TABLE portfolios ALTER COLUMN pair TYPE VARCHAR(50)"))
             elif dialect == "sqlite":
                 result = await conn.execute(text("PRAGMA table_info(portfolios)"))
@@ -101,6 +111,10 @@ async def _pm_ensure_tables(database_url: str) -> None:
                 if "market_type" not in existing:
                     await conn.execute(
                         text("ALTER TABLE portfolios ADD COLUMN market_type VARCHAR(20) NOT NULL DEFAULT 'spot'")
+                    )
+                if "unrealized_pnl" not in existing:
+                    await conn.execute(
+                        text("ALTER TABLE portfolios ADD COLUMN unrealized_pnl REAL NOT NULL DEFAULT 0.0")
                     )
                 # SQLite ignores VARCHAR length — pair widening is a no-op there.
         _pm_table_ready.add(database_url)
@@ -136,6 +150,7 @@ class PortfolioManager:
                             "amount": r.amount,
                             "avg_price": r.avg_price,
                             "market_type": r.market_type or "spot",
+                            "unrealized_pnl": getattr(r, "unrealized_pnl", 0.0) or 0.0,
                         }
                     # Load cash
                     acct = (
@@ -143,16 +158,14 @@ class PortfolioManager:
                     ).scalar_one_or_none()
                     if acct:
                         cash = acct.cash
-                    # Spot positions: amount * avg_price (signed). Perp/swap:
-                    # contribute 0 — DB doesn't track unrealized_pnl, and the
-                    # margin is already counted in ``cash``. Adding notional
-                    # would double-count or (when amount < 0 for shorts)
-                    # under-report by 2x notional. See companion comment in
-                    # read_portfolio_from_exchange.
+                    # Spot: amount * avg_price (signed asset value).
+                    # Perp/swap: persisted unrealized_pnl from last sync (margin
+                    # is already in cash, so notional is NOT added).
                     pos_value = sum(
-                        p["amount"] * p["avg_price"]
-                        for p in positions.values()
+                        (p["amount"] * p["avg_price"])
                         if (p.get("market_type") or "spot") == "spot"
+                        else float(p.get("unrealized_pnl", 0.0) or 0.0)
+                        for p in positions.values()
                     )
                     return {
                         "account_id": account_id,
@@ -165,7 +178,10 @@ class PortfolioManager:
         mem = self._memory.get(account_id, {})
         cash = self._memory_cash.get(account_id, 0.0)
         pos_value = sum(
-            p["amount"] * p["avg_price"] for p in mem.values() if (p.get("market_type") or "spot") == "spot"
+            (p["amount"] * p["avg_price"])
+            if (p.get("market_type") or "spot") == "spot"
+            else float(p.get("unrealized_pnl", 0.0) or 0.0)
+            for p in mem.values()
         )
         return {
             "account_id": account_id,
@@ -174,7 +190,14 @@ class PortfolioManager:
             "total_value": cash + pos_value,
         }
 
-    async def update_position(self, account_id: str, pair: str, amount: float, price: float) -> None:
+    async def update_position(
+        self,
+        account_id: str,
+        pair: str,
+        amount: float,
+        price: float,
+        unrealized_pnl: float = 0.0,
+    ) -> None:
         market_type = _market_type_for(pair)
         if self._db_url:
             try:
@@ -188,10 +211,18 @@ class PortfolioManager:
                         row.amount = amount
                         row.avg_price = price
                         row.market_type = market_type
+                        row.unrealized_pnl = unrealized_pnl
                         row.updated_at = datetime.now(UTC)
                     else:
                         session.add(
-                            Portfolio(id=key, pair=pair, market_type=market_type, amount=amount, avg_price=price)
+                            Portfolio(
+                                id=key,
+                                pair=pair,
+                                market_type=market_type,
+                                amount=amount,
+                                avg_price=price,
+                                unrealized_pnl=unrealized_pnl,
+                            )
                         )
                     await session.commit()
                 return
@@ -199,7 +230,12 @@ class PortfolioManager:
                 logger.warning("DB position update failed: %s", e)
         if account_id not in self._memory:
             self._memory[account_id] = {}
-        self._memory[account_id][pair] = {"amount": amount, "avg_price": price, "market_type": market_type}
+        self._memory[account_id][pair] = {
+            "amount": amount,
+            "avg_price": price,
+            "market_type": market_type,
+            "unrealized_pnl": unrealized_pnl,
+        }
 
     async def update_cash(self, account_id: str = "default", cash: float = 0.0) -> None:
         """Persist current cash balance."""

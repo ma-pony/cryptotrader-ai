@@ -50,6 +50,7 @@ def build_commit(
     debate_skip_reason: str = "",
     latency_breakdown: dict[str, Any] | None = None,
     token_usage: dict[str, Any] | None = None,
+    execution_status: dict[str, Any] | None = None,
 ) -> DecisionCommit:
     """Build a DecisionCommit with a generated hash.
 
@@ -118,4 +119,5 @@ def build_commit(
         debate_skip_reason=debate_skip_reason,
         latency_breakdown=latency_breakdown or {},
         token_usage=token_usage or {},
+        execution_status=execution_status,
     )

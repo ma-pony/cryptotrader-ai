@@ -255,6 +255,14 @@ def _commit_to_list_item(c: Any) -> DecisionListItem:
         rejected_by = getattr(gate, "rejected_by", "") or ""
         reason = getattr(gate, "reason", "") or ""
         reject_reason = f"{rejected_by} · {reason}" if rejected_by and reason else (rejected_by or reason or None)
+    else:
+        # Risk gate passed but execution may have skipped/failed (e.g.
+        # spot_short_no_inventory). Surface that as the reject reason.
+        es = getattr(c, "execution_status", None) or {}
+        if es and not es.get("succeeded", True):
+            stage = es.get("stage", "execution_unknown")
+            reason = es.get("reason", "")
+            reject_reason = f"{stage} · {reason}" if stage and reason else (stage or reason or None)
     pair_display, market_type = _pair_meta(c.pair)
     return DecisionListItem(
         commit_hash=c.hash,

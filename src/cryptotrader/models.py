@@ -395,3 +395,8 @@ class DecisionCommit:
     latency_breakdown: dict[str, Any] = field(default_factory=dict)
     # Token + cost accounting — see :class:`TokenUsage` for the shape.
     token_usage: dict[str, Any] = field(default_factory=dict)
+    # Post-gate execution outcome. None = not attempted (verdict was hold).
+    # Shape: {"succeeded": bool, "stage": "execution_skipped" | "execution_failed",
+    #         "reason": str}. Distinct from ``risk_gate`` so gate-pass-rate
+    # analytics are not skewed by exchange-side failures.
+    execution_status: dict[str, Any] | None = None

@@ -271,8 +271,9 @@ async def _sync_derivatives_from_positions(
         else:
             entry = float(pos.get("avg_price", 0.0) or 0.0)
             price = entry if entry > 0 else await _get_market_price(exchange, pair)
-        await pm.update_position("default", pair, amount, price)
-        total += float(pos.get("unrealized_pnl", 0.0) or 0.0)
+        upnl = float(pos.get("unrealized_pnl", 0.0) or 0.0)
+        await pm.update_position("default", pair, amount, price, unrealized_pnl=upnl)
+        total += upnl
     return total, seen
 
 
@@ -517,17 +518,18 @@ async def place_order(state: ArenaState) -> dict:
     else:
         order = await _build_entry_order(verdict, pair, price, state)
     if order is None:
-        # Surface the pre-flight bail reason via risk_gate so it shows up in
-        # the journal commit and on /decisions as reject_reason. Risk gate
-        # itself passed earlier — we override here because the cycle ended
-        # in execution failure, which is what the user needs to see.
+        # Surface the pre-flight bail reason in a dedicated field — keeping
+        # the original risk_gate result intact so analytics on gate-pass rate
+        # are not skewed by execution-layer failures. The decisions API
+        # picks this up in `_commit_to_list_item` as a fallback for
+        # reject_reason.
         err = state["data"].pop("execution_error", None) or "order_skipped: see logs"
         return {
             "data": {
                 "order": None,
-                "risk_gate": {
-                    "passed": False,
-                    "rejected_by": "execution_skipped",
+                "execution_status": {
+                    "succeeded": False,
+                    "stage": "execution_skipped",
                     "reason": err,
                 },
             }
@@ -562,9 +564,9 @@ async def place_order(state: ArenaState) -> dict:
         return {
             "data": {
                 "order": None,
-                "risk_gate": {
-                    "passed": False,
-                    "rejected_by": "execution_failed",
+                "execution_status": {
+                    "succeeded": False,
+                    "stage": "execution_failed",
                     "reason": reason,
                 },
             }

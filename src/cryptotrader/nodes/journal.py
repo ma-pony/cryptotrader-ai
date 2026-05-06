@@ -208,6 +208,7 @@ async def journal_trade(state: ArenaState) -> dict:
             challenges=state["data"].get("debate_turns") or [],
             latency_breakdown=_aggregate_latency(node_trace),
             token_usage=_snapshot_token_usage(),
+            execution_status=state["data"].get("execution_status"),
         )
         await store.commit(commit)
         logger.info(

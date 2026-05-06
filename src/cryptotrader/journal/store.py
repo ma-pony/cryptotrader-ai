@@ -87,6 +87,10 @@ def _sa_models():
         token_usage = Column(JSONB, nullable=False, default={})
         # Spec 013: market_type derived from pair (Pair.parse(pair).market_type)
         market_type = Column(String(20), nullable=False, default="spot")
+        # Execution-layer status: succeeded / stage / reason. Distinct from
+        # ``risk_gate`` so analytics on gate-pass rate are not skewed by
+        # post-gate execution failures (e.g. spot_short_no_inventory).
+        execution_status = Column(JSONB, nullable=True, default=None)
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
@@ -103,6 +107,9 @@ _OBSERVABILITY_COLUMNS = [
     ("token_usage", "JSONB", "NOT NULL DEFAULT '{}'"),
     # Spec 013: market_type column for distinguishing spot vs derivatives commits.
     ("market_type", "VARCHAR(20)", "NOT NULL DEFAULT 'spot'"),
+    # 2026-05-06: separate execution-layer status from risk_gate so
+    # post-gate failures don't pollute gate-pass-rate analytics.
+    ("execution_status", "JSONB", "DEFAULT NULL"),
 ]
 
 
@@ -248,6 +255,7 @@ class JournalStore:
             debate_skip_reason=d.get("debate_skip_reason", ""),
             latency_breakdown=d.get("latency_breakdown") or {},
             token_usage=d.get("token_usage") or {},
+            execution_status=d.get("execution_status"),
         )
 
     def _dc_to_row_dict(self, dc: DecisionCommit) -> dict[str, Any]:
@@ -282,6 +290,7 @@ class JournalStore:
             # Spec 013: derived from pair string at write time. Falls back to
             # 'spot' on parse failure so legacy / malformed pairs don't reject.
             "market_type": _market_type_for(dc.pair),
+            "execution_status": dc.execution_status,
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:
@@ -337,6 +346,7 @@ class JournalStore:
             debate_skip_reason=getattr(row, "debate_skip_reason", None) or "",
             latency_breakdown=getattr(row, "latency_breakdown", None) or {},
             token_usage=getattr(row, "token_usage", None) or {},
+            execution_status=getattr(row, "execution_status", None),
         )
 
     async def commit(self, dc: DecisionCommit) -> None:
