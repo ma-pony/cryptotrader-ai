@@ -202,7 +202,7 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
 
 - **FR-029**: 系统 MUST 删除 `src/cryptotrader/learning/context.py`（GSSC pipeline）整个文件
 - **FR-030**: 系统 MUST 删除 `models.py` 中 `ExperienceMemory` 与 `ExperienceRule` dataclass
-- **FR-031**: 系统 MUST 删除 `decision_commits.experience_json` 列（含 auto-migration），`JournalStore` 不再写该列
+- **FR-031**: 系统 MUST 删除 `decision_commits` 表上的 GSSC 历史列（实际列名为 `experience_memory`，旧文档误称 `experience_json`；migration 同时尝试 drop 两个列名以兼容历史 schema），`JournalStore` 不再写该列
 - **FR-032**: 系统 MUST 移除 `arena experience distill / show / merge / sessions` 4 个 CLI 子命令
 - **FR-033**: 系统 MUST 删除 4 个 GSSC 相关测试文件，新增 ≥ 25 个测试覆盖：memory 写入（≥ 6）、reflection 写文件（≥ 6）、middleware 注入（≥ 5）、load_skill tool（≥ 4）、防过拟合算法等价（≥ 4）
 
@@ -210,7 +210,7 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
 
 - **FR-034**: 不引入新 runtime 依赖（不引入向量库、Rust crates、外部 OpenViking server）
 - **FR-035**: 兼容现有 LangChain 1.2+ `create_agent` 接口；middleware 集成不破坏现有 fallback / streaming
-- **FR-036**: 仅 drop `decision_commits.experience_json` 一列，保留其他列与现有数据完整性
+- **FR-036**: 仅 drop `decision_commits` 上的 GSSC 列（`experience_memory` / `experience_json` 兼容名），保留其他列与现有数据完整性
 
 ### Key Entities
 
