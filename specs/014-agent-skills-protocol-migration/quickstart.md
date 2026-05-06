@@ -1,101 +1,89 @@
-# Quickstart — Agent Skills 协议迁移开发
+# Quickstart — 014 双层架构
 
 ## 前置
 
 - Python 3.12 + uv
-- 当前已 checkout `014-agent-skills-protocol-migration` 分支
-- 跑过一次 `uv sync` 确保依赖装好
+- checkout 分支 `014-agent-skills-protocol-migration`
+- `uv sync` 已跑过
 
-## 本地验证 Phase 1 实现
+## 验证 Phase 1 实现
 
 ```bash
-# 1. 跑新增的 skill loader / middleware 测试
-uv run pytest tests/test_agent_skills_loader.py tests/test_skills_middleware.py tests/test_load_skill_tool.py -v
+# 1. 跑新增测试
+uv run pytest tests/test_agent_memory_writer.py \
+              tests/test_skills_loader.py \
+              tests/test_skills_middleware.py \
+              tests/test_load_skill_tool.py \
+              tests/test_reflection_pattern_distill.py \
+              tests/test_anti_overfitting_equivalence.py \
+              tests/test_skills_curation.py \
+              -v
 
-# 2. 跑 reflection writer 测试
-uv run pytest tests/test_skills_reflection.py tests/test_skills_anti_overfitting.py -v
+# 2. 跑全套件确认无 regression
+uv run pytest --no-cov -q
+```
 
-# 3. 跑 paper-mode 完整 cycle，验证 middleware 自动注入
+## 文件布局检查
+
+```bash
+# git 跟踪的 5 个 SKILL.md
+ls -la agent_skills/
+# tech-analysis/SKILL.md
+# chain-analysis/SKILL.md
+# news-analysis/SKILL.md
+# macro-analysis/SKILL.md
+# trading-knowledge/SKILL.md
+
+# gitignored 的 memory 层（每 cycle 写入）
+ls agent_memory/   # 应在 .gitignore 中
+git check-ignore agent_memory/   # 应输出 agent_memory/
+
+# 跑一次 cycle 看 memory 写入
 uv run arena run --pair BTC/USDT --mode paper
+ls agent_memory/tech/cases/      # 新文件
+git status                       # agent_memory/ 不在 untracked 列表
 
-# 4. 看注入的 system prompt（DEBUG 模式）
-LOG_LEVEL=DEBUG uv run arena run --pair BTC/USDT --mode paper 2>&1 | grep -A 50 "system_message"
-
-# 5. 手动跑一次 reflection job（CLI）
+# 跑 reflection 看蒸馏
 uv run arena reflect --commits-since=24h
+ls agent_memory/tech/patterns/
+
+# 整理 SKILL.md（手工 review LLM 输出后 merge）
+uv run arena skills curate tech-analysis --llm
+diff agent_skills/tech-analysis/SKILL.md.draft \
+     agent_skills/tech-analysis/SKILL.md
+mv agent_skills/tech-analysis/SKILL.md.draft \
+   agent_skills/tech-analysis/SKILL.md
 ```
 
-## 检查文件布局
+## 实施前 checklist
 
-```bash
-tree agent_skills -L 3 -I 'archive'
-```
-
-预期：
-
-```text
-agent_skills/
-├── tech
-│   ├── instructions.md
-│   ├── patterns/      # 初期空
-│   ├── forbidden/     # 初期空
-│   └── archive/       # 初期空
-├── chain/...
-├── news/...
-├── macro/...
-└── shared
-    ├── funding_rate.md
-    ├── regime_definitions.md
-    └── trading_pair_semantics.md
-```
-
-## 验证 LangChain middleware 注入是否生效
-
-通过 grep DEBUG 日志找到形如：
-
-```
-system_message:
-  content_blocks:
-    - type: text
-      text: "## Agent Instructions\n\n{tech instructions body}\n\n## Available Patterns (3 matched current regime: ['range_bound'])\n\n- **tech::funding_squeeze_long**: ...\n..."
-```
-
-confirm 如下：
-1. 上方有 `## Agent Instructions`（来自 `tech/instructions.md`）
-2. 中段有 `## Available Patterns` + ≥ 0 条用 `**agent::name**` 格式
-3. 含 `## Loading Rule` 段，提示 agent 用 `load_skill` tool
-
-## 触发 `load_skill` 的方式
-
-agent 内部会自动决定调用，无需手动触发。但可以单测：
-
-```bash
-uv run python -c "
-from cryptotrader.agents.skills.tool import load_skill
-print(load_skill('tech::funding_squeeze_long'))
-print(load_skill('nonexistent_pattern'))
-"
-```
-
-## 触发 reflection job（手工）
-
-```bash
-# 一次性反思最近 24h 的 commits
-uv run arena reflect --commits-since=24h
-
-# 看反思生成 / 更新的文件
-git status agent_skills/
-```
-
-## 进入实施前的最终 checklist
-
-- [ ] `agent_skills/` 17 个种子文件已创建（4 instructions + shared 3 + 8 .gitkeep + ...）
+- [ ] `.gitignore` 已加 `agent_memory/`
+- [ ] `agent_skills/` 5 个 SKILL.md 已手工初始化（agent role 文本搬入）
+- [ ] `agent_memory/` 4 个 agent 子目录骨架已创建（cases/ patterns/ archive/ 各 .gitkeep）
+  - 注：.gitkeep 也在 gitignored 目录下，但本地需要存在以让目录被 loader 识别
 - [ ] `learning/context.py` 已删除
-- [ ] `models.py` 中 ExperienceMemory / ExperienceRule 已删除
+- [ ] `models.py` 中 `ExperienceMemory` / `ExperienceRule` 已删除
 - [ ] `decision_commits.experience_json` 列已 drop（auto-migration 通过）
 - [ ] `arena experience` CLI 子命令已移除
 - [ ] 4 个 GSSC 测试文件已删除
-- [ ] 全套件 `uv run pytest --no-cov -q` 通过（≥ 2003 测试）
-- [ ] 至少跑过 1 次 paper cycle 验证 middleware 注入
-- [ ] 至少跑过 1 次 `arena reflect` 验证 reflection 写文件
-- [ ] `grep -rn "ExperienceMemory\|ExperienceRule\|gather_packets" src/ tests/` 返回 0 结果
+- [ ] 全套件测试通过
+- [ ] paper cycle 跑通验证 middleware 注入
+- [ ] `arena reflect` 跑通验证 memory 蒸馏
+- [ ] `arena skills curate` CLI 命令存在
+
+## 验证 middleware 注入
+
+```bash
+LOG_LEVEL=DEBUG uv run arena run --pair BTC/USDT --mode paper 2>&1 | \
+  grep -A 30 "system_message"
+```
+
+应看到：
+- system_message.content_blocks 含原 system_prompt + 注入的 SKILL.md body
+- body 含 `## Role`、`## Active Patterns`（如有）、`## Forbidden Zones`（如有）、`## Shared Trading Knowledge`
+
+## 调试 tip
+
+- 直接读 SKILL.md：`cat agent_skills/tech-analysis/SKILL.md`
+- 直接读 case：`cat agent_memory/tech/cases/$(ls -t agent_memory/tech/cases/ | head -1)`
+- 测 `load_skill`：`uv run python -c "from cryptotrader.agents.skills.tool import load_skill; print(load_skill('tech-analysis'))"`

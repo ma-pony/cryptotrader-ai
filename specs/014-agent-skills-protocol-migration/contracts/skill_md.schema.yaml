@@ -1,0 +1,32 @@
+# SKILL.md frontmatter schema (5 个 SKILL.md 文件用)
+# 遵循 Anthropic Skills 协议格式
+$schema: "http://json-schema.org/draft-07/schema#"
+title: SkillMdFrontmatter
+type: object
+required: [name, description]
+properties:
+  name:
+    type: string
+    pattern: "^[a-z][a-z0-9-]*$"
+    description: |
+      Lowercase kebab-case identifier matching the skill directory name
+      (one of: tech-analysis, chain-analysis, news-analysis,
+      macro-analysis, trading-knowledge).
+  description:
+    type: string
+    minLength: 30
+    maxLength: 500
+    description: |
+      One-sentence summary of what this skill provides. Visible to agent
+      runtime as part of the SKILL.md content.
+  manually_edited:
+    type: boolean
+    default: false
+    description: |
+      User-set flag. When true, `arena skills curate` MUST skip overwriting
+      this file (or only append to designated AUTO-DISTILLED-PATTERNS region).
+  version:
+    type: string
+    pattern: "^\\d+\\.\\d+$"
+    default: "1.0"
+additionalProperties: true   # Anthropic Skills 协议允许扩展字段（如 argument-hint, metadata 等）

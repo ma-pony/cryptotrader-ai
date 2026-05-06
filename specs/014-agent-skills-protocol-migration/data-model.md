@@ -1,170 +1,207 @@
-# Phase 1 Data Model — 014 Agent Skills 协议迁移
+# Phase 1 Data Model — 014 双层架构 v2
 
 ## 实体清单
 
-### 1. `Skill` —— 一条经验记录的运行时表示（dataclass）
+### 1. `Skill` — 高层能力包（git 跟踪）
 
-字段：
+```python
+@dataclass
+class Skill:
+    name: str                    # tech-analysis / chain-analysis / news-analysis / macro-analysis / trading-knowledge
+    description: str             # frontmatter, 30-500 chars
+    body: str                    # markdown content（含 active patterns 摘要 + forbidden 摘要 + agent role）
+    manually_edited: bool        # frontmatter, 默认 False
+    version: str                 # frontmatter, 默认 "1.0"
+    file_path: Path              # 运行时 absolute path
+```
 
-| 字段 | 类型 | 说明 |
-|---|---|---|
-| `agent` | `Literal["tech", "chain", "news", "macro", "shared"]` | 所属 agent；shared 表示跨 agent 知识 |
-| `kind` | `Literal["pattern", "forbidden", "instruction", "knowledge"]` | 类别——决定路径与行为 |
-| `name` | `str` | snake_case；与文件名 stem 一致；同 agent 同 kind 内唯一 |
-| `description` | `str` | 1 句话摘要；30-500 字符；用于 prompt 注入 |
-| `body` | `str` | markdown 正文；用于 `load_skill` tool 返回 |
-| `regime_tags` | `list[str]` | 该 skill 适用的 regime；空列表 = 通配 |
-| `pnl_track` | `PnLTrack` | PnL 反馈累计 |
-| `maturity` | `Literal["observed", "probationary", "active", "deprecated"]` | 演化阶段 |
-| `manually_edited` | `bool` | 用户手编 body 后置 True；reflection 仅更新 `pnl_track` |
-| `created` | `datetime` | UTC ISO 8601 |
-| `source_commits` | `list[str]` | 蒸馏来源的 commit hash（前 16 字符）|
-| `version` | `str` | 默认 `"1.0"`；将来 schema 演进时递增 |
-| `file_path` | `Path` | 运行时 absolute path（不持久化）|
+- 总数：恒为 5
+- 文件位置：`agent_skills/<skill-name>/SKILL.md`
+- 协议：Anthropic Skills（与 `.claude/skills/speckit-*` 对齐）
 
-校验规则（FR-004 / FR-005 / contracts/skill_frontmatter.schema.yaml）：
+### 2. `PatternRecord` — Memory 层蒸馏数据（gitignored）
 
-- `name` 必须匹配 `^[a-z][a-z0-9_]*$`
-- `agent` ∈ {tech, chain, news, macro, shared}
-- shared 目录下 `kind` ∈ {knowledge}（spec 隐含约定，不放 patterns/forbidden）
-- 4 个 analysis agent 目录下 `kind` ∈ {pattern, forbidden, instruction}
-- `instruction` kind 同 agent 至多 1 个文件（`instructions.md`）
-- `description` 长度 30-500 字符
-- `regime_tags` 中每个值必须出现在 `learning/regime.py` 的 `KNOWN_REGIMES` 集合中（除了空数组）
-- `pnl_track.cases >= 0`，`win_rate ∈ [0, 1]`
+```python
+@dataclass
+class PatternRecord:
+    name: str                       # snake_case，文件名
+    agent: str                      # tech / chain / news / macro
+    description: str                # 一句话摘要 (30-500 chars)
+    body: str                       # 完整 markdown（条件、案例、例外）
+    regime_tags: list[str]          # 适用 regime；空 = 通配
+    pnl_track: PnLTrack
+    maturity: Literal["observed", "probationary", "active", "deprecated"]
+    manually_edited: bool           # 默认 False
+    created: datetime
+    source_cycles: list[str]        # 蒸馏来源的 cycle_ids
+    version: str                    # 默认 "1.0"
+    file_path: Path
+```
 
-### 2. `PnLTrack` —— 累计 PnL 元数据
+- 总数：每 agent 几十到上百
+- 文件位置：`agent_memory/<agent>/patterns/<name>.md`（active）或 `archive/<name>.md`（deprecated）
+- 由 reflection 自动生成或更新；不进 git
+
+### 3. `CaseRecord` — Memory 层原始数据（gitignored，永久保留）
+
+```python
+@dataclass
+class CaseRecord:
+    cycle_id: str                   # commit hash[:16] 或 trace_id
+    timestamp: datetime
+    pair: str                       # BTC/USDT:USDT 等
+    agent: str                      # tech / chain / news / macro
+    snapshot_summary: dict          # market data snapshot
+    agent_analysis: str             # agent 节点输出的 reasoning + score
+    verdict_action: Literal["long", "short", "hold", "close"]
+    verdict_reasoning: str          # 含 applied: 引用
+    applied_patterns: list[str]     # 从 verdict_reasoning 解析的 pattern names
+    risk_gate_passed: bool
+    execution_status: dict | None
+    final_pnl: float | None         # 平仓后回填；None 表示未平仓
+    file_path: Path
+```
+
+- 总数：~50/天/agent × N agents × 不限期 = 长期累积
+- 文件位置：`agent_memory/<agent>/cases/<YYYY-MM-DD>-cycle-<hash[:8]>.md`
+- 永久保留；用户可手工归档
+
+### 4. `PnLTrack` — Pattern 的 PnL 反馈累计
 
 ```python
 @dataclass
 class PnLTrack:
-    cases: int = 0                 # settled trades that referenced this skill via `applied:`
-    win_rate: float = 0.0          # cases where pnl > 0 / cases
-    avg_pnl: float = 0.0           # mean pnl across cases (USDT)
-    last_active: datetime | None = None    # last update timestamp; audit only
+    cases: int = 0
+    win_rate: float = 0.0      # 0-1
+    avg_pnl: float = 0.0       # USDT
+    last_active: datetime | None = None
 ```
 
-更新规则（FR-021）：
-- 每次 trading cycle 平仓后，遍历 verdict.reasoning 中的 `applied: <name>` 引用
-- 对每个有效引用，定位对应 Skill 文件，原子更新 `pnl_track`：
-  - `cases += 1`
-  - `win_rate = (old_win_rate * (cases - 1) + (1 if pnl > 0 else 0)) / cases`
-  - `avg_pnl = (old_avg_pnl * (cases - 1) + pnl) / cases`
-  - `last_active = now()`
+更新规则（spec FR-027）：每 case 平仓后，遍历 `applied_patterns`，对每条 pattern：
+- `cases += 1`
+- `win_rate = (old * (cases-1) + (1 if pnl > 0 else 0)) / cases`
+- `avg_pnl = (old * (cases-1) + pnl) / cases`
+- `last_active = now()`
 
-### 3. `Maturity` 状态机
+### 5. `Maturity` 状态机
 
 ```
-observed (新蒸馏，cases < L2 阈值=5)
+observed (新蒸馏，cases < 5)
    ↓ cases ≥ 5 + L1+L3 通过
-probationary (满足 L1/L3，但还在小样本观察)
+probationary
    ↓ cases ≥ 15 + win_rate ≥ 0.55 + L3 持续显著
-active (生产可用，注入 prompt 默认值)
+active (生产可用，进入 SKILL.md curation 候选池)
    ↓ win_rate < 0.40 OR cases ≥ 30 且差距收敛
-deprecated (移到 archive/，不再被加载)
-
-（无时间衰减层 L5——纯 PnL 触发）
+deprecated (移到 archive/，curation 时不引用)
 ```
 
-### 4. `AgentSkillSet` —— 单 agent 一次 cycle 的加载结果
+无时间衰减层（spec 已 lock-in）。
+
+### 6. `AgentSkillSet` — Middleware 一次加载结果
 
 ```python
 @dataclass
 class AgentSkillSet:
-    agent: str                              # tech | chain | news | macro
-    instructions: Skill | None              # 单条；agent 行为约束
-    patterns: list[Skill]                   # 已 regime 过滤
-    forbidden: list[Skill]                  # 已 regime 过滤
-    knowledge: list[Skill]                  # 来自 shared/，不过滤
-    regime_tags: list[str]                  # 构造时输入的 regime（snapshot 时刻）
-
-    def render_for_prompt(self) -> str:
-        """Render to markdown text appended to system_message."""
+    agent_id: str                       # tech / chain / news / macro
+    own_skill: Skill                    # agent 自己的 SKILL.md（如 tech-analysis）
+    shared_knowledge: Skill             # trading-knowledge SKILL.md
 ```
 
-### 5. `ReflectionRun` —— 单次反思的结构化日志
+注：双层架构下 middleware 不再加载 patterns（patterns 在 SKILL.md body 里，已 curated）。
+
+### 7. `ReflectionRun` — Memory 层反思日志
 
 ```python
 @dataclass
 class ReflectionRun:
     started_at: datetime
-    finished_at: datetime | None = None
-    commits_window: tuple[str, str] = ("", "")    # (first_hash, last_hash)
-    created_skills: list[str] = field(default_factory=list)    # file paths
-    updated_skills: list[str] = field(default_factory=list)
-    archived_skills: list[str] = field(default_factory=list)
-    errors: list[dict] = field(default_factory=list)            # [{file, error_type, msg}]
+    finished_at: datetime | None
+    cycles_window: tuple[str, str]    # (first_cycle_id, last_cycle_id)
+    new_patterns: list[str]           # file paths
+    updated_patterns: list[str]
+    archived_patterns: list[str]
+    errors: list[dict]
 ```
 
-仅作日志/可观测，不持久化（写到 stdout / structlog）。
+仅日志，不持久化。
 
-### 6. `LoadSkillRequest` / `LoadSkillResponse` —— tool 输入输出
+### 8. `CurationRun` — SKILL.md 整理日志
 
 ```python
 @dataclass
-class LoadSkillRequest:
-    name: str    # "<name>" or "<agent>::<name>"
+class CurationRun:
+    started_at: datetime
+    skill_name: str                   # tech-analysis 等
+    triggered_by: Literal["manual", "llm", "cron"]
+    active_patterns_used: list[str]   # 输入的 pattern names
+    output_path: Path                 # SKILL.md.draft 或 SKILL.md
+    skipped_reason: str | None        # 如 manually_edited=True
+```
 
-# 成功响应
-{"name": str, "agent": str, "kind": str, "body": str}
+### 9. `LoadSkillRequest` / `LoadSkillResponse`
 
-# 错误响应（4 类）
-{"error": "skill_not_found", "name": str}
-{"error": "ambiguous_name", "candidates": list[str]}
-{"error": "corrupt_file", "path": str, "details": str}
-{"error": "rate_limit_per_cycle", "limit": int}
+```python
+class LoadSkillRequest(BaseModel):
+    name: str    # 5 个 skill name 之一
+
+# 成功
+{"name": "tech-analysis", "body": "..."}
+
+# 错误（4 类）
+{"error": "skill_not_found", "name": "..."}
+{"error": "corrupt_file", "path": "...", "details": "..."}
+{"error": "rate_limit_per_cycle", "limit": 10}
+{"error": "skill_dir_missing"}
 ```
 
 ## 关系图
 
 ```
-Skill (1 file = 1 Skill)
-  ├─ belongs_to → agent (5 个之一)
-  ├─ has → PnLTrack
-  └─ persisted_as → markdown file (frontmatter + body)
-
-AgentSkillSet (1 per cycle per agent)
-  ├─ has → 1 Skill (instructions)
-  ├─ has → list[Skill] (patterns; regime-filtered)
-  ├─ has → list[Skill] (forbidden; regime-filtered)
-  └─ has → list[Skill] (knowledge; from shared/)
-
-ReflectionRun (1 per reflection job execution)
-  ├─ created → list[Skill]
-  ├─ updated → list[Skill]
-  └─ archived → list[Skill]
-
-verdict.reasoning text
-  └─ contains "applied: <name>" references
-       └─ Reflection updates referenced Skill.pnl_track
+agent_memory/<agent>/cases/<cycle_id>.md     [CaseRecord]
+                ↓ reflection 周期蒸馏
+agent_memory/<agent>/patterns/<name>.md      [PatternRecord]
+                ↓ curation 整理 (manual or LLM)
+agent_skills/<skill>/SKILL.md                [Skill]
+                ↑ middleware.wrap_model_call
+                ↑ load_skill(name) tool
+            agent prompt
 ```
 
 ## 文件系统物化
 
 ```
-agent_skills/
-├── tech/instructions.md                      # 1 个 Skill (kind=instruction)
-├── tech/patterns/funding_squeeze_long.md     # 1 个 Skill (kind=pattern)
-├── tech/forbidden/chase_low_volume.md        # 1 个 Skill (kind=forbidden)
-├── tech/archive/old_macd_pattern.md          # 1 个 Skill (deprecated)
-└── shared/funding_rate.md                    # 1 个 Skill (kind=knowledge, agent=shared)
+.gitignore
++ agent_memory/
+
+agent_memory/                            # gitignored
+├── tech/
+│   ├── cases/2026-05-06-cycle-7ffc.md
+│   ├── patterns/funding_squeeze_long.md
+│   └── archive/old_macd_pattern.md
+├── chain/{cases,patterns,archive}/
+├── news/{cases,patterns,archive}/
+└── macro/{cases,patterns,archive}/
+
+agent_skills/                            # git tracked, 5 个目录
+├── tech-analysis/SKILL.md
+├── chain-analysis/SKILL.md
+├── news-analysis/SKILL.md
+├── macro-analysis/SKILL.md
+└── trading-knowledge/SKILL.md
 ```
 
-每个 .md 文件 = 1 个 Skill。frontmatter 由 PyYAML 解析为 dataclass 字段。
+## 不持久化运行时状态
 
-## 不持久化的运行时状态
+- `_load_skill_call_count: dict[trace_id, int]`：rate-limit 计数（≤ 10/cycle）
+- `_skill_cache: dict[skill_name, Skill]`：进程内缓存；curation 写入后失效
 
-- `_load_skill_call_count: dict[trace_id, int]`：rate-limit 计数（每 cycle 上限 10 次，FR Edge Case）
-- `_skill_set_cache: dict[(agent, regime_hash), AgentSkillSet]`：进程内 LRU；reflection 写入后失效
-- `_load_skill_lock: threading.Lock`：tool 调用计数与缓存的并发保护
-
-## 与 spec 实体的对应关系
-
-spec.md "Key Entities" 提到：
+## 与 spec Key Entities 对应
 
 | spec | data-model.md |
 |---|---|
-| Skill | ✅ 同名 |
-| AgentSkillSet | ✅ 同名 |
+| Skill | ✅ 同名（5 个之一）|
+| PatternRecord | ✅ 同名（memory 层数据）|
+| CaseRecord | ✅ 同名（memory 层数据）|
+| AgentSkillSet | ✅ 同名（middleware 加载结果）|
 | ReflectionRun | ✅ 同名 |
-| AppliedSkillReference | （隐含在 verdict.reasoning text 解析；非独立实体）|
+| CurationRun | ✅ 同名（新增）|

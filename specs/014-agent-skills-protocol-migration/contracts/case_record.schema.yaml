@@ -1,0 +1,52 @@
+# CaseRecord frontmatter schema (agent_memory/<agent>/cases/*.md)
+# memory 层原始数据，每 cycle 一条，永久保留，gitignored
+$schema: "http://json-schema.org/draft-07/schema#"
+title: CaseRecordFrontmatter
+type: object
+required:
+  - cycle_id
+  - timestamp
+  - pair
+  - agent
+  - verdict_action
+  - risk_gate_passed
+properties:
+  cycle_id:
+    type: string
+    pattern: "^[0-9a-f]{8,64}$"
+    description: trace_id or commit hash (short or full)
+  timestamp:
+    type: string
+    format: date-time
+  pair:
+    type: string
+    description: ccxt canonical pair (e.g. BTC/USDT:USDT)
+  agent:
+    type: string
+    enum: [tech, chain, news, macro]
+  verdict_action:
+    type: string
+    enum: [long, short, hold, close]
+  applied_patterns:
+    type: array
+    items:
+      type: string
+    description: |
+      Pattern names parsed from verdict.reasoning's `applied: <name>` markers.
+      Used by reflection to update PnL track on referenced patterns.
+  risk_gate_passed:
+    type: boolean
+  execution_status:
+    type: object
+    nullable: true
+    properties:
+      succeeded: { type: boolean }
+      stage: { type: string }
+      reason: { type: string }
+  final_pnl:
+    type: number
+    nullable: true
+    description: |
+      Realized PnL after position closed (USDT). null if position still open
+      or trade was hold/skipped.
+additionalProperties: true   # body section serialized as YAML keys is OK; frontmatter free-form
