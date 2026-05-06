@@ -58,10 +58,6 @@
     "server": "Internal server error",
     "trace_id": "Trace ID"
   },
-  "desktop_only": {
-    "title": "Desktop only",
-    "body": "This app supports desktop ≥ 1280px only."
-  },
   "ws": {
     "connecting": "Connecting",
     "reconnecting": "Reconnecting…",

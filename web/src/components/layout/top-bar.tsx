@@ -121,13 +121,24 @@ export const TopBar = () => {
   const locale = useUIStore((s) => s.locale);
   const setLocale = useUIStore((s) => s.setLocale);
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
+  const setMobileNavOpen = useUIStore((s) => s.setMobileNavOpen);
 
   const isOnline = connectionStatus === 'connected';
+
+  // Below md the sidebar is hidden; the menu button opens the mobile drawer.
+  // At md+ the menu button toggles the desktop sidebar's collapsed state.
+  const onMenuClick = () => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches) {
+      setMobileNavOpen(true);
+    } else {
+      toggleSidebar();
+    }
+  };
 
   return (
     <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4">
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="toggle sidebar">
+        <Button variant="ghost" size="icon" onClick={onMenuClick} aria-label="toggle sidebar">
           <Menu className="h-4 w-4" />
         </Button>
         <Breadcrumb />

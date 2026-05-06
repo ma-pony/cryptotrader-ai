@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { Menu } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate, useLocation } from 'react-router';
 
@@ -7,7 +8,9 @@ import { AnalysisProgressPanel } from '@/components/analysis/analysis-progress-p
 import { useAnalysisProgress } from '@/hooks/use-analysis-progress';
 import { useChatMessages } from '@/hooks/use-chat-messages';
 import { useChatStore } from '@/stores/use-chat-store';
+import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Sheet, SheetContent } from '@/components/ui/sheet';
 
 import { ChatInput } from './components/chat-input';
 import { MessageStream } from './components/message-stream';
@@ -23,6 +26,7 @@ const ChatPage = () => {
   const currentSessionId = sessionId ?? activeSessionId;
   const { messages, status, error, sendMessage, stopStream, clearMessages } = useChatMessages(currentSessionId);
   const { progress, sendInterrupt, sendSteer } = useAnalysisProgress();
+  const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
 
   const initialContextRef = useRef(false);
   useEffect(() => {
@@ -42,6 +46,7 @@ const ChatPage = () => {
     (id: string) => {
       setActiveSession(id);
       void navigate(`/chat/${id}`);
+      setMobileSessionsOpen(false);
     },
     [setActiveSession, navigate],
   );
@@ -50,6 +55,7 @@ const ChatPage = () => {
     setActiveSession(null);
     clearMessages();
     void navigate('/chat');
+    setMobileSessionsOpen(false);
   }, [setActiveSession, clearMessages, navigate]);
 
   const handleRemoveSession = useCallback(
@@ -79,18 +85,44 @@ const ChatPage = () => {
         />
       </Card>
 
+      {/* Mobile session-list drawer (<lg). Reuses SessionList unchanged. */}
+      <Sheet open={mobileSessionsOpen} onOpenChange={setMobileSessionsOpen}>
+        <SheetContent side="left" className="lg:hidden">
+          <SessionList
+            sessions={sessions}
+            activeId={currentSessionId ?? null}
+            onSelect={handleSelectSession}
+            onNew={handleNewSession}
+            onRemove={handleRemoveSession}
+          />
+        </SheetContent>
+      </Sheet>
+
       <Card className="flex flex-1 flex-col overflow-hidden">
-        <div className="border-b border-border px-4 py-3">
-          <h1 className="text-lg font-semibold text-foreground">{t('title')}</h1>
-          {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
-          {chartContext && (
-            <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="inline-block rounded bg-blue-500/20 px-1.5 py-0.5 text-blue-400">
-                {t('chart_context_badge', '已附加图表上下文')}
-              </span>
-              <span>{chartContext.payloads[0]?.symbol} / {chartContext.payloads[0]?.timeframe}</span>
-            </div>
-          )}
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          {/* Sessions trigger — shown only on <lg where the inline session
+              list is hidden. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="lg:hidden"
+            onClick={() => setMobileSessionsOpen(true)}
+            aria-label={t('sessions_title', { defaultValue: '会话列表' })}
+          >
+            <Menu className="h-4 w-4" />
+          </Button>
+          <div className="flex-1">
+            <h1 className="text-lg font-semibold text-foreground">{t('title')}</h1>
+            {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+            {chartContext && (
+              <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-block rounded bg-blue-500/20 px-1.5 py-0.5 text-blue-400">
+                  {t('chart_context_badge', '已附加图表上下文')}
+                </span>
+                <span>{chartContext.payloads[0]?.symbol} / {chartContext.payloads[0]?.timeframe}</span>
+              </div>
+            )}
+          </div>
         </div>
 
         <AnalysisProgressPanel

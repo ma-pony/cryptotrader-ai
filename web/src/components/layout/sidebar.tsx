@@ -112,74 +112,107 @@ const SidebarFooter = () => {
   );
 };
 
-export const Sidebar = () => {
+/** Brand mark + name. Shared by the desktop sidebar and the mobile drawer. */
+const SidebarBrand = ({ collapsed }: { collapsed: boolean }) => {
   const { t } = useTranslation();
+  return (
+    <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
+      <span
+        className="flex h-8 w-8 items-center justify-center rounded-lg font-semibold text-[15px] shadow-glow-amber"
+        style={{
+          background: 'linear-gradient(135deg, var(--amber-500), var(--amber-600))',
+          color: 'hsl(var(--primary-foreground))',
+          fontFamily: "'Space Grotesk', system-ui, sans-serif",
+        }}
+        aria-hidden
+      >
+        ₵
+      </span>
+      {!collapsed ? (
+        <div className="flex flex-col leading-tight">
+          <span className="text-sm font-semibold text-foreground">{t('app.name')}</span>
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+            AI · v2.4
+          </span>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
+interface SidebarNavProps {
+  collapsed: boolean;
+  /** Called after a nav link is activated (used to close the mobile drawer). */
+  onNavigate?: (() => void) | undefined;
+}
+
+const SidebarNav = ({ collapsed, onNavigate }: SidebarNavProps) => {
+  const { t } = useTranslation();
+  return (
+    <nav className="flex-1 overflow-y-auto px-2 py-3">
+      {NAV_SECTIONS.map((section, sectionIdx) => (
+        <div
+          key={section.titleKey}
+          className={cn('space-y-0.5', sectionIdx > 0 && 'mt-4')}
+        >
+          {!collapsed ? (
+            <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+              {t(section.titleKey, { defaultValue: section.defaultTitle })}
+            </div>
+          ) : sectionIdx > 0 ? (
+            // collapsed mode: thin divider between groups
+            <div className="mx-2 mb-1 h-px bg-border" />
+          ) : null}
+          {section.items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/'}
+              onClick={onNavigate}
+              className={({ isActive }) =>
+                cn(
+                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors border-l-2',
+                  isActive
+                    ? 'bg-muted text-foreground font-medium border-l-amber-500 pl-[10px]'
+                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-transparent',
+                )
+              }
+            >
+              <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+              {!collapsed ? <span className="truncate">{t(item.labelKey)}</span> : null}
+            </NavLink>
+          ))}
+        </div>
+      ))}
+    </nav>
+  );
+};
+
+/** Drawer body for the mobile sidebar (rendered inside <Sheet>). */
+export const SidebarDrawerBody = ({ onNavigate }: { onNavigate?: () => void }) => (
+  <>
+    <SidebarBrand collapsed={false} />
+    <SidebarNav collapsed={false} onNavigate={onNavigate} />
+    <SidebarFooter />
+  </>
+);
+
+export const Sidebar = () => {
   const collapsed = useUIStore((s) => s.sidebarCollapsed);
 
   return (
+    // Hidden below md — the TopBar menu button opens the SidebarDrawer
+    // (rendered by AppShell) instead. Above md the sidebar is always
+    // present and its width depends on the collapsed flag.
     <aside
       className={cn(
-        'flex h-screen flex-col border-r border-border bg-card transition-[width] duration-200',
+        'hidden h-screen flex-col border-r border-border bg-card transition-[width] duration-200 md:flex',
         collapsed ? 'w-16' : 'w-60',
       )}
       aria-label="primary"
     >
-      <div className="flex h-14 items-center gap-2.5 border-b border-border px-4">
-        <span
-          className="flex h-8 w-8 items-center justify-center rounded-lg font-semibold text-[15px] shadow-glow-amber"
-          style={{
-            background: 'linear-gradient(135deg, var(--amber-500), var(--amber-600))',
-            color: 'hsl(var(--primary-foreground))',
-            fontFamily: "'Space Grotesk', system-ui, sans-serif",
-          }}
-          aria-hidden
-        >
-          ₵
-        </span>
-        {!collapsed ? (
-          <div className="flex flex-col leading-tight">
-            <span className="text-sm font-semibold text-foreground">{t('app.name')}</span>
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-              AI · v2.4
-            </span>
-          </div>
-        ) : null}
-      </div>
-      <nav className="flex-1 overflow-y-auto px-2 py-3">
-        {NAV_SECTIONS.map((section, sectionIdx) => (
-          <div
-            key={section.titleKey}
-            className={cn('space-y-0.5', sectionIdx > 0 && 'mt-4')}
-          >
-            {!collapsed ? (
-              <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                {t(section.titleKey, { defaultValue: section.defaultTitle })}
-              </div>
-            ) : sectionIdx > 0 ? (
-              // collapsed mode: thin divider between groups
-              <div className="mx-2 mb-1 h-px bg-border" />
-            ) : null}
-            {section.items.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.to === '/'}
-                className={({ isActive }) =>
-                  cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors border-l-2',
-                    isActive
-                      ? 'bg-muted text-foreground font-medium border-l-amber-500 pl-[10px]'
-                      : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-transparent',
-                  )
-                }
-              >
-                <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                {!collapsed ? <span className="truncate">{t(item.labelKey)}</span> : null}
-              </NavLink>
-            ))}
-          </div>
-        ))}
-      </nav>
+      <SidebarBrand collapsed={collapsed} />
+      <SidebarNav collapsed={collapsed} />
       {!collapsed ? <SidebarFooter /> : null}
     </aside>
   );

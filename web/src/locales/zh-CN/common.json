@@ -58,10 +58,6 @@
     "server": "服务器内部错误",
     "trace_id": "Trace ID"
   },
-  "desktop_only": {
-    "title": "桌面专用",
-    "body": "本应用仅支持 ≥ 1280px 桌面端访问。"
-  },
   "ws": {
     "connecting": "连接中",
     "reconnecting": "重连中…",
