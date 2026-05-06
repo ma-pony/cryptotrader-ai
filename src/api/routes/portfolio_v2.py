@@ -55,6 +55,9 @@ class PortfolioSnapshotOut(BaseModel):
     # Both fields are 0.0 when no snapshot history exists yet.
     total_return: float = 0.0
     total_return_pct: float = 0.0
+    # Mean realized PnL per filled trade (commits with non-null pnl).
+    # None when no settled trades exist yet.
+    avg_trade_pnl: float | None = None
 
 
 class EquityPointOut(BaseModel):
@@ -157,23 +160,29 @@ async def _load_commits(database_url: str | None) -> list:
         return []
 
 
-def _commit_pnl_stats(commits: list, cutoff_30d: datetime) -> tuple[int, float | None, float]:
-    """Return (total_trades, win_rate_or_None, realized_pnl_30d)."""
+def _commit_pnl_stats(commits: list, cutoff_30d: datetime) -> tuple[int, float | None, float, float | None]:
+    """Return (total_trades, win_rate_or_None, realized_pnl_30d, avg_trade_pnl_or_None).
+
+    avg_trade_pnl: mean of ``commit.pnl`` over commits that have settled
+    (non-null pnl). Useful as "average per-trade PnL" headline number.
+    """
     filled = [c for c in commits if getattr(c, "order", None) is not None]
     total = len(filled)
     win_rate: float | None = None
+    avg_trade_pnl: float | None = None
     if filled:
-        wins = [c for c in filled if (c.pnl is not None and c.pnl > 0)]
         settled = [c for c in filled if c.pnl is not None]
         if settled:
+            wins = [c for c in settled if c.pnl > 0]
             win_rate = round(len(wins) / len(settled), 4)
+            avg_trade_pnl = round(sum(float(c.pnl) for c in settled) / len(settled), 2)
     realized = 0.0
     for c in filled:
         ts_dt = _coerce_timestamp(c.timestamp)
         if ts_dt is None or ts_dt < cutoff_30d or c.pnl is None:
             continue
         realized += float(c.pnl)
-    return total, win_rate, round(realized, 2)
+    return total, win_rate, round(realized, 2), avg_trade_pnl
 
 
 def _inception_equity(snaps: list[dict]) -> float | None:
@@ -207,7 +216,7 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
     sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
 
     commits = await _load_commits(database_url)
-    total, win_rate, realized_30d = _commit_pnl_stats(commits, now - timedelta(days=30))
+    total, win_rate, realized_30d, avg_trade_pnl = _commit_pnl_stats(commits, now - timedelta(days=30))
 
     inception = _inception_equity(snaps)
     if inception is not None:
@@ -224,6 +233,7 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
         "realized_pnl_30d": realized_30d,
         "total_return": round(total_return, 2),
         "total_return_pct": round(total_return_pct, 6),
+        "avg_trade_pnl": avg_trade_pnl,
     }
 
 
@@ -328,6 +338,7 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         realized_pnl_30d=float(cast("float", extras["realized_pnl_30d"])),
         total_return=float(cast("float", extras["total_return"])),
         total_return_pct=float(cast("float", extras["total_return_pct"])),
+        avg_trade_pnl=cast("float | None", extras["avg_trade_pnl"]),
     )
 
 

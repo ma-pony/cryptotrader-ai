@@ -44,6 +44,8 @@ export const PortfolioSchema = z.object({
   // Inception-to-date total return (current equity − first snapshot).
   total_return: z.number().default(0),
   total_return_pct: z.number().default(0),
+  // Mean realized PnL per filled trade. Null until at least one trade has settled.
+  avg_trade_pnl: z.number().nullable().optional(),
 });
 
 export const EquityPointSchema = z.object({

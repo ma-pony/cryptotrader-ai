@@ -95,6 +95,8 @@ class TestComputeExtras:
         assert extras["total_trades"] == 4  # 4 commits with non-null order
         # win_rate is rounded to 4 decimals in _compute_extras
         assert extras["win_rate"] == pytest.approx(2 / 3, abs=1e-3)
+        # avg_trade_pnl = mean of settled commits: (100 - 50 + 200) / 3 ≈ 83.33
+        assert extras["avg_trade_pnl"] == pytest.approx(83.33, abs=1e-2)
 
     @pytest.mark.asyncio
     async def test_realized_pnl_30d_window(self) -> None:
@@ -134,6 +136,7 @@ class TestComputeExtras:
         # No snapshots means no inception baseline → 0.0 (not divide-by-zero)
         assert extras["total_return"] == 0.0
         assert extras["total_return_pct"] == 0.0
+        assert extras["avg_trade_pnl"] is None
 
     @pytest.mark.asyncio
     async def test_total_return_from_inception_snapshot(self) -> None:

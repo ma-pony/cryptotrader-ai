@@ -37,6 +37,8 @@ export const MetricCardsRow = memo(function MetricCardsRow({
       : data.total_return < 0
         ? 'down'
         : 'neutral';
+  const avgPnl = data?.avg_trade_pnl ?? null;
+  const avgPnlDir: 'up' | 'down' | 'neutral' = avgPnl == null ? 'neutral' : avgPnl > 0 ? 'up' : avgPnl < 0 ? 'down' : 'neutral';
   const isLive = connectionStatus === 'connected';
 
   return (
@@ -70,9 +72,19 @@ export const MetricCardsRow = memo(function MetricCardsRow({
         isLoading={isLoading}
       />
       <MetricCard
-        label={t('metrics.sharpe', { defaultValue: 'Sharpe (90D)' })}
-        value={data?.sharpe_90d != null ? data.sharpe_90d.toFixed(2) : '—'}
-        sub={data ? `胜率 ${data.win_rate != null ? `${(data.win_rate * 100).toFixed(1)}%` : '—'} · ${data.total_trades} 笔` : undefined}
+        label={t('metrics.win_trades', { defaultValue: '胜率 · 成交' })}
+        value={data?.win_rate != null ? `${(data.win_rate * 100).toFixed(1)}%` : '—'}
+        delta={
+          avgPnl != null
+            ? `${avgPnl >= 0 ? '+' : '-'}${formatCurrency(Math.abs(avgPnl))}/笔`
+            : undefined
+        }
+        deltaDirection={avgPnlDir}
+        sub={
+          data
+            ? `${data.total_trades} 笔 · Sharpe ${data.sharpe_90d != null ? data.sharpe_90d.toFixed(2) : '—'}`
+            : undefined
+        }
         isLoading={isLoading}
       />
       <MetricCard

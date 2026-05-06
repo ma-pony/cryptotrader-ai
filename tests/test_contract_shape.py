@@ -46,6 +46,8 @@ _PORTFOLIO_REQUIRED = {
     # Inception-to-date total return (2026-05-06):
     "total_return",
     "total_return_pct",
+    # Mean realized PnL per settled trade (2026-05-06):
+    "avg_trade_pnl",
 }
 
 _DECISION_LIST_ITEM_REQUIRED = {
