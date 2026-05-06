@@ -15,7 +15,14 @@ interface CandlestickChartProps {
   symbol: string;
   timeframe?: string;
   exchange?: 'binance' | 'okx';
+  /** Fixed pixel height. Ignored when ``fillContainer`` is true. */
   height?: number;
+  /**
+   * When true, the chart fills its parent's height and tracks resizes via
+   * ResizeObserver (parent must have a defined height). When false (default),
+   * the chart renders at the fixed ``height`` prop.
+   */
+  fillContainer?: boolean;
 }
 
 const EMPTY_BARS: OHLCVBar[] = [];
@@ -35,7 +42,7 @@ async function fetchOHLCV(
 }
 
 export const CandlestickChart = forwardRef<CandlestickChartHandle, CandlestickChartProps>(
-  ({ symbol, timeframe = '1h', exchange = 'binance', height = 400 }, ref) => {
+  ({ symbol, timeframe = '1h', exchange = 'binance', height = 400, fillContainer = false }, ref) => {
     const containerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
     const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -63,8 +70,12 @@ export const CandlestickChart = forwardRef<CandlestickChartHandle, CandlestickCh
       const el = containerRef.current;
       if (!el) return;
 
+      // In fillContainer mode, seed the chart with the parent's current height.
+      // The ResizeObserver below keeps it in sync afterwards.
+      const initialHeight = fillContainer ? el.clientHeight || height : height;
+
       const chart = createChart(el, {
-        height,
+        height: initialHeight,
         layout: {
           background: { type: ColorType.Solid, color: 'transparent' },
           textColor: '#9ca3b6',
@@ -138,7 +149,13 @@ export const CandlestickChart = forwardRef<CandlestickChartHandle, CandlestickCh
 
       const ro = new ResizeObserver((entries) => {
         for (const entry of entries) {
-          chart.applyOptions({ width: entry.contentRect.width });
+          const opts: Parameters<typeof chart.applyOptions>[0] = {
+            width: entry.contentRect.width,
+          };
+          if (fillContainer && entry.contentRect.height > 0) {
+            opts.height = entry.contentRect.height;
+          }
+          chart.applyOptions(opts);
         }
       });
       ro.observe(el);
@@ -150,9 +167,14 @@ export const CandlestickChart = forwardRef<CandlestickChartHandle, CandlestickCh
         candleSeriesRef.current = null;
         setIsReady(false);
       };
-    }, [bars, height]);
+    }, [bars, height, fillContainer]);
 
-    return <div ref={containerRef} style={{ width: '100%', height }} />;
+    return (
+      <div
+        ref={containerRef}
+        style={fillContainer ? { width: '100%', height: '100%' } : { width: '100%', height }}
+      />
+    );
   },
 );
 

@@ -13,3 +13,6 @@ config/local.toml
 .coverage
 .coverage.*
 htmlcov/
+
+# Claude Code runtime artifacts
+.claude/scheduled_tasks.lock
