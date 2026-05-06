@@ -43,11 +43,11 @@
 
 ### User Story 3 — 单写者反思：reflection 改写文件 + 防过拟合保留（Priority: P1）
 
-作为系统设计者，我希望反思流程从"DB upsert 旧 ExperienceMemory" 切换到"文件读写 + 单写者保证"——只有 reflection job 写文件，4 个 agent 节点 read-only；保留当前 5 层防过拟合算法（regime filter、verify、maturity assignment 等），保留 PnL-based maturity 演化（observed → probationary → active → deprecated）。
+作为系统设计者，我希望反思流程从"DB upsert 旧 ExperienceMemory" 切换到"文件读写 + 单写者保证"——只有 reflection job 写文件，4 个 agent 节点 read-only；保留当前 4 层防过拟合算法（regime filter、verify、maturity assignment、对手验证），保留 PnL-based maturity 演化（observed → probationary → active → deprecated）。明确不引入时间衰减层。
 
 **Why this priority**: 防过拟合是当前系统的核心交易特化 know-how，不能在迁移中丢失；单写者模型是文件存储下避免 race condition 的最简方案。这两条决定了"迁移后系统是否仍然可信"。
 
-**Independent Test**: 构造一组合成历史 commits（含已知胜负 PnL 分布），跑 reflection job，对比新算法与旧算法在以下 5 个 anti-overfitting 维度的输出是否数值等价：(1) regime-aware 胜率统计、(2) 最少样本量门槛、(3) 全局 vs 区段统计差距识别、(4) 对手验证（forbidden 是否真有相反方向证据）、(5) 时间衰减。等价即视为 know-how 无损迁移。
+**Independent Test**: 构造一组合成历史 commits（含已知胜负 PnL 分布），跑 reflection job，对比新算法与旧算法在以下 4 个 anti-overfitting 维度的输出是否数值等价：(1) regime-aware 胜率统计、(2) 最少样本量门槛、(3) 全局 vs 区段统计差距识别、(4) 对手验证（forbidden 是否真有相反方向证据）。等价即视为 know-how 无损迁移。
 
 **Acceptance Scenarios**:
 
@@ -128,14 +128,14 @@
 
 - **FR-014**: 系统 MUST 提供一个 reflection job（替代当前 `learning/reflect.py` 的 DB upsert 路径），输入为最近 N 个 commits，输出为对 `agent_skills/{agent}/` 下文件的增删改
 - **FR-015**: reflection job MUST 是单写者——同一时刻只能有一个实例运行（通过文件锁、运行时 mutex 或外部 cron 编排实现）
-- **FR-016**: reflection 算法 MUST 完整保留当前 5 层防过拟合机制，具体包括：
+- **FR-016**: reflection 算法 MUST 完整保留 4 层防过拟合机制（pure-PnL 驱动，无时间维度），具体包括：
   - **L1 — regime-aware 胜率统计**：仅统计与该 pattern 同 regime tag 的历史样本，不能用全局胜率混淆
   - **L2 — 最少样本量门槛**：低于 N 个独立 case（当前 N=5）的候选 pattern 不晋升 maturity
   - **L3 — 全局 vs 区段差距识别**：候选 pattern 必须在区段（regime 内）显著优于全局基线，否则视为过拟合噪声
   - **L4 — 对手验证（forbidden 专属）**：候选 forbidden_zone 必须有"反方向操作真的亏损"的相反方向证据，不仅"该方向操作不盈利"
-  - **L5 — 时间衰减**：超过 M 天（当前 M=60）未被 verdict reasoning `applied:` 过的 pattern，maturity 自动降级
+  - 注：明确不引入"时间衰减"层（基于 last_active 自动降级 maturity）。理由：pattern 可能仅因对应 regime 长期未出现而无 `applied`，并非 pattern 本身失效；纯 PnL 反馈触发的 L1+L3 已能识别真正失效的 pattern
 - **FR-017**: skill maturity 演化 MUST 保留当前 4 级（observed → probationary → active → deprecated），由 PnL track 触发；deprecated 的文件 MUST 移到 `archive/` 子目录而非删除
-- **FR-018**: reflection 失败 MUST NOT 阻塞下一个 trading cycle——cycle 使用上一次成功的蒸馏快照（即文件系统当前状态）。"失败"包括：进程崩溃、文件 IO 异常、解析异常、5 层防过拟合算法异常
+- **FR-018**: reflection 失败 MUST NOT 阻塞下一个 trading cycle——cycle 使用上一次成功的蒸馏快照（即文件系统当前状态）。"失败"包括：进程崩溃、文件 IO 异常、解析异常、4 层防过拟合算法异常
 - **FR-018a**: reflection 写文件 MUST 使用原子写（写到 temp file 然后 atomic rename），保证部分写入不会留下损坏文件；archive 操作 MUST 使用 git mv 或 atomic rename
 - **FR-019**: reflection 检测到 frontmatter 含 `manually_edited: true` 的文件时，MUST 仅更新 `pnl_track` 与 `last_active`，禁止覆写 body 或其他 frontmatter 字段
 - **FR-019a**: `manually_edited: true` 字段 MUST 由用户**手工添加**到 frontmatter（用户编辑 body 后自行设置）；本期不实现"自动检测 body diff 然后加 flag"的 pre-commit hook 等机制——保留为 follow-up
@@ -184,7 +184,7 @@
 
 - 4 个 agent 当前已存在且其 prompt 模板内容可清晰提取到 `instructions.md`（无需重写 agent 决策逻辑）
 - LangChain 1.2+ `create_agent` 的 `middleware=` 参数稳定可用，且支持在 LLM 调用前拦截/修改 system_prompt（已通过 `inspect.signature` 验证存在）
-- 当前 5 层防过拟合算法的核心实现在 `learning/reflect.py` 中，可被剥离为不依赖 DB 的纯函数
+- 当前防过拟合算法的核心实现在 `learning/reflect.py` 中，可被剥离为不依赖 DB 的纯函数；本期采纳其中 4 层（不含时间衰减）
 - `decision_commits.experience_json` 列的旧数据**不需要**被迁移到文件——新系统冷启动可接受，前 2 周经验为空
 - 前端 `/decisions/:id` 详情页面在迁移期间可降级（不展示 experience_json 字段），是可接受的业务影响
 - regime_tags 的取值集合（trending_up / range_bound / low_funding / high_funding / etc）保持当前 `learning/regime.py` 的定义不变
