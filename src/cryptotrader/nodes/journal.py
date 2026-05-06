@@ -148,6 +148,59 @@ async def _get_portfolio_snapshot(state: ArenaState) -> dict:
         return {}
 
 
+def _write_memory_case(state: ArenaState, commit: Any, pair_str: str, raw_verdict: dict | None) -> None:
+    """FR-006: 写入 agent_memory/cases/<cycle_id>.md（per-cycle 单文件）。
+
+    FR-007: 失败时 logger.warning，不阻塞 cycle。
+    调用 learning.memory.write_case()（原子写，进程内锁）。
+    """
+    try:
+        from cryptotrader.learning.memory import write_case
+
+        cycle_id = commit.hash[:16]  # 使用 commit hash 前 16 位作为 cycle_id
+
+        # 从 analyses 中提取各 agent 的 reasoning 文本
+        agent_analyses: dict[str, str] = {}
+        for agent_id, analysis in (commit.analyses or {}).items():
+            if hasattr(analysis, "reasoning"):
+                agent_analyses[agent_id] = analysis.reasoning or ""
+            elif isinstance(analysis, dict):
+                agent_analyses[agent_id] = analysis.get("reasoning", "")
+
+        verdict_action = raw_verdict.get("action", "hold") if raw_verdict else "hold"
+        verdict_reasoning = raw_verdict.get("reasoning", "") if raw_verdict else ""
+        # FR-026: 用 parse_applied() 解析 applied: 引用（支持 prefix + bare 两种形式）
+        from cryptotrader.learning.memory import parse_applied
+
+        applied_map = parse_applied(verdict_reasoning)  # {agent: [pattern_name]}
+        # 展平为 list[str]，格式为 "agent::pattern_name"
+        applied_patterns: list[str] = [f"{agent}::{name}" for agent, names in applied_map.items() for name in names]
+
+        risk_gate_passed = commit.risk_gate.passed if commit.risk_gate else True
+        exec_status = commit.execution_status
+
+        write_case(
+            cycle_id=cycle_id,
+            pair=pair_str,
+            agent_analyses=agent_analyses,
+            verdict_action=verdict_action,
+            verdict_reasoning=verdict_reasoning,
+            applied_patterns=applied_patterns,
+            risk_gate_passed=risk_gate_passed,
+            execution_status=exec_status,
+            final_pnl=commit.pnl,
+        )
+
+        # T041 / FR-026: 有 final_pnl 时立即更新 pattern PnL track
+        if commit.pnl is not None and applied_map:
+            from cryptotrader.learning.memory import update_pattern_pnl
+
+            update_pattern_pnl(applied_map, pnl=commit.pnl)
+
+    except Exception:
+        logger.warning("Memory case write failed (non-blocking)", exc_info=True)
+
+
 @node_logger()
 async def journal_trade(state: ArenaState) -> dict:
     """Journal a successful trade."""
@@ -202,7 +255,6 @@ async def journal_trade(state: ArenaState) -> dict:
             trace_id=get_trace_id(),
             consensus_metrics=state["data"].get("consensus_metrics"),
             verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),
-            experience_memory=state["data"].get("experience_memory", {}),
             node_trace=node_trace,
             debate_skip_reason=state["data"].get("debate_skip_reason", ""),
             challenges=state["data"].get("debate_turns") or [],
@@ -217,6 +269,11 @@ async def journal_trade(state: ArenaState) -> dict:
             pair_str,
             raw_verdict.get("action") if raw_verdict else "unknown",
         )
+
+        # FR-006: 写入 agent_memory/cases/<cycle_id>.md（per-cycle 单文件）
+        # FR-007: 写失败不阻塞 cycle（write_case 内部捕获异常）
+        _write_memory_case(state, commit, pair_str, raw_verdict)
+
         return {"data": {"journal_hash": commit.hash}}
     except Exception:
         logger.error(
@@ -268,7 +325,6 @@ async def journal_rejection(state: ArenaState) -> dict:
             trace_id=get_trace_id(),
             consensus_metrics=state["data"].get("consensus_metrics"),
             verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),
-            experience_memory=state["data"].get("experience_memory", {}),
             node_trace=node_trace,
             debate_skip_reason=state["data"].get("debate_skip_reason", ""),
             challenges=state["data"].get("debate_turns") or [],

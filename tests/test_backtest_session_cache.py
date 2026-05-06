@@ -53,7 +53,6 @@ def _make_commit_with_observability(hash_val: str) -> DecisionCommit:
             confusion_threshold=0.05,
         ),
         verdict_source="weighted",
-        experience_memory={"success_patterns": ["trend_follow"]},
         node_trace=[NodeTraceEntry(node="debate_gate", duration_ms=35, summary="skip")],
         debate_skip_reason="consensus",
     )
@@ -416,56 +415,6 @@ class TestOHLCVCache:
         store_ohlcv("BTC/USDT", "1h", [])
         result = get_cached("BTC/USDT", "1h", 0, 1_000_000)
         assert result == []
-
-
-# ---------------------------------------------------------------------------
-# save_experience() tests
-# ---------------------------------------------------------------------------
-
-
-class TestSaveExperience:
-    """save_experience() serializes ExperienceMemory to JSON."""
-
-    def test_save_experience_creates_json_file(self, tmp_path, monkeypatch) -> None:
-        from cryptotrader.backtest import session as session_module
-
-        monkeypatch.setattr(session_module, "_SESSIONS_DIR", tmp_path / "sessions")
-
-        from cryptotrader.backtest.session import save_experience
-        from cryptotrader.models import ExperienceMemory
-
-        experience = {
-            "tech_agent": ExperienceMemory(
-                success_patterns=[],
-                forbidden_zones=[],
-                strategic_insights=["trend following works well"],
-                updated_at="2025-01-01T00:00:00",
-            )
-        }
-        path = save_experience("exp_session", experience)
-        assert path.exists()
-        assert path.name == "experience.json"
-
-    def test_save_experience_data_is_readable(self, tmp_path, monkeypatch) -> None:
-        from cryptotrader.backtest import session as session_module
-
-        monkeypatch.setattr(session_module, "_SESSIONS_DIR", tmp_path / "sessions")
-
-        from cryptotrader.backtest.session import save_experience
-        from cryptotrader.models import ExperienceMemory
-
-        experience = {
-            "macro_agent": ExperienceMemory(
-                success_patterns=[],
-                forbidden_zones=[],
-                strategic_insights=["avoid high-volatility periods"],
-                updated_at="2025-02-01",
-            )
-        }
-        path = save_experience("exp_session_2", experience)
-        data = json.loads(path.read_text())
-        assert "macro_agent" in data
-        assert data["macro_agent"]["strategic_insights"] == ["avoid high-volatility periods"]
 
 
 # ---------------------------------------------------------------------------

@@ -66,7 +66,6 @@ class _OldStyleRow:
     # New columns — NULL for old rows
     consensus_metrics = None
     verdict_source = None
-    experience_memory = None
     node_trace = None
     debate_skip_reason = None
 
@@ -100,12 +99,6 @@ class TestRowToDcNullSafety:
         dc = store._row_to_dc(self._make_old_row(verdict_source=None))
         assert dc.verdict_source == "ai"
 
-    def test_row_to_dc_handles_null_experience_memory(self) -> None:
-        """_row_to_dc() returns {} when experience_memory column is NULL."""
-        store = self._make_store()
-        dc = store._row_to_dc(self._make_old_row(experience_memory=None))
-        assert dc.experience_memory == {}
-
     def test_row_to_dc_handles_null_node_trace(self) -> None:
         """_row_to_dc() returns [] when node_trace column is NULL."""
         store = self._make_store()
@@ -129,7 +122,6 @@ class TestRowToDcNullSafety:
         # All new fields use safe defaults
         assert dc.consensus_metrics is None
         assert dc.verdict_source == "ai"
-        assert dc.experience_memory == {}
         assert dc.node_trace == []
         assert dc.debate_skip_reason == ""
 
@@ -164,7 +156,6 @@ class TestRowToDcNullSafety:
         # Should return safe defaults for missing attributes
         assert dc.consensus_metrics is None
         assert dc.verdict_source == "ai"
-        assert dc.experience_memory == {}
         assert dc.node_trace == []
         assert dc.debate_skip_reason == ""
 
@@ -239,7 +230,6 @@ class TestInMemoryStoreNewFieldsRoundtrip:
             risk_gate=GateResult(passed=True),
             consensus_metrics=cm,
             verdict_source="ai",
-            experience_memory={"success_patterns": ["trend_follow"], "forbidden_zones": []},
             node_trace=[
                 NodeTraceEntry(node="debate_gate", duration_ms=35, summary="consensus skip"),
                 NodeTraceEntry(node="make_verdict", duration_ms=1200, summary="ai verdict"),
@@ -256,7 +246,6 @@ class TestInMemoryStoreNewFieldsRoundtrip:
         assert dc.consensus_metrics.mean_score == pytest.approx(0.55)
         assert dc.consensus_metrics.skip_threshold == pytest.approx(0.50)
         assert dc.verdict_source == "ai"
-        assert dc.experience_memory == {"success_patterns": ["trend_follow"], "forbidden_zones": []}
         assert len(dc.node_trace) == 2
         assert dc.node_trace[0].node == "debate_gate"
         assert dc.node_trace[0].duration_ms == 35
@@ -281,7 +270,6 @@ class TestInMemoryStoreNewFieldsRoundtrip:
         assert dc is not None
         assert dc.consensus_metrics is None
         assert dc.verdict_source == "ai"
-        assert dc.experience_memory == {}
         assert dc.node_trace == []
         assert dc.debate_skip_reason == ""
 
@@ -367,25 +355,6 @@ class TestInMemoryStoreNewFieldsRoundtrip:
 
         assert dc is not None
         assert dc.consensus_metrics is None
-
-    @pytest.mark.asyncio
-    async def test_empty_experience_memory_persists_as_empty_dict(self, store: JournalStore) -> None:
-        """experience_memory={} is stored and read back as {} (not None)."""
-        commit = DecisionCommit(
-            hash="empty_mem_01",
-            parent_hash=None,
-            timestamp=datetime.now(UTC),
-            pair="BTC/USDT",
-            snapshot_summary={},
-            analyses={},
-            debate_rounds=0,
-            experience_memory={},
-        )
-        await store.commit(commit)
-        dc = await store.show("empty_mem_01")
-
-        assert dc is not None
-        assert dc.experience_memory == {}
 
     @pytest.mark.asyncio
     async def test_empty_node_trace_persists_as_empty_list(self, store: JournalStore) -> None:

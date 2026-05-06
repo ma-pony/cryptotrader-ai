@@ -1,7 +1,7 @@
 """Tests for GET /api/decisions/{commit_hash} — FR-804.
 
 Returns the full DecisionCommit shape (agent_analyses / debate_rounds /
-risk_gate / execution / node_timeline / experience_memory_ref per data-model §2).
+risk_gate / execution / node_timeline per data-model §2).
 404 when commit_hash unknown.
 """
 
@@ -35,7 +35,6 @@ def _full_commit(commit_hash: str = "a1b2c3d"):
         AgentAnalysis,
         ConsensusMetrics,
         DecisionCommit,
-        ExperienceRule,
         GateResult,
         NodeTraceEntry,
         Order,
@@ -122,22 +121,6 @@ def _full_commit(commit_hash: str = "a1b2c3d"):
             NodeTraceEntry(node="risk_gate", duration_ms=15, summary="passed"),
             NodeTraceEntry(node="execute", duration_ms=210, summary="filled"),
         ],
-        experience_memory={
-            "memory_id": "mem_42",
-            "success_patterns": [
-                ExperienceRule(
-                    pattern="momentum + bullish news",
-                    category="success_pattern",
-                    conditions={"regime_tags": ["bull", "high_vol"]},
-                    rate=0.68,
-                    sample_count=20,
-                    maturity="rule",
-                    source="live",
-                ).__dict__
-            ],
-            "forbidden_zones": [],
-            "strategic_insights": ["avoid weekends"],
-        },
     )
 
 
@@ -166,7 +149,6 @@ class TestDecisionsDetailShape:
             "risk_gate",
             "execution",
             "node_timeline",
-            "experience_memory_ref",
             "trace_id",
         ):
             assert key in body, f"missing detail key: {key}"
@@ -242,22 +224,6 @@ class TestDecisionsDetailShape:
         # start_ms must be non-decreasing (cumulative from durations)
         starts = [e["start_ms"] for e in timeline]
         assert starts == sorted(starts)
-
-    def test_experience_memory_ref_includes_pattern_buckets(self, client: TestClient) -> None:
-        commit = _full_commit()
-        mock_store = MagicMock()
-        mock_store.show = AsyncMock(return_value=commit)
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("cryptotrader.journal.store.JournalStore", return_value=mock_store),
-        ):
-            body = client.get("/api/decisions/a1b2c3d").json()
-
-        emr = body["experience_memory_ref"]
-        for bucket in ("success_patterns", "forbidden_zones", "strategic_insights"):
-            assert bucket in emr
-            assert isinstance(emr[bucket], list)
 
     def test_execution_present_when_filled(self, client: TestClient) -> None:
         commit = _full_commit()

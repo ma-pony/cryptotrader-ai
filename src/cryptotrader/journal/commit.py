@@ -45,7 +45,6 @@ def build_commit(
     trace_id: str | None = None,
     consensus_metrics: dict[str, Any] | None = None,
     verdict_source: str = "ai",
-    experience_memory: dict[str, Any] | None = None,
     node_trace: list[NodeTraceEntry] | None = None,
     debate_skip_reason: str = "",
     latency_breakdown: dict[str, Any] | None = None,
@@ -64,7 +63,6 @@ def build_commit(
     trace_id = trace_id if trace_id is not None else obs.trace_id
     consensus_metrics = consensus_metrics if consensus_metrics is not None else obs.consensus_metrics
     verdict_source = verdict_source if verdict_source != "ai" else obs.verdict_source
-    experience_memory = experience_memory if experience_memory is not None else obs.experience_memory
     node_trace = node_trace if node_trace is not None else obs.node_trace
     debate_skip_reason = debate_skip_reason or obs.debate_skip_reason
     latency_breakdown = latency_breakdown if latency_breakdown is not None else obs.latency_breakdown
@@ -114,7 +112,6 @@ def build_commit(
         trace_id=trace_id,
         consensus_metrics=cm,
         verdict_source=verdict_source,  # type: ignore[arg-type]
-        experience_memory=experience_memory or {},
         node_trace=node_trace or [],
         debate_skip_reason=debate_skip_reason,
         latency_breakdown=latency_breakdown or {},

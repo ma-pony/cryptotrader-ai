@@ -74,7 +74,6 @@ _DECISION_DETAIL_REQUIRED = {
     "risk_gate",
     "execution",
     "node_timeline",
-    "experience_memory_ref",
     "trace_id",
     # Phase 1 additions:
     "debate_turns",
@@ -212,7 +211,6 @@ def _make_full_commit() -> MagicMock:
         confusion_threshold=0.05,
     )
     commit.verdict_source = "ai"
-    commit.experience_memory = {"memory_id": "em_001"}
     commit.node_trace = []
     commit.debate_skip_reason = "consensus"
     commit.latency_breakdown = {

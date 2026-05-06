@@ -585,214 +585,85 @@ async def _live_check(exchange_id: str):
         raise typer.Exit(1)
 
 
-# ── Experience subcommands ──
+# ── Skills subcommands ──
 
-experience_app = typer.Typer(help="Experience memory commands")
-app.add_typer(experience_app, name="experience")
+skills_app = typer.Typer(help="Agent Skills commands")
+app.add_typer(skills_app, name="skills")
 
 
-@experience_app.command("distill")
-def experience_distill(
-    session: str = typer.Argument(..., help="Backtest session ID"),
+@skills_app.command("curate")
+def skills_curate(
+    name: str = typer.Argument(..., help="Skill name (directory name under agent_skills/)"),
+    llm: bool = typer.Option(False, "--llm", help="Use LLM to generate pattern summaries"),
 ):
-    """Distill experience from a backtest session."""
-    asyncio.run(_experience_distill(session))
-
-
-async def _experience_distill(session_id: str):
-    from cryptotrader.backtest.session import load_commits, save_experience
-    from cryptotrader.learning.reflect import run_agent_reflection
-
-    commits_raw = load_commits(session_id)
-    if not commits_raw:
-        console.print(f"[red]No commits found for session {session_id}[/red]")
-        raise typer.Exit(1)
-
-    console.print(f"[bold]Distilling experience from {len(commits_raw)} commits...[/bold]")
-
-    results = {}
-    agent_ids = ("tech_agent", "chain_agent", "news_agent", "macro_agent")
-
-    for agent_id in agent_ids:
-        records = _extract_agent_records(commits_raw, agent_id)
-        if len(records) < 3:
-            console.print(f"  [dim]{agent_id}: skipped (only {len(records)} records)[/dim]")
-            continue
-        memory = await run_agent_reflection(agent_id, records, model="")
-        results[agent_id] = memory
-        console.print(
-            f"  [green]{agent_id}[/green]: {len(memory.success_patterns)} patterns, {len(memory.forbidden_zones)} zones"
-        )
-
-    save_experience(session_id, results)
-    console.print(f"[green]Experience saved to session {session_id}[/green]")
-
-
-def _extract_agent_records(commits_raw: list[dict], agent_id: str) -> list[dict]:
-    """Extract agent records from raw commit dicts for reflection."""
-    records = []
-    for c in commits_raw:
-        analyses = c.get("analyses", {})
-        agent_data = analyses.get(agent_id)
-        if not agent_data:
-            continue
-        pnl = c.get("pnl")
-        if pnl is None:
-            continue
-        verdict = c.get("verdict", {})
-        summary = c.get("snapshot_summary", {})
-        records.append(
-            {
-                "date": c.get("timestamp", ""),
-                "direction": agent_data.get("direction", "neutral"),
-                "confidence": agent_data.get("confidence", 0.5),
-                "reasoning": agent_data.get("reasoning", ""),
-                "key_factors": agent_data.get("key_factors", []),
-                "pnl": pnl,
-                "verdict_action": verdict.get("action", "hold"),
-                "price": summary.get("price", 0),
-                "volatility": summary.get("volatility", 0),
-                "funding_rate": summary.get("funding_rate", 0),
-            }
-        )
-    return records
-
-
-@experience_app.command("show")
-def experience_show(
-    session: str = typer.Argument(..., help="Backtest session ID"),
-):
-    """Show distilled experience for a backtest session."""
+    """Curate a skill file by injecting distilled patterns into its AUTO-DISTILLED-PATTERNS section."""
     from pathlib import Path
 
-    path = Path.home() / ".cryptotrader" / "backtest_sessions" / session / "experience.json"
-    if not path.exists():
-        console.print(f"[red]No experience found for session {session}. Run 'arena experience distill' first.[/red]")
+    from cryptotrader.learning.curation import curate_skill
+
+    skills_dir = Path("agent_skills")
+    skill_path = skills_dir / name / "SKILL.md"
+    if not skill_path.exists():
+        console.print(f"[red]Skill not found: {skill_path}[/red]")
         raise typer.Exit(1)
-    data = _load_json_file(path)
-    console.print_json(data=data)
+
+    try:
+        draft_path = curate_skill(name, skills_dir=skills_dir, use_llm=llm)
+        console.print(f"[green]Draft written to:[/green] {draft_path}")
+        console.print("[dim]Review the draft and rename to SKILL.md when ready.[/dim]")
+    except Exception as exc:
+        console.print(f"[red]Curation failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
 
-@experience_app.command("merge")
-def experience_merge(
-    session: str = typer.Argument(..., help="Backtest session ID to merge"),
+@skills_app.command("propose-new")
+def skills_propose_new(
+    scope: str = typer.Option("shared", "--scope", help="Scope: 'shared' or 'agent:<id>'"),
 ):
-    """Merge backtest experience into live memory."""
-    asyncio.run(_experience_merge(session))
-
-
-async def _experience_merge(session_id: str):
+    """Propose a new skill file based on active patterns not yet covered by existing skills."""
     from pathlib import Path
 
-    from cryptotrader.learning.reflect import load_reflections, save_reflection
-    from cryptotrader.models import ExperienceMemory, ExperienceRule
+    from cryptotrader.learning.skill_proposal import propose_new_skill
 
-    path = Path.home() / ".cryptotrader" / "backtest_sessions" / session_id / "experience.json"
-    if not path.exists():
-        console.print(f"[red]No experience found for session {session_id}[/red]")
-        raise typer.Exit(1)
+    skills_dir = Path("agent_skills")
+    memory_dir = Path.home() / ".cryptotrader" / "agent_memory"
 
-    data = _load_json_file(path)
-    existing = await load_reflections()
-
-    for agent_id, mem_data in data.items():
-        bt_mem = ExperienceMemory(
-            success_patterns=[
-                ExperienceRule(**{**r, "source": "backtest", "source_session": session_id})
-                for r in mem_data.get("success_patterns", [])
-            ],
-            forbidden_zones=[
-                ExperienceRule(**{**r, "source": "backtest", "source_session": session_id})
-                for r in mem_data.get("forbidden_zones", [])
-            ],
-            strategic_insights=mem_data.get("strategic_insights", []),
-        )
-
-        live_mem = existing.get(agent_id, ExperienceMemory())
-        merged = _merge_memories(live_mem, bt_mem)
-        await save_reflection(
-            Path.home() / ".cryptotrader" / "agent_reflections.db",
-            agent_id,
-            merged,
-        )
-        console.print(
-            f"  [green]{agent_id}[/green]: merged ({len(merged.success_patterns)} patterns, "
-            f"{len(merged.forbidden_zones)} zones)"
-        )
-
-    console.print("[green]Backtest experience merged into live memory[/green]")
-
-
-def _load_json_file(path) -> dict:
-    """Load JSON file synchronously."""
-    import json
-
-    with open(path) as f:
-        return json.load(f)
-
-
-def _merge_memories(live, bt):
-    """Merge backtest experience into live memory (additive)."""
-    from cryptotrader.models import ExperienceMemory
-
-    merged_patterns = list(live.success_patterns)
-    for rule in bt.success_patterns:
-        existing = _find_similar_rule(merged_patterns, rule)
-        if existing:
-            _merge_rule_stats(existing, rule)
+    try:
+        draft_path = propose_new_skill(scope=scope, skills_dir=skills_dir, memory_dir=memory_dir)
+        if draft_path is None:
+            console.print("[dim]No new patterns found to propose a skill for.[/dim]")
         else:
-            merged_patterns.append(rule)
-
-    merged_zones = list(live.forbidden_zones)
-    for rule in bt.forbidden_zones:
-        existing = _find_similar_rule(merged_zones, rule)
-        if existing:
-            _merge_rule_stats(existing, rule)
-        else:
-            merged_zones.append(rule)
-
-    merged_insights = list(live.strategic_insights)
-    for insight in bt.strategic_insights:
-        if insight not in merged_insights:
-            merged_insights.append(insight)
-
-    return ExperienceMemory(
-        success_patterns=merged_patterns,
-        forbidden_zones=merged_zones,
-        strategic_insights=merged_insights,
-    )
+            console.print(f"[green]Proposal draft written to:[/green] {draft_path}")
+            console.print("[dim]Review and rename to SKILL.md when ready.[/dim]")
+    except Exception as exc:
+        console.print(f"[red]Proposal failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
 
 
-def _merge_rule_stats(existing, incoming):
-    """Merge incoming rule stats into existing rule (weighted average rate)."""
-    total = existing.sample_count + incoming.sample_count
-    if total > 0:
-        existing.rate = (existing.rate * existing.sample_count + incoming.rate * incoming.sample_count) / total
-    existing.sample_count = total
-    existing.regime_count += 1
+@skills_app.command("list")
+def skills_list():
+    """List all known skills and their scopes."""
+    from pathlib import Path
 
+    from cryptotrader.agents.skills.loader import parse_skill_md
 
-def _find_similar_rule(rules, target):
-    """Find a rule with the same pattern text."""
-    for r in rules:
-        if r.pattern == target.pattern:
-            return r
-    return None
-
-
-@experience_app.command("sessions")
-def experience_sessions():
-    """List backtest sessions."""
-    from cryptotrader.backtest.session import list_sessions
-
-    sessions = list_sessions()
-    if not sessions:
-        console.print("[dim]No backtest sessions found.[/dim]")
+    skills_dir = Path("agent_skills")
+    if not skills_dir.exists():
+        console.print("[dim]No agent_skills/ directory found.[/dim]")
         return
-    table = Table(title="Backtest Sessions")
-    table.add_column("Session ID", style="cyan")
-    for s in sessions:
-        table.add_row(s)
+
+    table = Table(title="Agent Skills")
+    table.add_column("Name", style="cyan")
+    table.add_column("Scope")
+    table.add_column("Description")
+
+    for skill_file in sorted(skills_dir.glob("*/SKILL.md")):
+        try:
+            skill = parse_skill_md(skill_file)
+            table.add_row(skill.name, skill.scope, skill.description or "")
+        except Exception as exc:
+            table.add_row(skill_file.parent.name, "[red]corrupt[/red]", str(exc))
+
     console.print(table)
 
 

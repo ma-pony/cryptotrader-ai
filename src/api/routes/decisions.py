@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import logging
 import time as _time
-from dataclasses import asdict, is_dataclass
-from typing import Any, cast
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -175,13 +174,6 @@ class NodeTimelineEntryOut(BaseModel):
     duration_ms: int
 
 
-class ExperienceMemoryRefOut(BaseModel):
-    memory_id: str = ""
-    success_patterns: list[dict] = Field(default_factory=list)
-    forbidden_zones: list[dict] = Field(default_factory=list)
-    strategic_insights: list[Any] = Field(default_factory=list)
-
-
 class DecisionDetailOut(BaseModel):
     commit_hash: str
     ts: str
@@ -195,7 +187,6 @@ class DecisionDetailOut(BaseModel):
     risk_gate: RiskGateOut
     execution: ExecutionOut | None
     node_timeline: list[NodeTimelineEntryOut]
-    experience_memory_ref: ExperienceMemoryRefOut
     trace_id: str | None = None
     # Alignment with frontend prototype (2026-04-24):
     debate_turns: list[DebateTurnOut] = Field(default_factory=list)
@@ -554,31 +545,6 @@ def _serialize_node_trace(entries: list) -> list[NodeTimelineEntryOut]:
     return out
 
 
-def _serialize_experience(em: Any) -> ExperienceMemoryRefOut:
-    if not em:
-        return ExperienceMemoryRefOut()
-    if isinstance(em, dict):
-        data = em
-    elif is_dataclass(em) and not isinstance(em, type):
-        data = asdict(cast("Any", em))
-    else:
-        data = {}
-
-    def _to_dict(rule: Any) -> dict:
-        if isinstance(rule, dict):
-            return rule
-        if is_dataclass(rule) and not isinstance(rule, type):
-            return asdict(cast("Any", rule))
-        return {}
-
-    return ExperienceMemoryRefOut(
-        memory_id=str(data.get("memory_id", "") or ""),
-        success_patterns=[_to_dict(r) for r in data.get("success_patterns", []) or []],
-        forbidden_zones=[_to_dict(r) for r in data.get("forbidden_zones", []) or []],
-        strategic_insights=list(data.get("strategic_insights", []) or []),
-    )
-
-
 # ── Routes ──
 
 
@@ -657,7 +623,6 @@ async def get_decision(commit_hash: str) -> DecisionDetailOut:
         risk_gate=_serialize_risk_gate(commit.risk_gate),
         execution=_serialize_execution(commit),
         node_timeline=_serialize_node_trace(commit.node_trace),
-        experience_memory_ref=_serialize_experience(commit.experience_memory),
         trace_id=commit.trace_id,
         debate_turns=_serialize_turns(commit.challenges),
         debate_gate=_serialize_debate_gate(commit),

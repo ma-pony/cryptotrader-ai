@@ -128,10 +128,6 @@ class TestDecisionCommitNewFields:
         dc = self._make_commit()
         assert dc.verdict_source == "ai"
 
-    def test_experience_memory_defaults_to_empty_dict(self) -> None:
-        dc = self._make_commit()
-        assert dc.experience_memory == {}
-
     def test_node_trace_defaults_to_empty_list(self) -> None:
         dc = self._make_commit()
         assert dc.node_trace == []
@@ -159,11 +155,6 @@ class TestDecisionCommitNewFields:
     def test_verdict_source_accepts_hold_all_mock(self) -> None:
         dc = self._make_commit(verdict_source="hold_all_mock")
         assert dc.verdict_source == "hold_all_mock"
-
-    def test_experience_memory_stores_dict(self) -> None:
-        mem = {"success_patterns": ["pattern1"], "forbidden_zones": []}
-        dc = self._make_commit(experience_memory=mem)
-        assert dc.experience_memory == mem
 
     def test_node_trace_stores_list_of_entries(self) -> None:
         entries = [
@@ -198,7 +189,6 @@ class TestDecisionCommitNewFields:
         d = asdict(dc)
         assert "consensus_metrics" in d
         assert "verdict_source" in d
-        assert "experience_memory" in d
         assert "node_trace" in d
         assert "debate_skip_reason" in d
 
@@ -234,7 +224,6 @@ class TestJournalStoreNewFields:
                 confusion_threshold=0.05,
             ),
             verdict_source="ai",
-            experience_memory={"success_patterns": ["pattern_a"], "forbidden_zones": []},
             node_trace=[
                 NodeTraceEntry(node="data_collect", duration_ms=210, summary="fetched ok"),
                 NodeTraceEntry(node="debate_gate", duration_ms=15, summary="skipped"),
@@ -260,13 +249,6 @@ class TestJournalStoreNewFields:
         dc = await store.show("obs_test1")
         assert dc is not None
         assert dc.verdict_source == "ai"
-
-    @pytest.mark.asyncio
-    async def test_experience_memory_roundtrip(self, store: JournalStore, full_commit: DecisionCommit) -> None:
-        await store.commit(full_commit)
-        dc = await store.show("obs_test1")
-        assert dc is not None
-        assert dc.experience_memory == {"success_patterns": ["pattern_a"], "forbidden_zones": []}
 
     @pytest.mark.asyncio
     async def test_node_trace_roundtrip(self, store: JournalStore, full_commit: DecisionCommit) -> None:
@@ -302,7 +284,6 @@ class TestJournalStoreNewFields:
         assert dc is not None
         assert dc.consensus_metrics is None
         assert dc.verdict_source == "ai"
-        assert dc.experience_memory == {}
         assert dc.node_trace == []
         assert dc.debate_skip_reason == ""
 

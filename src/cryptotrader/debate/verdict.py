@@ -101,12 +101,18 @@ ANTI-PATTERNS TO AVOID:
 - Do NOT require all 4 agents to agree. 2-3 is enough for a strong trade.
 - Do NOT close winning positions just because one agent turns neutral.
 
+PATTERN ATTRIBUTION (FR-026):
+If your decision was influenced by a known agent skill pattern, cite it in your reasoning using:
+  applied: <agent>::<pattern_name>   (e.g. applied: tech::rsi_divergence_long)
+  applied: <pattern_name>            (bare form — only when you are the originating agent)
+You MAY include zero or more applied: citations. They are used only for PnL attribution.
+
 Output ONLY JSON:
 {
   "action": "long|short|hold|close",
   "confidence": 0.0-1.0,
   "position_scale": 0.0-1.0,
-  "reasoning": "2-3 sentences explaining your decision",
+  "reasoning": "2-3 sentences. Include 'applied: <agent>::<pattern>' if a skill pattern influenced this.",
   "thesis": "one sentence trade thesis (or exit rationale if closing)",
   "invalidation": "specific condition that would invalidate this decision"
 }"""
