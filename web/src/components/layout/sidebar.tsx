@@ -19,31 +19,62 @@ import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 import { cn } from '@/lib/cn';
 import { useUIStore } from '@/stores/use-ui-store';
 
+type NavLabelKey =
+  | 'nav.dashboard'
+  | 'nav.decisions'
+  | 'nav.debate'
+  | 'nav.backtest'
+  | 'nav.risk'
+  | 'nav.metrics'
+  | 'nav.chat'
+  | 'nav.market'
+  | 'nav.scheduler';
+
 interface NavItem {
   to: string;
-  labelKey:
-    | 'nav.dashboard'
-    | 'nav.decisions'
-    | 'nav.debate'
-    | 'nav.backtest'
-    | 'nav.risk'
-    | 'nav.metrics'
-    | 'nav.chat'
-    | 'nav.market'
-    | 'nav.scheduler';
+  labelKey: NavLabelKey;
   icon: LucideIcon;
 }
 
-const NAV_ITEMS: NavItem[] = [
-  { to: '/', labelKey: 'nav.dashboard', icon: Briefcase },
-  { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
-  { to: '/debate', labelKey: 'nav.debate', icon: GitBranch },
-  { to: '/backtest', labelKey: 'nav.backtest', icon: BarChart3 },
-  { to: '/risk', labelKey: 'nav.risk', icon: ShieldCheck },
-  { to: '/metrics', labelKey: 'nav.metrics', icon: Gauge },
-  { to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
-  { to: '/market', labelKey: 'nav.market', icon: TrendingUp },
-  { to: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
+interface NavSection {
+  /** Sidebar group label (i18n key with sensible defaultValue). */
+  titleKey: 'nav.section.trading' | 'nav.section.analysis' | 'nav.section.operations';
+  defaultTitle: string;
+  items: NavItem[];
+}
+
+// Grouping rationale (deep review FE-2026-05-06):
+//   trading      = the live decision loop (overview / decisions / debate)
+//   analysis     = retrospective + market context (backtest / market / metrics)
+//   operations   = control plane (risk / chat / scheduler)
+const NAV_SECTIONS: NavSection[] = [
+  {
+    titleKey: 'nav.section.trading',
+    defaultTitle: '交易',
+    items: [
+      { to: '/', labelKey: 'nav.dashboard', icon: Briefcase },
+      { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
+      { to: '/debate', labelKey: 'nav.debate', icon: GitBranch },
+    ],
+  },
+  {
+    titleKey: 'nav.section.analysis',
+    defaultTitle: '分析',
+    items: [
+      { to: '/market', labelKey: 'nav.market', icon: TrendingUp },
+      { to: '/backtest', labelKey: 'nav.backtest', icon: BarChart3 },
+      { to: '/metrics', labelKey: 'nav.metrics', icon: Gauge },
+    ],
+  },
+  {
+    titleKey: 'nav.section.operations',
+    defaultTitle: '运维',
+    items: [
+      { to: '/risk', labelKey: 'nav.risk', icon: ShieldCheck },
+      { to: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
+      { to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
+    ],
+  },
 ];
 
 const SidebarFooter = () => {
@@ -114,24 +145,39 @@ export const Sidebar = () => {
           </div>
         ) : null}
       </div>
-      <nav className="flex-1 space-y-0.5 overflow-y-auto px-2 py-3">
-        {NAV_ITEMS.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/'}
-            className={({ isActive }) =>
-              cn(
-                'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors border-l-2',
-                isActive
-                  ? 'bg-muted text-foreground font-medium border-l-amber-500 pl-[10px]'
-                  : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-transparent',
-              )
-            }
+      <nav className="flex-1 overflow-y-auto px-2 py-3">
+        {NAV_SECTIONS.map((section, sectionIdx) => (
+          <div
+            key={section.titleKey}
+            className={cn('space-y-0.5', sectionIdx > 0 && 'mt-4')}
           >
-            <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-            {!collapsed ? <span className="truncate">{t(item.labelKey)}</span> : null}
-          </NavLink>
+            {!collapsed ? (
+              <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
+                {t(section.titleKey, { defaultValue: section.defaultTitle })}
+              </div>
+            ) : sectionIdx > 0 ? (
+              // collapsed mode: thin divider between groups
+              <div className="mx-2 mb-1 h-px bg-border" />
+            ) : null}
+            {section.items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.to === '/'}
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors border-l-2',
+                    isActive
+                      ? 'bg-muted text-foreground font-medium border-l-amber-500 pl-[10px]'
+                      : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-transparent',
+                  )
+                }
+              >
+                <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+                {!collapsed ? <span className="truncate">{t(item.labelKey)}</span> : null}
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
       {!collapsed ? <SidebarFooter /> : null}

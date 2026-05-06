@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { cn } from '@/lib/cn';
 import { useDecisionDetail } from '@/hooks/use-decision-detail';
 import { useDecisions } from '@/hooks/use-decisions';
 import type { DebateTurn, DecisionDetail } from '@/types/api';
@@ -17,11 +18,17 @@ import { DebateTurnCard } from './components/debate-turn';
 import { DivergenceMeter } from './components/divergence-meter';
 import { AGENTS, type AgentKind, type DebateScenario, scoreToDirection } from './constants';
 
-const STEP_COLORS = {
-  violet: { fg: 'oklch(62% 0.180 295)', bg: 'oklch(62% 0.180 295 / 0.18)' },
-  warning: { fg: 'oklch(78% 0.155 75)', bg: 'oklch(78% 0.155 75 / 0.18)' },
-  amber: { fg: 'oklch(74% 0.165 70)', bg: 'oklch(74% 0.165 70 / 0.18)' },
+// Debate visual cleanup (FE-2026-05-06): collapse the violet/warning/amber
+// inline-style palette down to Tailwind utility classes. The whole page leans
+// to the brand amber accent (was over-using violet, which made the Debate
+// page feel like a different product from the rest of the app).
+const STEP_TONES = {
+  flow: 'border-cyan-500 bg-cyan-500/15 text-cyan-500',
+  pivot: 'border-amber-500 bg-amber-500/15 text-amber-500',
+  final: 'border-amber-500 bg-amber-500/20 text-amber-500',
 } as const;
+
+type StepTone = keyof typeof STEP_TONES;
 
 const KNOWN_AGENT_KINDS = new Set<string>(['tech', 'chain', 'news', 'macro', 'verdict', 'other']);
 
@@ -187,26 +194,21 @@ const DebateContent = () => {
   }
   const hasDebate = d.rounds.length > 0;
 
-  const steps = [
-    {
-      label: '门控',
-      sub: hasDebate ? '触发辩论' : '跳过',
-      Icon: Filter,
-      tone: 'violet' as const,
-    },
-    { label: '第 1 轮', sub: '4 Agent 交叉挑战', Icon: MessageSquare, tone: 'violet' as const },
-    { label: '第 2 轮', sub: '强化 / 让步 / 保持', Icon: MessageSquare, tone: 'violet' as const },
+  const steps: { label: string; sub: string; Icon: typeof Filter; tone: StepTone }[] = [
+    { label: '门控', sub: hasDebate ? '触发辩论' : '跳过', Icon: Filter, tone: 'flow' },
+    { label: '第 1 轮', sub: '4 Agent 交叉挑战', Icon: MessageSquare, tone: 'flow' },
+    { label: '第 2 轮', sub: '强化 / 让步 / 保持', Icon: MessageSquare, tone: 'flow' },
     {
       label: '收敛',
       sub: `${d.convergence.before.toFixed(2)} → ${d.convergence.after.toFixed(2)}`,
       Icon: Check,
-      tone: 'warning' as const,
+      tone: 'pivot',
     },
     {
       label: '裁决',
       sub: `${d.final_verdict.action === 'bullish' ? '看多' : d.final_verdict.action === 'bearish' ? '看空' : '中性'} ${(d.final_verdict.scale * 100).toFixed(0)}%`,
       Icon: Zap,
-      tone: 'amber' as const,
+      tone: 'final',
     },
   ];
 
@@ -232,68 +234,54 @@ const DebateContent = () => {
         }
       />
 
-      <div className="flex items-stretch mt-2">
-        {steps.map((step, i) => {
-          const c = STEP_COLORS[step.tone];
-          return (
-            <div key={i} className="flex-1 flex flex-col items-center relative">
-              {i > 0 ? (
-                <div
-                  className="absolute top-[18px] right-1/2 w-full h-px"
-                  style={{ background: c.fg }}
-                />
-              ) : null}
-              <div
-                className="w-9 h-9 rounded-full flex items-center justify-center relative z-10 mb-1.5 border-[1.5px]"
-                style={{ background: c.bg, borderColor: c.fg, color: c.fg }}
-              >
-                <step.Icon size={14} strokeWidth={2} />
-              </div>
-              <div className="text-xs font-medium">{step.label}</div>
-              <div className="text-[10px] text-muted-foreground mt-0.5">{step.sub}</div>
+      <div className="mt-2 flex items-stretch">
+        {steps.map((step, i) => (
+          <div key={i} className="relative flex flex-1 flex-col items-center">
+            {i > 0 ? (
+              <div className="absolute right-1/2 top-[18px] h-px w-full bg-border" />
+            ) : null}
+            <div
+              className={cn(
+                'relative z-10 mb-1.5 flex h-9 w-9 items-center justify-center rounded-full border-[1.5px]',
+                STEP_TONES[step.tone],
+              )}
+            >
+              <step.Icon size={14} strokeWidth={2} />
             </div>
-          );
-        })}
+            <div className="text-xs font-medium">{step.label}</div>
+            <div className="mt-0.5 text-[10px] text-muted-foreground">{step.sub}</div>
+          </div>
+        ))}
       </div>
 
-      <div
-        className="rounded-xl border p-4 flex gap-3.5 items-center"
-        style={{
-          background: 'oklch(62% 0.180 295 / 0.06)',
-          borderColor: 'oklch(62% 0.180 295 / 0.30)',
-        }}
-      >
+      <div className="flex items-center gap-3.5 rounded-xl border border-cyan-500/30 bg-cyan-500/5 p-4">
         <AgentBadge kind={d.initial[0]?.kind ?? 'chain'} size={40} />
         <div className="flex-1">
-          <div
-            className="text-[11px] uppercase tracking-wider font-medium mb-0.5"
-            style={{ color: 'oklch(62% 0.180 295)' }}
-          >
+          <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wider text-cyan-500">
             debate_gate 裁定
           </div>
           <div className="text-sm font-medium">
             {hasDebate ? '触发辩论' : '跳过辩论'} · {d.gate.reason || '（无说明）'}
           </div>
         </div>
-        <div className="flex gap-1.5 flex-wrap">
+        <div className="flex flex-wrap gap-1.5">
           {d.initial.map((a) => {
             const agent = AGENTS[a.kind];
-            const dirColor =
+            const dirClass =
               a.dir === 'bullish'
-                ? 'oklch(74% 0.160 150)'
+                ? 'text-trade-long'
                 : a.dir === 'bearish'
-                  ? 'oklch(66% 0.210 25)'
-                  : 'hsl(var(--muted-foreground))';
+                  ? 'text-trade-short'
+                  : 'text-muted-foreground';
             return (
               <div
                 key={a.kind}
-                className="px-2.5 py-1.5 rounded-md border text-center min-w-[72px]"
-                style={{ background: 'hsl(var(--card))', borderColor: 'hsl(var(--border))' }}
+                className="min-w-[72px] rounded-md border border-border bg-card px-2.5 py-1.5 text-center"
               >
                 <div className="text-[10px] font-medium" style={{ color: agent.color }}>
                   {agent.zh}
                 </div>
-                <div className="font-mono text-[11px] mt-0.5" style={{ color: dirColor }}>
+                <div className={cn('mt-0.5 font-mono text-[11px]', dirClass)}>
                   {a.dir === 'bullish' ? '↑' : a.dir === 'bearish' ? '↓' : '—'} {a.conf.toFixed(2)}
                 </div>
               </div>
@@ -305,15 +293,8 @@ const DebateContent = () => {
       {hasDebate ? (
         d.rounds.map((round) => (
           <div key={round.n}>
-            <div className="flex items-center gap-3 mb-3">
-              <div
-                className="w-8 h-8 rounded-full flex items-center justify-center font-semibold text-sm border"
-                style={{
-                  background: 'oklch(62% 0.180 295 / 0.15)',
-                  borderColor: 'oklch(62% 0.180 295)',
-                  color: 'oklch(72% 0.140 300)',
-                }}
-              >
+            <div className="mb-3 flex items-center gap-3">
+              <div className="flex h-8 w-8 items-center justify-center rounded-full border border-amber-500 bg-amber-500/15 text-sm font-semibold text-amber-500">
                 {round.n}
               </div>
               <div>
@@ -327,7 +308,7 @@ const DebateContent = () => {
                 </div>
               </div>
             </div>
-            <div className="flex flex-col gap-2.5 pl-10 ml-[15px] border-l border-dashed border-border">
+            <div className="ml-[15px] flex flex-col gap-2.5 border-l border-dashed border-border pl-10">
               {round.turns.map((turn, i) => (
                 <DebateTurnCard key={i} turn={turn} />
               ))}
@@ -344,20 +325,10 @@ const DebateContent = () => {
         />
       )}
 
-      <div
-        className="rounded-xl border p-5 flex gap-4 items-start"
-        style={{
-          background: 'linear-gradient(135deg, oklch(74% 0.165 70 / 0.10), hsl(var(--card)) 60%)',
-          borderColor: 'oklch(74% 0.165 70 / 0.35)',
-          boxShadow: '0 0 32px oklch(74% 0.165 70 / 0.25)',
-        }}
-      >
+      <div className="flex items-start gap-4 rounded-xl border border-amber-500/35 bg-gradient-to-br from-amber-500/10 to-card p-5 shadow-glow-amber">
         <AgentBadge kind="verdict" size={48} />
         <div className="flex-1">
-          <div
-            className="text-[11px] uppercase tracking-wider font-medium mb-1"
-            style={{ color: 'oklch(74% 0.165 70)' }}
-          >
+          <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-amber-500">
             AI 首席决策者 · {hasDebate ? '辩论后裁决' : '直接裁决'}
           </div>
           <div className="flex items-center gap-2.5 mb-2.5">

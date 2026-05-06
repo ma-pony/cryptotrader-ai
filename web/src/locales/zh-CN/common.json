@@ -12,7 +12,12 @@
     "metrics": "指标",
     "chat": "AI 对话",
     "market": "行情看板",
-    "scheduler": "调度规则"
+    "scheduler": "调度规则",
+    "section": {
+      "trading": "交易",
+      "analysis": "分析",
+      "operations": "运维"
+    }
   },
   "actions": {
     "refresh": "刷新",

@@ -5,6 +5,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { usePortfolioSnapshot } from '@/hooks/use-portfolio-snapshot';
 import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 
+import { ActivityFeed } from './components/activity-feed';
 import { EquityChartSection } from './components/equity-chart-section';
 import { MetricCardsRow } from './components/metric-cards-row';
 import { PositionsTable } from './components/positions-table';
@@ -30,7 +31,14 @@ const DashboardContent = () => {
         </div>
       </div>
 
-      <PositionsTable positions={portfolio.data?.positions} isLoading={portfolio.isLoading} />
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        <div className="lg:col-span-2">
+          <PositionsTable positions={portfolio.data?.positions} isLoading={portfolio.isLoading} />
+        </div>
+        <div>
+          <ActivityFeed />
+        </div>
+      </div>
     </div>
   );
 };

@@ -12,7 +12,12 @@
     "metrics": "Metrics",
     "chat": "AI Chat",
     "market": "Market",
-    "scheduler": "Scheduler"
+    "scheduler": "Scheduler",
+    "section": {
+      "trading": "Trading",
+      "analysis": "Analysis",
+      "operations": "Operations"
+    }
   },
   "actions": {
     "refresh": "Refresh",

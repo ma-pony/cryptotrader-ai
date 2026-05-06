@@ -30,7 +30,7 @@ const RiskContent = () => {
   const thresholds = data.thresholds;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <PageHeader title={t('title')} />
 
       {!data.redis_available ? (
@@ -40,16 +40,26 @@ const RiskContent = () => {
         </div>
       ) : null}
 
-      <CircuitBreakerHero
-        cb={data.circuit_breaker}
-        redisAvailable={data.redis_available}
-        // FE-m7: The 11 risk checks are statically registered in src/cryptotrader/risk/gate.py;
-        // backend does not expose a count, so we mirror the static value here. Changes to
-        // risk gate registration must update this literal (or expose checks_total via API).
-        checksOnline={RISK_CHECK_COUNT}
-      />
+      {/* ── Section 1: Live status — what's happening right now ── */}
+      <section aria-labelledby="risk-section-live" className="space-y-4">
+        <SectionHeader
+          id="risk-section-live"
+          label={t('section.live', { defaultValue: '实时状态' })}
+          description={t('section.live_hint', {
+            defaultValue: '熔断器、关键风险指标',
+          })}
+        />
 
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <CircuitBreakerHero
+          cb={data.circuit_breaker}
+          redisAvailable={data.redis_available}
+          // FE-m7: The 11 risk checks are statically registered in src/cryptotrader/risk/gate.py;
+          // backend does not expose a count, so we mirror the static value here. Changes to
+          // risk gate registration must update this literal (or expose checks_total via API).
+          checksOnline={RISK_CHECK_COUNT}
+        />
+
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <RiskMeter
           label={t('meters.daily_loss', { defaultValue: '当日亏损' })}
           value={data.daily_loss_pct ?? null}
@@ -69,16 +79,27 @@ const RiskContent = () => {
           unit="%"
           precision={0}
         />
-        <RiskMeter
-          label={t('meters.cvar', { defaultValue: '95% CVaR' })}
-          value={data.cvar_95 ?? null}
-          limit={5}
-          unit="%"
-          precision={2}
-        />
-      </div>
+          <RiskMeter
+            label={t('meters.cvar', { defaultValue: '95% CVaR' })}
+            value={data.cvar_95 ?? null}
+            limit={5}
+            unit="%"
+            precision={2}
+          />
+        </div>
+      </section>
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+      {/* ── Section 2: Limits / config — boundaries the engine enforces ── */}
+      <section aria-labelledby="risk-section-limits" className="space-y-4">
+        <SectionHeader
+          id="risk-section-limits"
+          label={t('section.limits', { defaultValue: '限制配置' })}
+          description={t('section.limits_hint', {
+            defaultValue: '相关性、冷却、阈值',
+          })}
+        />
+
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Card>
           <CardHeader className="p-4 pb-2">
             <CardTitle className="text-sm">
@@ -178,49 +199,82 @@ const RiskContent = () => {
         </Card>
       </div>
 
-      <ThresholdsCard thresholds={thresholds} />
+        <ThresholdsCard thresholds={thresholds} />
+      </section>
 
-      <Card>
-        <CardHeader className="p-4 pb-2">
-          <CardTitle className="flex items-center gap-2 text-sm">
-            <ShieldAlert size={14} />
-            {t('blocks.title', { defaultValue: '最近风控拦截' })}
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-4 pt-0">
-          {data.recent_blocks.length === 0 ? (
-            <EmptyState
-              size="compact"
-              icon={<ShieldAlert className="h-5 w-5" />}
-              title={t('blocks.empty', { defaultValue: '近期无拦截记录' })}
-              description={t('blocks.empty_hint', { defaultValue: '风控引擎运行正常' })}
-            />
-          ) : (
-            <div className="divide-y divide-border">
-              {data.recent_blocks.map((b) => (
-                <div
-                  key={b.commit_hash}
-                  className="flex items-center gap-3 py-2.5 text-xs"
-                >
-                  <span className="font-mono text-muted-foreground w-20">
-                    {formatDateTime(b.ts).slice(-8)}
-                  </span>
-                  <span className="font-mono text-muted-foreground w-20">
-                    {b.commit_hash.slice(0, 8)}
-                  </span>
-                  <StatusPill tone="danger">{b.rule}</StatusPill>
-                  <span className="flex-1 truncate text-muted-foreground">{b.detail}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* ── Section 3: Event stream — recent blocks & pending approvals ── */}
+      <section aria-labelledby="risk-section-events" className="space-y-4">
+        <SectionHeader
+          id="risk-section-events"
+          label={t('section.events', { defaultValue: '事件流' })}
+          description={t('section.events_hint', {
+            defaultValue: '最近拦截 · 待审批',
+          })}
+        />
 
-      <ApprovalQueueCard />
+        <Card>
+          <CardHeader className="p-4 pb-2">
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <ShieldAlert size={14} />
+              {t('blocks.title', { defaultValue: '最近风控拦截' })}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0">
+            {data.recent_blocks.length === 0 ? (
+              <EmptyState
+                size="compact"
+                icon={<ShieldAlert className="h-5 w-5" />}
+                title={t('blocks.empty', { defaultValue: '近期无拦截记录' })}
+                description={t('blocks.empty_hint', { defaultValue: '风控引擎运行正常' })}
+              />
+            ) : (
+              <div className="divide-y divide-border">
+                {data.recent_blocks.map((b) => (
+                  <div
+                    key={b.commit_hash}
+                    className="flex items-center gap-3 py-2.5 text-xs"
+                  >
+                    <span className="w-20 font-mono text-muted-foreground">
+                      {formatDateTime(b.ts).slice(-8)}
+                    </span>
+                    <span className="w-20 font-mono text-muted-foreground">
+                      {b.commit_hash.slice(0, 8)}
+                    </span>
+                    <StatusPill tone="danger">{b.rule}</StatusPill>
+                    <span className="flex-1 truncate text-muted-foreground">{b.detail}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <ApprovalQueueCard />
+      </section>
     </div>
   );
 };
+
+interface SectionHeaderProps {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+/** Subtle section divider for grouping risk page content. */
+const SectionHeader = ({ id, label, description }: SectionHeaderProps) => (
+  <div className="flex items-baseline gap-3 border-b border-border pb-1.5">
+    <h2
+      id={id}
+      className="text-[11px] font-semibold uppercase tracking-wider text-foreground"
+    >
+      {label}
+    </h2>
+    {description ? (
+      <span className="text-[11px] text-muted-foreground">{description}</span>
+    ) : null}
+  </div>
+);
 
 const RiskPage = () => {
   const { t } = useTranslation('risk');
