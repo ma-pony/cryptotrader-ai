@@ -1,0 +1,103 @@
+# JSON Schema (draft-07) for Skill markdown file frontmatter
+$schema: "http://json-schema.org/draft-07/schema#"
+title: SkillFrontmatter
+type: object
+required:
+  - name
+  - agent
+  - description
+  - regime_tags
+  - pnl_track
+  - maturity
+  - created
+  - source_commits
+  - version
+properties:
+  name:
+    type: string
+    pattern: "^[a-z][a-z0-9_]*$"
+    description: snake_case identifier; must match file name stem
+  agent:
+    type: string
+    enum: [tech, chain, news, macro, shared]
+  kind:
+    type: string
+    enum: [pattern, forbidden, instruction, knowledge]
+    description: |
+      Optional in frontmatter (derivable from path); if present must agree with
+      the directory location. Loader prefers path-based derivation.
+  description:
+    type: string
+    minLength: 30
+    maxLength: 500
+    description: |
+      One-sentence summary visible to the agent in system prompt. Must be
+      self-sufficient enough to apply the skill via reasoning alone — agent
+      will only fetch full body via load_skill tool when description is
+      insufficient.
+  regime_tags:
+    type: array
+    items:
+      type: string
+      enum:
+        - trending_up
+        - trending_down
+        - range_bound
+        - high_funding
+        - low_funding
+        - negative_funding
+        - high_vol
+        - extreme_fear
+        - extreme_greed
+        - btc_strength
+        - alt_strength
+    description: |
+      Empty array means "applies to any regime" (wildcard). Subset matching
+      with current cycle's regime_tags determines whether description is
+      injected.
+  pnl_track:
+    type: object
+    required: [cases, win_rate, avg_pnl]
+    properties:
+      cases:
+        type: integer
+        minimum: 0
+      win_rate:
+        type: number
+        minimum: 0
+        maximum: 1
+      avg_pnl:
+        type: number
+      last_active:
+        type: string
+        format: date-time
+        nullable: true
+  maturity:
+    type: string
+    enum: [observed, probationary, active, deprecated]
+  manually_edited:
+    type: boolean
+    default: false
+    description: |
+      User-set flag (frontmatter manually added). When true, reflection
+      MUST only update pnl_track and last_active; never overwrites body or
+      other frontmatter fields.
+  created:
+    type: string
+    format: date-time
+    description: UTC ISO 8601
+  source_commits:
+    type: array
+    items:
+      type: string
+      pattern: "^[0-9a-f]{16,64}$"
+    description: |
+      Commit hashes (16-char short or 64-char full) that contributed cases
+      to this skill's distillation. Audit trail for "where did this come from".
+  version:
+    type: string
+    pattern: "^\\d+\\.\\d+$"
+    description: |
+      Frontmatter schema version. Bumped when fields are added/removed.
+      Loader validates against expected versions; logs warning on mismatch.
+additionalProperties: false
