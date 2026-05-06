@@ -31,7 +31,17 @@ class ExchangeAdapter(Protocol):
 
 
 class LiveExchange:
-    def __init__(self, exchange_id: str, api_key: str, secret: str, *, sandbox: bool, passphrase: str = "") -> None:
+    def __init__(
+        self,
+        exchange_id: str,
+        api_key: str,
+        secret: str,
+        *,
+        sandbox: bool,
+        passphrase: str = "",
+        leverage: int = 1,
+        margin_mode: str = "isolated",
+    ) -> None:
         try:
             import ccxt.async_support as ccxt_async
         except ImportError:
@@ -54,11 +64,56 @@ class LiveExchange:
             config["password"] = passphrase
         self._exchange = exchange_cls(config)
         self._markets_loaded = False
+        self._leverage = leverage
+        self._margin_mode = margin_mode
+        # Symbols on which we have already attempted to set leverage. Tracked
+        # regardless of success so we don't retry (an "already-open position"
+        # error means leverage is fixed for that symbol anyway).
+        self._leveraged_symbols: set[str] = set()
 
     async def _ensure_markets(self) -> None:
         if not self._markets_loaded:
             await self._exchange.load_markets()
             self._markets_loaded = True
+
+    async def _ensure_leverage(self, symbol: str) -> None:
+        """Apply configured leverage to a perp ``symbol`` once.
+
+        - ``leverage <= 1``: no-op (matches OKX default; saves an API call).
+        - Spot symbol: no-op.
+        - Long-short position mode: set both posSides (OKX requires this).
+        - Errors are logged as warnings and swallowed — typically the symbol
+          already has an open position, in which case leverage is locked and
+          the order should still proceed with whatever leverage OKX has.
+        """
+        if self._leverage <= 1 or symbol in self._leveraged_symbols:
+            return
+        from cryptotrader.pair import Pair
+
+        try:
+            if Pair.parse(symbol).market_type == "spot":
+                self._leveraged_symbols.add(symbol)
+                return
+        except (ValueError, NotImplementedError):
+            return
+        for pos_side in ("long", "short"):
+            try:
+                await self._exchange.set_leverage(
+                    self._leverage,
+                    symbol,
+                    {"mgnMode": self._margin_mode, "posSide": pos_side},
+                )
+                logger.info("set_leverage %dx %s posSide=%s ok", self._leverage, symbol, pos_side)
+            except Exception as e:
+                logger.warning(
+                    "set_leverage %dx failed for %s posSide=%s: %s: %s",
+                    self._leverage,
+                    symbol,
+                    pos_side,
+                    type(e).__name__,
+                    e,
+                )
+        self._leveraged_symbols.add(symbol)
 
     async def _retry(self, coro_fn, *args, attempts: int | None = None):
         import ccxt
@@ -84,6 +139,7 @@ class LiveExchange:
 
     async def place_order(self, order: Order) -> dict[str, Any]:
         await self._ensure_markets()
+        await self._ensure_leverage(order.pair)
 
         from cryptotrader.pair import Pair
 

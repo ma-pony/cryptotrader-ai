@@ -18,12 +18,20 @@ import pytest
 from cryptotrader.execution.exchange import LiveExchange
 
 
-def _make_exchange() -> LiveExchange:
+def _make_exchange(*, leverage: int = 1, margin_mode: str = "isolated") -> LiveExchange:
     with patch("ccxt.async_support.okx") as mock_cls:
         mock_inst = MagicMock()
         mock_inst.load_markets = AsyncMock()
         mock_cls.return_value = mock_inst
-        return LiveExchange("okx", "k", "s", sandbox=True, passphrase="p")
+        return LiveExchange(
+            "okx",
+            "k",
+            "s",
+            sandbox=True,
+            passphrase="p",
+            leverage=leverage,
+            margin_mode=margin_mode,
+        )
 
 
 @pytest.mark.asyncio
@@ -91,3 +99,77 @@ async def test_get_positions_skips_zero_contract_entries():
     positions = await ex.get_positions()
     assert "BTC/USDT:USDT" not in positions
     assert "ETH/USDT:USDT" in positions
+
+
+# ── _ensure_leverage: configurable perp leverage application ──
+
+
+@pytest.mark.asyncio
+async def test_ensure_leverage_noop_when_leverage_is_one():
+    """leverage=1 must not call set_leverage (matches OKX default; saves API call)."""
+    ex = _make_exchange(leverage=1)
+    ex._exchange.set_leverage = AsyncMock()
+
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    ex._exchange.set_leverage.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ensure_leverage_skips_spot_pairs():
+    """Spot symbols don't have leverage; never invoke set_leverage."""
+    ex = _make_exchange(leverage=2)
+    ex._exchange.set_leverage = AsyncMock()
+
+    await ex._ensure_leverage("BTC/USDT")  # spot
+    ex._exchange.set_leverage.assert_not_called()
+    # cached so future calls also skip
+    assert "BTC/USDT" in ex._leveraged_symbols
+
+
+@pytest.mark.asyncio
+async def test_ensure_leverage_sets_both_pos_sides_for_perp():
+    """In long_short_mode OKX requires posSide for both long and short."""
+    ex = _make_exchange(leverage=2, margin_mode="isolated")
+    ex._exchange.set_leverage = AsyncMock(return_value={})
+
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    assert ex._exchange.set_leverage.call_count == 2
+    # Inspect the kwargs/positional args for both calls.
+    sides = []
+    for call in ex._exchange.set_leverage.call_args_list:
+        leverage, symbol, params = call.args
+        assert leverage == 2
+        assert symbol == "BTC/USDT:USDT"
+        assert params["mgnMode"] == "isolated"
+        sides.append(params["posSide"])
+    assert set(sides) == {"long", "short"}
+
+
+@pytest.mark.asyncio
+async def test_ensure_leverage_idempotent_on_repeat_calls():
+    """Second call for the same symbol is a no-op (already in cache)."""
+    ex = _make_exchange(leverage=2)
+    ex._exchange.set_leverage = AsyncMock(return_value={})
+
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    assert ex._exchange.set_leverage.call_count == 2  # only the first call's two posSides
+
+
+@pytest.mark.asyncio
+async def test_ensure_leverage_swallows_errors_and_caches_attempt():
+    """A failure (e.g. already-open position) must not crash place_order;
+    the symbol is still marked as attempted so we don't keep retrying."""
+    ex = _make_exchange(leverage=3)
+    ex._exchange.set_leverage = AsyncMock(side_effect=RuntimeError("position already open"))
+
+    # Must not raise
+    await ex._ensure_leverage("BTC/USDT:USDT")
+
+    assert "BTC/USDT:USDT" in ex._leveraged_symbols
+    # Both posSides attempted before giving up
+    assert ex._exchange.set_leverage.call_count == 2
+
+    # Subsequent call is a no-op (cached as attempted)
+    await ex._ensure_leverage("BTC/USDT:USDT")
+    assert ex._exchange.set_leverage.call_count == 2

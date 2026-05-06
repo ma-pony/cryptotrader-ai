@@ -80,6 +80,8 @@ async def _get_exchange(state: ArenaState, pair: str):
         creds.secret,
         sandbox=creds.sandbox,
         passphrase=creds.passphrase,
+        leverage=creds.leverage,
+        margin_mode=creds.margin_mode,
     )
     _live_exchanges[exchange_id] = live_exchange
     return live_exchange, None  # cached — don't close

@@ -505,7 +505,15 @@ async def _check_exchange_api(config, exchange_id: str) -> tuple[str, bool, str]
     try:
         from cryptotrader.execution.exchange import LiveExchange
 
-        ex = LiveExchange(exchange_id, creds.api_key, creds.secret, sandbox=creds.sandbox, passphrase=creds.passphrase)
+        ex = LiveExchange(
+            exchange_id,
+            creds.api_key,
+            creds.secret,
+            sandbox=creds.sandbox,
+            passphrase=creds.passphrase,
+            leverage=creds.leverage,
+            margin_mode=creds.margin_mode,
+        )
         t0 = time.monotonic()
         bal = await ex.get_balance()
         latency = int((time.monotonic() - t0) * 1000)

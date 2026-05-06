@@ -306,6 +306,13 @@ class ExchangeCredentials:
     secret: str = ""
     passphrase: str = ""
     sandbox: bool = True
+    # Perp leverage applied via `set_leverage` on first contact with each perp
+    # symbol. 1 = no-op (keeps OKX default; avoids extra API calls). Spot
+    # symbols ignore this.
+    leverage: int = 1
+    # OKX margin mode for perp positions: "isolated" (per-position margin) or
+    # "cross" (shared cross-margin pool). Used only when leverage > 1.
+    margin_mode: str = "isolated"
 
 
 @dataclass
