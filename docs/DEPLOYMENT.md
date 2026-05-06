@@ -95,6 +95,17 @@ $EDITOR .env
 #   secret = "..."
 #   passphrase = "..."
 #   sandbox = true               # flip to false for live trading
+#   leverage = 2                 # perp leverage; 1 = no-op (default); applied
+#                                # via set_leverage on first contact per symbol
+#   margin_mode = "isolated"     # OKX: "isolated" | "cross" (default isolated)
+#
+# Plus scheduler trading pairs (perp linear by default — spot accounts cannot short):
+#   [scheduler]
+#   pairs = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+#
+# Optional: pin total_return baseline if you funded in stages or want a fixed reference
+#   [portfolio]
+#   initial_capital = 100000     # default 0 = use earliest portfolio_snapshots row
 
 # 3. Add Caddy to compose (one-time edit, see deploy/Caddyfile in this repo)
 # Reverse-proxies /api/* to api:8003 and / to web:80, auto Let's Encrypt.
@@ -247,10 +258,20 @@ The sandbox-to-live flip is small but consequential:
    (e.g. 0.03 / 0.10 — closer to the original tight defaults).
 3. Set a smaller `[risk.position] max_single_pct` for the first weeks
    (e.g. 0.10 = 10% of equity per trade, not 0.90).
-4. Run `arena live-check` (already in the CLI) to confirm credentials,
+4. **Verify perp positon mode**: code assumes `long_short_mode` (per-side
+   long+short positions). Check via OKX web → 交易设置 → 持仓模式. If your
+   account is in `net_mode`, orders will fail with sCode=51000 because of
+   the `posSide` parameter.
+5. **Set `[exchanges.okx] leverage = 1`** for the first weeks (default).
+   Higher values multiply position notional via `set_leverage` and require
+   careful risk-budget recalculation (with 2x leverage, `max_single_pct =
+   0.9` means 90% notional → ~45% equity margin used).
+6. Pin `[portfolio] initial_capital = <starting USDT>` so the dashboard's
+   "总收益" stays meaningful if you fund in stages.
+7. Run `arena live-check` (already in the CLI) to confirm credentials,
    trading pair listings, and rate-limit headroom before flipping
    `sandbox = false`.
-5. **Watch the first 5 cycles in `docker compose logs -f scheduler`.**
+8. **Watch the first 5 cycles in `docker compose logs -f scheduler`.**
    Don't walk away.
 
 ## What this doc deliberately skips

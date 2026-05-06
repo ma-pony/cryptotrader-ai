@@ -23,9 +23,10 @@
 - **语言强化** — 将历史决策经验注入智能体 prompt，实现经验学习
 - **结构化经验记忆** — GSSC 流水线（汇集→选择→结构化）将历史经验注入智能体 prompt，含 regime 感知搜索和防过拟合五层防线
 - **回测引擎** — 历史模拟，含真实成本建模和防前视偏差
-- **实盘就绪** — 基于 ccxt 的交易所适配器，带重试、精度处理和超时控制
+- **实盘就绪** — 基于 ccxt 的交易所适配器，带重试、精度处理、配置驱动 perp 杠杆（`set_leverage` 幂等重试 + long_short_mode 双侧应用）
 - **APScheduler 自动化** — 周期性交易循环 + 每日组合摘要
 - **61+ 数据源** — 统一 SQLite 存储，覆盖 7 个类别，按源独立限速
+- **可观测性优先** — 拒单事件携带 root cause 异常信息（`[ConnectionError: ...]`）；执行层失败与风控解耦（`execution_status` vs `risk_gate`）；CI 守护禁止 `logger.debug(..., exc_info=True)` 吞异常
 
 ## 系统架构
 
@@ -261,10 +262,23 @@ max_drawdown_pct = 0.10
 
 [scheduler]
 enabled = false
-pairs = ["BTC/USDT", "ETH/USDT"]
+# 推荐用 perp 线性合约（spot 现货账户无库存时无法做空）
+pairs = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
 interval_minutes = 240
 exchange_id = "binance"
 daily_summary_hour = 0    # UTC 小时（0-23）
+
+[exchanges.okx]            # 在 config/local.toml 中（gitignored）
+api_key = "..."
+secret = "..."
+passphrase = "..."
+sandbox = true
+leverage = 1               # perp 杠杆；1 = no-op（默认；保持交易所默认）
+margin_mode = "isolated"   # OKX: "isolated" | "cross"
+
+[portfolio]
+initial_capital = 0.0      # 0 = 用首次 portfolio_snapshots 作为总收益基线；
+                           # 推荐 pin 实际本金（如 100000），中途充提不失真
 
 [experience]
 enabled = true

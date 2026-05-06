@@ -249,10 +249,14 @@ class DecisionCommit:
     analyses: dict[str, AgentAnalysis]
     debate_rounds: int
     verdict: TradeVerdict | None
-    risk_gate: GateResult | None
+    risk_gate: GateResult | None     # 真实风控判定（执行层失败不污染此字段）
     order: Order | None
     pnl: float | None
     retrospective: str | None        # 事后分析文本
+    # 执行层结果（与 risk_gate 解耦）。spot_short_no_inventory / Insufficient
+    # 等失败写到这里，不覆写 risk_gate。/decisions 的 reject_reason 优先 gate
+    # 真拒单，再 fallback 到此字段。
+    execution_status: dict | None    # {"succeeded": bool, "stage": str, "reason": str}
 ```
 
 ## 4. LangGraph 状态管理
@@ -278,7 +282,9 @@ class ArenaState(TypedDict):
 | `agent_reflections` | `dict[str, str]` | verbal_reinforcement | 各 Agent 策略备忘录 |
 | `analyses` | `dict[str, dict]` | agent nodes | 4 个 Agent 分析结果 |
 | `verdict` | `dict` | verdict node | 最终决策 |
-| `risk_gate` | `dict` | risk_check | 风控结果 |
+| `risk_gate` | `dict` | risk_check | 风控结果（仅风控层）|
+| `execution_status` | `dict` | place_order | 执行层结果，含失败原因；与 risk_gate 解耦 |
+| `execution_error` | `str` | _build_entry_order | 早拦原因（spot_short_no_inventory 等），后续合并入 execution_status |
 | `position_context` | `dict` | enrich_context / backtest | 当前持仓信息 |
 | `trend_context` | `dict` | enrich_context | 价格趋势信息 |
 | `order` | `dict` | place_order | 订单信息 |
@@ -418,10 +424,12 @@ create_llm(model, temperature, timeout, json_mode)
 ### 7.2 LiveExchange（实盘）
 
 - 基于 ccxt async，`enableRateLimit=True`
+- `options.fetchMarkets = ["spot", "swap"]` —— 排除 future / option 避免 OKX 偶发 5xx 拖垮 `load_markets`
 - 精度处理：`amount_to_precision` / `price_to_precision`
 - 最小订单量检查
 - 重试机制：指数退避 3 次（1s, 2s, 4s）
 - 订单超时：30 秒轮询，超时自动取消
+- **可配置 leverage / margin_mode**（`[exchanges.<id>] leverage = N, margin_mode = "isolated"|"cross"`）—— `_ensure_leverage` 在首次下单前调用 `set_leverage(N, symbol, posSide=long+short)`（long_short_mode 必须两边都设），失败计数重试至 `_LEVERAGE_RETRY_LIMIT=3` 后才进缓存
 
 ### 7.3 订单状态机
 
@@ -442,12 +450,14 @@ PENDING → SUBMITTED → FILLED
 | hash | String(16) PK | 短哈希标识 |
 | parent_hash | String(16) | 形成链式结构 |
 | timestamp | DateTime, indexed | 决策时间 |
-| pair | String(20), indexed | 交易对 |
+| pair | String(50), indexed | 交易对（spec 013：宽到容纳 perp delivery symbol）|
+| market_type | String(20) | spot / swap / future / option |
 | snapshot_summary | JSONB | 市场快照摘要 |
 | analyses | JSONB | 4 Agent 分析结果 |
 | debate_rounds | Integer | 辩论轮数 |
 | verdict | JSONB | AI 决策 |
-| risk_gate | JSONB | 风控结果 |
+| risk_gate | JSONB | 真实风控结果 |
+| execution_status | JSONB | 执行层结果（succeeded/stage/reason）；与 risk_gate 解耦 |
 | order_data | JSONB | 订单详情 |
 | pnl | Float | 已实现损益 |
 | retrospective | Text | 事后复盘 |

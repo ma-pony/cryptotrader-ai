@@ -53,8 +53,8 @@ web/
 │   │   ├── decision-detail/   # 8-section detail panel
 │   │   └── inline-widget/     # Sandboxed iframe widget
 │   ├── pages/
-│   │   ├── dashboard/         # P1: Portfolio overview
-│   │   ├── decisions/         # P1: Trading decision explorer
+│   │   ├── dashboard/         # P1: Portfolio overview (4 metric cards: 总权益 · 可用现金 · 胜率·成交 · 总收益)
+│   │   ├── decisions/         # P1: Trading decision explorer (PnL column + reject_reason from risk_gate / execution_status)
 │   │   ├── backtest/          # P1: Backtest runner
 │   │   ├── risk/              # P1: Risk status + circuit breaker
 │   │   ├── metrics/           # P1: Prometheus metrics viewer
@@ -101,9 +101,9 @@ CSS HSL variables with `data-theme="dark|light"` on `<html>`. Semantic tokens (`
 
 | Endpoint | Method | Description |
 |---|---|---|
-| `/api/portfolio/snapshot` | GET | Portfolio summary |
+| `/api/portfolio/snapshot` | GET | Portfolio summary (incl. `total_return`, `total_return_pct`, `avg_trade_pnl`) |
 | `/api/portfolio/equity-curve?range=24h\|7d\|30d\|all` | GET | Equity curve data |
-| `/api/scheduler/status` | GET | Scheduler state |
+| `/api/scheduler/status` | GET | Scheduler state (incl. `pair_statuses[]` with last_action / risk_passed / last_error / trace_id) |
 | `/api/decisions?pair=&from=&to=&page=&size=` | GET | Paginated decisions |
 | `/api/decisions/:id` | GET | Decision detail (incl. `node_timeline` + `latency_breakdown` + `debate_turns`) |
 | `/api/backtest/run` | POST | Start backtest (returns `run_id`) |
