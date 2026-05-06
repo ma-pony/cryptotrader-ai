@@ -41,7 +41,9 @@ class MarketCollector:
         ohlcv_key = f"ohlcv_{pair.replace('/', '_')}_{timeframe}"
         cached_ohlcv = get_cached_or_none(ohlcv_key, date=date)
 
-        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)()
+        # fetchMarkets restricts load_markets to types we actually use — see
+        # comment in execution/exchange.py for why future/option are excluded.
+        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)({"options": {"fetchMarkets": ["spot", "swap"]}})
         try:
             await exchange.load_markets()
 
@@ -127,7 +129,7 @@ class MarketDataService:
         exchange_cls = getattr(ccxt, exchange_id, None)
         if exchange_cls is None:
             return snapshot
-        ex = exchange_cls({"enableRateLimit": True})
+        ex = exchange_cls({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
         try:
             try:
                 fr = await ex.fetch_funding_rate(pair)
@@ -150,7 +152,7 @@ async def fetch_klines_binance(symbol: str = "BTC", interval: str = "1h", limit:
     """Fetch K-line data via ccxt Binance. Returns {"klines": [{"t", "o", "h", "l", "c", "v"}, ...]}."""
     result: dict = {"klines": []}
     pair = f"{symbol}/USDT"
-    exchange = ccxt.binance({"enableRateLimit": True})
+    exchange = ccxt.binance({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
     try:
         ohlcv = await exchange.fetch_ohlcv(pair, timeframe=interval, limit=limit)
         result["klines"] = [

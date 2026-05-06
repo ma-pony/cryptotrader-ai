@@ -127,7 +127,9 @@ class PriceTriggerEngine:
             # support today; can be made configurable later by reading
             # ``config.scheduler.exchange_id`` if other exchanges grow
             # equivalent ``fetch_ohlcv`` / ``fetch_funding_rates`` coverage.
-            self._market_client = ccxt_async.binance({"enableRateLimit": True})
+            self._market_client = ccxt_async.binance(
+                {"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}}
+            )
         return self._market_client
 
     async def reload_rules(self) -> None:

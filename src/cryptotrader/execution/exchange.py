@@ -44,6 +44,11 @@ class LiveExchange:
             "secret": secret,
             "sandbox": sandbox,
             "enableRateLimit": True,
+            # We only trade spot and linear perp (swap). Excluding future/option
+            # avoids `load_markets` failing wholesale when one of those instType
+            # endpoints is briefly unavailable upstream — the surfaced
+            # ExchangeNotAvailable cascades to portfolio_unknown rejections.
+            "options": {"fetchMarkets": ["spot", "swap"]},
         }
         if passphrase:
             config["password"] = passphrase

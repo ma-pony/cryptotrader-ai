@@ -143,7 +143,7 @@ async def _open_market_client():
     """
     import ccxt.async_support as ccxt_async
 
-    return ccxt_async.binance({"enableRateLimit": True})
+    return ccxt_async.binance({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
 
 
 def _perp_symbol_for(pair: str) -> str:

@@ -63,7 +63,7 @@ async def fetch_historical(pair: str, timeframe: str, since_ms: int, until_ms: i
 
     import ccxt.async_support as ccxt_async
 
-    exchange = ccxt_async.binance({"enableRateLimit": True})
+    exchange = ccxt_async.binance({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
     all_candles = []
     cursor = since_ms
 

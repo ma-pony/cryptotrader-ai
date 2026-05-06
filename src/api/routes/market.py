@@ -175,7 +175,7 @@ async def get_ohlcv(
         exchange_cls = getattr(ccxt, exchange, None)
         if exchange_cls is None:
             return OHLCVResponse()
-        ex = exchange_cls()
+        ex = exchange_cls({"options": {"fetchMarkets": ["spot", "swap"]}})
         try:
             raw = await ex.fetch_ohlcv(pair_symbol, timeframe, limit=limit)
         finally:
