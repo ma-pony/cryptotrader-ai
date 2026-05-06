@@ -208,9 +208,13 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
       filled trades exist.
     - **total_trades**: number of commits with a non-null ``order`` (executed).
     - **realized_pnl_30d**: sum of ``commit.pnl`` for commits in the last 30 days.
-    - **total_return / total_return_pct**: inception-to-date PnL derived from the
-      earliest portfolio snapshot. Both 0.0 when no snapshot history exists.
+    - **total_return / total_return_pct**: inception-to-date PnL. Baseline is
+      ``config.portfolio.initial_capital`` when set (>0), otherwise the earliest
+      portfolio snapshot. Both 0.0 when neither is available.
     """
+    from cryptotrader.config import load_config
+
+    cfg = load_config()
     now = datetime.now(UTC)
     snaps = await _load_snapshots(database_url)
     sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
@@ -218,10 +222,12 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
     commits = await _load_commits(database_url)
     total, win_rate, realized_30d, avg_trade_pnl = _commit_pnl_stats(commits, now - timedelta(days=30))
 
-    inception = _inception_equity(snaps)
-    if inception is not None:
-        total_return = current_equity - inception
-        total_return_pct = current_equity / inception - 1.0
+    # Baseline preference: explicit config > first snapshot > none.
+    configured = float(cfg.portfolio.initial_capital or 0.0)
+    baseline: float | None = configured if configured > 0 else _inception_equity(snaps)
+    if baseline is not None and baseline > 0:
+        total_return = current_equity - baseline
+        total_return_pct = current_equity / baseline - 1.0
     else:
         total_return = 0.0
         total_return_pct = 0.0

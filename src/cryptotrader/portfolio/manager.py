@@ -158,15 +158,7 @@ class PortfolioManager:
                     ).scalar_one_or_none()
                     if acct:
                         cash = acct.cash
-                    # Spot: amount * avg_price (signed asset value).
-                    # Perp/swap: persisted unrealized_pnl from last sync (margin
-                    # is already in cash, so notional is NOT added).
-                    pos_value = sum(
-                        (p["amount"] * p["avg_price"])
-                        if (p.get("market_type") or "spot") == "spot"
-                        else float(p.get("unrealized_pnl", 0.0) or 0.0)
-                        for p in positions.values()
-                    )
+                    pos_value = _equity_contribution(positions)
                     return {
                         "account_id": account_id,
                         "positions": positions,
@@ -177,12 +169,7 @@ class PortfolioManager:
                 logger.warning("DB portfolio read failed: %s", e)
         mem = self._memory.get(account_id, {})
         cash = self._memory_cash.get(account_id, 0.0)
-        pos_value = sum(
-            (p["amount"] * p["avg_price"])
-            if (p.get("market_type") or "spot") == "spot"
-            else float(p.get("unrealized_pnl", 0.0) or 0.0)
-            for p in mem.values()
-        )
+        pos_value = _equity_contribution(mem)
         return {
             "account_id": account_id,
             "positions": mem,
@@ -392,20 +379,25 @@ class PortfolioManager:
 def _equity_contribution(
     positions: dict[str, dict[str, Any]],
     *,
-    traded_pair: str,
-    current_price: float,
+    traded_pair: str = "",
+    current_price: float = 0.0,
 ) -> float:
     """Sum each position's contribution to equity, accounting for market type.
 
-    - Spot:  ``amount * price`` (signed). ``amount`` is in base currency; the
-             asset is actually held, so mark-to-market value adds to equity.
+    - Spot:  ``amount * avg_price`` (signed; falls back to ``current_price``
+             for the active cycle pair when no avg is stored, e.g.
+             PaperExchange seed). ``amount`` is in base currency — the asset
+             is actually held so mark-to-market value adds to equity.
     - Perp/swap/future: ``unrealized_pnl`` only. The notional is NOT held as
              an asset — only the margin is, and the margin is already in
              ``cash``. Adding ``amount * price`` double-counts the margin and
              creates phantom equity inflation (~$49K on a fresh 20.88 ETH
              short observed 2026-05-06). Using ``-amount * price`` (signed)
-             instead under-reports equity by the same amount on shorts. Both
-             routes are wrong; unrealized_pnl is the only correct value.
+             would under-report by the same amount on shorts. Both wrong;
+             unrealized_pnl is the only correct value.
+
+    Used by both ``read_portfolio_from_exchange`` (live, traded_pair set) and
+    ``PortfolioManager.get_portfolio`` (DB / memory, traded_pair="").
     """
     from cryptotrader.pair import Pair as _Pair
 
@@ -414,7 +406,7 @@ def _equity_contribution(
         try:
             mt = _Pair.parse(p_pair).market_type
         except (ValueError, NotImplementedError):
-            mt = "spot"
+            mt = pos.get("market_type") or "spot"
         if mt != "spot":
             total += float(pos.get("unrealized_pnl", 0.0) or 0.0)
             continue

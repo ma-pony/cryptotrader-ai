@@ -158,6 +158,29 @@ class TestComputeExtras:
         assert extras["total_return_pct"] == pytest.approx(0.1)
 
     @pytest.mark.asyncio
+    async def test_total_return_uses_configured_initial_capital_when_set(self) -> None:
+        """When config.portfolio.initial_capital > 0, it overrides the
+        first-snapshot baseline. Lets the user pin a stable reference even if
+        snapshots predate the initial deposit."""
+        from unittest.mock import MagicMock
+
+        base = datetime(2026, 1, 1, tzinfo=UTC)
+        snaps = [{"timestamp": base.isoformat(), "total_value": 50_000.0}]
+        cfg = MagicMock()
+        cfg.portfolio.initial_capital = 100_000.0
+        with (
+            patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
+            patch("cryptotrader.journal.store.JournalStore") as js_cls,
+            patch("cryptotrader.config.load_config", return_value=cfg),
+        ):
+            pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
+            js_cls.return_value.log = AsyncMock(return_value=[])
+            extras = await _compute_extras(None, current_equity=110_000.0)
+        # Configured 100K beats snapshot 50K
+        assert extras["total_return"] == pytest.approx(10_000.0)
+        assert extras["total_return_pct"] == pytest.approx(0.1)
+
+    @pytest.mark.asyncio
     async def test_total_return_negative(self) -> None:
         base = datetime(2026, 1, 1, tzinfo=UTC)
         snaps = [{"timestamp": base.isoformat(), "total_value": 100_000.0}]

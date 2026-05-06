@@ -170,6 +170,24 @@ class BacktestConfig:
     position_sizing: BacktestPositionSizingConfig = field(default_factory=BacktestPositionSizingConfig)
 
 
+# ── Portfolio (live trading inception baseline) ──
+
+
+@dataclass
+class PortfolioConfig:
+    """Live-trading portfolio settings.
+
+    ``initial_capital`` is the baseline for the dashboard's "总收益"
+    (inception-to-date return) calculation. ``0.0`` (default) falls back to
+    the earliest portfolio_snapshots row — adequate when no deposits or
+    withdrawals occur after the system starts tracking. Set explicitly to
+    pin the baseline if you fund the account in stages or want a fixed
+    reference (e.g. set 100000 if you started with $100K USDT).
+    """
+
+    initial_capital: float = 0.0
+
+
 # ── Regime thresholds ──
 
 
@@ -555,6 +573,7 @@ class AppConfig:
     data: DataConfig = field(default_factory=DataConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     backtest: BacktestConfig = field(default_factory=BacktestConfig)
+    portfolio: PortfolioConfig = field(default_factory=PortfolioConfig)
     experience: ExperienceConfig = field(default_factory=ExperienceConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     providers: ProvidersConfig = field(default_factory=ProvidersConfig)
@@ -956,6 +975,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         data=DataConfig(**toml_data.get("data", {})),
         risk=risk,
         backtest=backtest,
+        portfolio=PortfolioConfig(**toml_data.get("portfolio", {})),
         experience=_build_experience_config(toml_data),
         scheduler=_build_scheduler_config(toml_data),
         providers=providers,
