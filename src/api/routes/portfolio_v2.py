@@ -51,6 +51,10 @@ class PortfolioSnapshotOut(BaseModel):
     win_rate: float | None = None  # fraction ∈ [0, 1]
     total_trades: int = 0
     realized_pnl_30d: float = 0.0
+    # Inception-to-date total return (current equity - first snapshot equity).
+    # Both fields are 0.0 when no snapshot history exists yet.
+    total_return: float = 0.0
+    total_return_pct: float = 0.0
 
 
 class EquityPointOut(BaseModel):
@@ -172,8 +176,22 @@ def _commit_pnl_stats(commits: list, cutoff_30d: datetime) -> tuple[int, float |
     return total, win_rate, round(realized, 2)
 
 
-async def _compute_extras(database_url: str | None) -> dict[str, object]:
-    """Derive (sharpe_90d, win_rate, total_trades, realized_pnl_30d).
+def _inception_equity(snaps: list[dict]) -> float | None:
+    """Return total_value of the earliest snapshot, or None when unavailable.
+
+    Snapshots come from ``portfolio_snapshots`` (one row per scheduler cycle
+    since 685ca52, 2026-04-30). The first row is treated as inception baseline
+    for total-return calculation.
+    """
+    if not snaps:
+        return None
+    earliest = min(snaps, key=lambda s: s.get("timestamp") or "")
+    val = float(earliest.get("total_value", 0.0) or 0.0)
+    return val if val > 0 else None
+
+
+async def _compute_extras(database_url: str | None, current_equity: float) -> dict[str, object]:
+    """Derive (sharpe_90d, win_rate, total_trades, realized_pnl_30d, total_return, total_return_pct).
 
     - **sharpe_90d**: mean/std of daily equity returns over last 90 days, annualised
       by sqrt(365). ``None`` when fewer than 30 daily samples.
@@ -181,6 +199,8 @@ async def _compute_extras(database_url: str | None) -> dict[str, object]:
       filled trades exist.
     - **total_trades**: number of commits with a non-null ``order`` (executed).
     - **realized_pnl_30d**: sum of ``commit.pnl`` for commits in the last 30 days.
+    - **total_return / total_return_pct**: inception-to-date PnL derived from the
+      earliest portfolio snapshot. Both 0.0 when no snapshot history exists.
     """
     now = datetime.now(UTC)
     snaps = await _load_snapshots(database_url)
@@ -189,11 +209,21 @@ async def _compute_extras(database_url: str | None) -> dict[str, object]:
     commits = await _load_commits(database_url)
     total, win_rate, realized_30d = _commit_pnl_stats(commits, now - timedelta(days=30))
 
+    inception = _inception_equity(snaps)
+    if inception is not None:
+        total_return = current_equity - inception
+        total_return_pct = current_equity / inception - 1.0
+    else:
+        total_return = 0.0
+        total_return_pct = 0.0
+
     return {
         "sharpe_90d": sharpe,
         "win_rate": win_rate,
         "total_trades": total,
         "realized_pnl_30d": realized_30d,
+        "total_return": round(total_return, 2),
+        "total_return_pct": round(total_return_pct, 6),
     }
 
 
@@ -282,7 +312,7 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         logger.warning("Portfolio snapshot read failed: %s", exc)
         raise HTTPException(status_code=503, detail="Portfolio data unavailable") from exc
 
-    extras = await _compute_extras(config.infrastructure.database_url)
+    extras = await _compute_extras(config.infrastructure.database_url, current_equity=equity)
 
     return PortfolioSnapshotOut(
         equity=equity,
@@ -296,6 +326,8 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         win_rate=cast("float | None", extras["win_rate"]),
         total_trades=int(cast("int", extras["total_trades"])),
         realized_pnl_30d=float(cast("float", extras["realized_pnl_30d"])),
+        total_return=float(cast("float", extras["total_return"])),
+        total_return_pct=float(cast("float", extras["total_return_pct"])),
     )
 
 

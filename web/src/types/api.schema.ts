@@ -41,6 +41,9 @@ export const PortfolioSchema = z.object({
   win_rate: z.number().nullable().optional(),
   total_trades: z.number().default(0),
   realized_pnl_30d: z.number().default(0),
+  // Inception-to-date total return (current equity − first snapshot).
+  total_return: z.number().default(0),
+  total_return_pct: z.number().default(0),
 });
 
 export const EquityPointSchema = z.object({

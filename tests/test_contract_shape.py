@@ -43,6 +43,9 @@ _PORTFOLIO_REQUIRED = {
     "win_rate",
     "total_trades",
     "realized_pnl_30d",
+    # Inception-to-date total return (2026-05-06):
+    "total_return",
+    "total_return_pct",
 }
 
 _DECISION_LIST_ITEM_REQUIRED = {

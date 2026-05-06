@@ -30,7 +30,13 @@ export const MetricCardsRow = memo(function MetricCardsRow({
       : data.pnl_24h < 0
         ? 'down'
         : 'neutral';
-  const ddDir: 'up' | 'down' | 'neutral' = !data ? 'neutral' : data.drawdown > 0 ? 'down' : 'neutral';
+  const totalReturnDir: 'up' | 'down' | 'neutral' = !data
+    ? 'neutral'
+    : data.total_return > 0
+      ? 'up'
+      : data.total_return < 0
+        ? 'down'
+        : 'neutral';
   const isLive = connectionStatus === 'connected';
 
   return (
@@ -70,10 +76,19 @@ export const MetricCardsRow = memo(function MetricCardsRow({
         isLoading={isLoading}
       />
       <MetricCard
-        label={t('metrics.drawdown', { defaultValue: '回撤 · 30D 已实现' })}
-        value={data ? formatPercent(-data.drawdown) : '--'}
-        sub={data ? `30D 已实现 ${data.realized_pnl_30d >= 0 ? '+' : ''}${formatCurrency(data.realized_pnl_30d)}` : undefined}
-        deltaDirection={ddDir}
+        label={t('metrics.total_return', { defaultValue: '总收益' })}
+        value={
+          data
+            ? `${data.total_return >= 0 ? '+' : ''}${formatCurrency(data.total_return)}`
+            : '--'
+        }
+        delta={data ? formatPercent(data.total_return_pct) : undefined}
+        deltaDirection={totalReturnDir}
+        sub={
+          data
+            ? `30D 已实现 ${data.realized_pnl_30d >= 0 ? '+' : ''}${formatCurrency(data.realized_pnl_30d)} · 回撤 ${formatPercent(-data.drawdown)}`
+            : undefined
+        }
         isLoading={isLoading}
       />
     </div>
