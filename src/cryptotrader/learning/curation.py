@@ -169,7 +169,11 @@ def _curate_with_llm(
 
     本期输出基于当前 body + active patterns 摘要的草稿，
     详细 prompt 优化留 follow-up。
+
+    注意：当前 --llm 路径为 stub 实现，等同于非 LLM 路径（仅替换 AUTO-DISTILLED 区段）。
+    真正的 LLM 调用将在后续 follow-up 中实现。
     """
+    logger.warning("curate_skill --llm: 当前为 stub 实现（等同于非 LLM 路径），真正的 LLM 调用留 follow-up 实现")
     pattern_summary = _build_auto_distilled_section(patterns)
     # 替换 AUTO-DISTILLED 区段（LLM 路径也保留手工内容）
     return _replace_auto_distilled_section(current_body, pattern_summary)
