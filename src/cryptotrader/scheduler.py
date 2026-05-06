@@ -294,12 +294,20 @@ class Scheduler:
         # manual ``arena run`` overlapping with a scheduler tick). The lock
         # holder writes its uuid; release is owner-checked so a TTL-expired
         # holder cannot wipe a fresh holder's key.
-        redis_state = RedisStateManager(load_config().infrastructure.redis_url)
-        async with cycle_lock(redis_state, pair) as acquired:
-            if not acquired:
-                logger.warning("cycle_lock held for %s — skipping this scheduler tick", pair)
-                return
-            await self._run_pair_locked(pair, trigger_meta)
+        try:
+            redis_state = RedisStateManager(load_config().infrastructure.redis_url)
+            async with cycle_lock(redis_state, pair) as acquired:
+                if not acquired:
+                    logger.warning("cycle_lock held for %s — skipping this scheduler tick", pair)
+                    return
+                await self._run_pair_locked(pair, trigger_meta)
+        except Exception as e:
+            # Config / Redis init failures must not propagate to gather() — the
+            # cycle should continue with the remaining pairs. _run_pair_locked
+            # has its own catch for in-cycle errors; this wrapper covers
+            # everything before the lock is acquired.
+            logger.warning("Scheduler setup failed for pair %s", pair, exc_info=True)
+            self._status[pair]["last_error"] = str(e)
 
     async def _run_pair_locked(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
         from cryptotrader.tracing import set_trace_id

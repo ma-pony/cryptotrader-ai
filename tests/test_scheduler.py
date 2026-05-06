@@ -91,7 +91,12 @@ async def test_run_cycle_increments_count():
     s = Scheduler(["BTC/USDT"], interval_minutes=60)
     assert s._cycle_count == 0
 
-    with patch.object(s, "_run_pair", new_callable=AsyncMock) as mock_run:
+    # _write_cycle_snapshot hits real exchange/DB in live mode — must be
+    # mocked so unit tests don't depend on network/OKX availability.
+    with (
+        patch.object(s, "_run_pair", new_callable=AsyncMock) as mock_run,
+        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
+    ):
         await s._run_cycle()
         assert s._cycle_count == 1
         mock_run.assert_called_once_with("BTC/USDT")
@@ -103,7 +108,10 @@ async def test_run_cycle_increments_count():
 async def test_run_cycle_gathers_all_pairs():
     s = Scheduler(["BTC/USDT", "ETH/USDT", "SOL/USDT"], interval_minutes=60)
 
-    with patch.object(s, "_run_pair", new_callable=AsyncMock) as mock_run:
+    with (
+        patch.object(s, "_run_pair", new_callable=AsyncMock) as mock_run,
+        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
+    ):
         await s._run_cycle()
         assert mock_run.call_count == 3
         called_pairs = {call.args[0] for call in mock_run.call_args_list}
@@ -124,7 +132,10 @@ async def test_scheduler_respects_enabled_flag():
 async def test_run_cycle_updates_status():
     s = Scheduler(["BTC/USDT"], interval_minutes=60)
 
-    with patch.object(s, "_run_pair", new_callable=AsyncMock):
+    with (
+        patch.object(s, "_run_pair", new_callable=AsyncMock),
+        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
+    ):
         await s._run_cycle()
         assert "next_run" in s._status["BTC/USDT"]
 
@@ -140,7 +151,10 @@ async def test_run_cycle_exception_does_not_propagate():
     async def fail(_pair: str) -> None:
         raise RuntimeError("pair failure")
 
-    with patch.object(s, "_run_pair", side_effect=fail):
+    with (
+        patch.object(s, "_run_pair", side_effect=fail),
+        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
+    ):
         # Must not raise
         await s._run_cycle()
     # cycle_count incremented means _run_cycle completed normally

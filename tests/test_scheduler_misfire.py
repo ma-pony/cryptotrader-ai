@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -92,7 +92,12 @@ async def test_overlapping_invocation_is_skipped(caplog):
         invocation_count += 1
         await gate.wait()
 
-    with patch.object(s, "_run_pair", side_effect=slow_run_pair):
+    with (
+        patch.object(s, "_run_pair", side_effect=slow_run_pair),
+        # _write_cycle_snapshot hits real exchange/DB in live mode — mock it
+        # out so the test exercises only the overlap-prevention logic.
+        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
+    ):
         s._scheduler.start(paused=True)
 
         s._scheduler.add_job(
@@ -218,7 +223,10 @@ async def test_direct_cycle_calls_do_not_block_each_other():
         count += 1
         await barrier.wait()
 
-    with patch.object(s, "_run_pair", side_effect=counting_run_pair):
+    with (
+        patch.object(s, "_run_pair", side_effect=counting_run_pair),
+        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
+    ):
         t1 = asyncio.create_task(s._run_cycle())
         t2 = asyncio.create_task(s._run_cycle())
         # Yield multiple times so both gather() calls can dispatch _run_pair.
