@@ -104,7 +104,6 @@
 - **shared/ 文件被 agent 私有覆盖意图**：禁止；shared/ 严格只读，agent 不能 override
 - **reflection job 失败**：trading cycle 必须**继续运行**，使用上一次成功蒸馏的快照；reflection 失败不阻塞下一个 cycle
 - **频繁 git diff noise**：reflection 的自动写入应单独 commit（如有 commit 流程），与代码 commit 物理分离；不在本 spec 强制要求
-- **`load_skill` 调用 archived skill**：tool MUST 拒绝（archived 不再适用），返回 `{"error": "skill_archived", "archived_at": "..."}`，避免 agent 应用已废弃的 pattern
 - **`load_skill` 调用频率失控**：若同一 cycle 内 agent 调用 `load_skill` > 10 次（hallucination loop 信号），后续调用 MUST 返回 `{"error": "rate_limit_per_cycle"}`，避免 token 失控
 
 ## Requirements *(mandatory)*
