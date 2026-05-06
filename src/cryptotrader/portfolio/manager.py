@@ -143,7 +143,17 @@ class PortfolioManager:
                     ).scalar_one_or_none()
                     if acct:
                         cash = acct.cash
-                    pos_value = sum(p["amount"] * p["avg_price"] for p in positions.values())
+                    # Spot positions: amount * avg_price (signed). Perp/swap:
+                    # contribute 0 — DB doesn't track unrealized_pnl, and the
+                    # margin is already counted in ``cash``. Adding notional
+                    # would double-count or (when amount < 0 for shorts)
+                    # under-report by 2x notional. See companion comment in
+                    # read_portfolio_from_exchange.
+                    pos_value = sum(
+                        p["amount"] * p["avg_price"]
+                        for p in positions.values()
+                        if (p.get("market_type") or "spot") == "spot"
+                    )
                     return {
                         "account_id": account_id,
                         "positions": positions,
@@ -154,7 +164,9 @@ class PortfolioManager:
                 logger.warning("DB portfolio read failed: %s", e)
         mem = self._memory.get(account_id, {})
         cash = self._memory_cash.get(account_id, 0.0)
-        pos_value = sum(p["amount"] * p["avg_price"] for p in mem.values())
+        pos_value = sum(
+            p["amount"] * p["avg_price"] for p in mem.values() if (p.get("market_type") or "spot") == "spot"
+        )
         return {
             "account_id": account_id,
             "positions": mem,
@@ -341,6 +353,47 @@ class PortfolioManager:
         self._snapshots = [s for s in self._snapshots if s.get("account_id") != account_id]
 
 
+def _equity_contribution(
+    positions: dict[str, dict[str, Any]],
+    *,
+    traded_pair: str,
+    current_price: float,
+) -> float:
+    """Sum each position's contribution to equity, accounting for market type.
+
+    - Spot:  ``amount * price`` (signed). ``amount`` is in base currency; the
+             asset is actually held, so mark-to-market value adds to equity.
+    - Perp/swap/future: ``unrealized_pnl`` only. The notional is NOT held as
+             an asset — only the margin is, and the margin is already in
+             ``cash``. Adding ``amount * price`` double-counts the margin and
+             creates phantom equity inflation (~$49K on a fresh 20.88 ETH
+             short observed 2026-05-06). Using ``-amount * price`` (signed)
+             instead under-reports equity by the same amount on shorts. Both
+             routes are wrong; unrealized_pnl is the only correct value.
+    """
+    from cryptotrader.pair import Pair as _Pair
+
+    total = 0.0
+    for p_pair, pos in positions.items():
+        try:
+            mt = _Pair.parse(p_pair).market_type
+        except (ValueError, NotImplementedError):
+            mt = "spot"
+        if mt != "spot":
+            total += float(pos.get("unrealized_pnl", 0.0) or 0.0)
+            continue
+        amount = pos.get("amount", 0) or 0
+        avg = float(pos.get("avg_price", 0) or 0)
+        if avg > 0:
+            price = avg
+        elif p_pair == traded_pair and current_price:
+            price = current_price
+        else:
+            price = 0.0
+        total += amount * price
+    return total
+
+
 async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | None:
     """Read current portfolio directly from exchange.
 
@@ -412,21 +465,7 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
             "liquidation_price": None,
         }
 
-    # Prefer the row's stored avg_price (perp entryPrice / freshly-fetched
-    # spot ticker) — both reflect a real quote for the row's actual symbol.
-    # Only fall back to ``current_price`` for the active cycle pair when no
-    # quote is available (e.g. PaperExchange perps with no cost basis).
-    total_pos_value = 0.0
-    for p_pair, pos in positions.items():
-        amount = pos.get("amount", 0) or 0
-        avg = float(pos.get("avg_price", 0) or 0)
-        if avg > 0:
-            price = avg
-        elif p_pair == pair and current_price:
-            price = current_price
-        else:
-            price = 0.0
-        total_pos_value += abs(amount) * price
+    total_pos_value = _equity_contribution(positions, traded_pair=pair, current_price=current_price)
 
     return {
         "cash": cash,

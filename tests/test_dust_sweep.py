@@ -94,8 +94,8 @@ async def test_spot_dust_lets_sweep_clear_old_db_row(pm):
 async def test_perp_dust_amount_is_treated_as_zero(pm):
     ex = _exchange_with_ticker()
     derivs = {
-        "BTC/USDT:USDT": {"amount": 0.5, "avg_price": 70000.0},
-        "ETH/USDT:USDT": {"amount": 1e-08, "avg_price": 2300.0},  # dust perp
+        "BTC/USDT:USDT": {"amount": 0.5, "avg_price": 70000.0, "unrealized_pnl": 100.0},
+        "ETH/USDT:USDT": {"amount": 1e-08, "avg_price": 2300.0, "unrealized_pnl": 999.0},  # dust skipped
     }
     total, seen = await _sync_derivatives_from_positions(
         pm, derivs, traded_pair="BTC/USDT:USDT", current_price=77000.0, exchange=ex
@@ -104,7 +104,8 @@ async def test_perp_dust_amount_is_treated_as_zero(pm):
     assert "BTC/USDT:USDT" in p["positions"]
     assert "ETH/USDT:USDT" not in p["positions"]
     assert "ETH/USDT:USDT" not in seen
-    assert total == pytest.approx(0.5 * 77000.0)
+    # Equity contribution = unrealized_pnl of NON-dust positions
+    assert total == pytest.approx(100.0)
 
 
 # ── sentinel: real positions just above threshold still survive ──

@@ -138,57 +138,59 @@ async def test_spot_non_traded_pair_writes_zero_when_exchange_has_no_fetch_ticke
 
 @pytest.mark.asyncio
 async def test_derivs_uses_entry_price_when_present(pm):
+    """Persistence still records entryPrice; equity contribution = unrealized_pnl."""
     ex = _make_exchange()
-    derivs = {"BTC/USDT:USDT": {"amount": 0.1, "avg_price": 70000.0}}
+    derivs = {"BTC/USDT:USDT": {"amount": 0.1, "avg_price": 70000.0, "unrealized_pnl": 12.5}}
     total, _ = await _sync_derivatives_from_positions(
         pm, derivs, traded_pair="BTC/USDT:USDT", current_price=77000.0, exchange=ex
     )
     p = await pm.get_portfolio()
-    # traded perp pair uses current_price
+    # traded perp pair uses current_price for persistence
     assert p["positions"]["BTC/USDT:USDT"]["avg_price"] == 77000.0
-    assert total == pytest.approx(0.1 * 77000.0)
+    # equity contribution is unrealized_pnl, NOT notional (notional is not an asset)
+    assert total == pytest.approx(12.5)
 
 
 @pytest.mark.asyncio
 async def test_derivs_non_traded_uses_old_entry_price(pm):
     ex = _make_exchange()
     derivs = {
-        "BTC/USDT:USDT": {"amount": 0.1, "avg_price": 0.0},  # traded
-        "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 2300.0},  # non-traded with entry
+        "BTC/USDT:USDT": {"amount": 0.1, "avg_price": 0.0, "unrealized_pnl": 5.0},  # traded
+        "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 2300.0, "unrealized_pnl": -3.0},  # non-traded
     }
     total, _ = await _sync_derivatives_from_positions(
         pm, derivs, traded_pair="BTC/USDT:USDT", current_price=77000.0, exchange=ex
     )
     p = await pm.get_portfolio()
     assert p["positions"]["ETH/USDT:USDT"]["avg_price"] == 2300.0
-    assert total == pytest.approx(0.1 * 77000.0 + 1.0 * 2300.0)
+    assert total == pytest.approx(5.0 - 3.0)
 
 
 @pytest.mark.asyncio
 async def test_derivs_non_traded_fetches_ticker_when_entry_missing(pm):
     ex = _make_exchange({"ETH/USDT:USDT": 2200.0})
     derivs = {
-        "BTC/USDT:USDT": {"amount": 0.1, "avg_price": 0.0},
-        "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 0.0},
+        "BTC/USDT:USDT": {"amount": 0.1, "avg_price": 0.0},  # no unrealized -> 0
+        "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 0.0, "unrealized_pnl": 17.0},
     }
     total, _ = await _sync_derivatives_from_positions(
         pm, derivs, traded_pair="BTC/USDT:USDT", current_price=77000.0, exchange=ex
     )
     p = await pm.get_portfolio()
     assert p["positions"]["ETH/USDT:USDT"]["avg_price"] == 2200.0
-    assert total == pytest.approx(0.1 * 77000.0 + 1.0 * 2200.0)
+    assert total == pytest.approx(17.0)  # only ETH contributes; BTC missing field -> 0
 
 
 @pytest.mark.asyncio
 async def test_derivs_non_traded_writes_zero_when_ticker_fails(pm):
     ex = _make_exchange(raises=True)
     derivs = {
-        "BTC/USDT:USDT": {"amount": 0.1, "avg_price": 0.0},
-        "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 0.0},
+        "BTC/USDT:USDT": {"amount": 0.1, "avg_price": 0.0, "unrealized_pnl": 8.0},
+        "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 0.0, "unrealized_pnl": 4.0},
     }
     total, _ = await _sync_derivatives_from_positions(
         pm, derivs, traded_pair="BTC/USDT:USDT", current_price=77000.0, exchange=ex
     )
     p = await pm.get_portfolio()
     assert p["positions"]["ETH/USDT:USDT"]["avg_price"] == 0.0
-    assert total == pytest.approx(0.1 * 77000.0)
+    assert total == pytest.approx(8.0 + 4.0)

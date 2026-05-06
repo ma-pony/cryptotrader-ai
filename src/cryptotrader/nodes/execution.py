@@ -242,7 +242,13 @@ async def _sync_derivatives_from_positions(
     current_price: float,
     exchange: Any = None,
 ) -> tuple[float, set[str]]:
-    """Persist non-spot positions from get_positions(). Returns (value, seen)."""
+    """Persist non-spot positions from get_positions().
+
+    Returns (equity_contribution, seen). The contribution is the sum of
+    unrealized PnL across open derivative positions — NOT notional. Notional
+    is not an asset; the margin is already in cash. See companion comment in
+    portfolio.manager.read_portfolio_from_exchange.
+    """
     from cryptotrader.pair import Pair
 
     total = 0.0
@@ -266,7 +272,7 @@ async def _sync_derivatives_from_positions(
             entry = float(pos.get("avg_price", 0.0) or 0.0)
             price = entry if entry > 0 else await _get_market_price(exchange, pair)
         await pm.update_position("default", pair, amount, price)
-        total += abs(amount) * price
+        total += float(pos.get("unrealized_pnl", 0.0) or 0.0)
     return total, seen
 
 
