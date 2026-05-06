@@ -429,9 +429,13 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
     """Build an order for new entry or add-to-position (加仓).
 
     Mirrors backtest logic: compute target_size from scale, subtract existing position.
+    Returns None when the order cannot be built; reason is stashed at
+    ``state["data"]["execution_error"]`` for downstream journaling (rule 3 of
+    docs/logging-conventions.md).
     """
     from cryptotrader.config import load_config as _lc_exec
     from cryptotrader.models import Order
+    from cryptotrader.pair import Pair
 
     scale = verdict.get("position_scale", 1.0)
     config = _lc_exec()
@@ -441,6 +445,7 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
     total = exchange_portfolio["total_value"] if exchange_portfolio else 0
     if not total or total <= 0:
         logger.warning("No portfolio total_value available, cannot size order")
+        state["data"]["execution_error"] = "no_portfolio: total_value unavailable"
         return None
     max_single_pct = state["metadata"].get("max_single_pct", config.risk.position.max_single_pct)
     target_amount = (total * max_single_pct * scale) / price
@@ -454,6 +459,23 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
     except Exception:
         logger.warning("Position sizing from exchange failed", exc_info=True)
 
+    # Pre-flight: spot accounts cannot short without inventory. Skip the
+    # whole exchange round-trip + ValueError dance when the math is obvious.
+    try:
+        market_type = Pair.parse(pair).market_type
+    except (ValueError, NotImplementedError):
+        market_type = "spot"
+    if market_type == "spot" and side == "sell" and existing_amount <= 0:
+        logger.info(
+            "Cannot short on spot without inventory: %s holdings=%g — skipping order",
+            pair,
+            existing_amount,
+        )
+        state["data"]["execution_error"] = (
+            f"spot_short_no_inventory: cannot sell {pair} on spot — current holdings={existing_amount:g}"
+        )
+        return None
+
     if side == "buy" and existing_amount > 0:
         amount = max(0.0, target_amount - existing_amount)
     elif side == "sell" and existing_amount < 0:
@@ -463,6 +485,7 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
 
     if amount < 1e-12:
         logger.info("Position already at or above target scale, skipping order")
+        state["data"]["execution_error"] = "position_at_target: no delta to order"
         return None
     return Order(pair=pair, side=side, amount=amount, price=price)
 
@@ -486,7 +509,21 @@ async def place_order(state: ArenaState) -> dict:
     else:
         order = await _build_entry_order(verdict, pair, price, state)
     if order is None:
-        return {"data": {"order": None}}
+        # Surface the pre-flight bail reason via risk_gate so it shows up in
+        # the journal commit and on /decisions as reject_reason. Risk gate
+        # itself passed earlier — we override here because the cycle ended
+        # in execution failure, which is what the user needs to see.
+        err = state["data"].pop("execution_error", None) or "order_skipped: see logs"
+        return {
+            "data": {
+                "order": None,
+                "risk_gate": {
+                    "passed": False,
+                    "rejected_by": "execution_skipped",
+                    "reason": err,
+                },
+            }
+        }
 
     exchange, _ = await _get_exchange(state, pair)
 
@@ -510,8 +547,20 @@ async def place_order(state: ArenaState) -> dict:
 
     status = order.status
     if status not in (OrderStatus.FILLED, OrderStatus.PARTIALLY_FILLED):
-        logger.warning("Order not filled: %s %s status=%s", order.side, pair, status)
-        return {"data": {"order": None}}
+        err_type = result.get("error_type")
+        err_msg = result.get("error_msg")
+        reason = f"{err_type}: {err_msg}" if err_type and err_msg else (err_msg or err_type or f"status={status}")
+        logger.warning("Order not filled: %s %s status=%s reason=%s", order.side, pair, status, reason)
+        return {
+            "data": {
+                "order": None,
+                "risk_gate": {
+                    "passed": False,
+                    "rejected_by": "execution_failed",
+                    "reason": reason,
+                },
+            }
+        }
 
     filled_amount = result.get("filled", order.amount) if status == OrderStatus.PARTIALLY_FILLED else order.amount
     filled_price = result.get("price", order.price)

@@ -40,7 +40,12 @@ class OrderManager:
             else:
                 logger.warning("Unknown order status from exchange: %s, marking FAILED", status)
                 self.transition(order, OrderStatus.FAILED)
-        except Exception:
-            logger.warning("Order placement failed", exc_info=True)
+        except Exception as e:
+            logger.warning("Order placement failed: %s: %s", type(e).__name__, e, exc_info=True)
+            # Surface the error to the caller so it can be journaled and shown
+            # to the user (rule 3 of docs/logging-conventions.md). Without this
+            # the order silently disappears and `is_filled=false` has no reason.
+            result["error_type"] = type(e).__name__
+            result["error_msg"] = str(e)
             self.transition(order, OrderStatus.FAILED)
         return order, result

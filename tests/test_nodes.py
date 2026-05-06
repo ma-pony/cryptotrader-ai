@@ -673,10 +673,15 @@ async def test_make_verdict_llm():
 
 @pytest.mark.asyncio
 async def test_place_order_short():
-    """place_order creates sell order for short verdict."""
+    """place_order creates sell order for short verdict on a perp pair.
+
+    Spot accounts cannot short without inventory, so use BTC/USDT:USDT (linear
+    perp) which supports both directions.
+    """
     from cryptotrader.nodes.execution import _paper_exchanges, place_order
 
     state = _base_state(
+        pair="BTC/USDT:USDT",
         verdict={"action": "short", "confidence": 0.7, "position_scale": 0.5},
         portfolio={"total_value": 10000},
     )
@@ -686,13 +691,43 @@ async def test_place_order_short():
     mock_exchange.get_positions = AsyncMock(return_value={})
     mock_exchange.place_order = AsyncMock(return_value={"status": "filled", "filled": 0.01, "price": 50000})
 
-    _paper_exchanges[("BTC/USDT", False)] = mock_exchange
+    _paper_exchanges[("BTC/USDT:USDT", False)] = mock_exchange
     try:
         result = await place_order(state)
         order = result["data"]["order"]
         assert order["side"] == "sell"
     finally:
+        _paper_exchanges.pop(("BTC/USDT:USDT", False), None)
+
+
+@pytest.mark.asyncio
+async def test_place_order_spot_short_blocks_with_reason():
+    """Shorting on spot without inventory must skip the order and surface a
+    reject_reason via state.data.risk_gate so the user sees why on /decisions.
+    """
+    from cryptotrader.nodes.execution import _paper_exchanges, place_order
+
+    state = _base_state(
+        pair="BTC/USDT",
+        verdict={"action": "short", "confidence": 0.7, "position_scale": 0.5},
+        portfolio={"total_value": 10000},
+    )
+
+    mock_exchange = MagicMock()
+    mock_exchange.get_balance = AsyncMock(return_value={"USDT": 10000.0})
+    mock_exchange.get_positions = AsyncMock(return_value={})
+
+    _paper_exchanges[("BTC/USDT", False)] = mock_exchange
+    try:
+        result = await place_order(state)
+    finally:
         _paper_exchanges.pop(("BTC/USDT", False), None)
+
+    assert result["data"]["order"] is None
+    gate = result["data"]["risk_gate"]
+    assert gate["passed"] is False
+    assert gate["rejected_by"] == "execution_skipped"
+    assert "spot_short_no_inventory" in gate["reason"]
 
 
 @pytest.mark.asyncio
