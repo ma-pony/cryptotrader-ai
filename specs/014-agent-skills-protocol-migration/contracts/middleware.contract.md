@@ -12,25 +12,25 @@
 from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
 
 class SkillsInjectionMiddleware(AgentMiddleware):
-    """Per-agent middleware that loads its own SKILL.md + trading-knowledge SKILL.md
-    and prepends to system message before LLM call.
+    """Per-agent middleware that discovers all SKILL.md under agent_skills/,
+    filters by frontmatter `scope`, and injects matched skills into the
+    system message before LLM call.
+
+    No hardcoded skill→agent mapping — discovery is runtime, based on
+    each SKILL.md's `scope` frontmatter field. New skills added by user
+    or `arena skills propose-new` are picked up automatically next cycle.
 
     Reference: https://docs.langchain.com/oss/python/langchain/multi-agent/skills-sql-assistant
     """
 
     tools = [load_skill_tool]    # registered for create_agent to pick up
 
-    SKILL_NAME_BY_AGENT = {
-        "tech": "tech-analysis",
-        "chain": "chain-analysis",
-        "news": "news-analysis",
-        "macro": "macro-analysis",
-    }
+    VALID_AGENT_IDS = {"tech", "chain", "news", "macro"}
 
-    def __init__(self, agent_id: str):
-        assert agent_id in self.SKILL_NAME_BY_AGENT
+    def __init__(self, agent_id: str, skill_dir: Path | None = None):
+        assert agent_id in self.VALID_AGENT_IDS
         self.agent_id = agent_id
-        self.own_skill_name = self.SKILL_NAME_BY_AGENT[agent_id]
+        self.skill_dir = skill_dir or Path("agent_skills")
 
     def wrap_model_call(
         self,
@@ -44,25 +44,25 @@ class SkillsInjectionMiddleware(AgentMiddleware):
 
 ```python
 def wrap_model_call(self, request, handler):
-    # 1. Load own skill + shared trading-knowledge
-    own = load_skill(self.own_skill_name)        # tech-analysis 等
-    shared = load_skill("trading-knowledge")
+    # 1. Discover all SKILL.md, filter by scope
+    matched_skills = discover_skills_for_agent(
+        agent_id=self.agent_id,
+        skill_dir=self.skill_dir,
+    )    # returns list[Skill] where scope == "shared" OR scope == f"agent:{self.agent_id}"
 
-    # 2. Compose addendum (skip on errors, log warning)
+    # 2. Compose addendum (skip individual failures, log warning)
     parts = []
-    if "body" in own:
-        parts.append(own["body"])
-    else:
-        logger.warning("Failed to load %s SKILL.md: %s", self.own_skill_name, own)
-    if "body" in shared:
-        parts.append("\n## Shared Trading Knowledge\n\n" + shared["body"])
-    else:
-        logger.warning("Failed to load trading-knowledge SKILL.md: %s", shared)
+    for skill in matched_skills:
+        try:
+            content = skill.body
+            parts.append(f"<!-- skill: {skill.name} ({skill.scope}) -->\n\n{content}")
+        except Exception as e:
+            logger.warning("Failed to render %s SKILL.md: %s", skill.name, e)
+
+    if not parts:
+        return handler(request)    # No skills loaded → original prompt
 
     addendum = "\n\n".join(parts)
-    if not addendum:
-        # Both failed; proceed with original prompt
-        return handler(request)
 
     # 3. Append to system_message.content_blocks
     new_blocks = list(request.system_message.content_blocks) + [
@@ -76,6 +76,24 @@ def wrap_model_call(self, request, handler):
 
     # 4. Forward
     return handler(modified)
+
+
+def discover_skills_for_agent(agent_id: str, skill_dir: Path) -> list[Skill]:
+    """Scan agent_skills/*/SKILL.md, parse frontmatter, filter by scope.
+
+    Cached by mtime of skill_dir + each SKILL.md. Cache invalidated on any
+    file change (e.g., after curation or propose-new manual save).
+    """
+    skills = []
+    for skill_md in skill_dir.glob("*/SKILL.md"):
+        try:
+            skill = parse_skill_md(skill_md)
+        except Exception as e:
+            logger.warning("Failed to parse %s: %s", skill_md, e)
+            continue
+        if skill.scope == "shared" or skill.scope == f"agent:{agent_id}":
+            skills.append(skill)
+    return skills
 ```
 
 ## SKILL.md Body Layout（curation 整理后产物示例）

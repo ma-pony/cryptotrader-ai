@@ -145,7 +145,9 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
 - **FR-001**: 系统 MUST 在仓库根创建两个顶级目录：`agent_memory/`（**gitignored**）与 `agent_skills/`（**git 跟踪**）
 - **FR-002**: `.gitignore` MUST 包含 `agent_memory/`，确保该目录及子内容不进 git
 - **FR-003**: `agent_memory/` 下 MUST 有 4 个 agent 子目录（tech / chain / news / macro），每个子目录含 `cases/`、`patterns/`、`archive/` 三个二级目录
-- **FR-004**: `agent_skills/` 下 MUST 有恰好 5 个 skill 目录（tech-analysis / chain-analysis / news-analysis / macro-analysis / trading-knowledge），每个目录至少含 1 个 `SKILL.md` 文件
+- **FR-004**: `agent_skills/` 下 MUST 至少含 5 个 initial skill 目录（tech-analysis / chain-analysis / news-analysis / macro-analysis / trading-knowledge）；目录结构扁平（`agent_skills/<name>/SKILL.md`）；**支持运行时增长**——用户或 `arena skills propose-new` 可在该目录下新建 skill，middleware 自动发现，无需修改代码或重启
+- **FR-004a**: 每个 SKILL.md 的 frontmatter MUST 含 `scope` 字段，取值 `shared`（跨 agent 注入）或 `agent:<agent_id>`（仅注入到指定 agent，agent_id ∈ {tech, chain, news, macro}）
+- **FR-004b**: 系统 MUST NOT 硬编码 skill name → agent 的映射表；middleware 通过扫描 `agent_skills/*/SKILL.md` 的 frontmatter `scope` 字段做 runtime 发现
 - **FR-005**: `agent_memory/` 数据 MUST 永久保留（不自动删除）；deprecated 的 pattern 文件移到 `agent_memory/<agent>/archive/`，仍可读取
 
 #### Memory 层（cases + patterns）
@@ -169,16 +171,19 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
 - **FR-014**: 每个 SKILL.md MUST 遵循 Anthropic Skills 协议格式：frontmatter 含 `name`（与目录名一致）+ `description`（一句话能力摘要）+ body（agent 角色 + active patterns 摘要 + forbidden zones 摘要 + 使用规则）
 - **FR-015**: SKILL.md **不在每 cycle 自动更新**——是周期性整理产物（手工编辑、LLM 触发整理、或半自动 PR）
 - **FR-016**: 系统 MUST 提供 CLI 命令 `arena skills curate <skill_name> [--llm]` 触发整理：读 `agent_memory/<agent>/patterns/` active 状态的 patterns + 当前 SKILL.md → 输出新 SKILL.md 草稿
+- **FR-016a**: 系统 MUST 提供 CLI 命令 `arena skills propose-new [--scope <shared|agent:<id>>]` 触发**新 skill 提议**：分析 active patterns 找出共同 regime / theme 的子集，输出建议的新 SKILL.md 草稿到 stdout 或 `agent_skills/<proposed-name>/SKILL.md.draft`；**不自动创建 skill 文件**——需用户 review + manual save
 - **FR-017**: SKILL.md frontmatter 含 `manually_edited: true` 时，整理流程 MUST 跳过该文件或仅追加到指定区段（如 `<!-- AUTO-DISTILLED-PATTERNS -->` 标记内）
+- **FR-017a**: 用户手动创建新 SKILL.md（如 `agent_skills/momentum-trader/SKILL.md` 含合规 frontmatter）后，**下一个 trading cycle** MUST 自动 discovery 并按 `scope` 注入对应 agent prompt——无需重启服务、无需修改代码
 
 #### 加载与注入
 
 - **FR-018**: 系统 MUST 提供 `SkillsInjectionMiddleware`（继承 LangChain `AgentMiddleware`），可挂载到 `create_agent` 的 `middleware=` 参数；参考 https://docs.langchain.com/oss/python/langchain/multi-agent/skills-sql-assistant
-- **FR-019**: 4 个 agent 节点（tech_analyze / chain_analyze / news_analyze / macro_analyze）MUST 通过 middleware 自动加载并注入对应 SKILL.md + trading-knowledge SKILL.md
-- **FR-020**: middleware MUST 在 `wrap_model_call` 时把 SKILL.md body 拼接到 `request.system_message.content_blocks`
+- **FR-019**: 4 个 agent 节点（tech_analyze / chain_analyze / news_analyze / macro_analyze）MUST 通过 middleware 自动 discover 并注入：(1) 所有 `scope: shared` 的 skills；(2) 所有 `scope: agent:<self>` 的 skills（自身相关）
+- **FR-019a**: middleware discovery 算法 MUST 在每个 cycle（或启用 mtime 缓存时）扫描 `agent_skills/*/SKILL.md`，按 frontmatter `scope` 过滤；新增 / 删除 skill 文件后下个 cycle 自动反映
+- **FR-020**: middleware MUST 在 `wrap_model_call` 时把所有匹配 skill 的 body 拼接到 `request.system_message.content_blocks`
 - **FR-021**: middleware MUST 注册 `load_skill(name: str) -> str` tool（通过 `AgentMiddleware.tools` 类变量）；agent 可按需重新拉取任一 skill body
 - **FR-022**: `load_skill` MUST 是 LangChain tool + 普通 Python 函数双接口（同实现），便于 verdict 节点等不走 create_agent 的代码直接调
-- **FR-023**: `load_skill(name)` 仅需 1 参数（5 个 skill name 之一）；不需要 `agent::pattern` 嵌套形式（patterns 在 SKILL.md body 里）
+- **FR-023**: `load_skill(name)` 仅需 1 参数（任一已注册的 skill name，runtime 扩展）；不需要 `agent::pattern` 嵌套形式（patterns 在 SKILL.md body 里）
 - **FR-024**: middleware 加载 SKILL.md 失败（文件不存在 / frontmatter 损坏）MUST 跳过 + warning，不阻塞 cycle
 - **FR-025**: `load_skill` rate-limit：同一 cycle 同一 trace_id 调用 > 10 次返回 `rate_limit_per_cycle` error
 
@@ -216,7 +221,7 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
 ### Measurable Outcomes
 
 - **SC-001**：迁移完成后单个 trading cycle 中 4 个 agent 的 prompt token 数总和（含 load_skill tool 调用累计）较旧系统下降 ≥ 30%
-- **SC-002**：`agent_skills/` 进 git 文件总数 ≤ 6（5 个 SKILL.md + 可选 .gitkeep）；运维者用 `cat agent_skills/<skill>/SKILL.md` ≤ 30 秒可审查任一 skill
+- **SC-002**：`agent_skills/` 初始进 git 文件总数 ≤ 6（initial 5 个 SKILL.md + 可选 .gitkeep）；运行时可增长（用户或 LLM 提议创建新 skill），但每个新 skill 仍是 1 个 SKILL.md 文件——文件数与功能数线性，绝不会再退化为"一条 pattern 一个文件"；运维者用 `cat agent_skills/<name>/SKILL.md` ≤ 30 秒可审查任一 skill
 - **SC-003**：完成 ≥ 14 天运行后，`agent_memory/<agent>/cases/` 累计 cycles 数 ≥ trading cycle 实际执行次数（不丢数据）
 - **SC-004**：完成 ≥ 14 天 reflection 运行后，`agent_memory/<agent>/patterns/` 自动产生 ≥ 1 条 maturity=active 的 pattern（验证防过拟合算法在新存储下仍可正常晋升）
 - **SC-005**：`arena skills curate` 命令运行后，输出的 SKILL.md 草稿 frontmatter 合规、body 包含至少一条 active pattern 的引用
@@ -249,5 +254,8 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
 - `agent_memory/` 跨机器同步（如 rsync / S3 备份）：不在本 spec 范围
 - 前端 UI 展示 cases / patterns：不做（agent_memory 是分析数据，不在 web UI）
 - LLM-driven SKILL.md 自动整理流程的实现细节：本期 CLI 命令存在，但具体 prompt 设计 + 评估机制留 follow-up
+- Skill 自动拆分 / 合并（auto split-merge）：当 skill body 过大 OR 多个 skill patterns 重叠时建议拆分/合并——本期不实现，留 follow-up
+- 自动创建新 skill 文件：`arena skills propose-new` 仅输出 draft，不直接 write `agent_skills/`；用户必须 review + manual save
+- Skill 命名冲突自动解决（如同名 SKILL.md 已存在时如何处理）：本期 propose-new 仅输出 stdout/draft，文件冲突时 fail；未来可加交互式 prompt
 - Cross-trading-pair 经验泛化：保持当前行为
 - `load_skill` 响应缓存：每次调用都直读文件

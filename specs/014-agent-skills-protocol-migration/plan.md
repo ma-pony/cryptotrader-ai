@@ -85,12 +85,13 @@ cryptotrader-ai/
 │   ├── news/{cases,patterns,archive}/
 │   └── macro/{cases,patterns,archive}/
 │
-├── agent_skills/                                # ⭐ 顶级目录（git 跟踪）
-│   ├── tech-analysis/SKILL.md                   # initial 手工写
-│   ├── chain-analysis/SKILL.md
-│   ├── news-analysis/SKILL.md
-│   ├── macro-analysis/SKILL.md
-│   └── trading-knowledge/SKILL.md               # 替代之前 shared/ 的 funding_rate / regime_def 等
+├── agent_skills/                                # ⭐ 顶级目录（git 跟踪），扁平结构
+│   │                                            #    数量动态：initial 5；运行时由用户或 propose-new 增加
+│   ├── tech-analysis/SKILL.md                   # frontmatter scope: agent:tech
+│   ├── chain-analysis/SKILL.md                  # frontmatter scope: agent:chain
+│   ├── news-analysis/SKILL.md                   # frontmatter scope: agent:news
+│   ├── macro-analysis/SKILL.md                  # frontmatter scope: agent:macro
+│   └── trading-knowledge/SKILL.md               # frontmatter scope: shared
 │
 ├── src/cryptotrader/
 │   ├── agents/
@@ -106,6 +107,7 @@ cryptotrader-ai/
 │   │   ├── memory.py                            # ⭐ 新增 — case 写入 + patterns 蒸馏 + archive (~250 行)
 │   │   │                                        # 含 4 层防过拟合算法（迁自 reflect.py）
 │   │   ├── curation.py                          # ⭐ 新增 — SKILL.md 整理（手工 + LLM 触发） (~120 行)
+│   │   ├── skill_proposal.py                    # ⭐ 新增 — analyze patterns → propose new SKILL.md draft (~80 行)
 │   │   ├── regime.py                            # 保留不动
 │   │   ├── reflect.py                           # ❌ 删除（DB upsert 路径）
 │   │   ├── context.py                           # ❌ 删除（GSSC pipeline 整文件）
@@ -129,6 +131,7 @@ cryptotrader-ai/
     ├── test_reflection_pattern_distill.py       # ⭐ ≥6 测试 (memory 蒸馏)
     ├── test_anti_overfitting_equivalence.py     # ⭐ ≥4 测试 (4 层等价)
     ├── test_skills_curation.py                  # ⭐ ≥3 测试 (CLI 整理流程)
+    ├── test_skill_proposal.py                   # ⭐ ≥3 测试 (propose-new + 动态发现)
     ├── test_experience_extraction.py            # ❌ 删除
     ├── test_factorminer_*.py / test_gssc_*.py   # ❌ 删除
     └── 其他保留
@@ -154,10 +157,9 @@ cryptotrader-ai/
 - cycle 总耗时较基线增量 ≤ 5%
 
 ### R3（重新简化）：命名消歧
-双层架构下命名空间天然清晰：
-- 5 个 skill name：`tech-analysis` / `chain-analysis` / `news-analysis` / `macro-analysis` / `trading-knowledge`，全局唯一
+- skill name：扁平 kebab-case（initial 5 个全局唯一），运行时可增长；middleware 通过 frontmatter `scope` 字段做发现，无硬编码 mapping
 - patterns 内部命名：`<agent>/patterns/<name>.md`，路径隔离
-- `load_skill(name)` 只接 5 个 skill name 之一，无歧义
+- `load_skill(name)` 接任意已存在的 skill name（按 directory 解析）
 - verdict reasoning `applied: <pattern_name>`：在该 agent 的 patterns/ 内查找；跨 agent 引用用 `applied: <agent>::<pattern_name>` 形式（FR-026）
 
 ### R4（更新）：文件锁
@@ -283,6 +285,6 @@ mv agent_skills/tech-analysis/SKILL.md.draft agent_skills/tech-analysis/SKILL.md
 | Violation | Why Needed | Simpler Alternative Rejected Because |
 |---|---|---|
 | 两个顶级目录（agent_memory + agent_skills） | 数据/能力分离；memory gitignored，skills 进 git | 单顶级目录嵌套（`agent_skills/<skill>/memory/`）会让 gitignore 规则复杂、git diff 时混淆 |
-| `learning/memory.py` + `learning/curation.py` 拆两文件 | reflection（频繁、自动）vs curation（慢、手工/LLM）频率与触发完全不同 | 单文件可行但难以独立测试 |
+| `learning/memory.py` + `learning/curation.py` + `learning/skill_proposal.py` 拆三文件 | 三种触发频率与逻辑差异大：reflection 自动频繁、curation 周期性、proposal 偶发探索性 | 单文件可行但难以独立测试 |
 | `nodes/reflection.py` 独立节点（vs 嵌入 nodes/data.py） | 独立节点有自己的 logging / metrics / 失败隔离 | 嵌入 nodes/data 会混淆 graph 拓扑 |
 | `arena skills curate` 新 CLI 命令 | 用户需要手工触发整理（user 强调"也可以自定义"） | 自动 cron-only 流程剥夺用户控制权 |

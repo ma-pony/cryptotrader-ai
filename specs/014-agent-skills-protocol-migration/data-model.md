@@ -7,17 +7,22 @@
 ```python
 @dataclass
 class Skill:
-    name: str                    # tech-analysis / chain-analysis / news-analysis / macro-analysis / trading-knowledge
+    name: str                    # initial 5: tech-analysis / chain-analysis / news-analysis / macro-analysis / trading-knowledge
+                                 # 可由用户或 arena skills propose-new 在 runtime 增加
     description: str             # frontmatter, 30-500 chars
+    scope: str                   # frontmatter, "shared" 或 "agent:<id>"
+                                 # 决定 middleware 注入到哪些 agent prompt
     body: str                    # markdown content（含 active patterns 摘要 + forbidden 摘要 + agent role）
     manually_edited: bool        # frontmatter, 默认 False
     version: str                 # frontmatter, 默认 "1.0"
     file_path: Path              # 运行时 absolute path
 ```
 
-- 总数：恒为 5
-- 文件位置：`agent_skills/<skill-name>/SKILL.md`
+- 数量：initial 5（无上限）—— 4 个 `scope: agent:<id>` + 1 个 `scope: shared`
+- 文件位置：`agent_skills/<skill-name>/SKILL.md`（扁平目录）
 - 协议：Anthropic Skills（与 `.claude/skills/speckit-*` 对齐）
+- 增长方式：用户手工创建 SKILL.md 或 `arena skills propose-new` 输出 draft 后人工保存
+- 发现机制：middleware 扫描 `agent_skills/*/SKILL.md`，按 frontmatter `scope` 过滤；**无硬编码 skill name → agent 映射**
 
 ### 2. `PatternRecord` — Memory 层蒸馏数据（gitignored）
 
@@ -103,11 +108,14 @@ deprecated (移到 archive/，curation 时不引用)
 @dataclass
 class AgentSkillSet:
     agent_id: str                       # tech / chain / news / macro
-    own_skill: Skill                    # agent 自己的 SKILL.md（如 tech-analysis）
-    shared_knowledge: Skill             # trading-knowledge SKILL.md
+    matched_skills: list[Skill]         # 所有 scope == "shared" 或 scope == f"agent:{agent_id}" 的 skills
+                                        # initial 状态：每个 agent 通常加载 2 个（own + shared）
+                                        # 但运行时 user/propose-new 可能新增多个 scope: agent:tech 的 skills
 ```
 
-注：双层架构下 middleware 不再加载 patterns（patterns 在 SKILL.md body 里，已 curated）。
+注：
+- middleware 不再加载 patterns（patterns 在 SKILL.md body 里，已 curated）
+- skills 数量动态——middleware 不假设 own + shared 的 1+1 模式
 
 ### 7. `ReflectionRun` — Memory 层反思日志
 

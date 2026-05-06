@@ -1,17 +1,19 @@
-# SKILL.md frontmatter schema (5 个 SKILL.md 文件用)
+# SKILL.md frontmatter schema (所有 SKILL.md 文件用)
 # 遵循 Anthropic Skills 协议格式
+# 数量动态：initial 5 个，运行时可由 propose-new CLI 或用户手动新增
 $schema: "http://json-schema.org/draft-07/schema#"
 title: SkillMdFrontmatter
 type: object
-required: [name, description]
+required: [name, description, scope]
 properties:
   name:
     type: string
     pattern: "^[a-z][a-z0-9-]*$"
     description: |
-      Lowercase kebab-case identifier matching the skill directory name
-      (one of: tech-analysis, chain-analysis, news-analysis,
-      macro-analysis, trading-knowledge).
+      Lowercase kebab-case identifier matching the skill directory name.
+      Initial set: tech-analysis, chain-analysis, news-analysis,
+      macro-analysis, trading-knowledge. Additional skills can be added
+      at runtime; middleware discovers via filesystem scan, not hardcoded.
   description:
     type: string
     minLength: 30
@@ -19,6 +21,17 @@ properties:
     description: |
       One-sentence summary of what this skill provides. Visible to agent
       runtime as part of the SKILL.md content.
+  scope:
+    oneOf:
+      - { const: "shared" }
+      - { type: string, pattern: "^agent:(tech|chain|news|macro)$" }
+    description: |
+      Scope determines which agent prompts inject this skill:
+      - "shared": injected to all 4 agent prompts (e.g., trading-knowledge)
+      - "agent:tech" | "agent:chain" | "agent:news" | "agent:macro":
+        injected only to that specific agent's prompt
+      Replaces the obsolete hardcoded SKILL_NAME_BY_AGENT mapping —
+      middleware uses this field for runtime discovery.
   manually_edited:
     type: boolean
     default: false

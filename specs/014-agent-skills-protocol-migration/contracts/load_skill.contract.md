@@ -20,8 +20,11 @@
 class LoadSkillInput(BaseModel):
     name: str = Field(
         description=(
-            "Skill name. One of: tech-analysis, chain-analysis, "
-            "news-analysis, macro-analysis, trading-knowledge."
+            "Skill name (kebab-case). Initial set: tech-analysis, "
+            "chain-analysis, news-analysis, macro-analysis, "
+            "trading-knowledge. Additional skills can be added at runtime "
+            "by the user or `arena skills propose-new`; tool resolves any "
+            "existing SKILL.md by directory name."
         )
     )
 ```
@@ -51,9 +54,7 @@ def load_skill(name: str) -> dict:
     base = Path("agent_skills")
     if not base.exists():
         return {"error": "skill_dir_missing"}
-    if name not in {"tech-analysis", "chain-analysis", "news-analysis",
-                    "macro-analysis", "trading-knowledge"}:
-        return {"error": "skill_not_found", "name": name}
+    # No hardcoded name list — resolve by directory existence
     file_path = base / name / "SKILL.md"
     if not file_path.exists():
         return {"error": "skill_not_found", "name": name}
