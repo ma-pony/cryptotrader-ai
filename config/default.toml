@@ -121,7 +121,18 @@ extreme_greed_fng = 75
 
 [scheduler]
 enabled = false
-pairs = ["BTC/USDT", "ETH/USDT"]
+# Default 5-pair set diversified across correlation groups (BTC / ETH / L1-alt /
+# meme / DeFi). Spot symbols here suit the binance default exchange; switch to
+# perp variants ("BTC/USDT:USDT" etc) in local.toml when running on OKX with
+# leverage. Adding more pairs costs LLM tokens linearly per cycle but lets the
+# dual-cap risk gate have more candidates to fit within the budget.
+pairs = [
+  "BTC/USDT",
+  "ETH/USDT",
+  "SOL/USDT",
+  "DOGE/USDT",
+  "LINK/USDT",
+]
 interval_minutes = 240
 exchange_id = "binance"
 daily_summary_hour = 0    # UTC hour for daily summary (0-23)
