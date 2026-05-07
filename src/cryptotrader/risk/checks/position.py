@@ -65,15 +65,23 @@ class MaxTotalExposure:
         positions = portfolio.get("positions", {})
         existing_notional = 0.0
         existing_margin = 0.0
-        for v in positions.values():
+        for pair_key, v in positions.items():
             if isinstance(v, dict):
                 amount = v.get("amount", 0) or 0
                 avg_price = v.get("avg_price", 0) or 0
                 notional = abs(amount * avg_price)
                 existing_notional += notional
-                # Spot has leverage=1 effectively (margin == notional).
-                # Treat all non-spot as the configured leverage.
-                market = (v.get("market_type") or "spot").lower()
+                # Determine if this is a derivative (perp/swap/future) → use leverage.
+                # Source priority:
+                #   (1) explicit ``market_type`` field on the position dict
+                #   (2) ccxt symbol shape: anything with ":" suffix is a derivative
+                #       ("BTC/USDT:USDT", "BTC/USD:BTC"). Spot is plain "BTC/USDT".
+                # ``read_portfolio_from_exchange`` does NOT currently set market_type
+                # on the dict (2026-05-07 finding), so the symbol-based inference is
+                # the actual production path and must be reliable.
+                market = (v.get("market_type") or "").lower()
+                if not market:
+                    market = "swap" if isinstance(pair_key, str) and ":" in pair_key else "spot"
                 lev = 1 if market == "spot" else self._leverage
                 existing_margin += notional / lev
             else:
