@@ -611,6 +611,10 @@ async def place_order(state: ArenaState) -> dict:
         "amount": filled_amount,
         "price": filled_price,
         "status": status.value if hasattr(status, "value") else str(status),
+        # Carry the exchange-assigned id forward so journal_trade preserves it
+        # on the reconstructed Order. Without this, decisions API displayed
+        # "订单号 Order" (the literal class name fallback in _serialize_execution).
+        "exchange_id": order.exchange_id,
     }
 
     portfolio_ok = await _update_portfolio(state, order, filled_amount, filled_price, exchange)
