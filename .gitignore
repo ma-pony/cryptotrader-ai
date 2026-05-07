@@ -21,3 +21,6 @@ htmlcov/
 # locally for analysis, not committed. The curated SKILL.md files in
 # agent_skills/ are the git-tracked artifacts.
 agent_memory/
+
+# Runtime logs (uvicorn / scheduler / etc) — local development convenience.
+logs/
