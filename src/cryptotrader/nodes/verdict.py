@@ -448,18 +448,35 @@ async def risk_check(state: ArenaState) -> dict:
     if portfolio is None:
         portfolio = await _build_risk_portfolio(state, config)
         if portfolio is None:
-            err = state["data"].get("_portfolio_read_error") or {}
-            err_suffix = f" [{err['type']}: {err['msg']}]" if err else ""
-            logger.warning("Exchange returned 0 total_value in live mode — rejecting%s", err_suffix)
-            return {
-                "data": {
-                    "risk_gate": {
-                        "passed": False,
-                        "rejected_by": "portfolio_unknown",
-                        "reason": f"Exchange returned 0 balance — cannot trade safely{err_suffix}",
+            # Close action is risk-reduction by definition — never block it on
+            # portfolio-read failure. The close order will either succeed at
+            # the exchange (proving the read failure was transient / cache /
+            # margin-mode quirk) or fail naturally at execute() with a real
+            # exchange-side error. Blocking close here means the operator
+            # cannot exit a losing position whenever OKX has a hiccup, which
+            # is the exact opposite of what risk gating should achieve.
+            if verdict.action == "close":
+                logger.info(
+                    "Portfolio unreadable but verdict is close — letting it through "
+                    "(risk reduction must not be blocked)"
+                )
+                # Synthesize a minimal portfolio so the gate has something to
+                # work with — gate.check whitelists close anyway, so values
+                # don't matter. We just need a non-None dict.
+                portfolio = {"total_value": 0, "positions": {}, "cash": 0}
+            else:
+                err = state["data"].get("_portfolio_read_error") or {}
+                err_suffix = f" [{err['type']}: {err['msg']}]" if err else ""
+                logger.warning("Exchange returned 0 total_value in live mode — rejecting%s", err_suffix)
+                return {
+                    "data": {
+                        "risk_gate": {
+                            "passed": False,
+                            "rejected_by": "portfolio_unknown",
+                            "reason": f"Exchange returned 0 balance — cannot trade safely{err_suffix}",
+                        }
                     }
                 }
-            }
 
     result = await gate.check(verdict, portfolio)
     _log_risk_outcome(state, result, verdict.action)

@@ -73,6 +73,25 @@ def _isolate_agent_memory_dir(tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _reset_okx_portfolio_cache() -> None:
+    """Reset the per-process OKX live-portfolio cache between tests.
+
+    portfolio_v2 caches a successful read for 30s to avoid pounding OKX on
+    every poll. Without this reset, tests that mock ``read_portfolio_from_exchange``
+    to return None see the previous test's cached dict instead of going through
+    the mocked path. Added 2026-05-07 with the cache.
+    """
+    try:
+        import api.routes.portfolio_v2 as p
+
+        p._OKX_LAST_FAIL_AT = 0.0
+        p._OKX_LAST_OK_AT = 0.0
+        p._OKX_LAST_OK_RESULT = None
+    except Exception:
+        pass
+
+
+@pytest.fixture(autouse=True)
 def _reset_api_rate_limiter() -> None:
     """Clear API rate-limit buckets, backtest run state, and health caches before each test."""
     try:
