@@ -29,6 +29,7 @@ describe('Portfolio schema contract', () => {
       positions: [
         {
           pair: 'BTC/USDT',
+          pair_display: 'BTC/USDT',
           side: 'long',
           size: 0.42,
           avg_price: 89120,
@@ -138,12 +139,6 @@ describe('Decision list + detail schemas', () => {
       risk_gate: { passed: true, checks: [] },
       execution: null,
       node_timeline: [{ node: 'tech_agent', start_ms: 0, duration_ms: 150 }],
-      experience_memory_ref: {
-        memory_id: 'em_001',
-        success_patterns: [],
-        forbidden_zones: [],
-        strategic_insights: [],
-      },
       trace_id: 'trace-abc',
       debate_turns: [
         {
@@ -235,12 +230,6 @@ describe('Decision list + detail schemas', () => {
       risk_gate: { passed: true, checks: [] },
       execution: null,
       node_timeline: [],
-      experience_memory_ref: {
-        memory_id: '',
-        success_patterns: [],
-        forbidden_zones: [],
-        strategic_insights: [],
-      },
     };
     const parsed = DecisionDetailSchema.parse(minimal);
     expect(parsed.debate_turns).toEqual([]);
