@@ -12,7 +12,6 @@ import { formatCurrency, formatDateTime } from '@/lib/format';
 import { AgentAnalysisGrid } from './agent-analysis-grid';
 import { DebateSection } from './debate-section';
 import { ExecutionSection } from './execution-section';
-import { ExperienceMemorySection } from './experience-memory-section';
 import { MarketContextSection } from './market-context-section';
 import { NodeTimelinePipeline } from './node-timeline-pipeline';
 import { RiskGateSection } from './risk-gate-section';
@@ -85,10 +84,15 @@ export const DecisionDetailPanel = ({ commitHash }: Props) => {
             id="sec-summary"
             index={1}
             title={t('detail.summary', { defaultValue: '摘要' })}
-            right={
-              data.trace_id ? (
+            right={(() => {
+              const traceUiTpl = import.meta.env.VITE_TRACE_UI_URL as string | undefined;
+              if (!data.trace_id || !traceUiTpl) return null;
+              const href = traceUiTpl.includes('{trace_id}')
+                ? traceUiTpl.replace('{trace_id}', data.trace_id)
+                : `${traceUiTpl}${data.trace_id}`;
+              return (
                 <a
-                  href={`/traces/${data.trace_id}`}
+                  href={href}
                   className="inline-flex items-center gap-1 text-xs text-amber-500 hover:underline"
                   target="_blank"
                   rel="noopener noreferrer"
@@ -96,8 +100,8 @@ export const DecisionDetailPanel = ({ commitHash }: Props) => {
                   <ExternalLink className="h-3 w-3" aria-hidden />
                   OTel
                 </a>
-              ) : null
-            }
+              );
+            })()}
           />
           <div
             className="rounded-xl border p-4 flex items-start gap-4"
@@ -349,7 +353,7 @@ export const DecisionDetailPanel = ({ commitHash }: Props) => {
           )}
         </section>
 
-        {/* Section 8 — Meta (latency + tokens + node timeline + experience) */}
+        {/* Section 8 — Meta (latency + tokens + node timeline) */}
         <section aria-label={t('detail.meta', { defaultValue: '元数据' })}>
           <SectionHeader
             id="sec-meta"
@@ -436,7 +440,6 @@ export const DecisionDetailPanel = ({ commitHash }: Props) => {
           </div>
           <div className="mt-3 space-y-3">
             <NodeTimelinePipeline entries={data.node_timeline} />
-            <ExperienceMemorySection memory={data.experience_memory_ref} />
           </div>
         </section>
       </div>

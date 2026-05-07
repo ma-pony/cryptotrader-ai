@@ -214,13 +214,6 @@ export const NodeTimelineEntrySchema = z.object({
   duration_ms: z.number(),
 });
 
-export const ExperienceMemoryRefSchema = z.object({
-  memory_id: z.string().default(''),
-  success_patterns: z.array(z.record(z.unknown())).default([]),
-  forbidden_zones: z.array(z.record(z.unknown())).default([]),
-  strategic_insights: z.array(z.unknown()).default([]),
-});
-
 export const DecisionDetailSchema = z.object({
   commit_hash: z.string(),
   ts: z.string(),
@@ -234,7 +227,6 @@ export const DecisionDetailSchema = z.object({
   risk_gate: RiskGateSchema,
   execution: ExecutionSchema.nullable(),
   node_timeline: z.array(NodeTimelineEntrySchema),
-  experience_memory_ref: ExperienceMemoryRefSchema,
   trace_id: z.string().nullable().optional(),
   // Alignment with prototype (2026-04-24):
   debate_turns: z.array(DebateTurnSchema).default([]),

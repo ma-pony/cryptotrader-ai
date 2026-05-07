@@ -25,7 +25,6 @@ import type {
   EquityCurveSchema,
   EquityPointSchema,
   ExecutionSchema,
-  ExperienceMemoryRefSchema,
   LatencyBreakdownSchema,
   LatencyHistogramBucketSchema,
   MetricsCountersSchema,
@@ -77,7 +76,6 @@ export type RiskCheck = z.output<typeof RiskCheckSchema>;
 export type RiskGate = z.output<typeof RiskGateSchema>;
 export type Execution = z.output<typeof ExecutionSchema>;
 export type NodeTimelineEntry = z.output<typeof NodeTimelineEntrySchema>;
-export type ExperienceMemoryRef = z.output<typeof ExperienceMemoryRefSchema>;
 export type DecisionDetail = z.output<typeof DecisionDetailSchema>;
 export type AgentBias = z.output<typeof AgentBiasSchema>;
 export type Bias = z.output<typeof BiasSchema>;
