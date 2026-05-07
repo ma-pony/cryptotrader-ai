@@ -23,11 +23,23 @@ router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
 _MAX_POINTS = 1000  # NFR-P-004
 
-# OKX live-portfolio cooldown: after a failure / timeout, skip the live read
-# entirely for this many seconds (DB fallback is fast). Prevents dashboard
-# poll loop from hanging on the timeout when OKX is unreachable.
+# OKX live-portfolio fetch tuning. Three knobs:
+#   1. _OKX_FETCH_TIMEOUT_SEC: per-call budget. Healthy OKX takes ~500ms - 8s
+#      depending on network (VPN tunnel adds ~5s). 8s is generous enough to
+#      avoid spurious DB fallback while staying under React Query's idle
+#      tolerance.
+#   2. _OKX_FAIL_COOLDOWN_SEC: after a timeout/error, skip live read entirely
+#      for this long (use DB fallback). Prevents dashboard from hanging
+#      every poll when OKX is unreachable.
+#   3. _OKX_CACHE_TTL_SEC: cache successful live result so the per-second
+#      poll loop doesn't slam OKX with redundant calls. The whole purpose of
+#      live read is up-to-date P&L; 30s freshness is more than enough.
+_OKX_FETCH_TIMEOUT_SEC = 8.0
 _OKX_FAIL_COOLDOWN_SEC = 60.0
+_OKX_CACHE_TTL_SEC = 30.0
 _OKX_LAST_FAIL_AT: float = 0.0
+_OKX_LAST_OK_AT: float = 0.0
+_OKX_LAST_OK_RESULT: dict | None = None
 
 
 # ── Response models (data-model §1) ──
@@ -363,15 +375,20 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
     # 15s, making the dashboard appear offline. The cooldown keeps subsequent
     # polls fast-path through DB until OKX is likely healthy again.
     now = time.monotonic()
-    if _OKX_LAST_FAIL_AT and now - _OKX_LAST_FAIL_AT < _OKX_FAIL_COOLDOWN_SEC:
-        live = None  # skip live read during cooldown
+    # Cache hit: a successful read in the last _OKX_CACHE_TTL_SEC.
+    if _OKX_LAST_OK_RESULT is not None and now - _OKX_LAST_OK_AT < _OKX_CACHE_TTL_SEC:
+        live = _OKX_LAST_OK_RESULT
+    elif _OKX_LAST_FAIL_AT and now - _OKX_LAST_FAIL_AT < _OKX_FAIL_COOLDOWN_SEC:
+        live = None  # cooldown after recent failure
     else:
         try:
             live = await asyncio.wait_for(
                 pm_mod.read_portfolio_from_exchange(cast("ArenaState", _build_state())),
-                timeout=3.0,
+                timeout=_OKX_FETCH_TIMEOUT_SEC,
             )
-            globals()["_OKX_LAST_FAIL_AT"] = 0.0  # success — reset cooldown
+            globals()["_OKX_LAST_FAIL_AT"] = 0.0
+            globals()["_OKX_LAST_OK_AT"] = now
+            globals()["_OKX_LAST_OK_RESULT"] = live
         except Exception:
             logger.info("read_portfolio_from_exchange timed out / failed; using DB", exc_info=True)
             globals()["_OKX_LAST_FAIL_AT"] = now
