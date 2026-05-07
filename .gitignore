@@ -16,3 +16,8 @@ htmlcov/
 
 # Claude Code runtime artifacts
 .claude/scheduled_tasks.lock
+
+# Agent memory layer (spec 014): high-volume runtime data — preserved
+# locally for analysis, not committed. The curated SKILL.md files in
+# agent_skills/ are the git-tracked artifacts.
+agent_memory/

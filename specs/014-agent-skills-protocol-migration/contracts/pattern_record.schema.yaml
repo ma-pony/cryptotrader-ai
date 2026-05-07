@@ -1,0 +1,85 @@
+# PatternRecord frontmatter schema (agent_memory/<agent>/patterns/*.md)
+# memory 层数据，gitignored
+$schema: "http://json-schema.org/draft-07/schema#"
+title: PatternRecordFrontmatter
+type: object
+required:
+  - name
+  - agent
+  - description
+  - regime_tags
+  - pnl_track
+  - maturity
+  - created
+  - source_cycles
+  - version
+properties:
+  name:
+    type: string
+    pattern: "^[a-z][a-z0-9_]*$"
+    description: snake_case identifier; matches file name stem
+  agent:
+    type: string
+    enum: [tech, chain, news, macro]
+  description:
+    type: string
+    minLength: 30
+    maxLength: 500
+  regime_tags:
+    type: array
+    items:
+      type: string
+      enum:
+        - trending_up
+        - trending_down
+        - range_bound
+        - high_funding
+        - low_funding
+        - negative_funding
+        - high_vol
+        - extreme_fear
+        - extreme_greed
+        - btc_strength
+        - alt_strength
+    description: |
+      Empty array means wildcard (applies to any regime). Used for
+      curation filter to decide which patterns make it into SKILL.md.
+  pnl_track:
+    type: object
+    required: [cases, win_rate, avg_pnl]
+    properties:
+      cases:
+        type: integer
+        minimum: 0
+      win_rate:
+        type: number
+        minimum: 0
+        maximum: 1
+      avg_pnl:
+        type: number
+      last_active:
+        type: string
+        format: date-time
+        nullable: true
+  maturity:
+    type: string
+    enum: [observed, probationary, active, deprecated]
+  manually_edited:
+    type: boolean
+    default: false
+    description: |
+      When true, reflection only updates pnl_track / last_active; never
+      overwrites body.
+  created:
+    type: string
+    format: date-time
+  source_cycles:
+    type: array
+    items:
+      type: string
+    description: |
+      cycle_ids that contributed cases to distill this pattern. Audit trail.
+  version:
+    type: string
+    pattern: "^\\d+\\.\\d+$"
+additionalProperties: false

@@ -79,7 +79,6 @@ def _sa_models():
         # Observability columns (task 1.3)
         consensus_metrics = Column(JSONB, nullable=True, default=None)
         verdict_source = Column(String(20), nullable=False, default="ai")
-        experience_memory = Column(JSONB, nullable=True, default=None)
         node_trace = Column(JSONB, nullable=False, default=[])
         debate_skip_reason = Column(String(500), nullable=False, default="")
         # Spec: frontend-prototype-alignment (2026-04-24)
@@ -100,7 +99,6 @@ _OBSERVABILITY_COLUMNS = [
     # (column_name, DDL_type, DEFAULT_clause)
     ("consensus_metrics", "JSONB", "DEFAULT NULL"),
     ("verdict_source", "VARCHAR(20)", "NOT NULL DEFAULT 'ai'"),
-    ("experience_memory", "JSONB", "DEFAULT NULL"),
     ("node_trace", "JSONB", "NOT NULL DEFAULT '[]'"),
     ("debate_skip_reason", "VARCHAR(500)", "NOT NULL DEFAULT ''"),
     ("latency_breakdown", "JSONB", "NOT NULL DEFAULT '{}'"),
@@ -110,6 +108,12 @@ _OBSERVABILITY_COLUMNS = [
     # 2026-05-06: separate execution-layer status from risk_gate so
     # post-gate failures don't pollute gate-pass-rate analytics.
     ("execution_status", "JSONB", "DEFAULT NULL"),
+]
+
+# Columns to DROP from existing databases (FR-031: experience_json/experience_memory removal).
+# For PostgreSQL: ALTER TABLE … DROP COLUMN IF EXISTS. For SQLite: no-op (column is harmless).
+_DROP_COLUMNS = [
+    "experience_memory",  # FR-031: replaced by file-based agent_memory/ two-layer architecture
 ]
 
 
@@ -137,6 +141,9 @@ async def _ensure_tables(database_url: str) -> None:
                             f"ALTER TABLE decision_commits ADD COLUMN IF NOT EXISTS {col_name} {col_type} {col_default}"
                         )
                     )
+                # FR-031: drop legacy experience_memory column (replaced by file-based agent_memory/)
+                for col_name in _DROP_COLUMNS:
+                    await conn.execute(text(f"ALTER TABLE decision_commits DROP COLUMN IF EXISTS {col_name}"))
                 # Spec 013 deep-review: widen pair column from VARCHAR(20) to VARCHAR(50)
                 # to fit ccxt futures delivery symbols. Idempotent — re-running is a no-op.
                 await conn.execute(text("ALTER TABLE decision_commits ALTER COLUMN pair TYPE VARCHAR(50)"))
@@ -250,7 +257,6 @@ class JournalStore:
             trace_id=d.get("trace_id"),
             consensus_metrics=consensus_metrics,
             verdict_source=d.get("verdict_source", "ai"),
-            experience_memory=d.get("experience_memory") or {},
             node_trace=node_trace,
             debate_skip_reason=d.get("debate_skip_reason", ""),
             latency_breakdown=d.get("latency_breakdown") or {},
@@ -282,7 +288,6 @@ class JournalStore:
             # Observability fields (task 1.3)
             "consensus_metrics": d.get("consensus_metrics"),
             "verdict_source": dc.verdict_source,
-            "experience_memory": d.get("experience_memory") or None,
             "node_trace": d.get("node_trace", []),
             "debate_skip_reason": dc.debate_skip_reason,
             "latency_breakdown": d.get("latency_breakdown") or {},
@@ -341,7 +346,6 @@ class JournalStore:
             trace_id=getattr(row, "trace_id", None),
             consensus_metrics=consensus_metrics,
             verdict_source=getattr(row, "verdict_source", None) or "ai",
-            experience_memory=getattr(row, "experience_memory", None) or {},
             node_trace=node_trace,
             debate_skip_reason=getattr(row, "debate_skip_reason", None) or "",
             latency_breakdown=getattr(row, "latency_breakdown", None) or {},

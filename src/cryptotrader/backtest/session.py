@@ -13,7 +13,7 @@ from cryptotrader._compat import UTC
 
 if TYPE_CHECKING:
     from cryptotrader.backtest.result import BacktestResult
-    from cryptotrader.models import DecisionCommit, ExperienceMemory
+    from cryptotrader.models import DecisionCommit
 
 logger = logging.getLogger(__name__)
 
@@ -53,16 +53,6 @@ def save_result(session_id: str, result: BacktestResult) -> Path:
     data = asdict(result)
     # Remove large equity_curve from summary (keep only summary stats)
     data.pop("equity_curve", None)
-    with open(path, "w") as f:
-        json.dump(data, f, ensure_ascii=False, default=str, indent=2)
-    return path
-
-
-def save_experience(session_id: str, experience: dict[str, ExperienceMemory]) -> Path:
-    """Save distilled experience to session directory."""
-    session_dir = get_session_dir(session_id)
-    path = session_dir / "experience.json"
-    data = {agent_id: asdict(mem) for agent_id, mem in experience.items()}
     with open(path, "w") as f:
         json.dump(data, f, ensure_ascii=False, default=str, indent=2)
     return path

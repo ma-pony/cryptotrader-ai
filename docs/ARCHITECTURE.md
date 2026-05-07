@@ -658,3 +658,85 @@ daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 1. 加载 `config/default.toml`
 2. 深度合并 `config/local.toml`（gitignored，存放 API keys）
 3. 首次加载后全局缓存（`_cached_config`），运行中不可变
+
+---
+
+## 14. 双层 Agent 记忆架构（Spec 014）
+
+### 14.1 概述
+
+替代原有 DB 驱动的 `ExperienceMemory`/`ExperienceRule` + GSSC 管线，引入：
+
+| 层 | 路径 | git 追踪 | 说明 |
+|----|------|----------|------|
+| **Memory 层** | `agent_memory/` | ❌ gitignored | 永久原始记录：case 文件 + pattern 文件 |
+| **Skills 层** | `agent_skills/` | ✅ 版本追踪 | 经人工策展的 SKILL.md，遵循 Anthropic Skills 协议 |
+
+### 14.2 Memory 层
+
+```
+agent_memory/
+├── cases/
+│   └── <cycle_id>.md      # 每个 cycle 写入一个 frontmatter + 正文文件
+└── <agent_id>/
+    ├── patterns/
+    │   └── <pattern>.md   # 经蒸馏后的 PatternRecord（含 PnL track）
+    └── archive/           # deprecated patterns 归档
+```
+
+**写入流程**：
+- `nodes/journal.py` → `learning/memory.write_case()` — 原子写，失败不阻塞
+- frontmatter: `cycle_id`, `pair`, `verdict_action`, `applied`, `final_pnl`, `risk_gate_passed`
+- body: 各 agent reasoning 摘要
+
+**蒸馏流程**（`nodes/reflection.py`）：
+- 读取 cases，统计 `applied:` 引用的 pattern 胜率
+- 4 层防过拟合（L1 regime 过滤、L2 最小样本、L3 段 vs 全局 delta、L4 对抗验证）
+- maturity FSM：`observed` → `probationary` → `active` → `deprecated`（deprecated 归档到 `archive/`）
+
+### 14.3 Skills 层
+
+```
+agent_skills/
+├── tech-analysis/SKILL.md    # scope: agent:tech
+├── chain-analysis/SKILL.md   # scope: agent:chain
+├── news-analysis/SKILL.md    # scope: agent:news
+├── macro-analysis/SKILL.md   # scope: agent:macro
+└── trading-knowledge/SKILL.md # scope: shared
+```
+
+**SKILL.md 格式**（Anthropic Skills 协议）：
+```markdown
+---
+name: tech-analysis
+description: 技术分析 agent 的角色定义与历史蒸馏规律
+scope: agent:tech
+---
+
+## Role
+...
+
+## AUTO-DISTILLED-PATTERNS
+<!-- 由 arena skills curate 自动替换 -->
+```
+
+### 14.4 注入机制
+
+`SkillsInjectionMiddleware`（`agents/skills/middleware.py`）：
+- 动态扫描 `agent_skills/*/SKILL.md` 的 `scope` 字段（LRU mtime 缓存）
+- 为每个 agent 组装 `own skill + shared skill` 的 system addendum
+- 在 `ToolAgent.analyze()` 中，`system = role_description + ANALYSIS_FRAMEWORK + addendum`
+
+### 14.5 Pattern 归因（FR-026）
+
+verdict reasoning 中使用 `applied: <agent>::<pattern_name>` 格式引用 pattern。
+`parse_applied()` 解析引用，`update_pattern_pnl()` 在平仓时更新 PnL track。
+
+### 14.6 CLI 命令
+
+| 命令 | 说明 |
+|------|------|
+| `arena skills list` | 列出所有 skill 及 scope |
+| `arena skills curate <name>` | 将蒸馏 patterns 注入 SKILL.md（生成 .draft） |
+| `arena skills curate <name> --llm` | 同上，用 LLM 生成 pattern 摘要 |
+| `arena skills propose-new --scope <scope>` | 分析活跃 patterns，提案新 SKILL.md |

@@ -199,7 +199,6 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
         generate_verdict_calibration,
     )
     from cryptotrader.journal.store import JournalStore
-    from cryptotrader.learning.reflect import load_reflections, maybe_reflect
     from cryptotrader.learning.regime import tag_regime
     from cryptotrader.learning.verbal import get_experience
 
@@ -217,7 +216,6 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
     historical_cases: list = []
     agent_corrections: dict[str, str] = {}
     verdict_calibration = ""
-    experience_memory: dict = {}
 
     if not is_backtest:
         # Fetch historical cases (regime-aware)
@@ -236,30 +234,13 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
         except Exception:
             logger.warning("Bias detection failed, continuing without calibration", exc_info=True)
 
-        # Load structured experience memory (fast SQLite read)
-        try:
-            experience_memory = await load_reflections()
-        except Exception:
-            logger.warning("Failed to load experience memory", exc_info=True)
-
-        # Maybe trigger background reflection (fire-and-forget, doesn't block trading)
-        cycle_count = state["metadata"].get("cycle_count", 0)
-        if config.experience.enabled and cycle_count > 0:
-            try:
-                from cryptotrader.task_registry import add_background_task
-
-                add_background_task(
-                    maybe_reflect(store, cycle_count, config.experience),
-                    name="reflect",
-                )
-            except Exception:
-                logger.info("Failed to schedule reflection", exc_info=True)
+        # Skills injection is handled by SkillsInjectionMiddleware in ToolAgent.analyze().
+        # Background distillation is triggered by run_reflection() node (nodes/reflection.py).
 
     return {
         "data": {
             "regime_tags": regime_tags,
             "historical_cases": historical_cases,
-            "experience_memory": experience_memory,
             "agent_corrections": agent_corrections,
             "verdict_calibration": verdict_calibration,
         }

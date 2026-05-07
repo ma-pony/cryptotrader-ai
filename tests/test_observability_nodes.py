@@ -374,25 +374,6 @@ class TestJournalObservabilityFields:
 
         assert captured.get("verdict_source") == "ai"
 
-    async def test_journal_trade_passes_experience_memory(self):
-        """journal_trade passes experience_memory from state to build_commit."""
-        from cryptotrader.nodes.journal import journal_trade
-
-        exp_mem = {"success_patterns": ["bullish RSI"], "forbidden_zones": []}
-        state = _base_state(experience_memory=exp_mem)
-        spy, captured = self._make_build_commit_spy()
-
-        with (
-            patch("cryptotrader.journal.commit.build_commit", side_effect=spy),
-            patch("cryptotrader.journal.store.JournalStore") as mock_store,
-            patch("cryptotrader.nodes.journal._get_portfolio_snapshot", new=AsyncMock(return_value={})),
-            patch("cryptotrader.tracing.get_trace_id", return_value="trace-1"),
-        ):
-            mock_store.return_value.commit = AsyncMock()
-            await journal_trade(state)
-
-        assert captured.get("experience_memory") == exp_mem
-
     async def test_journal_trade_passes_node_trace(self):
         """journal_trade passes node_trace from state to build_commit."""
         from cryptotrader.nodes.journal import journal_trade
@@ -448,7 +429,6 @@ class TestJournalObservabilityFields:
 
         assert captured.get("consensus_metrics") is None
         assert captured.get("verdict_source") == "ai"
-        assert captured.get("experience_memory") == {}
         assert captured.get("node_trace") == []
         assert captured.get("debate_skip_reason") == ""
 
@@ -501,27 +481,6 @@ class TestJournalObservabilityFields:
             await journal_rejection(state)
 
         assert captured.get("verdict_source") == "hold_all_mock"
-
-    async def test_journal_rejection_passes_experience_memory(self):
-        """journal_rejection passes experience_memory from state to build_commit."""
-        from cryptotrader.nodes.journal import journal_rejection
-
-        exp_mem = {"forbidden_zones": ["high volatility bearish"]}
-        state = _base_state(experience_memory=exp_mem)
-        state["data"]["risk_gate"] = {"passed": False, "rejected_by": "check", "reason": "r"}
-        spy, captured = self._make_build_commit_spy()
-
-        with (
-            patch("cryptotrader.journal.commit.build_commit", side_effect=spy),
-            patch("cryptotrader.journal.store.JournalStore") as mock_store,
-            patch("cryptotrader.tracing.get_trace_id", return_value="trace-2"),
-            patch("cryptotrader.nodes.verdict._get_notifier") as mock_notifier,
-        ):
-            mock_store.return_value.commit = AsyncMock()
-            mock_notifier.return_value.notify = AsyncMock()
-            await journal_rejection(state)
-
-        assert captured.get("experience_memory") == exp_mem
 
     async def test_journal_rejection_passes_node_trace(self):
         """journal_rejection passes node_trace from state to build_commit."""
@@ -584,6 +543,5 @@ class TestJournalObservabilityFields:
 
         assert captured.get("consensus_metrics") is None
         assert captured.get("verdict_source") == "ai"
-        assert captured.get("experience_memory") == {}
         assert captured.get("node_trace") == []
         assert captured.get("debate_skip_reason") == ""

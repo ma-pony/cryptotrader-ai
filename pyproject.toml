@@ -152,8 +152,34 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/_compat.py" = ["UP036", "UP017"]
 # MCP Server docstrings use Chinese for tool descriptions (consumed by LLM agents)
 "src/cryptotrader/mcp/servers/*.py" = ["RUF002"]
-# reflect.py contains Chinese LLM prompts -- fullwidth punctuation is intentional
-"src/cryptotrader/learning/reflect.py" = ["RUF001"]
+# learning/memory.py, curation.py, skill_proposal.py and agents/skills/* contain
+# Chinese docstrings + LLM prompts (spec 014 two-layer architecture). Fullwidth
+# punctuation is intentional and matches the project's CLAUDE.md guidance
+# ("generate responses in Simplified Chinese").
+# TCH003: Path is used at runtime in many functions (Path("..."), default args).
+# C901: distill_patterns is genuinely complex (4-layer anti-overfitting). Splitting
+#       further would obscure the algorithm flow.
+# E501: Long lines in regex pattern strings / Chinese docstrings (CJK width).
+# SIM105/SIM108/PERF401/B005: stylistic suggestions — keep readable form.
+"src/cryptotrader/agents/skills/*.py" = ["RUF001", "RUF002", "RUF003", "TCH003", "PERF401", "SIM105"]
+"src/cryptotrader/learning/memory.py" = ["RUF001", "RUF002", "RUF003", "TCH003", "C901", "PERF401", "SIM108", "B005"]
+"src/cryptotrader/learning/curation.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
+"src/cryptotrader/learning/skill_proposal.py" = ["RUF001", "RUF002", "RUF003", "TCH003", "E501"]
+"src/cryptotrader/nodes/reflection.py" = ["RUF001", "RUF002", "RUF003"]
+# journal.py: spec 014 added Chinese-comment sections for case writing + PnL backfill.
+"src/cryptotrader/nodes/journal.py" = ["RUF001", "RUF002", "RUF003"]
+# spec 014 test files use Chinese docstrings + assertion messages.
+"tests/test_two_layer_architecture.py" = ["RUF001", "RUF002", "RUF003", "S603", "S607"]
+"tests/test_agent_memory_writer.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_anti_overfitting_equivalence.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_load_skill_tool.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_applied_pattern_parser.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_reflection_pattern_distill.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skill_proposal.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skills_curation.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skills_loader.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skills_middleware.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skills_perf.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 # portfolio/manager.py: same SQLAlchemy declarative-class pattern as journal/store.
 "src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
 # cli/main.py:

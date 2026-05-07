@@ -597,6 +597,12 @@ class ToolAgent(BaseAgent):
         try:
             from langchain.agents import create_agent
 
+            from cryptotrader.agents.skills.middleware import SkillsInjectionMiddleware
+
+            skills_addendum = SkillsInjectionMiddleware(agent_id=self.agent_id).build_system_addendum()
+            if skills_addendum:
+                system = system + "\n\n" + skills_addendum
+
             llm = _create_chat_model(self.model)
             agent = create_agent(llm, tools=self.tools, system_prompt=system)
 

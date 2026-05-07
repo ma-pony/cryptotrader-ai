@@ -11,9 +11,6 @@ from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
 
-# Default token budget for experience context (chars / 4 ≈ tokens)
-_DEFAULT_TOKEN_BUDGET = 2000
-
 # Degraded analysis result returned when an agent times out or fails
 _MOCK_ANALYSIS_RESULT: dict[str, Any] = {
     "direction": "neutral",
@@ -28,7 +25,6 @@ _MOCK_ANALYSIS_RESULT: dict[str, Any] = {
 
 async def _run_agent(agent_type: str, state: ArenaState) -> dict:
     from cryptotrader.config import load_config
-    from cryptotrader.learning.context import gather_packets, select_packets, structure_experience
 
     # Snapshot hash reuse: active only in scheduler continuous-cycle scenarios.
     # Conditions: current hash exists AND matches prev hash AND cached entry exists for this agent.
@@ -75,19 +71,9 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         agent = agents_fallback[agent_type](model)
     snapshot = state["data"]["snapshot"]
 
-    # Build GSSC experience context
+    # Build experience context from legacy state fields (steering/corrections only)
+    # Skills are now injected via SkillsInjectionMiddleware inside ToolAgent.analyze()
     experience = _build_experience(state, agent_type)
-    if not experience:
-        # Fallback: use GSSC pipeline from structured data
-        memory = state["data"].get("experience_memory", {}).get(agent_type)
-        cases = state["data"].get("historical_cases", [])
-        agent_corrections = state["data"].get("agent_corrections", {})
-        correction = agent_corrections.get(agent_type, "")
-        regime_tags = state["data"].get("regime_tags", [])
-
-        packets = gather_packets(memory, cases, correction)
-        selected = select_packets(packets, regime_tags, _DEFAULT_TOKEN_BUDGET)
-        experience = structure_experience(selected)
 
     # Inject live steering instructions (T024)
     experience = await _inject_steering(state, agent_type, experience)
@@ -220,15 +206,10 @@ async def _publish_agent_done(
 
 
 def _build_experience(state: ArenaState, agent_type: str) -> str:
-    """Build experience string from legacy state fields (backward compat).
+    """Build experience string from state fields (steering/corrections only).
 
-    Returns empty string if new GSSC fields are available.
+    Skills injection is handled by SkillsInjectionMiddleware inside ToolAgent.analyze().
     """
-    # If new structured fields are present, return empty to trigger GSSC path
-    if "experience_memory" in state.get("data", {}):
-        return ""
-
-    # Legacy path: experience is a pre-formatted string
     experience = state["data"].get("experience", "")
     agent_corrections = state["data"].get("agent_corrections", {})
     correction = agent_corrections.get(agent_type, "")

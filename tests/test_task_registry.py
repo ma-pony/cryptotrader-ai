@@ -221,18 +221,20 @@ async def test_multiple_tasks_held_simultaneously() -> None:
 
 
 async def test_verbal_reinforcement_uses_add_background_task() -> None:
-    """verbal_reinforcement() internally calls add_background_task instead of bare loop.create_task."""
+    """verbal_reinforcement() no longer calls maybe_reflect — background distillation
+    was migrated to the run_reflection node (Spec 014 two-layer architecture).
+    The old GSSC/maybe_reflect path is fully removed."""
     import inspect
 
     import cryptotrader.nodes.data as data_module
 
     source = inspect.getsource(data_module.verbal_reinforcement)
 
-    # Should call add_background_task
-    assert "add_background_task" in source
-
-    # Should no longer directly call loop.create_task for maybe_reflect
+    # GSSC / maybe_reflect path must be gone (Spec 014 migration)
+    assert "maybe_reflect" not in source
     assert "loop.create_task(maybe_reflect" not in source
+    assert "gather_packets" not in source
+    assert "structure_experience" not in source
 
 
 async def test_verbal_reinforcement_integration_with_registry(caplog) -> None:
