@@ -49,11 +49,19 @@ class RiskGate:
         ]
 
     async def check(self, verdict: TradeVerdict, portfolio: dict) -> GateResult:
-        # Close actions always pass — reducing risk should never be blocked
+        # Close actions always pass — reducing risk should never be blocked.
+        # This whitelist intentionally runs BEFORE every infrastructure check
+        # (redis, exchange health, etc) below: a close is the only safe move
+        # when infrastructure is degraded, and forcing the operator to ride
+        # out a losing position because the cache layer is flaky is exactly
+        # the failure mode risk gating should prevent. The execute step still
+        # gets to fail if the exchange is genuinely unreachable; we just
+        # don't pre-empt it at the gate.
         if verdict.action == "close":
             return GateResult(passed=True)
 
-        # If Redis was configured but is now unavailable, reject conservatively
+        # If Redis was configured but is now unavailable, reject conservatively.
+        # Note: this only blocks NEW positions — close is already whitelisted above.
         if self._redis_was_configured and not await self.redis_state.ping():
             err = getattr(self.redis_state, "_last_ping_error", None) or {}
             err_suffix = f" [{err['type']}: {err['msg']}]" if err else ""
