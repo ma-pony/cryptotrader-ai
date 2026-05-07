@@ -66,6 +66,20 @@ const ActionBadge = ({
       </span>
     );
   }
+  if (lower === 'close') {
+    return (
+      <span className="inline-flex items-center gap-1 font-mono text-amber-500">
+        <MinusCircle className="h-3 w-3" />
+        CLOSE
+        {Number.isFinite(pnl ?? NaN) ? (
+          <span className="ml-1 text-[10px] tabular-nums">
+            {(pnl ?? 0) >= 0 ? '+' : ''}
+            {((pnl ?? 0) * 100).toFixed(2)}%
+          </span>
+        ) : null}
+      </span>
+    );
+  }
   return <span className="font-mono text-muted-foreground">HOLD</span>;
 };
 
