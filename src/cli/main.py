@@ -730,6 +730,64 @@ async def _portfolio_reset(capital: float):
     console.print(f"[green]Portfolio reset. Cash: ${capital:,.2f}[/green]")
 
 
+@portfolio_app.command("reset-baseline")
+def portfolio_reset_baseline(
+    reason: Annotated[str, typer.Option("--reason", "-r", help="Why are you resetting? (audit log)")] = "",
+    operator: Annotated[str, typer.Option("--operator", help="Who is doing this (audit log)")] = "",
+    account_id: Annotated[str, typer.Option("--account-id", help="Account to reset")] = "default",
+    confirm: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
+):
+    """Acknowledge current equity as the new drawdown peak baseline.
+
+    Subsequent ``DrawdownLimit`` checks measure peak/trough only against
+    snapshots taken AFTER this reset, so historical losses no longer
+    permanently gate new trades. Writes an audit row including the operator
+    and the reason — required for any production-grade reset.
+
+    Use this AFTER deciding the past drawdown is "accepted history" and
+    you want the system to start a fresh baseline. This does NOT delete any
+    snapshot data; only the drawdown computation window changes.
+    """
+    if not reason:
+        console.print("[red]--reason is required for audit log[/red]")
+        raise typer.Exit(2)
+    if not operator:
+        import getpass
+
+        operator = getpass.getuser() or "unknown"
+    asyncio.run(_portfolio_reset_baseline(account_id, reason, operator, confirm))
+
+
+async def _portfolio_reset_baseline(account_id: str, reason: str, operator: str, confirm: bool):
+    from cryptotrader.config import load_config
+    from cryptotrader.portfolio.manager import PortfolioManager
+
+    cfg = load_config()
+    pm = PortfolioManager(cfg.infrastructure.database_url)
+    portfolio = await pm.get_portfolio(account_id)
+    current_equity = portfolio.get("total_value", 0.0)
+    current_dd = await pm.get_drawdown(account_id)
+
+    console.print(f"Account: [cyan]{account_id}[/cyan]")
+    console.print(f"Current equity: [bold]${current_equity:,.2f}[/bold]")
+    console.print(f"Current drawdown (from existing peak): [yellow]{current_dd * 100:.2f}%[/yellow]")
+    console.print(f"After reset, drawdown baseline starts fresh from ${current_equity:,.2f}.")
+    console.print(f"Operator: [cyan]{operator}[/cyan]")
+    console.print(f"Reason: [cyan]{reason}[/cyan]")
+
+    if not confirm:
+        typer.confirm("Proceed with baseline reset?", abort=True)
+
+    row = await pm.record_baseline_reset(
+        account_id=account_id,
+        baseline_equity=current_equity,
+        operator=operator,
+        reason=reason,
+    )
+    console.print(f"[green]Baseline reset recorded.[/green]  id={row['id']}  at={row['reset_at'].isoformat()}")
+    console.print("[dim]Note: existing snapshots are preserved; only drawdown computation window changed.[/dim]")
+
+
 # ── Agent subcommands ──
 
 agent_app = typer.Typer(help="Agent management commands")

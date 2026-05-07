@@ -231,19 +231,17 @@ async def _compute_drawdown_pct(
     *,
     snaps: list | None = None,
 ) -> float | None:
-    """Same as PortfolioManager.get_drawdown but returned as percentage (absolute).
+    """Return current drawdown as positive percentage (e.g. ``33.34``).
 
-    If ``snaps`` is provided, avoids re-reading the snapshot table.
+    Always delegates to ``PortfolioManager.get_drawdown`` so the
+    operator-initiated baseline reset (``arena portfolio reset-baseline``,
+    spec drawdown decoupling 2026-05-07) is honored. The earlier inline
+    fast-path that recomputed peak/trough from a pre-loaded ``snaps`` list
+    bypassed the baseline cutoff and is no longer used; ``snaps`` is left
+    in the signature only to avoid breaking the existing caller in
+    ``risk_status`` that passes it through ``asyncio.gather``.
     """
     try:
-        if snaps is not None:
-            vals = [float(s.get("total_value", 0.0) or 0.0) for s in snaps]
-            if not vals:
-                return 0.0
-            peak = max(vals)
-            last = vals[-1]
-            dd = (last - peak) / peak if peak > 0 else 0.0
-            return round(abs(dd) * 100.0, 2)
         from cryptotrader.portfolio.manager import PortfolioManager
 
         pm = PortfolioManager(database_url)

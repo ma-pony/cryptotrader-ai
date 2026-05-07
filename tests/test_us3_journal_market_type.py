@@ -40,14 +40,14 @@ class TestPortfolioModelHasMarketType:
     def test_portfolio_orm_has_market_type_column(self) -> None:
         from cryptotrader.portfolio.manager import _pm_models
 
-        _, Portfolio, _, _ = _pm_models()  # noqa: N806 — ORM class
+        _, Portfolio, _, _, _ = _pm_models()  # noqa: N806 — ORM class
         cols = {c.name for c in Portfolio.__table__.columns}
         assert "market_type" in cols
 
     def test_portfolio_market_type_default_is_spot(self) -> None:
         from cryptotrader.portfolio.manager import _pm_models
 
-        _, Portfolio, _, _ = _pm_models()  # noqa: N806 — ORM class
+        _, Portfolio, _, _, _ = _pm_models()  # noqa: N806 — ORM class
         col = Portfolio.__table__.columns["market_type"]
         assert col.default is not None
         assert col.default.arg == "spot"

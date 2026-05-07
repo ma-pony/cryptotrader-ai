@@ -315,8 +315,16 @@ async def test_journal_trade_exception_safe():
 
 
 @pytest.mark.asyncio
-async def test_drawdown_circuit_breaker():
-    """DrawdownLimit triggers circuit breaker via Redis when exceeded."""
+async def test_drawdown_does_not_auto_trip_circuit_breaker():
+    """DrawdownLimit gates the trade but MUST NOT auto-trip the circuit breaker.
+
+    Drawdown is a slow-moving peak-to-trough metric, not a fast-loss event;
+    auto-tripping the breaker on every cycle while drawdown stays above the
+    threshold makes ``arena risk reset-circuit-breaker`` semantically void
+    (next cycle re-trips it). To reset the drawdown baseline, the operator
+    runs ``arena portfolio reset-baseline``. The circuit breaker remains the
+    fast-loss / manual-pause signal only.
+    """
     from cryptotrader.config import LossConfig
     from cryptotrader.models import TradeVerdict
     from cryptotrader.risk.checks.loss import DrawdownLimit
@@ -333,7 +341,8 @@ async def test_drawdown_circuit_breaker():
 
     result = await check.evaluate(verdict, portfolio)
     assert not result.passed
-    mock_redis.set_circuit_breaker.assert_called_once()
+    assert "Drawdown" in (result.reason or "")
+    mock_redis.set_circuit_breaker.assert_not_called()
 
 
 # ── Config parsing ──

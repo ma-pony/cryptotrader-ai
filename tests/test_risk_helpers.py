@@ -47,26 +47,65 @@ class TestComputeDailyLossPct:
 
 
 class TestComputeDrawdownPct:
+    """``_compute_drawdown_pct`` now always delegates to PortfolioManager.
+
+    The earlier inline ``snaps=`` fast-path bypassed the operator-initiated
+    baseline reset (spec drawdown decoupling, 2026-05-07). The tests below
+    exercise the new contract: drawdown is read from the manager, which
+    honors the most recent ``portfolio_baseline_resets`` row.
+    """
+
     @pytest.mark.asyncio
-    async def test_from_snaps_computes_percent(self) -> None:
-        snaps = [
-            {"total_value": 10_000.0},
-            {"total_value": 12_000.0},  # peak
-            {"total_value": 11_000.0},  # 8.33% drawdown from peak
-        ]
-        result = await _compute_drawdown_pct(None, snaps=snaps)
+    async def test_returns_drawdown_from_manager(self, tmp_path) -> None:
+        from cryptotrader.portfolio.manager import PortfolioManager
+
+        url = f"sqlite+aiosqlite:///{tmp_path}/p.db"
+        pm = PortfolioManager(url)
+        await pm.snapshot("default", 10_000.0, 10_000.0)
+        await pm.snapshot("default", 12_000.0, 12_000.0)
+        await pm.snapshot("default", 11_000.0, 11_000.0)
+        result = await _compute_drawdown_pct(url)
         assert result == pytest.approx(8.33, abs=0.01)
 
     @pytest.mark.asyncio
-    async def test_empty_snaps_returns_zero(self) -> None:
-        result = await _compute_drawdown_pct(None, snaps=[])
+    async def test_no_db_returns_zero(self, tmp_path) -> None:
+        # Empty in-memory manager has no snapshots → drawdown is 0.0.
+        url = f"sqlite+aiosqlite:///{tmp_path}/empty.db"
+        result = await _compute_drawdown_pct(url)
         assert result == 0.0
 
     @pytest.mark.asyncio
-    async def test_all_new_highs_returns_zero(self) -> None:
-        snaps = [{"total_value": v} for v in [1000, 1100, 1200, 1300]]
-        result = await _compute_drawdown_pct(None, snaps=snaps)
+    async def test_all_new_highs_returns_zero(self, tmp_path) -> None:
+        from cryptotrader.portfolio.manager import PortfolioManager
+
+        url = f"sqlite+aiosqlite:///{tmp_path}/p.db"
+        pm = PortfolioManager(url)
+        for v in [1000.0, 1100.0, 1200.0, 1300.0]:
+            await pm.snapshot("default", v, v)
+        result = await _compute_drawdown_pct(url)
         assert result == pytest.approx(0.0)
+
+    @pytest.mark.asyncio
+    async def test_baseline_reset_zeroes_drawdown(self, tmp_path) -> None:
+        """The headline fix: API drawdown_pct must respect baseline reset."""
+        import asyncio as _asyncio
+
+        from cryptotrader.portfolio.manager import PortfolioManager
+
+        url = f"sqlite+aiosqlite:///{tmp_path}/p.db"
+        pm = PortfolioManager(url)
+        await pm.snapshot("default", 150_000.0, 150_000.0)
+        await pm.snapshot("default", 100_000.0, 100_000.0)
+        before = await _compute_drawdown_pct(url)
+        assert before is not None
+        assert before > 30.0
+
+        await pm.record_baseline_reset(account_id="default", baseline_equity=100_000.0, operator="op", reason="ack")
+        await _asyncio.sleep(0.05)
+        await pm.snapshot("default", 100_500.0, 100_500.0)
+        after = await _compute_drawdown_pct(url)
+        assert after is not None
+        assert after < 1.0, f"expected ~0, got {after}"
 
 
 class TestComputeTotalExposurePct:

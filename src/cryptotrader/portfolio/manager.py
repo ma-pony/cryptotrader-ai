@@ -69,7 +69,27 @@ def _pm_models():
         cash = Column(Float, default=0.0)
         updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
 
-    _pm_cache = (Base, Portfolio, PortfolioSnapshot, AccountBalance)
+    class PortfolioBaselineReset(Base):
+        """Audit log of operator-initiated drawdown baseline resets.
+
+        Each row is an explicit "I accept the current equity as the new
+        peak baseline" decision. ``get_drawdown`` ignores snapshots with
+        ``timestamp < latest_reset.reset_at``, effectively starting the
+        peak/trough computation fresh from this point forward.
+
+        Spec: see ``spec.md`` design discussion (decoupling DrawdownLimit
+        from circuit_breaker, 2026-05-07).
+        """
+
+        __tablename__ = "portfolio_baseline_resets"
+        id = Column(String, primary_key=True)  # uuid hex
+        account_id = Column(String, nullable=False, index=True)
+        reset_at = Column(DateTime(timezone=True), nullable=False, index=True)
+        baseline_equity = Column(Float, nullable=False)
+        operator = Column(String(64), nullable=False)
+        reason = Column(String(500), nullable=False, default="")
+
+    _pm_cache = (Base, Portfolio, PortfolioSnapshot, AccountBalance, PortfolioBaselineReset)
     return _pm_cache
 
 
@@ -83,7 +103,7 @@ async def _pm_ensure_tables(database_url: str) -> None:
     from sqlalchemy import text
 
     if database_url not in _pm_table_ready:
-        Base, _, _, _ = _pm_models()
+        Base, *_ = _pm_models()
         engine = await get_engine(database_url)
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -120,6 +140,28 @@ async def _pm_ensure_tables(database_url: str) -> None:
         _pm_table_ready.add(database_url)
 
 
+def _ts_after(ts: Any, cutoff: datetime) -> bool:
+    """Return True iff snapshot timestamp ``ts`` is strictly after ``cutoff``.
+
+    Tolerates strings, naive datetimes, and None (None → False so we exclude
+    snapshots without a usable timestamp from post-reset windows).
+    """
+    if ts is None:
+        return False
+    if isinstance(ts, str):
+        try:
+            ts = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except ValueError:
+            return False
+    if not isinstance(ts, datetime):
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    if cutoff.tzinfo is None:
+        cutoff = cutoff.replace(tzinfo=UTC)
+    return ts > cutoff
+
+
 async def _pm_session(database_url: str):
     # get_async_session initialises the engine on first call, then we ensure tables exist.
     session = await get_async_session(database_url)
@@ -140,7 +182,7 @@ class PortfolioManager:
         cash = 0.0
         if self._db_url:
             try:
-                _, Portfolio, _, AccountBalance = _pm_models()
+                _, Portfolio, _, AccountBalance, _ = _pm_models()
                 from sqlalchemy import select
 
                 async with await _pm_session(self._db_url) as session:
@@ -188,7 +230,7 @@ class PortfolioManager:
         market_type = _market_type_for(pair)
         if self._db_url:
             try:
-                _, Portfolio, _, _ = _pm_models()
+                _, Portfolio, _, _, _ = _pm_models()
                 from sqlalchemy import select
 
                 async with await _pm_session(self._db_url) as session:
@@ -228,7 +270,7 @@ class PortfolioManager:
         """Persist current cash balance."""
         if self._db_url:
             try:
-                _, _, _, AccountBalance = _pm_models()
+                _, _, _, AccountBalance, _ = _pm_models()
                 from sqlalchemy import select
 
                 async with await _pm_session(self._db_url) as session:
@@ -286,11 +328,93 @@ class PortfolioManager:
         return today[-1] - today[0]
 
     async def get_drawdown(self, account_id: str = "default") -> float:
-        snaps = [s["total_value"] for s in await self.load_snapshots(account_id)]
-        if not snaps:
+        """Compute current drawdown from portfolio snapshots.
+
+        Honors the most recent operator-initiated baseline reset: snapshots
+        with ``timestamp < latest_reset.reset_at`` are excluded so the
+        peak/trough computation starts fresh from the reset point. This
+        prevents historical losses from permanently gating new trades after
+        the operator has explicitly accepted a new baseline via
+        ``arena portfolio reset-baseline``.
+        """
+        snaps = await self.load_snapshots(account_id)
+        last_reset = await self.get_last_baseline_reset(account_id)
+        if last_reset is not None:
+            cutoff = last_reset["reset_at"]
+            snaps = [s for s in snaps if _ts_after(s.get("timestamp"), cutoff)]
+        values = [s["total_value"] for s in snaps]
+        if not values:
             return 0.0
-        peak = max(snaps)
-        return (snaps[-1] - peak) / peak if peak > 0 else 0.0
+        peak = max(values)
+        return (values[-1] - peak) / peak if peak > 0 else 0.0
+
+    async def get_last_baseline_reset(self, account_id: str = "default") -> dict | None:
+        """Return the most recent baseline reset for an account, or None."""
+        if not self._db_url:
+            return None
+        try:
+            _, _, _, _, PortfolioBaselineReset = _pm_models()
+            from sqlalchemy import desc, select
+
+            async with await _pm_session(self._db_url) as session:
+                rows = await session.execute(
+                    select(PortfolioBaselineReset)
+                    .where(PortfolioBaselineReset.account_id == account_id)
+                    .order_by(desc(PortfolioBaselineReset.reset_at))
+                    .limit(1)
+                )
+                r = rows.scalars().first()
+                if r is None:
+                    return None
+                return {
+                    "id": r.id,
+                    "account_id": r.account_id,
+                    "reset_at": r.reset_at,
+                    "baseline_equity": r.baseline_equity,
+                    "operator": r.operator,
+                    "reason": r.reason,
+                }
+        except Exception as e:
+            logger.warning("Baseline reset lookup failed: %s", e)
+            return None
+
+    async def record_baseline_reset(
+        self,
+        account_id: str = "default",
+        baseline_equity: float = 0.0,
+        operator: str = "unknown",
+        reason: str = "",
+    ) -> dict:
+        """Record an explicit drawdown baseline reset and return the audit row.
+
+        Operator acknowledges current equity as the new peak baseline; future
+        ``get_drawdown`` calls measure against snapshots strictly after this
+        reset's timestamp.
+        """
+        if not self._db_url:
+            raise RuntimeError("record_baseline_reset requires a database (no in-memory mode)")
+        _, _, _, _, PortfolioBaselineReset = _pm_models()
+        now = datetime.now(UTC)
+        row_id = uuid.uuid4().hex
+        async with await _pm_session(self._db_url) as session:
+            row = PortfolioBaselineReset(
+                id=row_id,
+                account_id=account_id,
+                reset_at=now,
+                baseline_equity=baseline_equity,
+                operator=operator,
+                reason=reason or "",
+            )
+            session.add(row)
+            await session.commit()
+        return {
+            "id": row_id,
+            "account_id": account_id,
+            "reset_at": now,
+            "baseline_equity": baseline_equity,
+            "operator": operator,
+            "reason": reason or "",
+        }
 
     async def get_returns(self, account_id: str = "default", days: int = 60) -> list[float]:
         snaps = [s["total_value"] for s in await self.load_snapshots(account_id)]
@@ -314,7 +438,7 @@ class PortfolioManager:
         self._snapshots.append(snap)
         if self._db_url:
             try:
-                _, _, PortfolioSnapshot, _ = _pm_models()
+                _, _, PortfolioSnapshot, _, _ = _pm_models()
 
                 async with await _pm_session(self._db_url) as session:
                     session.add(
@@ -333,7 +457,7 @@ class PortfolioManager:
         """Load snapshots from DB if available, else use in-memory."""
         if self._db_url:
             try:
-                _, _, PortfolioSnapshot, _ = _pm_models()
+                _, _, PortfolioSnapshot, _, _ = _pm_models()
                 from sqlalchemy import select
 
                 async with await _pm_session(self._db_url) as session:
@@ -359,7 +483,7 @@ class PortfolioManager:
         """Reset portfolio to clean state — delete positions, cash, and snapshots."""
         if self._db_url:
             try:
-                _, Portfolio, PortfolioSnapshot, AccountBalance = _pm_models()
+                _, Portfolio, PortfolioSnapshot, AccountBalance, _ = _pm_models()
                 from sqlalchemy import delete
 
                 async with await _pm_session(self._db_url) as session:
