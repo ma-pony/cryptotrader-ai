@@ -160,28 +160,60 @@ async def _load_commits(database_url: str | None) -> list:
         return []
 
 
-def _commit_pnl_stats(commits: list, cutoff_30d: datetime) -> tuple[int, float | None, float, float | None]:
-    """Return (total_trades, win_rate_or_None, realized_pnl_30d, avg_trade_pnl_or_None).
+def _commit_pnl_stats(
+    commits: list,
+    cutoff_30d: datetime,
+    inception_cutoff: datetime | None = None,
+) -> tuple[int, float | None, float, float | None]:
+    """Return (total_trades, win_rate, realized_pnl_30d, avg_trade_pnl).
 
-    avg_trade_pnl: mean of ``commit.pnl`` over commits that have settled
-    (non-null pnl). Useful as "average per-trade PnL" headline number.
+    Two filters applied so the trade-level metrics align with the snapshot-
+    based ``total_return`` instead of double-counting (2026-05-07 design):
+
+    (B) ``inception_cutoff``: drop commits older than the first portfolio
+        snapshot. Pre-snapshot trades are already absorbed into the equity
+        baseline used by ``total_return``; counting them again here
+        creates a phantom "every trade is negative but total is positive"
+        paradox.
+
+    (C) ``action == "close"`` only: open-action commits get their ``pnl``
+        column polluted by ``_update_one_commit_pnl`` with an unrealized
+        snapshot at the cycle right after open. That value is calibration
+        feedback for the LLM, NOT realized round-trip P&L. Real realized
+        P&L lives on the matching close-action commit. Counting both
+        double-counts each round-trip.
+
+    ``cutoff_30d`` still applies on top for the 30-day realized window.
     """
-    filled = [c for c in commits if getattr(c, "order", None) is not None]
-    total = len(filled)
+    eligible = []
+    for c in commits:
+        if getattr(c, "order", None) is None:
+            continue
+        ts_dt = _coerce_timestamp(c.timestamp)
+        if inception_cutoff is not None and (ts_dt is None or ts_dt < inception_cutoff):
+            continue
+        action = ((c.verdict.action if c.verdict else "") or "").lower()
+        if action != "close":
+            continue
+        eligible.append(c)
+
+    total = len(eligible)
     win_rate: float | None = None
     avg_trade_pnl: float | None = None
-    if filled:
-        settled = [c for c in filled if c.pnl is not None]
+    if eligible:
+        settled = [c for c in eligible if c.pnl is not None]
         if settled:
             wins = [c for c in settled if c.pnl > 0]
             win_rate = round(len(wins) / len(settled), 4)
             avg_trade_pnl = round(sum(float(c.pnl) for c in settled) / len(settled), 2)
+
     realized = 0.0
-    for c in filled:
+    for c in eligible:
         ts_dt = _coerce_timestamp(c.timestamp)
         if ts_dt is None or ts_dt < cutoff_30d or c.pnl is None:
             continue
         realized += float(c.pnl)
+
     return total, win_rate, round(realized, 2), avg_trade_pnl
 
 
@@ -199,18 +231,33 @@ def _inception_equity(snaps: list[dict]) -> float | None:
     return val if val > 0 else None
 
 
+def _inception_timestamp(snaps: list[dict]) -> datetime | None:
+    """Return timestamp of the earliest snapshot for trade-stats inception cutoff."""
+    if not snaps:
+        return None
+    earliest = min(snaps, key=lambda s: s.get("timestamp") or "")
+    return _coerce_timestamp(earliest.get("timestamp"))
+
+
 async def _compute_extras(database_url: str | None, current_equity: float) -> dict[str, object]:
     """Derive (sharpe_90d, win_rate, total_trades, realized_pnl_30d, total_return, total_return_pct).
 
     - **sharpe_90d**: mean/std of daily equity returns over last 90 days, annualised
       by sqrt(365). ``None`` when fewer than 30 daily samples.
-    - **win_rate**: share of filled commits with positive ``pnl``; ``None`` when no
-      filled trades exist.
-    - **total_trades**: number of commits with a non-null ``order`` (executed).
-    - **realized_pnl_30d**: sum of ``commit.pnl`` for commits in the last 30 days.
+    - **win_rate**: share of close-action commits since inception with positive
+      realized ``pnl``. ``None`` when no closes recorded.
+    - **total_trades**: count of close-action (round-trip-completing) commits
+      since inception. Open-action commits are excluded — their ``pnl`` is an
+      unrealized snapshot, not a realized trade outcome.
+    - **realized_pnl_30d**: sum of close-action realized ``pnl`` in the last
+      30 days, also subject to the inception cutoff.
     - **total_return / total_return_pct**: inception-to-date PnL. Baseline is
       ``config.portfolio.initial_capital`` when set (>0), otherwise the earliest
       portfolio snapshot. Both 0.0 when neither is available.
+
+    The "inception cutoff" applied to commit stats matches the snapshot baseline
+    used for ``total_return`` so both metrics measure the same time window. See
+    the 2026-05-07 design note for the paradox this resolves.
     """
     from cryptotrader.config import load_config
 
@@ -220,7 +267,10 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
     sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
 
     commits = await _load_commits(database_url)
-    total, win_rate, realized_30d, avg_trade_pnl = _commit_pnl_stats(commits, now - timedelta(days=30))
+    inception_ts = _inception_timestamp(snaps)
+    total, win_rate, realized_30d, avg_trade_pnl = _commit_pnl_stats(
+        commits, now - timedelta(days=30), inception_cutoff=inception_ts
+    )
 
     # Baseline preference: explicit config > first snapshot > none.
     configured = float(cfg.portfolio.initial_capital or 0.0)

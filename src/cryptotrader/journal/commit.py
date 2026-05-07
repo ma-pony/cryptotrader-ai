@@ -41,6 +41,7 @@ def build_commit(
     challenges: list[dict] | None = None,
     *,
     observability: CommitObservability | None = None,
+    pnl: float | None = None,
     # Legacy per-field kwargs (deprecated — prefer ``observability``):
     trace_id: str | None = None,
     consensus_metrics: dict[str, Any] | None = None,
@@ -117,4 +118,5 @@ def build_commit(
         latency_breakdown=latency_breakdown or {},
         token_usage=token_usage or {},
         execution_status=execution_status,
+        pnl=pnl,
     )

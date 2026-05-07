@@ -71,19 +71,25 @@ class TestComputeExtras:
 
     @pytest.mark.asyncio
     async def test_win_rate_from_filled_trades(self) -> None:
-        def _make_commit(pnl: float | None, has_order: bool) -> MagicMock:
+        # 2026-05-07 contract change: stats only count close-action commits.
+        # Open-action commits' .pnl is calibration / unrealized, not realized PnL.
+        def _make_commit(pnl: float | None, has_order: bool, action: str = "close") -> MagicMock:
             c = MagicMock()
             c.pnl = pnl
             c.order = MagicMock() if has_order else None
             c.timestamp = datetime.now(UTC)
+            c.verdict = MagicMock()
+            c.verdict.action = action
             return c
 
         commits = [
-            _make_commit(100.0, True),  # win
-            _make_commit(-50.0, True),  # loss
-            _make_commit(200.0, True),  # win
-            _make_commit(None, True),  # unsettled — excluded from win_rate denominator
-            _make_commit(0.0, False),  # no order — excluded entirely
+            _make_commit(100.0, True),  # close, win
+            _make_commit(-50.0, True),  # close, loss
+            _make_commit(200.0, True),  # close, win
+            _make_commit(None, True),  # close, unsettled — counted in total but not in win/avg
+            _make_commit(0.0, False),  # no order — excluded
+            _make_commit(999.0, True, action="long"),  # open — excluded (calibration value)
+            _make_commit(-888.0, True, action="short"),  # open — excluded
         ]
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
@@ -92,10 +98,9 @@ class TestComputeExtras:
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=[])
             js_cls.return_value.log = AsyncMock(return_value=commits)
             extras = await _compute_extras(None, current_equity=10000.0)
-        assert extras["total_trades"] == 4  # 4 commits with non-null order
-        # win_rate is rounded to 4 decimals in _compute_extras
+        assert extras["total_trades"] == 4  # 4 close-action commits with order
         assert extras["win_rate"] == pytest.approx(2 / 3, abs=1e-3)
-        # avg_trade_pnl = mean of settled commits: (100 - 50 + 200) / 3 ≈ 83.33
+        # avg_trade_pnl = mean over settled close commits: (100 - 50 + 200) / 3 ≈ 83.33
         assert extras["avg_trade_pnl"] == pytest.approx(83.33, abs=1e-2)
 
     @pytest.mark.asyncio
@@ -105,11 +110,15 @@ class TestComputeExtras:
         commit_in.pnl = 500.0
         commit_in.order = MagicMock()
         commit_in.timestamp = now - timedelta(days=5)
+        commit_in.verdict = MagicMock()
+        commit_in.verdict.action = "close"
 
         commit_out = MagicMock()
         commit_out.pnl = 9999.0  # must be excluded — outside 30d
         commit_out.order = MagicMock()
         commit_out.timestamp = now - timedelta(days=45)
+        commit_out.verdict = MagicMock()
+        commit_out.verdict.action = "close"
 
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
@@ -119,6 +128,41 @@ class TestComputeExtras:
             js_cls.return_value.log = AsyncMock(return_value=[commit_in, commit_out])
             extras = await _compute_extras(None, current_equity=10000.0)
         assert extras["realized_pnl_30d"] == pytest.approx(500.0)
+
+    @pytest.mark.asyncio
+    async def test_pre_inception_trades_excluded(self) -> None:
+        """spec(B) 2026-05-07: trades older than first snapshot are excluded so
+        commit-level stats align with snapshot-based ``total_return``.
+        """
+        now = datetime.now(UTC)
+        first_snap_ts = now - timedelta(days=10)
+
+        def _close(pnl: float, days_ago: float) -> MagicMock:
+            c = MagicMock()
+            c.pnl = pnl
+            c.order = MagicMock()
+            c.timestamp = now - timedelta(days=days_ago)
+            c.verdict = MagicMock()
+            c.verdict.action = "close"
+            return c
+
+        snaps = [{"timestamp": first_snap_ts, "total_value": 10_000.0}]
+        commits = [
+            _close(-5_000.0, days_ago=30),  # PRE-INCEPTION, excluded
+            _close(100.0, days_ago=5),  # post-inception, win
+            _close(-200.0, days_ago=2),  # post-inception, loss
+        ]
+        with (
+            patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
+            patch("cryptotrader.journal.store.JournalStore") as js_cls,
+        ):
+            pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
+            js_cls.return_value.log = AsyncMock(return_value=commits)
+            extras = await _compute_extras(None, current_equity=9_900.0)
+        assert extras["total_trades"] == 2  # the -5_000 pre-inception is excluded
+        assert extras["realized_pnl_30d"] == pytest.approx(-100.0)  # 100 + (-200)
+        assert extras["avg_trade_pnl"] == pytest.approx(-50.0)
+        assert extras["win_rate"] == pytest.approx(0.5)
 
     @pytest.mark.asyncio
     async def test_empty_journal_yields_zero_stats(self) -> None:

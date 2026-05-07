@@ -239,6 +239,15 @@ async def journal_trade(state: ArenaState) -> dict:
 
         parent_hash = state["data"].get("journal_hash")
         node_trace = _resolve_node_trace(state)
+        # Capture realized PnL for close-action commits at write time.
+        # Open-action commits stay pnl=None; their fake "unrealized snapshot at
+        # next cycle" pollution from update_past_pnl is also disabled for opens
+        # (see nodes/data.py:_update_one_commit_pnl). This keeps commit.pnl
+        # semantically clean: realized round-trip P&L when present, None for
+        # opens / skipped trades. Frontend stats (avg_trade_pnl / win_rate /
+        # realized_pnl_30d) all rely on this contract since 2026-05-07.
+        action = (raw_verdict or {}).get("action", "").lower()
+        commit_pnl = state["data"].get("realized_pnl") if action == "close" else None
         commit = build_commit(
             pair=pair_str,
             snapshot_summary=state["data"].get("snapshot_summary", {}),
@@ -252,6 +261,7 @@ async def journal_trade(state: ArenaState) -> dict:
             fill_price=fill_price,
             slippage=slippage,
             portfolio_after=portfolio_after,
+            pnl=commit_pnl,
             trace_id=get_trace_id(),
             consensus_metrics=state["data"].get("consensus_metrics"),
             verdict_source=state["data"].get("verdict", {}).get("verdict_source", "ai"),

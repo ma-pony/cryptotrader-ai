@@ -136,11 +136,30 @@ async def collect_snapshot(state: ArenaState) -> dict:
 
 
 async def _update_one_commit_pnl(store, dc, current_price: float) -> bool:
-    """Compute unrealized PnL for a single commit; returns True if updated."""
+    """Backfill realized PnL for an *unsettled close* commit.
+
+    2026-05-07 contract change: only ``close`` actions are eligible. Previously
+    this also "filled in" unrealized snapshots on open commits, which polluted
+    realized-PnL aggregations (frontend avg_trade_pnl / win_rate / realized_30d)
+    and produced the "every trade negative but total return positive" paradox.
+    Open commits should stay ``pnl=None`` forever — their P&L is realized on the
+    matching close commit instead.
+
+    For close commits where ``state["data"]["realized_pnl"]`` was captured at
+    execution time (see ``nodes/execution.py:_build_close_order``), the journal
+    already stored the true realized P&L and this function exits early.
+
+    The remaining (entry_price - current_price) calculation is a *fallback* for
+    legacy commits that have no realized_pnl snapshot and that we cannot
+    reconstruct without the original entry price. It is approximate.
+    """
     if dc.order is None:
         return False  # No trade was placed
     if dc.pnl is not None and dc.fill_price is not None:
         return False  # Realized PnL already recorded
+    action = ((dc.verdict.action if dc.verdict else "") or "").lower()
+    if action != "close":
+        return False  # Open commits never get pnl set — see docstring
     entry_price = dc.order.price
     if not entry_price or entry_price <= 0:
         return False
@@ -149,7 +168,7 @@ async def _update_one_commit_pnl(store, dc, current_price: float) -> bool:
     else:
         pnl_pct = (entry_price - current_price) / entry_price
     pnl_abs = pnl_pct * dc.order.amount * entry_price
-    retro = f"Entry {entry_price:.2f} → Current {current_price:.2f} = {pnl_pct:+.2%} (unrealized)"
+    retro = f"Entry {entry_price:.2f} → Current {current_price:.2f} = {pnl_pct:+.2%} (legacy fallback)"
     await store.update_pnl(dc.hash, pnl_abs, retro)
     return True
 

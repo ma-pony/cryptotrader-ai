@@ -419,7 +419,16 @@ async def check_stop_loss(state: ArenaState) -> dict:
 
 
 async def _build_close_order(pair: str, price: float, state: ArenaState):
-    """Build an order to flatten an existing position (reads from exchange)."""
+    """Build an order to flatten an existing position (reads from exchange).
+
+    Side effect: stashes ``state["data"]["realized_pnl"]`` from the position's
+    ``unrealized_pnl`` BEFORE the flatten. By the time ``journal_trade`` writes
+    the close commit, that value IS the realized round-trip P&L — preserves
+    it because once the close fills, ``unrealized_pnl`` is gone forever.
+    Without this snapshot, the post-hoc ``_update_one_commit_pnl`` in nodes/data.py
+    can only compute "if you re-opened a short here, what would you P&L now"
+    which is calibration feedback, not realized trade P&L.
+    """
     from cryptotrader.models import Order
 
     try:
@@ -428,9 +437,20 @@ async def _build_close_order(pair: str, price: float, state: ArenaState):
         pos_amount = pos.get("amount", 0)
     except Exception:
         logger.warning("Exchange portfolio fetch for close failed", exc_info=True)
+        pos = {}
         pos_amount = 0
     if pos_amount == 0:
         return None
+    # Realized PnL = unrealized_pnl at the moment of close (derivatives), or
+    # (close_price - avg_entry) * amount for spot. Store on state so the journal
+    # write path can persist it as commit.pnl.
+    realized = pos.get("unrealized_pnl")
+    if realized is None or realized == 0.0:
+        avg_entry = float(pos.get("avg_price", 0.0) or 0.0)
+        if avg_entry > 0:
+            realized = (price - avg_entry) * pos_amount  # signed by amount
+    if realized is not None:
+        state["data"]["realized_pnl"] = float(realized)
     return Order(pair=pair, side="sell" if pos_amount > 0 else "buy", amount=abs(pos_amount), price=price)
 
 
