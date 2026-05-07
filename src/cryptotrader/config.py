@@ -99,8 +99,21 @@ class DataConfig:
 
 @dataclass
 class PositionConfig:
-    max_single_pct: float = 0.10
-    max_total_exposure_pct: float = 0.50
+    # Max single-position notional as fraction of equity. Forces diversification:
+    # 0.50 means no one trade can take more than half the budget on its own.
+    max_single_pct: float = 0.50
+    # Max sum-of-positions notional as fraction of equity. Caps total price
+    # exposure independent of leverage. 1.00 = up to 1x equity in notional;
+    # raise to 1.5-2.0 for explicitly leveraged strategies. Was 0.50 in the
+    # spot-only era; bumped after dual-cap refactor (2026-05-07) so leverage
+    # actually buys capital efficiency.
+    max_total_exposure_pct: float = 1.00
+    # Max fraction of equity locked as margin. Independent of notional —
+    # this is the "free margin buffer" guarantee. With 2x leverage and
+    # max_total_exposure_pct=1.00, max_margin_used_pct=0.50 is a tight pair
+    # (barely consistent); 0.40 leaves a real buffer for adverse moves +
+    # stop-loss execution + funding payments.
+    max_margin_used_pct: float = 0.40
     max_correlated_positions: int = 2
 
 

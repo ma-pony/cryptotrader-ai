@@ -97,24 +97,24 @@ async def test_max_position_zero_portfolio(verdict):
 
 @pytest.mark.asyncio
 async def test_total_exposure_pass(verdict, portfolio):
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     r = await c.evaluate(verdict, portfolio)
     assert r.passed
 
 
 @pytest.mark.asyncio
 async def test_total_exposure_fail(verdict):
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
+    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30, max_margin_used_pct=1.0))
     r = await c.evaluate(verdict, {"total_value": 10000, "positions": {"A": 4000}})
     assert not r.passed
-    assert "No remaining exposure budget" in r.reason
+    assert "No remaining notional budget" in r.reason
 
 
 @pytest.mark.asyncio
 async def test_total_exposure_hold_always_passes():
     """Hold action should pass even with high exposure (no new position added)."""
     hold = TradeVerdict(action="hold", confidence=0.7, position_scale=0.0)
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
+    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30, max_margin_used_pct=1.0))
     r = await c.evaluate(hold, {"total_value": 10000, "positions": {"A": 9000}})
     assert r.passed
 
@@ -123,7 +123,7 @@ async def test_total_exposure_hold_always_passes():
 async def test_total_exposure_close_always_passes():
     """Close action should pass even with high exposure (reducing position)."""
     close = TradeVerdict(action="close", confidence=0.7, position_scale=0.0)
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30))
+    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30, max_margin_used_pct=1.0))
     r = await c.evaluate(close, {"total_value": 10000, "positions": {"A": 9000}})
     assert r.passed
 
@@ -135,7 +135,7 @@ async def test_total_exposure_projected_clamps():
     # max_single_pct=0.50, scale=0.90 → projected_new=0.45
     # existing=0.20, projected_total=0.65 > max=0.50
     # remaining=0.30 → proposed scale_adjustment=0.30/0.50=0.60
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
     assert r.passed
     # Verdict MUST NOT be mutated — the check only proposes via CheckResult.
@@ -150,7 +150,7 @@ async def test_total_exposure_projected_passes():
     v = TradeVerdict(action="long", confidence=0.7, position_scale=0.10)
     # max_single_pct=0.10, scale=0.10 → projected_new=0.01
     # existing=0.20, projected_total=0.21 < max=0.50
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
     assert r.passed
 
@@ -158,7 +158,7 @@ async def test_total_exposure_projected_passes():
 @pytest.mark.asyncio
 async def test_total_exposure_skips_unparseable_position_value(verdict):
     """Non-numeric position values must not crash the risk gate."""
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     # Mixed shapes: dict with None fields, bare string, bare None, normal float.
     portfolio = {
         "total_value": 10000,
@@ -180,11 +180,11 @@ async def test_total_exposure_at_limit_rejects_with_no_budget():
     """TEST-I1: when remaining ≤ 0.01 the check rejects, doesn't propose tiny scale."""
     v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
     # existing=4995/10000=49.95%, max=50% → remaining=0.05% (<= 0.01 threshold).
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 4995}})
     assert not r.passed
     assert r.scale_adjustment is None
-    assert "No remaining exposure budget" in r.reason
+    assert "No remaining notional budget" in r.reason
 
 
 @pytest.mark.asyncio
@@ -193,7 +193,7 @@ async def test_total_exposure_just_above_threshold_clamps():
     v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
     # existing=4880/10000=48.8%, max=50% → remaining=1.2% (> 1% threshold).
     # proposed = 1.2% / 50% = 0.024 → still very small but legal.
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 4880}})
     assert r.passed
     assert r.scale_adjustment is not None
@@ -206,7 +206,7 @@ async def test_total_exposure_dict_positions_summed_correctly():
     v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
     # Two dict positions: 0.1 BTC @ $30k = $3000 + 1 ETH @ $2000 = $2000 → $5000 / $10000 = 50%.
     # max=50% → remaining=0 → reject.
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50))
+    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
     portfolio = {
         "total_value": 10000,
         "positions": {

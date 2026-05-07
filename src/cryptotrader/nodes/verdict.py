@@ -277,7 +277,7 @@ async def _process_schedule_follow_up(state: ArenaState, verdict_data: dict) -> 
 
 
 # Module-level cache for RiskGate to preserve circuit breaker state
-_risk_gate_cache: dict[str, Any] = {}
+_risk_gate_cache: dict[tuple[str, int], Any] = {}
 
 # Lazy notifier
 _notifier_instance: Any = None
@@ -426,9 +426,18 @@ async def risk_check(state: ArenaState) -> dict:
 
     config = load_config()
     redis_url = state["metadata"].get("redis_url")
-    cache_key = redis_url or "_default"
+    # Resolve perp leverage for the dual-cap risk model. Order:
+    #   1. state["metadata"]["leverage"] — explicit override (tests, backtests)
+    #   2. config.exchanges[active_exchange].leverage — production live path
+    #   3. 1 (no leverage) — safe fallback
+    leverage = state["metadata"].get("leverage")
+    if leverage is None:
+        exchange_id = state["metadata"].get("exchange") or config.exchange_id or "okx"
+        creds = config.exchanges.get(exchange_id)
+        leverage = creds.leverage if creds else 1
+    cache_key = (redis_url or "_default", int(leverage))
     if cache_key not in _risk_gate_cache:
-        _risk_gate_cache[cache_key] = RiskGate(config.risk, RedisStateManager(redis_url))
+        _risk_gate_cache[cache_key] = RiskGate(config.risk, RedisStateManager(redis_url), leverage=leverage)
     gate = _risk_gate_cache[cache_key]
 
     vd = state["data"]["verdict"]

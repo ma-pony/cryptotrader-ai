@@ -52,6 +52,9 @@ def _base_state(verdict_action: str = "long", engine: str = "paper") -> dict:
             "engine": engine,
             "database_url": None,
             "redis_url": None,
+            # Pin leverage so cache_key matches the {("_default", 1): mock_gate}
+            # patches below regardless of host env's exchanges.okx.leverage.
+            "leverage": 1,
         },
         "debate_round": 0,
         "max_debate_rounds": 2,
@@ -121,7 +124,7 @@ async def test_risk_check_rejection_logs_check_name(caplog):
     )
 
     with (
-        patch("cryptotrader.nodes.verdict._risk_gate_cache", {"_default": mock_gate}),
+        patch("cryptotrader.nodes.verdict._risk_gate_cache", {("_default", 1): mock_gate}),
         caplog.at_level(logging.WARNING, logger="cryptotrader.nodes.verdict"),
     ):
         await risk_check(state)
@@ -154,7 +157,7 @@ async def test_risk_check_rejection_logs_reason_summary(caplog):
     )
 
     with (
-        patch("cryptotrader.nodes.verdict._risk_gate_cache", {"_default": mock_gate}),
+        patch("cryptotrader.nodes.verdict._risk_gate_cache", {("_default", 1): mock_gate}),
         caplog.at_level(logging.WARNING, logger="cryptotrader.nodes.verdict"),
     ):
         await risk_check(state)
@@ -181,7 +184,7 @@ async def test_risk_check_passed_does_not_log_rejection(caplog):
     mock_gate.check = AsyncMock(return_value=GateResult(passed=True))
 
     with (
-        patch("cryptotrader.nodes.verdict._risk_gate_cache", {"_default": mock_gate}),
+        patch("cryptotrader.nodes.verdict._risk_gate_cache", {("_default", 1): mock_gate}),
         caplog.at_level(logging.WARNING, logger="cryptotrader.nodes.verdict"),
     ):
         await risk_check(state)
@@ -217,7 +220,7 @@ async def test_risk_check_rejection_increments_ct_risk_rejected_total():
 
     before = _sample_value(REGISTRY, "ct_risk_rejected_total", {"check_name": check_name})
 
-    with patch("cryptotrader.nodes.verdict._risk_gate_cache", {"_default": mock_gate}):
+    with patch("cryptotrader.nodes.verdict._risk_gate_cache", {("_default", 1): mock_gate}):
         await risk_check(state)
 
     after = _sample_value(REGISTRY, "ct_risk_rejected_total", {"check_name": check_name})
@@ -240,7 +243,7 @@ async def test_risk_check_pass_does_not_increment_ct_risk_rejected_total():
 
     before = _sample_value(REGISTRY, "ct_risk_rejected_total", {"check_name": check_name})
 
-    with patch("cryptotrader.nodes.verdict._risk_gate_cache", {"_default": mock_gate}):
+    with patch("cryptotrader.nodes.verdict._risk_gate_cache", {("_default", 1): mock_gate}):
         await risk_check(state)
 
     after = _sample_value(REGISTRY, "ct_risk_rejected_total", {"check_name": check_name})

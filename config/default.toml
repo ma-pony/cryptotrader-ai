@@ -48,8 +48,14 @@ ohlcv_limit = 100
 max_stop_loss_pct = 0.05
 
 [risk.position]
-max_single_pct = 0.10
-max_total_exposure_pct = 0.50
+# Dual-cap risk model (2026-05-07). max_single_pct caps any single trade,
+# max_total_exposure_pct caps total notional (price-risk), and
+# max_margin_used_pct caps margin lockup (capital-efficiency / liquidation
+# buffer). With 2x leverage these defaults give: ≥ 2 positions allowed,
+# 1x equity in notional, 60% free margin headroom.
+max_single_pct = 0.50
+max_total_exposure_pct = 1.00
+max_margin_used_pct = 0.40
 max_correlated_positions = 2
 
 [risk.loss]

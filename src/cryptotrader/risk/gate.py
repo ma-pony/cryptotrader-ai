@@ -24,12 +24,18 @@ logger = logging.getLogger(__name__)
 
 
 class RiskGate:
-    def __init__(self, config: RiskConfig, redis_state: RedisStateManager) -> None:
+    def __init__(
+        self,
+        config: RiskConfig,
+        redis_state: RedisStateManager,
+        *,
+        leverage: int = 1,
+    ) -> None:
         self.redis_state = redis_state
         self._redis_was_configured = getattr(redis_state, "_redis", None) is not None
         self._checks = [
             MaxPositionSize(config.position),
-            MaxTotalExposure(config.position),
+            MaxTotalExposure(config.position, leverage=leverage),
             DailyLossLimit(config.loss, redis_state, post_loss_minutes=config.cooldown.post_loss_minutes),
             DrawdownLimit(config.loss, redis_state),
             CVaRCheck(config.loss),
