@@ -45,17 +45,26 @@ default_timeframe = "1h"
 ohlcv_limit = 100
 
 [risk]
-max_stop_loss_pct = 0.05
+# Per-position stop-loss. Tightened 0.05 → 0.04 (2026-05-07) so 5
+# positions can stop simultaneously without breaching the daily-loss limit:
+#   max_total_notional × max_stop = 1.50 × 0.04 = 0.06 ≤ 0.08 (daily limit)
+# leaving a 2% buffer for slippage / partial-fill / fee tail.
+max_stop_loss_pct = 0.04
 
 [risk.position]
-# Dual-cap risk model (2026-05-07). max_single_pct caps any single trade,
-# max_total_exposure_pct caps total notional (price-risk), and
-# max_margin_used_pct caps margin lockup (capital-efficiency / liquidation
-# buffer). With 2x leverage these defaults give: ≥ 2 positions allowed,
-# 1x equity in notional, 60% free margin headroom.
-max_single_pct = 0.50
-max_total_exposure_pct = 1.00
-max_margin_used_pct = 0.40
+# Dual-cap risk model calibrated for 5-pair 2x-leverage setup (2026-05-07).
+# Each pair capped at 30% of equity (notional) so up to 5 perps can coexist
+# within the 150% notional budget. Margin headroom 80% to fit 5 × 15% margin
+# (= 75%) with 5% buffer for stop-loss execution + funding payments.
+#
+# Sanity (5 perps each at full single-cap):
+#   total notional 5 × 30% = 150% ≤ 150% ✓
+#   total margin   5 × 15% =  75% ≤  80% ✓
+#   single stop-loss 0.30 × 4% = 1.2% (well under 8% daily limit)
+#   five-stop simultaneous 1.50 × 4% = 6.0% ≤ 8% ✓
+max_single_pct = 0.30
+max_total_exposure_pct = 1.50
+max_margin_used_pct = 0.80
 max_correlated_positions = 2
 
 [risk.loss]
