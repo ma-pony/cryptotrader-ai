@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Literal, cast
 
@@ -21,6 +22,12 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/portfolio", tags=["portfolio"])
 
 _MAX_POINTS = 1000  # NFR-P-004
+
+# OKX live-portfolio cooldown: after a failure / timeout, skip the live read
+# entirely for this many seconds (DB fallback is fast). Prevents dashboard
+# poll loop from hanging on the timeout when OKX is unreachable.
+_OKX_FAIL_COOLDOWN_SEC = 60.0
+_OKX_LAST_FAIL_AT: float = 0.0
 
 
 # ── Response models (data-model §1) ──
@@ -349,14 +356,26 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
     config = load_config()
     pm = PortfolioManager(config.infrastructure.database_url)
 
-    try:
-        live = await asyncio.wait_for(
-            pm_mod.read_portfolio_from_exchange(cast("ArenaState", _build_state())),
-            timeout=15.0,
-        )
-    except Exception:
-        logger.warning("read_portfolio_from_exchange failed", exc_info=True)
-        live = None
+    # 3s budget for live exchange read + 60s cooldown after a failure. Original
+    # 15s with no cooldown was acceptable when OKX was reachable, but on networks
+    # where OKX DNS is poisoned (e.g. mainland CN without VPN — see 2026-05-07
+    # incident: 198.18.0.138 returned for www.okx.com) every snapshot poll hung
+    # 15s, making the dashboard appear offline. The cooldown keeps subsequent
+    # polls fast-path through DB until OKX is likely healthy again.
+    now = time.monotonic()
+    if _OKX_LAST_FAIL_AT and now - _OKX_LAST_FAIL_AT < _OKX_FAIL_COOLDOWN_SEC:
+        live = None  # skip live read during cooldown
+    else:
+        try:
+            live = await asyncio.wait_for(
+                pm_mod.read_portfolio_from_exchange(cast("ArenaState", _build_state())),
+                timeout=3.0,
+            )
+            globals()["_OKX_LAST_FAIL_AT"] = 0.0  # success — reset cooldown
+        except Exception:
+            logger.info("read_portfolio_from_exchange timed out / failed; using DB", exc_info=True)
+            globals()["_OKX_LAST_FAIL_AT"] = now
+            live = None
 
     try:
         if live:
