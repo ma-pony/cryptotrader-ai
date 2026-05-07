@@ -50,10 +50,32 @@ class PaperExchange:
             fill_price = order.price * (1 + slippage if order.side == "buy" else 1 - slippage)
             fee = order.amount * fill_price * self._fee_bps / 10000
             cost = order.amount * fill_price
-            base = Pair.parse(order.pair).base
+            pair_obj = Pair.parse(order.pair)
+            base = pair_obj.base
+            # Derivative orders (perp / future, ccxt symbol "BTC/USDT:USDT") are
+            # margin-denominated, NOT spot. Sell-side does NOT require holding
+            # the base; both sides only need free USDT margin = notional/leverage.
+            # We don't model perp positions inside ``_balances`` (which is asset-
+            # denominated for spot); the canonical perp position state lives in
+            # the DB-backed PortfolioManager, populated by the journal after a
+            # successful order. Here we just gate on USDT margin and succeed.
+            is_derivative = pair_obj.market_type != "spot"
 
             # Balance pre-check (include fee in buy cost)
-            if order.side == "buy":
+            if is_derivative:
+                # Conservative paper-mode margin: assume 1x (worst-case full notional).
+                # When real leverage > 1, USDT cash buffer is even larger than needed,
+                # so this never spuriously fails an order that the live exchange
+                # would accept. PaperExchange does not consult the leverage config.
+                margin_required = cost
+                available = self._balances.get("USDT", 0)
+                if available < margin_required + fee:
+                    return {
+                        "id": order_id,
+                        "status": "failed",
+                        "reason": f"Insufficient USDT margin: {available:.2f} < {margin_required + fee:.2f}",
+                    }
+            elif order.side == "buy":
                 available = self._balances.get("USDT", 0)
                 if available < cost + fee:
                     return {
@@ -81,7 +103,17 @@ class PaperExchange:
                 "fee": fee,
             }
             self._orders[order_id] = record
-            if order.side == "buy":
+            if is_derivative:
+                # Derivative fills: cash buffer for fees; canonical perp position
+                # state is owned by PortfolioManager (populated post-fill via
+                # nodes/execution._update_portfolio reading exchange position).
+                # We do NOT pretend to track perp positions in _balances (which
+                # is asset-denominated for spot only). This means PaperExchange's
+                # ``get_positions`` will not surface the perp until the live
+                # exchange path or DB read merges them in — acceptable because
+                # the journal records the order and the portfolio API uses DB.
+                self._balances["USDT"] = self._balances.get("USDT", 0) - fee
+            elif order.side == "buy":
                 self._balances["USDT"] -= cost + fee
                 self._balances[base] = self._balances.get(base, 0) + order.amount
                 # Update cost basis
