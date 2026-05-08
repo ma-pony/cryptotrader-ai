@@ -7,6 +7,14 @@
 | #   | 日期       | 主题                                  | Spec 目录                                                                 | 状态         |
 | --- | ---------- | ------------------------------------- | ------------------------------------------------------------------------- | ------------ |
 | 01  | 2026-04-16 | 前端重写 · LangAlpha 移植 + Crypto 化 | [specs/001-frontend-rewrite-langalpha-port/](../specs/001-frontend-rewrite-langalpha-port/) | Spec Ready，待 `/speckit-plan` |
+| 02  | 2026-05-08 | Skill / Memory 进化前序研究（8 项目）  | [specs/016-research-skill-evolution-prior-art/](../specs/016-research-skill-evolution-prior-art/) | Spec ✅ SOUND，Phase 1 研究启动；blocks 017/018 |
+
+## 进行中的依赖链
+
+```
+spec 016 Phase 1 → unblocks → spec 017 brainstorm （prompt 外置）
+spec 016 Phase 2 → unblocks → spec 018 brainstorm （skill 进化 v2）
+```
 
 ## 约定
 
