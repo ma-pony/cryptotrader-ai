@@ -197,6 +197,16 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_skills_loader.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_skills_middleware.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_skills_perf.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
+# spec 017b: snapshot_renderer + agent config test files use Chinese docstrings/comments.
+# C901 acknowledged — render_crypto_snapshot handles all crypto domain fields verbatim
+# from BaseAgent._build_prompt() (spec 017b FR-Y12 verbatim migration requirement).
+"src/cryptotrader/agents/snapshot_renderer.py" = ["RUF001", "RUF002", "RUF003", "C901"]
+"tests/test_snapshot_renderer.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_tech_agent.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_chain_agent.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_news_agent.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_macro_agent.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_e2e_prompt_externalization.py" = ["RUF001", "RUF002", "RUF003", "S101"]
 # spec 017a (PromptBuilder Foundation): docstrings + section labels + test
 # fixtures use Chinese characters and fullwidth punctuation, matching the
 # project's CLAUDE.md guidance ("generate responses in Simplified Chinese").
