@@ -87,25 +87,25 @@ def test_rate_limit_check_overhead_is_negligible():
     assert avg_ms < 0.1, f"平均 rate-limit 重置耗时 {avg_ms:.4f}ms 超过 0.1ms 阈值"
 
 
-def test_build_system_addendum_is_fast(tmp_path):
-    """SkillsInjectionMiddleware.build_system_addendum() 热路径应 <5ms。"""
+def test_get_available_skills_is_fast(tmp_path):
+    """DefaultSkillProvider.get_available_skills() 热路径应 <5ms（替代已删 middleware 测试）。"""
+    from cryptotrader.agents.prompt_builder import DefaultSkillProvider
     from cryptotrader.agents.skills.loader import _clear_cache
-    from cryptotrader.agents.skills.middleware import SkillsInjectionMiddleware
 
     _clear_cache()
     _write_skill(tmp_path, "tech-analysis", scope="agent:tech")
     _write_skill(tmp_path, "trading-knowledge", scope="shared")
 
-    mw = SkillsInjectionMiddleware(agent_id="tech", skill_dir=tmp_path)
+    provider = DefaultSkillProvider(skills_root=tmp_path)
     # 冷启动
-    mw.build_system_addendum()
+    provider.get_available_skills("tech", snapshot={})
 
     # 热测量
     start = time.perf_counter()
     iterations = 50
     for _ in range(iterations):
-        mw.build_system_addendum()
+        provider.get_available_skills("tech", snapshot={})
     elapsed_ms = (time.perf_counter() - start) * 1000
 
     avg_ms = elapsed_ms / iterations
-    assert avg_ms < 5.0, f"平均 build_system_addendum 耗时 {avg_ms:.3f}ms 超过 5ms 阈值"
+    assert avg_ms < 5.0, f"平均 get_available_skills 耗时 {avg_ms:.3f}ms 超过 5ms 阈值"

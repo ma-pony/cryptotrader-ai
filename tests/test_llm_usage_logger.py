@@ -149,11 +149,20 @@ def test_log_llm_usage_caller_field():
 
 async def test_base_agent_analyze_logs_llm_usage():
     """BaseAgent.analyze() 在调用 LLM 后应记录 llm_usage 事件。"""
+    from unittest.mock import MagicMock
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
     from cryptotrader.agents.base import BaseAgent
 
+    fake_pb = MagicMock()
+    fake_pb.build.return_value = (
+        SystemMessage(content="You are a test agent."),
+        HumanMessage(content="Analyze BTC/USDT"),
+    )
     agent = BaseAgent(
         agent_id="test_agent",
-        role_description="You are a test agent.",
+        prompt_builder=fake_pb,
         model="gpt-4o-mini",
     )
     snapshot = _make_snapshot()

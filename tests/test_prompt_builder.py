@@ -223,6 +223,7 @@ class TestSkillProviderEmpty:
         assert "暂无可用技能" in sys_msg.content
 
     def test_skill_provider_with_skills_renders_markdown(self, config_dir: Path, noop_memory: MagicMock) -> None:
+        # spec 017b FR-Y29: PromptBuilder._render_skills() 输出完整 SKILL.md body
         skill_provider = MagicMock()
         skill_provider.get_available_skills.return_value = [
             Skill(
@@ -230,6 +231,7 @@ class TestSkillProviderEmpty:
                 description="测试技能描述",
                 tags=["tech"],
                 steps=["步骤一", "步骤二"],
+                body="测试技能描述\n\n## 使用场景\n详细使用说明...",
             )
         ]
         b = PromptBuilder(
@@ -241,6 +243,8 @@ class TestSkillProviderEmpty:
         sys_msg, _ = b.build(SAMPLE_SNAPSHOT, SAMPLE_PORTFOLIO)
         assert "test-skill" in sys_msg.content
         assert "测试技能描述" in sys_msg.content
+        # 完整 body 渲染（spec 017b FR-Y29）：含 body 中的子标题
+        assert "## 使用场景" in sys_msg.content
 
 
 # ── (f) slot_overrides 生效 ──────────────────────────────────────────────────────

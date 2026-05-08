@@ -3,9 +3,35 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.agents.base import ToolAgent
 from cryptotrader.config import AgentConfig, AgentsConfig
+
+
+def _fake_pb() -> MagicMock:
+    pb = MagicMock()
+    pb.build.return_value = (SystemMessage(content="sys"), HumanMessage(content="usr"))
+    return pb
+
+
+def _real_pb(agent_id: str) -> MagicMock:
+    from cryptotrader.agents.prompt_builder import (
+        DefaultMemoryProvider,
+        DefaultSkillProvider,
+        PromptBuilder,
+    )
+
+    repo_root = Path(__file__).parent.parent
+    return PromptBuilder(
+        agent_id=agent_id,
+        config_dir=repo_root / "config" / "agents",
+        memory_provider=DefaultMemoryProvider(memory_root=repo_root / "agent_memory"),
+        skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
+    )
 
 
 class TestToolIsolation:
@@ -17,14 +43,14 @@ class TestToolIsolation:
             ),
         }
         cfg = AgentsConfig(_agents=agents)
-        agent = cfg.build("custom_agent")
+        agent = cfg.build("custom_agent", prompt_builder=_fake_pb())
         assert isinstance(agent, ToolAgent)
         assert len(agent.tools) == 1
         assert agent.tools[0].name == "get_funding_rate_history"
 
     def test_empty_tools_gets_default_for_builtin(self):
         cfg = AgentsConfig()
-        agent = cfg.build("chain_agent")
+        agent = cfg.build("chain_agent", prompt_builder=_real_pb("chain"))
         assert isinstance(agent, ToolAgent)
         assert len(agent.tools) > 0
 
@@ -37,7 +63,7 @@ class TestToolIsolation:
         }
         cfg = AgentsConfig(_agents=agents)
         with caplog.at_level(logging.WARNING):
-            agent = cfg.build("custom_agent")
+            agent = cfg.build("custom_agent", prompt_builder=_fake_pb())
         assert isinstance(agent, ToolAgent)
         assert len(agent.tools) == 0
         assert "unknown tool" in caplog.text

@@ -8,31 +8,7 @@ from cryptotrader.agents.base import ToolAgent
 from cryptotrader.agents.data_tools import CHAIN_TOOLS
 
 if TYPE_CHECKING:
-    from cryptotrader.models import DataSnapshot
-
-ROLE = (
-    "You are an expert on-chain and derivatives analyst for cryptocurrency markets. "
-    "You have access to tools that let you query real-time derivatives data, funding rate history, "
-    "liquidation data, whale transfers, exchange flows, and DeFi TVL.\n\n"
-    "Your workflow:\n"
-    "1. Review the initial market snapshot provided\n"
-    "2. Use your tools to dig deeper into areas that need investigation\n"
-    "3. Synthesize all data into a directional signal\n\n"
-    "Focus on: positioning extremes (funding rate spikes, OI imbalances), smart money flow "
-    "(exchange netflow direction, whale accumulation/distribution), and leverage flush risk "
-    "(liquidation clusters near current price).\n"
-    "Distinguish between leading signals (whale flows, exchange withdrawals) and lagging signals "
-    "(liquidation data, TVL changes). Weight leading signals more heavily.\n\n"
-    "Domain checklist (verify before signaling):\n"
-    "- Crowding risk: Is funding rate above 0.03% or below -0.01%? Extremes are contrarian — a crowded long is "
-    "bearish, not bullish.\n"
-    "- Signal type: Am I basing my call on leading indicators (flows, whale moves) or lagging ones (liquidations, "
-    "TVL)? If lagging only, lower confidence.\n"
-    "- Liquidation proximity: Are there large liquidation clusters within 3-5% of current price? If yes, flag the "
-    "flush risk regardless of direction.\n"
-    "- Flow consistency: Do exchange netflow and whale activity agree? If whales are accumulating but exchanges see "
-    "inflow, something is off — acknowledge it."
-)
+    from cryptotrader.agents.prompt_builder import PromptBuilder
 
 
 def _format_liquidations(liq: dict) -> list[str]:
@@ -79,9 +55,15 @@ def _format_btc_network_health(oc: object) -> list[str]:
 
 
 class ChainAgent(ToolAgent):
-    def __init__(self, model: str = "", backtest_mode: bool = False) -> None:
+    def __init__(self, *, prompt_builder: PromptBuilder, model: str = "", backtest_mode: bool = False) -> None:
+        from cryptotrader.agents.skills.tool import load_skill_tool
+
         super().__init__(
-            agent_id="chain", role_description=ROLE, tools=CHAIN_TOOLS, model=model, backtest_mode=backtest_mode
+            agent_id="chain",
+            prompt_builder=prompt_builder,
+            tools=[*CHAIN_TOOLS, load_skill_tool],
+            model=model,
+            backtest_mode=backtest_mode,
         )
 
     _KNOWN_EXCHANGES = frozenset(
@@ -106,38 +88,3 @@ class ChainAgent(ToolAgent):
                 direction = "exchange-to-exchange" if frm_is_ex else "unknown direction"
             lines.append(f"  - ${usd / 1e6:.1f}M from {frm} → {to} ({direction})")
         return "\n".join(lines)
-
-    def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
-        base = super()._build_prompt(snapshot, experience)
-        oc = snapshot.onchain
-        parts = []
-        if oc.exchange_netflow != 0.0:
-            label = "inflow (sell pressure)" if oc.exchange_netflow > 0 else "outflow (accumulation)"
-            parts.append(f"Exchange netflow: {oc.exchange_netflow:,.2f} ({label})")
-        if oc.whale_transfers:
-            parts.append(self._format_whale_transfers(oc.whale_transfers))
-        if oc.defi_tvl > 0:
-            parts.append(f"DeFi TVL: ${oc.defi_tvl:,.0f}, 7d change: {oc.defi_tvl_change_7d:+.2%}")
-        if oc.liquidations_24h:
-            parts.extend(_format_liquidations(oc.liquidations_24h))
-        network_parts = _format_btc_network_health(oc)
-        if network_parts:
-            parts.append("BTC Network Health:\n" + "\n".join(network_parts))
-        initial_data = "On-Chain Data (initial snapshot):\n" + "\n".join(parts) if parts else ""
-        # Surface data coverage so the model can distinguish "value is genuinely 0"
-        # from "provider unavailable / API key not set". Without this, missing
-        # API keys on third-party providers silently degrade decision quality.
-        coverage = ""
-        if oc.data_quality:
-            unavailable = [p for p, ok in oc.data_quality.items() if not ok]
-            if unavailable:
-                coverage = (
-                    f"\n\nDATA COVERAGE WARNING: the following on-chain providers were "
-                    f"unavailable in this snapshot: {', '.join(sorted(unavailable))}. "
-                    f"Treat absent fields as UNMEASURED, not as zero. Lower data_sufficiency accordingly."
-                )
-        hint = (
-            "\n\nYou have tools to query more data. Use them if the initial snapshot is incomplete "
-            "or if you need historical context (e.g. funding rate trend over the last 2 days)."
-        )
-        return f"{initial_data}{coverage}{hint}\n\n{base}"

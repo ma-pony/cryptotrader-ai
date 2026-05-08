@@ -218,6 +218,7 @@ class Skill:
     tags: list[str]
     steps: list[str]
     body: str = ""
+    name: str = ""  # FR-Y30: skill 显示名；缺失时 fallback 到 skill_id
 
 
 # ── MemoryProvider Protocol ─────────────────────────────────────────────────────
@@ -340,53 +341,23 @@ class DefaultSkillProvider:
         snapshot: dict,
         k: int = 5,
     ) -> list[Skill]:
-        """返回 agent_id 在 tags 中的 top-k skills（本 spec 简单 keyword match）。"""
-        skills = self._load_all()
-        relevant = [s for s in skills if agent_id in s.tags]
-        return relevant[:k]
+        """返回与 agent_id 匹配的 top-k skills，使用 spec 014 scope filter（FR-Y28）。"""
+        from cryptotrader.agents.skills.loader import discover_skills_for_agent
 
-    def _load_all(self) -> list[Skill]:
-        """延迟加载并缓存所有 SKILL.md，失败单条跳过 + warning。"""
-        if self._cache is not None:
-            return self._cache
-        if not self._root.exists():
-            self._cache = []
-            return []
-        skills: list[Skill] = []
-        for skill_dir in sorted(self._root.iterdir()):
-            if not skill_dir.is_dir():
-                continue
-            md_path = skill_dir / "SKILL.md"
-            if not md_path.exists():
-                continue
-            try:
-                skill = self._parse_skill_md(md_path)
-                skills.append(skill)
-            except Exception as e:
-                logger.warning("解析 %s 失败: %s", md_path, e)
-        self._cache = skills
-        return skills
-
-    def _parse_skill_md(self, path: Path) -> Skill:
-        """解析 SKILL.md：YAML frontmatter（必填：skill_id / description / tags / steps）+ body。"""
-        content = path.read_text(encoding="utf-8")
-        m = re.match(r"^---\n(.*?)\n---\n(.*)$", content, re.DOTALL)
-        if not m:
-            raise ValueError(f"SKILL.md 缺少 YAML frontmatter: {path}")
-        fm_text, body = m.group(1), m.group(2)
-        fm = yaml.safe_load(fm_text)
-        if not isinstance(fm, dict):
-            raise ValueError(f"SKILL.md frontmatter 应为 dict: {path}")
-        for fld in ("skill_id", "description", "tags", "steps"):
-            if fld not in fm:
-                raise ValueError(f"SKILL.md 缺少必填字段 {fld!r}: {path}")
-        return Skill(
-            skill_id=str(fm["skill_id"]),
-            description=str(fm["description"]),
-            tags=list(fm["tags"]),
-            steps=list(fm["steps"]),
-            body=body.strip(),
-        )
+        spec014_skills = discover_skills_for_agent(agent_id, skill_dir=self._root)
+        result: list[Skill] = []
+        for s014 in spec014_skills[:k]:
+            result.append(
+                Skill(
+                    skill_id=s014.name,
+                    description=s014.description,
+                    tags=[s014.scope],
+                    steps=[],
+                    body=s014.body,
+                    name=s014.name,
+                )
+            )
+        return result
 
 
 # ── EnforceResult + TokenBudgetEnforcer ────────────────────────────────────────
@@ -504,20 +475,33 @@ class PromptBuilder:
         snapshot: dict,
         portfolio: dict,
         agent_analyses: dict | None = None,
+        experience: str = "",
     ) -> tuple[SystemMessage, HumanMessage]:
         """组装 LLM messages — 唯一对外入口（spec 017 FR-X6）。
 
         返回 (SystemMessage, HumanMessage) tuple 供 agent 直接传给 LLM。
         telemetry 8 字段挂当前 active span 或 structured log（FR-X18/X19）。
+
+        Args:
+            experience: 调用方提供的历史经验文本（FR-Y6b）。
+                非空时直接作为 recent_memory section 内容，跳过 MemoryProvider。
+                空时走 MemoryProvider fallback（017a 默认行为）。
         """
         t0 = time.monotonic()
 
-        # 1. 获取记忆（异常 → 占位）
-        try:
-            recent_memory = self._memory_provider.get_recent_memory(self._agent_id, snapshot)
-        except Exception:
-            logger.warning("MemoryProvider 异常，降级为占位", exc_info=True)
-            recent_memory = "暂无历史记忆"
+        # 1. 获取记忆（experience 非空时直接用，跳过 MemoryProvider）
+        experience_source: str
+        if experience:
+            recent_memory = experience
+            experience_source = "caller"
+        else:
+            try:
+                recent_memory = self._memory_provider.get_recent_memory(self._agent_id, snapshot)
+                experience_source = "provider" if recent_memory else "empty"
+            except Exception:
+                logger.warning("MemoryProvider 异常，降级为占位", exc_info=True)
+                recent_memory = "暂无历史记忆"
+                experience_source = "empty"
 
         # 2. 获取 skills（异常 → 空列表）
         try:
@@ -553,32 +537,27 @@ class PromptBuilder:
         # 7. 按 slot 分配组装 SystemMessage + HumanMessage
         sys_msg, usr_msg = self._assemble_messages(result.final_sections)
 
-        # 8. Telemetry（8 字段）
+        # 8. Telemetry（8 字段 + experience_source 辅助字段）
         duration_ms = (time.monotonic() - t0) * 1000
-        self._emit_telemetry(result, duration_ms)
+        self._emit_telemetry(result, duration_ms, experience_source=experience_source)
 
         return sys_msg, usr_msg
 
     def _render_skills(self, skills: list[Skill]) -> str:
-        """把 list[Skill] 渲染为 markdown bullet list。"""
+        """把 list[Skill] 渲染为完整 body（FR-Y29，verbatim body，与 spec 014 loader 格式一致）。"""
         if not skills:
             return "暂无可用技能"
-        lines = []
+        parts = []
         for sk in skills:
-            lines.append(f"- **{sk.skill_id}**: {sk.description}")
-            for step in sk.steps:
-                lines.append(f"  - {step}")
-        return "\n".join(lines)
+            display_name = sk.name or sk.skill_id
+            parts.append(f"\n\n---\n## Skill: {display_name}\n\n{sk.body}")
+        return "".join(parts)
 
     def _render_snapshot(self, snapshot: dict) -> str:
-        """把 snapshot dict 渲染为 key: value 文本；缺失字段走占位。"""
-        if not snapshot:
-            return "<missing>"
-        lines = []
-        for k, v in snapshot.items():
-            val = v if v is not None else "<missing>"
-            lines.append(f"{k}: {val}")
-        return "\n".join(lines)
+        """把 snapshot dict 渲染为 crypto 领域格式（FR-Y14）。"""
+        from cryptotrader.agents.snapshot_renderer import render_crypto_snapshot
+
+        return render_crypto_snapshot(snapshot)
 
     def _render_portfolio(self, portfolio: dict) -> str:
         """把 portfolio dict 渲染为文本；缺失走占位。"""
@@ -622,7 +601,12 @@ class PromptBuilder:
 
         return SystemMessage(content=sys_content), HumanMessage(content=usr_content)
 
-    def _emit_telemetry(self, result: EnforceResult, duration_ms: float) -> None:
+    def _emit_telemetry(
+        self,
+        result: EnforceResult,
+        duration_ms: float,
+        experience_source: str = "empty",
+    ) -> None:
         """写入 8 个 telemetry 字段到当前 active OpenTelemetry span 或 structured log。"""
         attrs = {
             "prompt.builder.agent_id": self._agent_id,
@@ -633,6 +617,8 @@ class PromptBuilder:
             "prompt.builder.prompt_size_post": result.prompt_size_post,
             "prompt.builder.budget": result.budget,
             "prompt.builder.duration_ms": round(duration_ms, 2),
+            # 辅助字段（FR-Y19 contract）：experience 来源标识
+            "prompt.builder.experience_source": experience_source,
         }
 
         # 尝试挂到 OpenTelemetry active span（spec 010 基础设施）
