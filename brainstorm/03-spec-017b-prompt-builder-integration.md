@@ -184,9 +184,43 @@
 
 按 6 项决策落地：C / Skill-A / B / D / A / B / B。整合范围：~16 文件，~1500 行 diff。
 
-## Open Threads
+## Open Threads（已 spot-check 解决，2026-05-08）
 
-- **既有 cases.jsonl schema 验证**：DefaultMemoryProvider `_format_case` 期望字段（case_id / context / outcome / pnl）若与现有 spec 014 写入格式不匹配，C2 commit 落地后第一次 cycle 会报错。需要在 C2 之前 sample-check 现网 cases.jsonl 内容。**风险等级**：中。**缓解**：C1 commit 前手动 `head agent_memory/*/cases.jsonl` 确认字段；如不匹配在 C2 调整 `_format_case` 兼容字段。
-- **regime_tags 重设计**：Q5 决策删 `AgentsConfig.build` 的 `regime_tags` 参数，但 spec 014 / 015 的 `verbal_reinforcement` 节点输出 `regime_tags` 进入 state；调用 `cfg.agents.build()` 处可能仍传该参数 → 需在 nodes/agents.py 调用处一并清理。
-- **prompt_template 字段在配置文件中可能已被使用**：当前 `config/default.toml` 是否有 `[agents.<id>] prompt_template = "..."` 配置？如有，C2 删除字段会让 TOML 解析报错。需要在 C1 之前 grep `config/default.toml` 确认。**缓解**：C1 commit 前 `grep prompt_template config/`，如有配置先在 C2 commit 中一并删除该 TOML 行。
-- **graph.py 是否含 agent 实例化**：FR-Y35 标注"若有则同步更新；若无则不要求"，但实际尚未确认。需要 C2 实施时 `grep -n "TechAgent\|ChainAgent\|NewsAgent\|MacroAgent" src/cryptotrader/graph.py` 确认。
+### ✅ DefaultMemoryProvider 路径错误（已发现，决策 Option-2）
+
+**发现**：017a `DefaultMemoryProvider` 设计与 spec 014 实际目录结构**不匹配**：
+
+| 字段 | 017a 期望 | spec 014 实际 |
+|---|---|---|
+| Patterns | `agent_memory/<agent_id>/patterns.md`（单文件） | `agent_memory/<agent_id>/patterns/*.md`（子目录，目前空） |
+| Cases | `agent_memory/<agent_id>/cases.jsonl`（每 agent 一个 jsonl） | `agent_memory/cases/<cycle_id>.md`（**全局** per-cycle markdown，YAML frontmatter + body 含 4 个 agent analyses） |
+
+**实际影响**：017a 落地后 `DefaultMemoryProvider` 是僵尸代码，永远返回"暂无历史记忆"。但**没人发现** —— 因为 017a 只交付基建未集成，没人真的调用过。
+
+**决策**：**Option-2 — DefaultMemoryProvider fix 推迟到 spec 018**
+- 理由：spec 017b 已经够大（~16 文件 / 1500 行 diff），不在此扩；spec 018 EvolvingMemoryProvider 反正要重写 Provider，一起修整自然
+- 实施方式：
+  - **修订 FR-Y6**：BaseAgent.analyze() 的 `experience: str` 参数保留并直接传给 PromptBuilder.build()，PromptBuilder 把 experience 作为 `recent_memory` section 的覆盖输入（如 experience 非空，跳过 MemoryProvider 调用）
+  - **新增 FR-Y6b**：`PromptBuilder.build(snapshot, portfolio, agent_analyses=None, experience: str = "")` 签名加 `experience` 参数；当 `experience` 非空时，作为 `recent_memory` section 内容；当 `experience` 为空时，调用 `memory_provider.get_recent_memory(...)` fallback（占位）
+  - **本 spec 不修 DefaultMemoryProvider 内部实现**（仍按 017a path 设计返回"暂无历史记忆"）；spec 018 重写
+- 风险：零回归 — experience 参数路径与 spec 014 verbal reinforcement 流转一致；现有 4 agent 仍走 experience 注入
+
+### ✅ regime_tags 流转
+
+`nodes/agents.py:56` 当前传 `regime_tags=regime_tags` 给 `cfg.agents.build()`。Q5 决策删除该参数。**已隐含在 FR-Y19 / FR-Y33**，C2 实施时一并清理 `nodes/agents.py:42` 的 `regime_tags = state["data"].get("regime_tags", [])` 与 `:56` 的传参。其他用处（`tracing.py` / `journal/search.py`）保留不动，是不同模块。
+
+### ✅ prompt_template 字段在 config/
+
+**spot-check 结果**：`grep -rn "prompt_template" config/` **无匹配**。现有 TOML 配置不含 prompt_template，C2 删除 dataclass 字段安全。
+
+### ✅ graph.py agent 实例化
+
+**spot-check 结果**：`grep -n "TechAgent\|ChainAgent\|NewsAgent\|MacroAgent" src/cryptotrader/graph.py` **无匹配**。graph.py 不直接实例化 4 agent，FR-Y35 视作 NOOP。
+
+## Decision Updates（基于 spot-check 结果，2026-05-08）
+
+| 字段 | 旧定义 | 新定义 |
+|---|---|---|
+| FR-Y6 | experience 参数被 PromptBuilder 视作 recent_memory section 的覆盖输入 | experience: str 参数保留，PromptBuilder.build() 加 `experience: str = ""` 参数；非空时作为 recent_memory section；空时 fallback 调 MemoryProvider |
+| FR-Y6b（新增） | — | PromptBuilder.build() 签名扩展：`build(snapshot, portfolio, agent_analyses=None, experience: str = "")`；experience 非空 → 跳过 memory_provider.get_recent_memory；experience 空 → 走原 017a 路径（DefaultMemoryProvider 占位） |
+| OOS（新增条目） | — | DefaultMemoryProvider 的 patterns / cases 实际路径修复（与 spec 014 目录对齐）→ spec 018 |
