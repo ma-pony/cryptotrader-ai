@@ -197,6 +197,13 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_skills_loader.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_skills_middleware.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_skills_perf.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
+# spec 017a (PromptBuilder Foundation): docstrings + section labels + test
+# fixtures use Chinese characters and fullwidth punctuation, matching the
+# project's CLAUDE.md guidance ("generate responses in Simplified Chinese").
+"src/cryptotrader/agents/prompt_builder.py" = ["RUF001", "RUF002", "RUF003", "C901", "PERF401", "C401", "PERF403"]
+"tests/test_prompt_builder.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_token_budget.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_config_loader.py" = ["RUF001", "RUF002", "RUF003", "E501"]
 # portfolio/manager.py: same SQLAlchemy declarative-class pattern as journal/store.
 "src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
 # cli/main.py:
