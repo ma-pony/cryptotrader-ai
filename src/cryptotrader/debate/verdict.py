@@ -101,20 +101,53 @@ ANTI-PATTERNS TO AVOID:
 - Do NOT require all 4 agents to agree. 2-3 is enough for a strong trade.
 - Do NOT close winning positions just because one agent turns neutral.
 
-PATTERN ATTRIBUTION (FR-026):
-If your decision was influenced by a known agent skill pattern, cite it in your reasoning using:
+PATTERN ATTRIBUTION (FR-026 — REQUIRED, NOT OPTIONAL):
+Every directional verdict (long / short / close) MUST cite at least one applied skill in
+`reasoning` using the exact format below. PnL attribution depends on this — a verdict
+without `applied:` is treated as low-confidence and may be downgraded server-side.
   applied: <agent>::<pattern_name>   (e.g. applied: tech::rsi_divergence_long)
   applied: <pattern_name>            (bare form — only when you are the originating agent)
-You MAY include zero or more applied: citations. They are used only for PnL attribution.
+For "hold" actions, applied: is optional.
+
+INVALIDATION + TARGET (both mandatory for long/short, must be CONCRETE PRICE LEVELS):
+
+`invalidation` MUST be a numeric stop price + condition. Examples:
+  ✓ "Close at $2,250 if ETH breaks above SMA60 with volume"
+  ✓ "Cover short at $82,500 (above prior swing high)"
+  ✗ "Thesis invalidated if momentum reverses"  ← REJECTED, no level
+  ✗ "If macro flips bullish"                    ← REJECTED, no level
+
+Stop distance must be wide enough to survive normal noise. Server-side rule:
+  |entry − invalidation| / entry  ≥  max(1.5×ATR/price, 1.0%)
+where ATR is provided in the price context block. Stops tighter than this are
+auto-downgraded to confidence × 0.5 (whipsaw risk). Example: BTC at $80,950 with
+ATR $200 → minimum stop distance = max(1.5×200, 80950×0.01) = $810. So a stop at
+$81,050 ($100 away) is REJECTED; $81,800 is acceptable.
+
+`target_price` MUST be a numeric profit target with positive expected R:R:
+  R:R = |target − entry| / |entry − invalidation|  ≥  1.5
+Examples:
+  ✓ Short BTC entry $80,950, stop $81,800 (≈$850), target $79,500 (≈$1,450) → R:R 1.7 ✓
+  ✗ Short BTC entry $80,950, stop $81,800, target $80,000 (≈$950) → R:R 1.1 ✗ rejected
+Server-side downgrades R:R < 1.5 to confidence × 0.5. Pick targets that justify the stop.
+
+BANNED PHRASES (do NOT include in reasoning, thesis, or invalidation):
+  - "despite weak agent track records"          ← self-canceling — if they're weak, don't trade
+  - "size capped at the X% max position limit"  ← system config, not your thesis
+  - "the X% portfolio limit"                    ← same
+  - "weak track record"                         ← same self-cancel
+These all leaked across multiple cycles producing reasoning noise. State your thesis directly;
+do not pad with meta-commentary about the system or the agents' fallibility.
 
 Output ONLY JSON:
 {
   "action": "long|short|hold|close",
   "confidence": 0.0-1.0,
   "position_scale": 0.0-1.0,
-  "reasoning": "2-3 sentences. Include 'applied: <agent>::<pattern>' if a skill pattern influenced this.",
-  "thesis": "one sentence trade thesis (or exit rationale if closing)",
-  "invalidation": "specific condition that would invalidate this decision"
+  "reasoning": "2-3 sentences. MUST include 'applied: <agent>::<pattern>' for directional actions.",
+  "thesis": "one sentence trade thesis (or exit rationale if closing). No banned phrases.",
+  "invalidation": "stop price + condition (e.g. 'Cover at $82,500 if BTC breaks prior swing'). MUST satisfy stop rule.",
+  "target_price": "profit target price (e.g. '$78,500'). MUST satisfy R:R >= 1.5. Empty for hold/close."
 }"""
 
 
@@ -203,12 +236,25 @@ def _format_trend_context(trend_context: dict | None) -> str:
             parts.append(f"  {period} change: {val:+.1%}")
     high = trend_context.get("high_30d")
     low = trend_context.get("low_30d")
+    current = trend_context.get("current_price", 0)
     if high and low:
         parts.append(f"  30d range: ${low:,.0f} — ${high:,.0f}")
-        current = trend_context.get("current_price", 0)
         if current and high > low:
             pct_in_range = (current - low) / (high - low)
             parts.append(f"  Current at {pct_in_range:.0%} of 30d range")
+    atr = trend_context.get("atr_14")
+    if atr is not None and current:
+        atr_pct = atr / current if current else 0
+        # Provide both the raw ATR and the minimum stop-distance the server
+        # will enforce. LLM uses these two numbers to size invalidation
+        # outside the noise band (N2 — ATR-based stops).
+        min_stop_pct = max(1.5 * atr_pct, 0.01)
+        min_stop_abs = current * min_stop_pct
+        parts.append(f"  ATR(14): ${atr:,.4f} ({atr_pct:.2%} of price)")
+        parts.append(
+            f"  Min stop distance: ${min_stop_abs:,.4f} ({min_stop_pct:.2%})"
+            " — invalidation must be at least this far from entry"
+        )
     return "\n".join(parts)
 
 
@@ -283,6 +329,7 @@ AGENT ANALYSES:
             reasoning=data.get("reasoning", ""),
             thesis=data.get("thesis", ""),
             invalidation=data.get("invalidation", ""),
+            target_price=data.get("target_price", "") or "",
         )
         logger.info(
             "AI verdict: action=%s confidence=%.2f scale=%.2f thesis=%s",

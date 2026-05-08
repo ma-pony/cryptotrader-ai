@@ -195,6 +195,7 @@ verdict 节点输出的 reasoning 中显式声明 `applied: <pattern_name>`（pa
   - **self-agent 上下文**（4 个 analysis agent 在自身 prompt 内引用本 agent 的 pattern）：bare name 如 `applied: funding_squeeze_long`，默认归属为发起 agent
   - **cross-agent 上下文**（verdict 节点综合 4 agent 输出时）：MUST 使用前缀形式 `applied: <agent>::<pattern_name>`（例如 `applied: tech::funding_squeeze_long`），消除跨 agent 同名歧义
   - **reflection 解析规则**：bare name 按发起 agent 解析；带前缀按 `<agent>` 解析；若 bare name 在多 agent 同时存在且无前缀，记 logger.warning 并跳过该次 PnL 归因
+- **FR-026a** (added 2026-05-08): server-side enforcement — verdict 节点 MUST 在 LLM 输出落库前检查 reasoning 是否包含至少一个 `applied:` 引用；directional verdict (long/short/close) 缺失时 MUST 将 verdict.confidence × 0.5 并在 `verdict.guardrails` 列表中记录 `missing_applied`。理由：实盘观测 prompt 单靠"MUST 强制要求"达不到 100% 引用率，server-side ×0.5 惩罚把无归因 verdict 的实际下单尺寸压到原来 ¼（信心 ramp 联动），既保留 LLM 自由度又使无 PnL 归因路径不可能造成大仓损失。Hold action 不受此规则约束（无可归因路径）。
 - **FR-027**: reflection job 解析 verdict.reasoning 时 MUST 提取所有 `applied:` 引用，定位到 `agent_memory/<agent>/patterns/<pattern_name>.md` 并更新 `pnl_track`
 - **FR-028**: 引用了不存在的 pattern 时，reflection MUST 跳过 + logger.warning，不影响其他引用归因
 

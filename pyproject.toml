@@ -168,6 +168,23 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/nodes/reflection.py" = ["RUF001", "RUF002", "RUF003"]
 # journal.py: spec 014 added Chinese-comment sections for case writing + PnL backfill.
 "src/cryptotrader/nodes/journal.py" = ["RUF001", "RUF002", "RUF003"]
+# spec 015 (runtime safety guardrails): comments + docstrings + LLM prompts use
+# en-dash, minus, ATR multiplication-sign for readability. C901 on risk_check
+# acknowledged — the function legitimately handles many guardrail branches.
+"src/cryptotrader/agents/macro.py" = ["RUF001"]
+"src/cryptotrader/data/macro.py" = ["RUF001", "RUF003"]
+"src/cryptotrader/debate/verdict.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/nodes/debate.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/nodes/data.py" = ["RUF001", "RUF002", "RUF003", "C901"]
+"src/cryptotrader/nodes/verdict.py" = ["RUF001", "RUF002", "RUF003", "C901"]
+"src/cryptotrader/nodes/execution.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/risk/checks/concentration.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/execution/exchange.py" = ["RUF001", "RUF002", "RUF003", "C901", "SIM105", "SIM108"]
+"src/cryptotrader/tracing.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_macro_concentration.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_macro_coverage.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_post_process_verdict.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_debate_anti_ratchet.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 014 test files use Chinese docstrings + assertion messages.
 "tests/test_two_layer_architecture.py" = ["RUF001", "RUF002", "RUF003", "S603", "S607"]
 "tests/test_agent_memory_writer.py" = ["RUF001", "RUF002", "RUF003"]

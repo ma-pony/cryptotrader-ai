@@ -11,6 +11,7 @@ from cryptotrader.data.macro import (
     _fetch_btc_dominance,
     _fetch_fear_greed,
     _fetch_fred,
+    _is_plausible_fred,
 )
 
 
@@ -94,6 +95,90 @@ class TestFetchFred:
             patch("httpx.AsyncClient", return_value=client),
         ):
             assert await _fetch_fred("DFF", "key123") == 0.0
+
+    # ── sanity-check guard against poisoned values ──
+
+    @pytest.mark.asyncio
+    async def test_api_value_below_range_returns_zero_and_skips_cache(self):
+        # DTWEXBGS plausible band is 85–145; 50 is below.
+        resp = _mock_response({"observations": [{"value": "50.0", "date": "2026-05-07"}]})
+        client = _mock_httpx_client(response=resp)
+        with (
+            patch("cryptotrader.data.macro.get_cached_or_none", return_value=None),
+            patch("cryptotrader.data.macro.cache_result") as mock_cache,
+            patch("httpx.AsyncClient", return_value=client),
+        ):
+            result = await _fetch_fred("DTWEXBGS", "key123")
+        assert result == 0.0
+        mock_cache.assert_not_called()  # poisoned values must NOT be cached
+
+    @pytest.mark.asyncio
+    async def test_api_value_above_range_returns_zero(self):
+        resp = _mock_response({"observations": [{"value": "200.0", "date": "2026-05-07"}]})
+        client = _mock_httpx_client(response=resp)
+        with (
+            patch("cryptotrader.data.macro.get_cached_or_none", return_value=None),
+            patch("cryptotrader.data.macro.cache_result") as mock_cache,
+            patch("httpx.AsyncClient", return_value=client),
+        ):
+            assert await _fetch_fred("DTWEXBGS", "key123") == 0.0
+        mock_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_api_value_inside_range_caches_normally(self):
+        # 118.39 is the actual current DTWEXBGS reading — must pass.
+        resp = _mock_response({"observations": [{"value": "118.39", "date": "2026-05-07"}]})
+        client = _mock_httpx_client(response=resp)
+        with (
+            patch("cryptotrader.data.macro.get_cached_or_none", return_value=None),
+            patch("cryptotrader.data.macro.cache_result") as mock_cache,
+            patch("httpx.AsyncClient", return_value=client),
+        ):
+            assert await _fetch_fred("DTWEXBGS", "key123") == 118.39
+        mock_cache.assert_called_once_with("fred_DTWEXBGS", 118.39, date="2026-05-07")
+
+    @pytest.mark.asyncio
+    async def test_cached_value_outside_range_returns_zero(self):
+        # Stale poisoned cache (e.g. someone manually inserted 999) must not leak.
+        with patch("cryptotrader.data.macro.get_cached_or_none", return_value=999.0):
+            assert await _fetch_fred("DTWEXBGS", "key123") == 0.0
+
+    @pytest.mark.asyncio
+    async def test_cached_value_inside_range_passes_through(self):
+        with patch("cryptotrader.data.macro.get_cached_or_none", return_value=100.5):
+            assert await _fetch_fred("DTWEXBGS", "key123") == 100.5
+
+    @pytest.mark.asyncio
+    async def test_unknown_series_passes_through_unchecked(self):
+        # Series with no entry in the range table shouldn't be policed.
+        resp = _mock_response({"observations": [{"value": "99999.0", "date": "2026-05-07"}]})
+        client = _mock_httpx_client(response=resp)
+        with (
+            patch("cryptotrader.data.macro.get_cached_or_none", return_value=None),
+            patch("cryptotrader.data.macro.cache_result"),
+            patch("httpx.AsyncClient", return_value=client),
+        ):
+            assert await _fetch_fred("MADEUP_SERIES", "key123") == 99999.0
+
+
+class TestIsPlausibleFred:
+    def test_known_series_in_range(self):
+        assert _is_plausible_fred("DTWEXBGS", 100.0) is True
+        assert _is_plausible_fred("DTWEXBGS", 118.39) is True
+        assert _is_plausible_fred("DTWEXBGS", 85.0) is True  # boundary inclusive
+        assert _is_plausible_fred("DTWEXBGS", 145.0) is True
+
+    def test_known_series_out_of_range(self):
+        assert _is_plausible_fred("DTWEXBGS", 84.99) is False
+        assert _is_plausible_fred("DTWEXBGS", 145.01) is False
+        assert _is_plausible_fred("DFF", -1.0) is False
+        assert _is_plausible_fred("DFF", 16.0) is False
+        assert _is_plausible_fred("VIXCLS", 4.0) is False
+        assert _is_plausible_fred("T10Y2Y", -3.5) is False
+
+    def test_unknown_series_passes(self):
+        assert _is_plausible_fred("FOOBAR", 1e9) is True
+        assert _is_plausible_fred("FOOBAR", -1e9) is True
 
 
 # ── _fetch_fear_greed ──

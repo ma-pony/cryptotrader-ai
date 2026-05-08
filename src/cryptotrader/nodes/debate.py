@@ -30,8 +30,19 @@ Rules:
 - If you change, state exactly which data point changed your mind.
 - Look for cross-domain contradictions (e.g., bullish technicals + bearish on-chain = important signal).
 
+Confidence movement rules (anti-ratchet — broken systems drift confidence up over rounds without new evidence):
+- You may RAISE confidence (> +0.02) ONLY if `new_findings` STARTS WITH the literal token "[NEW]"
+  followed by a SPECIFIC numeric data point from another agent that you did NOT mention in your own
+  initial reasoning. Example: "[NEW] chain_agent's long/short ratio 1.78 above the 1.5 threshold I had not seen".
+- The "[NEW]" tag means: the data point is new TO YOU (you didn't already cite it). "Other agents agreeing"
+  is not new — it's social proof, which is FORBIDDEN as a reason to raise confidence.
+- You may LOWER confidence freely when other agents cite contradicting evidence you cannot rebut.
+- If you have nothing genuinely new from this round, keep confidence within ±0.02 of your before value.
+- Server-side enforcement: confidence raises > +0.02 without "[NEW]" prefix in `new_findings` are
+  automatically rolled back to `before + 0.02`. Don't try to game it.
+
 Output JSON: {{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "reasoning": "...",
-"key_factors": [...], "risk_flags": [...], "new_findings": "cross-domain insight from other agents' data"}}"""
+"key_factors": [...], "risk_flags": [...], "new_findings": "[NEW] <specific datum> ..." OR ""}}"""
 
 
 def _classify_move(before_dir: str, before_conf: float, after_dir: str, after_conf: float) -> str:
@@ -117,7 +128,27 @@ async def _debate_one_agent(
         after_dir = data.get("direction", before_dir)
         after_conf = float(data.get("confidence", before_conf))
         reasoning = data.get("reasoning", analysis.get("reasoning", ""))
-        new_findings = data.get("new_findings", "")
+        new_findings = data.get("new_findings", "") or ""
+
+        # N4: server-side anti-ratchet enforcement. Confidence raises > +0.02
+        # without a "[NEW]" prefix in new_findings are echo-chamber moves —
+        # snap back to ``before + 0.02``. Direction flips bypass this (a real
+        # change of mind is allowed without the [NEW] discipline; the discipline
+        # targets confidence drift on an unchanged stance).
+        if after_dir == before_dir:
+            raise_amount = after_conf - before_conf
+            has_new_tag = new_findings.lstrip().upper().startswith("[NEW]")
+            if raise_amount > 0.02 and not has_new_tag:
+                snapped = round(before_conf + 0.02, 4)
+                logger.info(
+                    "Debate %s anti-ratchet: confidence %.2f -> %.2f rolled back to %.2f (no [NEW] in new_findings)",
+                    agent_id,
+                    before_conf,
+                    after_conf,
+                    snapped,
+                )
+                after_conf = snapped
+
         merged.update(
             {
                 "direction": after_dir,
@@ -237,6 +268,31 @@ async def debate_gate(state: ArenaState) -> dict:
     analyses = {k: v for k, v in raw_analyses.items() if not v.get("is_mock", False)}
 
     config = _load_config().debate
+
+    # All-mock cycle (every agent's LLM call failed) → skip debate entirely.
+    # Running 8 debate turns on 0-confidence mock analyses is pure waste; the
+    # verdict node already forces ``hold_all_mock`` downstream regardless of
+    # what the debate produces.
+    if len(raw_analyses) > 0 and len(analyses) == 0:
+        strength, mean_score = compute_consensus_strength(raw_analyses)
+        dispersion = compute_divergence(raw_analyses)
+        logger.info("All %d agents returned mock analyses — skipping debate", len(raw_analyses))
+        from cryptotrader.metrics import get_metrics_collector
+
+        get_metrics_collector().inc_debate_skipped()
+        return {
+            "data": {
+                "debate_skipped": True,
+                "debate_skip_reason": "all_mock",
+                "consensus_metrics": {
+                    "strength": strength,
+                    "mean_score": mean_score,
+                    "dispersion": dispersion,
+                    "skip_threshold": config.consensus_skip_threshold,
+                    "confusion_threshold": config.confusion_skip_threshold,
+                },
+            }
+        }
 
     # Not enough real agents to evaluate consensus — force debate unconditionally
     if len(analyses) < 2:

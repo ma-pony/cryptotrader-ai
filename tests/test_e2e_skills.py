@@ -22,12 +22,13 @@ async def test_risk_gate_with_token_security():
 
     gate = RiskGate(config, redis_state)
 
-    # Verify 12 checks (was 11 before)
-    assert len(gate._checks) == 12
+    # Verify 13 checks (12 + macro_concentration added 2026-05-07)
+    assert len(gate._checks) == 13
 
-    # Verify token security check is present
+    # Verify token security and macro concentration checks are present
     check_names = [c.name for c in gate._checks]
     assert "token_security" in check_names
+    assert "macro_concentration" in check_names
 
 
 @pytest.mark.asyncio

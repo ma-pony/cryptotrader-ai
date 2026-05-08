@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
@@ -17,6 +18,22 @@ logger = logging.getLogger(__name__)
 # position closes, the next order will retry. 3 attempts is enough to
 # distinguish transient errors from permanent locks without spamming.
 _LEVERAGE_RETRY_LIMIT = 3
+
+# How long an exchange-side rejection (e.g. OKX 51202 "Market order amount
+# exceeds the maximum amount") keeps the (pair, side) signature in a
+# fallback-to-limit cache. 30 minutes covers most retry windows without
+# permanently masking a transient venue blip.
+_ORDER_FAILURE_CACHE_TTL_S = 30 * 60
+
+# Conservative slippage band when synthesizing a limit order to replace a
+# rejected/oversized market order. 0.3% is wide enough to fill in the same
+# minute on liquid pairs but tight enough to behave like a market fill.
+_MARKET_TO_LIMIT_SLIPPAGE = 0.003
+
+# Module-level failure ledger. Key: (exchange_id, pair, side). Value: last
+# rejection timestamp. Survives across LiveExchange instances within a
+# process so a brief reconnection does not lose the learning.
+_oversized_market_failures: dict[tuple[str, str, str], float] = {}
 
 
 @runtime_checkable
@@ -202,6 +219,25 @@ class LiveExchange:
         if min_amount and float(amount) < min_amount:
             raise ValueError(f"Order amount {amount} below minimum {min_amount}")
 
+        # Max market-order amount precheck + failure-learning cache.
+        # Some venues (notably OKX) have a *separate* maximum for market
+        # orders that is much smaller than the limit-order maximum. When
+        # exceeded the venue returns 51202 ("Market order amount exceeds the
+        # maximum amount") and the order silently fails. Two defenses:
+        #   1. If we know the venue cap (`maxMktSz` on OKX, or unified
+        #      `limits.amount.max`) and the amount exceeds it, downgrade to a
+        #      limit order at price ± slippage band proactively.
+        #   2. If a previous attempt for the same (pair, side) hit the cap in
+        #      the last 30 min, downgrade preemptively even if the cap value
+        #      isn't visible — we already know market orders are unsafe.
+        order_type, amount, price = self._maybe_downgrade_to_limit(
+            order,
+            market,
+            amount,
+            price,
+            pair.market_type,
+        )
+
         # OKX perp/swap (and similar derivative venues) require ``posSide`` in
         # long_short position mode. Without it OKX returns sCode=51000
         # "Parameter posSide error". Derive it from the existing position when
@@ -211,15 +247,28 @@ class LiveExchange:
         if pair.market_type != "spot":
             params["posSide"] = await self._derive_pos_side(order)
 
-        result = await self._retry(
-            self._exchange.create_order,
-            order.pair,
-            order.order_type,
-            order.side,
-            float(amount),
-            float(price) if order.order_type == "limit" else None,
-            params,
-        )
+        try:
+            result = await self._retry(
+                self._exchange.create_order,
+                order.pair,
+                order_type,
+                order.side,
+                float(amount),
+                float(price) if order_type == "limit" else None,
+                params,
+            )
+        except Exception as e:
+            # Detect OKX 51202 / Binance "MAX_NUM_ALGO_ORDERS" / generic
+            # "exceeds maximum amount" rejection and remember it so the next
+            # call for this (pair, side) auto-downgrades.
+            if self._is_oversized_market_rejection(e):
+                self._record_oversized_failure(order.pair, order.side)
+                logger.warning(
+                    "Oversized market-order rejection cached for %s %s — next order will use limit fallback",
+                    order.pair,
+                    order.side,
+                )
+            raise
 
         # Order timeout: cancel if not filled
         if result.get("status") != "closed":
@@ -231,6 +280,144 @@ class LiveExchange:
                 result = await self._wait_or_cancel(order_id, order.pair, wait_seconds=wait_s)
 
         return result
+
+    # ── oversized-market handling ────────────────────────────────────────
+
+    def _read_max_market_amount(self, market: dict[str, Any]) -> float | None:
+        """Best-effort read of the per-venue max market-order size.
+
+        Sources, in priority order:
+          1. ``market['limits']['amount']['max']`` — ccxt unified field.
+          2. OKX raw ``info.maxMktSz`` — string of contract count for swaps.
+        Returns None if no usable cap is found.
+        """
+        cap = market.get("limits", {}).get("amount", {}).get("max")
+        if cap is not None:
+            try:
+                v = float(cap)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+        info = market.get("info", {}) or {}
+        raw = info.get("maxMktSz")
+        if raw:
+            try:
+                v = float(raw)
+                if v > 0:
+                    return v
+            except (TypeError, ValueError):
+                pass
+        return None
+
+    def _is_recent_oversized_failure(self, pair_str: str, side: str) -> bool:
+        key = (self._exchange.id, pair_str, side)
+        ts = _oversized_market_failures.get(key)
+        if ts is None:
+            return False
+        if time.time() - ts > _ORDER_FAILURE_CACHE_TTL_S:
+            _oversized_market_failures.pop(key, None)
+            return False
+        return True
+
+    def _record_oversized_failure(self, pair_str: str, side: str) -> None:
+        _oversized_market_failures[(self._exchange.id, pair_str, side)] = time.time()
+
+    @staticmethod
+    def _is_oversized_market_rejection(exc: BaseException) -> bool:
+        """Heuristically classify an exchange exception as oversized-market.
+
+        OKX 51202 message:  "Market order amount exceeds the maximum amount"
+        We match on substrings rather than ccxt error class because ccxt
+        wraps everything in ``InvalidOrder`` regardless of subcode.
+        """
+        msg = str(exc).lower()
+        markers = (
+            "exceeds the maximum amount",  # OKX 51202 wording
+            "exceeds maximum amount",
+            "exceeds the maximum order",
+            "exceeds maximum order",
+            "51202",  # OKX subcode
+            "max_num_orders",  # Binance variants
+            "max amount",
+        )
+        return any(m in msg for m in markers)
+
+    def _maybe_downgrade_to_limit(
+        self,
+        order: Order,
+        market: dict[str, Any],
+        amount: Any,
+        price: float,
+        market_type: str,
+    ) -> tuple[str, Any, float]:
+        """Decide whether to convert a market order to a limit order.
+
+        Triggers a downgrade when EITHER:
+          - we know the venue's market-order cap and ``amount`` exceeds it, OR
+          - this (pair, side) had an oversized-market rejection in the last
+            ``_ORDER_FAILURE_CACHE_TTL_S`` seconds (failure-learning cache).
+
+        For sells we set the limit price slightly *below* current to ensure a
+        cross; for buys, slightly *above*. Returns ``(order_type, amount, price)``
+        ready for ``create_order``.
+        """
+        if order.order_type != "market":
+            return order.order_type, amount, price
+
+        oversized = False
+        cap = self._read_max_market_amount(market)
+        if cap is not None:
+            try:
+                oversized = float(amount) > cap
+            except (TypeError, ValueError):
+                oversized = False
+
+        recent_fail = self._is_recent_oversized_failure(order.pair, order.side)
+        if not (oversized or recent_fail):
+            return "market", amount, price
+
+        # Compute crossing limit price. Sell crosses below mid; buy crosses
+        # above mid. The 0.3% band is wide enough to fill on liquid OKX perps
+        # without becoming a true resting order.
+        slip = _MARKET_TO_LIMIT_SLIPPAGE
+        if order.side == "sell":
+            limit_price = price * (1.0 - slip)
+        else:
+            limit_price = price * (1.0 + slip)
+
+        # If the cap is known and amount still exceeds the limit-order cap (rare
+        # for OKX where maxLmtSz >> maxMktSz), clip — the caller's strategy is
+        # responsible for splitting; we don't silently break a position into
+        # multiple LLM-unaware orders.
+        if cap is not None and oversized:
+            try:
+                clip_to = self._exchange.amount_to_precision(order.pair, cap)
+                amount = clip_to
+                logger.warning(
+                    "Order amount > venue maxMktSz (%s); clipped to %s and downgraded to limit",
+                    cap,
+                    clip_to,
+                )
+            except Exception:
+                logger.warning("amount_to_precision failed; using raw cap %s", cap, exc_info=True)
+                amount = cap
+        else:
+            logger.info(
+                "Recent oversized-market failure on %s %s — preemptively using limit order",
+                order.pair,
+                order.side,
+            )
+
+        # ccxt expects price to go through price_to_precision for limit orders.
+        try:
+            limit_price = float(self._exchange.price_to_precision(order.pair, limit_price))
+        except Exception:
+            pass
+
+        # Track the original spot/perp split — caller already passed this in.
+        _ = market_type
+        return "limit", amount, limit_price
 
     async def _derive_pos_side(self, order: Order) -> str:
         """Return ``posSide`` for an OKX-style perp order.

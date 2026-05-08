@@ -82,6 +82,12 @@ async def run_analysis_and_buffer(
 
         pipeline_t0 = _time.monotonic()
         trace_register(trace_id)
+        # Bind the per-decision token ledger in *this* coroutine context so
+        # every subtask LangGraph spawns inherits it (see comment in
+        # ``tracing.run_graph_traced`` for the same fix on the scheduler path).
+        from cryptotrader.llm.token_tracker import start_ledger
+
+        start_ledger()
         # Track previous chunk timestamp so each node's duration_ms reflects
         # the wall-clock gap between the prior node_exit and this node_exit
         # (LangGraph astream doesn't provide per-node timings directly).

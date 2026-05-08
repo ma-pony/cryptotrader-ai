@@ -115,6 +115,13 @@ class PositionConfig:
     # stop-loss execution + funding payments.
     max_margin_used_pct: float = 0.40
     max_correlated_positions: int = 2
+    # Cap on simultaneous positions in a single direction (long or short).
+    # When 3+ positions already share a direction, the bot is making a single
+    # macro bet, not a diversified portfolio — refuse the (N+1)th to prevent
+    # synchronous stop-loss cascade exhausting the daily-loss budget. Set to
+    # 999 to disable; default 3 of a 5-pair set keeps headroom for one
+    # contrarian position.
+    max_same_direction_positions: int = 3
 
 
 @dataclass

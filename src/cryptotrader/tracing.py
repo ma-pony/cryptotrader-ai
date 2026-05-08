@@ -129,8 +129,28 @@ async def run_graph_traced(
 
     # Share the live trace via the registry so journal nodes (which run *inside*
     # the graph) can read what's accumulated so far. Keyed by state.metadata.trace_id.
-    trace_id = (initial_state.get("metadata") or {}).get("trace_id")
-    trace_register(trace_id) if trace_id else None
+    # Two-layer resolution: prefer the trace_id the caller already wrote into
+    # the state (explicit), fall back to the structlog ContextVar one (set by
+    # ``set_trace_id()`` in the scheduler), and finally generate one. This
+    # plugs the silent telemetry hole where the scheduler bound a trace_id to
+    # contextvars but never propagated it into state.metadata, leaving
+    # ``trace_register(None)`` as a no-op and the journal's
+    # ``latency_breakdown`` stuck at all-zeros.
+    metadata = initial_state.setdefault("metadata", {})
+    trace_id = metadata.get("trace_id") or get_trace_id() or str(uuid.uuid4())
+    metadata["trace_id"] = trace_id
+    trace_register(trace_id)
+
+    # Bind the per-decision token ledger in *this* coroutine context so every
+    # subtask LangGraph spawns inherits it. ``init_decision`` previously called
+    # ``start_ledger()`` from inside its own subtask, where the ContextVar set
+    # didn't propagate back up — so all downstream node tasks saw a fresh
+    # (None) ledger and ``token_usage`` shipped as zeros. Setting it here puts
+    # it in the outer context that all subsequent ``asyncio.create_task`` /
+    # ``asyncio.gather`` inheritances pick up.
+    from cryptotrader.llm.token_tracker import start_ledger
+
+    start_ledger()
     last_chunk_t = time.monotonic()
     try:
         async for chunk in graph.astream(initial_state, config=config, stream_mode="updates"):

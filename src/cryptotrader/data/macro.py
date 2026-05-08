@@ -18,11 +18,63 @@ from cryptotrader.models import MacroData
 logger = logging.getLogger(__name__)
 
 
+# Plausible value ranges for FRED series we consume. A value outside the
+# range is treated as missing (returned as 0.0) so downstream agents do not
+# anchor on poisoned data — see PROD-2026-05-07 incident where the broad
+# USD index (DTWEXBGS, base 2006=100, ~120 currently) was relabelled "DXY"
+# in agent prompts, causing the LLM to read 118 as ICE-DXY-extreme and
+# turning macro_agent permanently bearish across all altcoins.
+#
+# Ranges are deliberately wide (full historical envelope + headroom). The
+# goal is to catch obviously broken/stale/impossible values, not to police
+# normal market moves.
+_FRED_PLAUSIBLE_RANGES: dict[str, tuple[float, float]] = {
+    # Trade-Weighted USD Broad Goods, Jan 2006 base = 100. 20y range ~95–135.
+    "DTWEXBGS": (85.0, 145.0),
+    # Effective Federal Funds Rate (% annualized). ZIRP era through 2022 hike cycle.
+    "DFF": (0.0, 15.0),
+    # 10Y–2Y treasury spread (%). Inversion floor ~-2, steepening ceiling ~+3.
+    "T10Y2Y": (-3.0, 5.0),
+    # CBOE VIX. COVID spike 82.7 was historic record.
+    "VIXCLS": (5.0, 100.0),
+    # S&P 500 level — floor only (no upper bound that ages well).
+    "SP500": (500.0, 100000.0),
+    # M2 money stock (billions). Floor far below current ~21000.
+    "WM2NS": (5000.0, 1_000_000.0),
+    # CPI All Urban (1982-84=100). Floor 100, no realistic ceiling.
+    "CPIAUCSL": (100.0, 10000.0),
+}
+
+
+def _is_plausible_fred(series: str, value: float) -> bool:
+    """Return True if `value` is within the known-plausible band for `series`.
+
+    Series with no entry in `_FRED_PLAUSIBLE_RANGES` pass through unchecked
+    (we only police series we explicitly consume).
+    """
+    rng = _FRED_PLAUSIBLE_RANGES.get(series)
+    if rng is None:
+        return True
+    lo, hi = rng
+    return lo <= value <= hi
+
+
 async def _fetch_fred(series: str, api_key: str, date: str | None = None) -> float:
     source_key = f"fred_{series}"
     cached = get_cached_or_none(source_key, date)
     if cached is not None:
-        return float(cached) if isinstance(cached, int | float) else 0.0
+        if isinstance(cached, int | float):
+            val = float(cached)
+            if not _is_plausible_fred(series, val):
+                logger.warning(
+                    "FRED %s cached value %.4f outside plausible range %s — treating as missing",
+                    series,
+                    val,
+                    _FRED_PLAUSIBLE_RANGES.get(series),
+                )
+                return 0.0
+            return val
+        return 0.0
 
     # Backtest mode: no live API call for historical data
     if date is not None:
@@ -40,6 +92,14 @@ async def _fetch_fred(series: str, api_key: str, date: str | None = None) -> flo
             obs = r.json().get("observations", [])
             if obs:
                 val = float(obs[0]["value"])
+                if not _is_plausible_fred(series, val):
+                    logger.warning(
+                        "FRED %s API value %.4f outside plausible range %s — treating as missing (not cached)",
+                        series,
+                        val,
+                        _FRED_PLAUSIBLE_RANGES.get(series),
+                    )
+                    return 0.0
                 obs_date = obs[0].get("date")
                 cache_result(source_key, val, date=obs_date)
                 return val

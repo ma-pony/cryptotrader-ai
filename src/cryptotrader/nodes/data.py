@@ -155,8 +155,18 @@ async def _update_one_commit_pnl(store, dc, current_price: float) -> bool:
     """
     if dc.order is None:
         return False  # No trade was placed
-    if dc.pnl is not None and dc.fill_price is not None:
-        return False  # Realized PnL already recorded
+    # 2026-05-08: previously also required ``fill_price is not None`` here, but
+    # close commits are persisted with top-level ``fill_price=None`` (the
+    # actual fill price lives on the order row, not the commit). The compound
+    # guard was therefore always falsy on close commits and the function ran
+    # on every cycle, retroactively overwriting the realized PnL with a
+    # mark-to-market estimate using the *current* price. Result: a SOL close
+    # booked at +$90.56 on cycle T became +$54.17 on cycle T+1 because price
+    # had drifted. Realized PnL is set once at close time (see
+    # nodes/execution.py:_build_close_order writing state.realized_pnl) — once
+    # ``pnl is not None`` it must never change.
+    if dc.pnl is not None:
+        return False  # Realized PnL already recorded — never recompute
     action = ((dc.verdict.action if dc.verdict else "") or "").lower()
     if action != "close":
         return False  # Open commits never get pnl set — see docstring
@@ -299,6 +309,25 @@ def _build_trend_from_ohlcv(snapshot) -> dict | None:
     if highs and lows:
         ctx["high_30d"] = max(highs)
         ctx["low_30d"] = min(lows)
+
+    # ATR(14) on the snapshot timeframe — average true range over last 14 bars,
+    # used by the verdict prompt + server-side guardrail to enforce stops wider
+    # than typical noise. true_range = max(high-low, |high-prev_close|, |low-prev_close|).
+    # Falls back to None when fewer than 15 bars are available so callers can
+    # degrade gracefully.
+    closes_full = ohlcv["close"].dropna().tolist()
+    highs_full = ohlcv["high"].dropna().tolist()
+    lows_full = ohlcv["low"].dropna().tolist()
+    if len(closes_full) >= 15 and len(highs_full) >= 15 and len(lows_full) >= 15:
+        trs = []
+        for i in range(-14, 0):
+            h = highs_full[i]
+            lo = lows_full[i]
+            pc = closes_full[i - 1]
+            trs.append(max(h - lo, abs(h - pc), abs(lo - pc)))
+        if trs:
+            ctx["atr_14"] = sum(trs) / len(trs)
+
     return ctx
 
 

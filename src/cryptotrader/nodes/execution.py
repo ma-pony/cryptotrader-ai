@@ -132,21 +132,28 @@ async def _load_balances_from_db(
 
 
 async def _update_trade_tracking(state: ArenaState, pair: str):
-    """Update trade count and cooldown after successful order."""
-    from cryptotrader.nodes.verdict import _risk_gate_cache
+    """Update trade count and same-pair cooldown after a successful order.
 
+    Uses ``RedisStateManager(redis_url)`` directly rather than reaching into
+    the verdict-side ``_risk_gate_cache``. The risk-gate cache is keyed by
+    ``(redis_url, leverage)`` (added when the dual-cap risk model went in)
+    while this function only had ``redis_url`` — a key-shape mismatch that
+    caused every lookup to miss, so cooldowns were *never* persisted and
+    same_pair_minutes silently became a no-op. RedisStateManager is cheap
+    (just a thin wrapper over the redis client + in-memory fallback) so
+    re-instantiating per call is fine.
+    """
     redis_url = state["metadata"].get("redis_url")
-    cache_key = redis_url or "_default"
-    if cache_key in _risk_gate_cache:
-        try:
-            rsm = _risk_gate_cache[cache_key].redis_state
-            await rsm.incr_trade_count()
-            from cryptotrader.config import load_config
+    try:
+        from cryptotrader.config import load_config
+        from cryptotrader.risk.state import RedisStateManager
 
-            cooldown_min = load_config().risk.cooldown.same_pair_minutes
-            await rsm.set_cooldown(pair, cooldown_min)
-        except Exception:
-            logger.warning("Trade tracking update failed", exc_info=True)
+        rsm = RedisStateManager(redis_url)
+        await rsm.incr_trade_count()
+        cooldown_min = load_config().risk.cooldown.same_pair_minutes
+        await rsm.set_cooldown(pair, cooldown_min)
+    except Exception:
+        logger.warning("Trade tracking update failed", exc_info=True)
 
 
 async def _update_portfolio(

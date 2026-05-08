@@ -23,6 +23,11 @@ class VerdictSlim(BaseModel):
     confidence: float = 0.0
     reasoning: str = ""
     source: str = "ai"
+    # P0#1 (2026-05-07): make invalidation visible — without it the operator
+    # can't tell where the LLM thinks the thesis breaks. thesis paired for
+    # symmetry; both already stored on the dataclass and DB JSONB blob.
+    thesis: str = ""
+    invalidation: str = ""
 
 
 class DecisionListItem(BaseModel):
@@ -214,12 +219,22 @@ def _pair_meta(pair: str) -> tuple[str, str]:
 def _verdict_to_slim(v: Any) -> VerdictSlim:
     if v is None:
         return VerdictSlim(action="hold")
+
+    def _as_str(val: Any) -> str:
+        # Coerce non-string sources (legacy ``None`` defaults, or MagicMock objects in tests)
+        # to a real ``str`` so pydantic's ``string_type`` validator accepts them.
+        if val is None:
+            return ""
+        return val if isinstance(val, str) else str(val)
+
     return VerdictSlim(
         action=getattr(v, "action", "hold"),
         size=float(getattr(v, "position_scale", 0.0) or 0.0),
         confidence=float(getattr(v, "confidence", 0.0) or 0.0),
-        reasoning=getattr(v, "reasoning", "") or "",
+        reasoning=_as_str(getattr(v, "reasoning", "")),
         source=getattr(v, "verdict_source", "ai") or "ai",
+        thesis=_as_str(getattr(v, "thesis", "")),
+        invalidation=_as_str(getattr(v, "invalidation", "")),
     )
 
 

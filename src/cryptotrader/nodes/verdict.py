@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import structlog
@@ -13,6 +14,192 @@ from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
 _structlog = structlog.get_logger(__name__)
+
+# Detects the canonical FR-026 attribution string (`applied: <agent>::<pattern>` or
+# `applied: <pattern>`). The two-form match is intentional: agents may cite either
+# their own bare skill or another agent's namespaced skill.
+_APPLIED_RE = re.compile(r"applied:\s*([A-Za-z0-9_:]+)")
+
+# Pulls the FIRST USD-denominated price out of a free-text invalidation /
+# target_price string. Tolerates "$80,950", "$80950.50", "80,950" (no $).
+# Stops at non-numeric / non-comma / non-dot.
+_PRICE_RE = re.compile(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
+
+
+def _extract_price(text: str | None) -> float | None:
+    """Best-effort numeric extraction from a free-text price level string."""
+    if not text or not isinstance(text, str):
+        return None
+    m = _PRICE_RE.search(text)
+    if not m:
+        return None
+    try:
+        return float(m.group(1).replace(",", ""))
+    except (ValueError, TypeError):
+        return None
+
+
+def _post_process_verdict(
+    verdict,
+    raw_analyses: dict,
+    vd_dict: dict,
+    *,
+    entry_price: float | None = None,
+    atr: float | None = None,
+) -> dict:
+    """Apply deterministic server-side guardrails on top of the LLM verdict.
+
+    Three guardrails (in order — each only LOWERS confidence, never raises):
+      1. Confidence-based sizing cap. The LLM's ``position_scale`` is capped by
+         a Kelly-ish linear ramp from confidence (cf 0.50 → 0%, cf 0.70 → 40%,
+         cf 1.00 → 100% of max_single). Prevents medium-conviction trades from
+         going max-size.
+      2. Missing FR-026 ``applied:`` citation on a directional verdict halves
+         confidence. Skill PnL attribution requires a citation; without one we
+         cannot learn from this trade.
+      3. Any agent that returned ``is_mock`` or ``confidence==0`` (data outage)
+         caps verdict.confidence at ``raw - 0.20``. The LLM does not know that
+         one of the inputs was synthetic, so the cap is enforced here.
+
+    Returns the modified verdict dict (in-place via ``vd_dict``).
+    """
+    action = vd_dict.get("action", "hold")
+    cf = float(vd_dict.get("confidence", 0.0) or 0.0)
+    scale = float(vd_dict.get("position_scale", cf) or 0.0)
+    reasoning = vd_dict.get("reasoning", "") or ""
+
+    # Guardrail 1: confidence-based sizing cap.
+    # Linear ramp: cf=0.50 → 0, cf=0.70 → 0.4, cf=1.00 → 1.0
+    # Floors at 0 (sub-coin-flip confidence carries no size). Hold/close
+    # actions exit fully and use scale 0 / 1 already, so skip them.
+    if action in ("long", "short"):
+        confidence_cap = max(0.0, min(1.0, (cf - 0.5) * 2))
+        if scale > confidence_cap:
+            logger.info(
+                "Verdict scale capped by confidence ramp: %.2f -> %.2f (cf=%.2f, action=%s)",
+                scale,
+                confidence_cap,
+                cf,
+                action,
+            )
+            scale = confidence_cap
+            vd_dict["position_scale"] = scale
+            vd_dict.setdefault("guardrails", []).append("confidence_scale_cap")
+
+    # Guardrail 2: directional verdict missing `applied:` halves confidence.
+    if action in ("long", "short", "close") and not _APPLIED_RE.search(reasoning):
+        new_cf = round(cf * 0.5, 4)
+        logger.info(
+            "Verdict missing FR-026 applied: citation — confidence %.2f -> %.2f",
+            cf,
+            new_cf,
+        )
+        cf = new_cf
+        vd_dict["confidence"] = cf
+        vd_dict.setdefault("guardrails", []).append("missing_applied")
+
+    # Guardrail 3: any agent silent/mock → cap confidence at raw - 0.20.
+    silent_agents: list[str] = []
+    for aid, a in (raw_analyses or {}).items():
+        if not isinstance(a, dict):
+            a = {} if a is None else getattr(a, "__dict__", {})
+        is_mock = a.get("is_mock", False)
+        a_conf = float(a.get("confidence", 0.0) or 0.0)
+        if is_mock or a_conf == 0.0:
+            silent_agents.append(aid)
+    if silent_agents and action in ("long", "short", "close"):
+        capped = max(0.0, min(cf, max(0.0, cf - 0.20)))
+        if capped < cf:
+            logger.info(
+                "Verdict confidence capped due to silent/mock agents %s: %.2f -> %.2f",
+                silent_agents,
+                cf,
+                capped,
+            )
+            cf = capped
+            vd_dict["confidence"] = cf
+            vd_dict.setdefault("guardrails", []).append(f"silent_agents:{','.join(silent_agents)}")
+        # Re-apply confidence ramp since cf dropped.
+        if action in ("long", "short"):
+            ramp = max(0.0, min(1.0, (cf - 0.5) * 2))
+            if scale > ramp:
+                vd_dict["position_scale"] = ramp
+
+    # Guardrail 4 (N2): invalidation stop too tight → halve confidence.
+    # Stop must be at least max(1.5×ATR, 1.0% of entry). Prevents the LLM from
+    # placing 0.06%-distance stops that get whipsawed by routine 5min noise
+    # (observed pattern in 02:23 cycle: BTC stop $100 from entry $80,950).
+    if action in ("long", "short") and entry_price and entry_price > 0:
+        stop_price = _extract_price(vd_dict.get("invalidation", ""))
+        if stop_price is not None:
+            stop_distance = abs(stop_price - entry_price)
+            atr_floor = 1.5 * atr if (atr and atr > 0) else 0.0
+            pct_floor = entry_price * 0.01
+            min_distance = max(atr_floor, pct_floor)
+            if stop_distance < min_distance:
+                new_cf = round(cf * 0.5, 4)
+                logger.info(
+                    "Verdict stop too tight: distance=$%.4f < min=$%.4f (1.5×ATR=$%.4f, 1%%=$%.4f); cf %.2f -> %.2f",
+                    stop_distance,
+                    min_distance,
+                    atr_floor,
+                    pct_floor,
+                    cf,
+                    new_cf,
+                )
+                cf = new_cf
+                vd_dict["confidence"] = cf
+                vd_dict.setdefault("guardrails", []).append("stop_too_tight")
+                # Re-apply ramp.
+                ramp = max(0.0, min(1.0, (cf - 0.5) * 2))
+                if vd_dict.get("position_scale", 0) > ramp:
+                    vd_dict["position_scale"] = ramp
+
+    # Guardrail 5 (N7): R:R < 1.5 → halve confidence.
+    # R:R = |target − entry| / |entry − stop|. A trade with stop $1 risk and
+    # target $1 reward is statistically unprofitable after fees+slippage; we
+    # require a 1.5× edge minimum.
+    if action in ("long", "short") and entry_price and entry_price > 0:
+        stop_price = _extract_price(vd_dict.get("invalidation", ""))
+        target_price = _extract_price(vd_dict.get("target_price", ""))
+        if stop_price is not None and target_price is not None:
+            stop_distance = abs(stop_price - entry_price)
+            target_distance = abs(target_price - entry_price)
+            if stop_distance > 0:
+                rr = target_distance / stop_distance
+                if rr < 1.5:
+                    new_cf = round(cf * 0.5, 4)
+                    logger.info(
+                        "Verdict R:R %.2f < 1.5 (entry=$%.4f stop=$%.4f target=$%.4f); cf %.2f -> %.2f",
+                        rr,
+                        entry_price,
+                        stop_price,
+                        target_price,
+                        cf,
+                        new_cf,
+                    )
+                    cf = new_cf
+                    vd_dict["confidence"] = cf
+                    vd_dict.setdefault("guardrails", []).append(f"low_rr:{rr:.2f}")
+                    ramp = max(0.0, min(1.0, (cf - 0.5) * 2))
+                    if vd_dict.get("position_scale", 0) > ramp:
+                        vd_dict["position_scale"] = ramp
+                else:
+                    vd_dict["risk_reward_ratio"] = round(rr, 3)
+        elif target_price is None:
+            # Missing target on a directional verdict — same penalty as missing applied:
+            new_cf = round(cf * 0.5, 4)
+            logger.info(
+                "Verdict missing target_price for %s — cf %.2f -> %.2f",
+                action,
+                cf,
+                new_cf,
+            )
+            cf = new_cf
+            vd_dict["confidence"] = cf
+            vd_dict.setdefault("guardrails", []).append("missing_target_price")
+
+    return vd_dict
 
 
 async def _gather_risk_constraints(state: ArenaState) -> dict:
@@ -208,8 +395,28 @@ async def make_verdict(state: ArenaState) -> dict:
         "reasoning": verdict.reasoning,
         "thesis": verdict.thesis,
         "invalidation": verdict.invalidation,
+        "target_price": getattr(verdict, "target_price", "") or "",
         "verdict_source": verdict_source,
     }
+
+    # Server-side guardrails: confidence-scaled sizing, applied: enforcement,
+    # silent-agent confidence cap, ATR-based stop, R:R ≥ 1.5. These run on AI
+    # and weighted verdicts alike so the safety net does not depend on the LLM
+    # following the prompt.
+    if verdict_source != "hold_all_mock":
+        # Pull live price + ATR from the snapshot/trend context for the
+        # invalidation distance + R:R checks (Guardrails 4 + 5).
+        _summary = state["data"].get("snapshot_summary") or {}
+        _trend = state["data"].get("trend_context") or {}
+        _entry = float(_summary.get("price") or _trend.get("current_price") or 0.0) or None
+        _atr = _trend.get("atr_14")
+        _post_process_verdict(
+            verdict,
+            raw_analyses,
+            verdict_data,
+            entry_price=_entry,
+            atr=_atr,
+        )
 
     await _process_schedule_follow_up(state, verdict_data)
 
@@ -441,7 +648,15 @@ async def risk_check(state: ArenaState) -> dict:
     gate = _risk_gate_cache[cache_key]
 
     vd = state["data"]["verdict"]
-    verdict = TradeVerdict(**vd)
+    # Filter to only the TradeVerdict dataclass fields. The verdict dict can
+    # legitimately carry extra keys that the dataclass doesn't model — e.g.
+    # ``guardrails`` (audit trail of which server-side guardrails fired in
+    # ``_post_process_verdict``) or ``verdict_source``-adjacent metadata.
+    # Without this filter every cycle whose verdict triggered a guardrail
+    # crashed at ``TradeVerdict.__init__() got an unexpected keyword argument``,
+    # which silently dropped the pair from the cycle output (seen at 22:39 SOL,
+    # 03:55 LINK/SOL — the "silent drop" bug observed during overnight monitoring).
+    verdict = TradeVerdict(**{k: v for k, v in vd.items() if k in TradeVerdict.__dataclass_fields__})
 
     # In backtest mode, portfolio is pre-built by the engine — skip exchange queries
     portfolio = state["data"].get("portfolio")

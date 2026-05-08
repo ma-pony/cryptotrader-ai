@@ -54,9 +54,11 @@ def _make_analysis(direction: str = "bullish", confidence: float = 0.6) -> dict:
 async def test_debate_one_agent_emits_turn_with_before_after() -> None:
     analysis = _make_analysis("bullish", 0.6)
     others = {"chain_agent": _make_analysis("bearish", 0.5)}
+    # [NEW] prefix required to bypass anti-ratchet (confidence raise > +0.02).
     response_json = (
         '{"direction": "bullish", "confidence": 0.85, "reasoning": "updated",'
-        ' "key_factors": ["f1"], "risk_flags": [], "new_findings": "cross-domain insight"}'
+        ' "key_factors": ["f1"], "risk_flags": [],'
+        ' "new_findings": "[NEW] cross-domain insight: chain showed funding 0.03% I had not seen"}'
     )
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=response_json))
@@ -78,7 +80,7 @@ async def test_debate_one_agent_emits_turn_with_before_after() -> None:
     assert turn["before"] == {"direction": "bullish", "confidence": 0.6}
     assert turn["after"] == {"direction": "bullish", "confidence": 0.85}
     assert turn["move"] == "强化"
-    assert turn["new_findings"] == "cross-domain insight"
+    assert turn["new_findings"].startswith("[NEW]")
     assert turn["errored"] is False
 
 

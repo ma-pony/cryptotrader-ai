@@ -233,6 +233,12 @@ class TradeVerdict:
     reasoning: str = ""
     thesis: str = ""
     invalidation: str = ""
+    # N7 (2026-05-08): explicit profit target so server can compute R:R and
+    # reject low-edge trades. Long/short verdicts must populate; hold/close
+    # leave it empty. String form (e.g. "$87.50") so the LLM can keep the same
+    # format it uses for ``invalidation`` — server-side parses both with
+    # the same regex.
+    target_price: str = ""
     verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
 
     def __post_init__(self) -> None:

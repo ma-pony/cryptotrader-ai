@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from cryptotrader.models import GateResult, TradeVerdict
+from cryptotrader.risk.checks.concentration import MacroConcentrationCheck
 from cryptotrader.risk.checks.cooldown import CooldownCheck
 from cryptotrader.risk.checks.correlation import CorrelationCheck
 from cryptotrader.risk.checks.cvar import CVaRCheck
@@ -40,6 +41,7 @@ class RiskGate:
             DrawdownLimit(config.loss, redis_state),
             CVaRCheck(config.loss),
             CorrelationCheck(config.position),
+            MacroConcentrationCheck(config.position),
             CooldownCheck(config.cooldown, redis_state),
             VolatilityGate(config.volatility),
             FundingRateGate(config.volatility),

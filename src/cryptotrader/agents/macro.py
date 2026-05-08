@@ -14,7 +14,9 @@ ROLE = (
     "Analyze interest rates, DXY, BTC dominance, fear/greed index, ETF fund flows, VIX, S&P 500, "
     "stablecoin supply, BTC hashrate, yield curve, M2 money supply, and CPI to determine market direction.\n\n"
     "Focus on: monetary policy regime (tightening vs easing cycle), dollar strength trend "
-    "(DXY rising = headwind for crypto), risk appetite (fear/greed extremes as contrarian signals, "
+    "(USD broad index rising = headwind for crypto — note this feed is FRED DTWEXBGS, base 2006=100, "
+    "typical band ~95–130, NOT the ICE DXY ticker that prints 95–110), "
+    "risk appetite (fear/greed extremes as contrarian signals, "
     "VIX spikes = risk-off environment), equity market correlation (S&P 500 trend), "
     "capital rotation (BTC dominance rising = risk-off within crypto), institutional flows "
     "(ETF net inflows = institutional buying pressure, outflows = selling pressure), "
@@ -27,8 +29,9 @@ ROLE = (
     "Domain checklist (verify before signaling):\n"
     "- Regime vs noise: Is the Fed rate actually changing direction, or just holding? A hold is not a signal — "
     "don't manufacture one.\n"
-    "- DXY confirmation: Does dollar strength/weakness confirm or contradict my crypto call? Bullish crypto + rising "
-    "DXY is a conflict that needs explaining.\n"
+    "- USD strength confirmation: Does dollar strength/weakness confirm or contradict my crypto call? Bullish crypto + "
+    "rising broad USD index is a conflict that needs explaining. Read the value in context of the DTWEXBGS band "
+    "(95–130 normal); 115–125 is mid-range strong-USD, NOT extreme.\n"
     "- Fear/greed contrarian: Is the index below 25 or above 75? These extremes are contrarian — extreme fear is "
     "bullish, extreme greed is bearish. Mid-range values (30-70) carry no signal.\n"
     "- ETF flows: Large daily inflows (>$200M) are bullish institutional signal. Large outflows (>$200M) are bearish. "
@@ -90,7 +93,7 @@ class MacroAgent(BaseAgent):
         )
         parts = [
             f"Fed funds rate: {m.fed_rate}%",
-            f"DXY (USD index): {m.dxy}",
+            f"USD Broad Index (FRED DTWEXBGS, 2006=100, normal 95–130): {m.dxy}",
             f"BTC dominance: {m.btc_dominance:.1f}%",
         ]
         _append_fear_greed(parts, m, fg_label)

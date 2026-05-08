@@ -50,7 +50,8 @@ async def test_debate_one_agent_success():
     others = {"chain_agent": _make_analysis("bearish")}
     response_json = (
         '{"direction": "bullish", "confidence": 0.85, "reasoning": "updated",'
-        ' "key_factors": ["f1"], "risk_flags": [], "new_findings": "cross-domain"}'
+        ' "key_factors": ["f1"], "risk_flags": [],'
+        ' "new_findings": "[NEW] chain_agent funding rate 0.025% reinforces my long thesis"}'
     )
     mock_llm = AsyncMock()
     mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=response_json))
@@ -65,8 +66,9 @@ async def test_debate_one_agent_success():
             1,
         )
     assert aid == "tech_agent"
+    # Confidence raise +0.05 with [NEW] prefix → anti-ratchet allows it.
     assert result["confidence"] == 0.85
-    assert result["new_findings"] == "cross-domain"
+    assert result["new_findings"].startswith("[NEW]")
 
 
 @pytest.mark.asyncio

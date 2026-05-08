@@ -642,11 +642,16 @@ async def test_make_verdict_llm():
     mock_verdict = MagicMock()
     mock_verdict.action = "long"
     mock_verdict.confidence = 0.8
-    mock_verdict.position_scale = 0.7
+    mock_verdict.position_scale = 0.6
     mock_verdict.divergence = 0.1
-    mock_verdict.reasoning = "Strong bullish consensus"
+    # Include `applied:` (FR-026) so server-side guardrail does not halve cf.
+    # Use concrete invalidation + target prices so N2 (stop distance) and N7 (R:R)
+    # guardrails accept the verdict.
+    mock_verdict.reasoning = "Strong bullish consensus. applied: tech::breakout_long"
     mock_verdict.thesis = "Breakout confirmed"
-    mock_verdict.invalidation = "Below 48k"
+    mock_verdict.invalidation = "Below $48,000"  # entry $50k, stop ~4% away
+    mock_verdict.target_price = "$56,000"  # 12% target → R:R 3.0
+    mock_verdict.verdict_source = "ai"
 
     with (
         patch(
@@ -666,6 +671,8 @@ async def test_make_verdict_llm():
     assert v["action"] == "long"
     assert v["confidence"] == 0.8
     assert v["thesis"] == "Breakout confirmed"
+    # cf=0.8 → confidence_cap = (0.8-0.5)*2 = 0.6, so scale stays at 0.6
+    assert v["position_scale"] == pytest.approx(0.6)
 
 
 # ── nodes/execution.py — deeper coverage ──
