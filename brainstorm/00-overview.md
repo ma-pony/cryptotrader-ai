@@ -12,7 +12,8 @@ Last updated: 2026-05-09
 | 02  | 2026-05-08 | Skill / Memory 进化前序研究（8 项目）         | [specs/016-research-skill-evolution-prior-art/](../specs/016-research-skill-evolution-prior-art/) | Spec ✅ SOUND，Phase 1+2 完成；unblocks 017/018/019/020 |
 | 03  | 2026-05-08 | Spec 017b — Agent Prompt Builder Integration | [specs/018-agent-prompt-builder-integration/](../specs/018-agent-prompt-builder-integration/) | ✅ Spec Ready + Implementation 合并 main |
 | 04  | 2026-05-09 | Spec 018 — Memory Evolution                   | [specs/019-memory-evolution/](../specs/019-memory-evolution/)             | ✅ Spec Ready + Implementation 合并 main |
-| 05  | 2026-05-09 | Spec 019 — Skill Evolution                    | （待 `/speckit-specify` 创建）                                            | Active brainstorm；7 决策已敲定 + 4 项 spot-check 完成，待 ship |
+| 05  | 2026-05-09 | Spec 019 — Skill Evolution                    | [specs/020-skill-evolution/](../specs/020-skill-evolution/)               | ✅ Spec Ready + Implementation 合并 main |
+| 06  | 2026-05-09 | Spec 020a — Trilogy Ops（cache 观测 + advisory + 部署 + monitoring） | （待 `/speckit-specify` 创建）                                            | Active brainstorm；5 决策已敲定 + 4 项 spot-check 完成，待 ship |
 
 ## 进行中的依赖链
 
@@ -24,9 +25,11 @@ spec 016 Phase 1+2  ──┐
                        │
                        └──> spec 018 (Memory Evolution，本会话，trilogy 切分后)
                              │
-                             └──> spec 019 (Skill Evolution，待启动)
+                             └──> spec 019 (Skill Evolution，已合并 main)
                                    │
-                                   └──> spec 020 (Ops: cache + daemon + lineage，待启动)
+                                   ├──> spec 020a (cache 观测 + advisory + 部署 + monitoring，本会话，待 ship)
+                                   │
+                                   └──> spec 020b (reflect daemon + git lineage，待启动)
 ```
 
 ## 已合并 spec
@@ -35,6 +38,7 @@ spec 016 Phase 1+2  ──┐
 - **spec 017a**：PromptBuilder 基建（commit cfd3acc + merge f1e37a9，2026-05-08）
 - **spec 017b**：4 agent 集成切换（commit 5b65a4a + 18e231e，2026-05-08）
 - **spec 018**：Memory Evolution（commit 458a0f2 + 14afc50 + 1c0302d，2026-05-09）
+- **spec 019**：Skill Evolution（commit 3fbf941，2026-05-09）
 
 ## Open Threads
 
