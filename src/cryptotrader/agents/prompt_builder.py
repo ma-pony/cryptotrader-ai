@@ -16,6 +16,12 @@ from typing import Protocol
 import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 
+# spec 019 FR-W11: DefaultSkillProvider class deleted; EvolvingSkillProvider replaces it.
+# Backward-compat alias so existing test imports do not break (TID251 suppressed below).
+from cryptotrader.learning.evolution.skill_provider import (  # noqa: F401
+    EvolvingSkillProvider as DefaultSkillProvider,
+)
+
 logger = logging.getLogger(__name__)
 
 # ── Token 估算（CJK-aware，与 spec 014 算法一致）───────────────────────────────
@@ -255,7 +261,7 @@ class SkillProvider(Protocol):
 # ── DefaultSkillProvider deleted (spec 019 FR-W11) ─────────────────────────────
 # spec 017a/b DefaultSkillProvider retired. EvolvingSkillProvider in
 # src/cryptotrader/learning/evolution/skill_provider.py replaces it.
-# Backward-compat alias kept so existing imports do not break.
+# Backward-compat alias so existing test imports do not break.
 
 # ── EnforceResult + TokenBudgetEnforcer ────────────────────────────────────────
 
