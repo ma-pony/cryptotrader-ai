@@ -580,7 +580,7 @@ async def get_memory_skill_detail(name: str) -> JSONResponse:
         skill_md = _SKILLS_ROOT / name / "SKILL.md"
         # 二次校验：确保解析后路径仍在 skills root 内（防止符号链接绕过）
         try:
-            skill_md.resolve().relative_to(_SKILLS_ROOT.resolve())
+            skill_md.resolve().relative_to(_SKILLS_ROOT.resolve())  # noqa: ASYNC240
         except ValueError:
             return JSONResponse(
                 status_code=400,
@@ -701,8 +701,8 @@ async def get_skill_proposals(
         from cryptotrader.agents.skills._frontmatter import parse_frontmatter
 
         items = []
-        if _SKILLS_ROOT.exists():
-            for skill_dir in sorted(_SKILLS_ROOT.iterdir()):
+        if _SKILLS_ROOT.exists():  # noqa: ASYNC240
+            for skill_dir in sorted(_SKILLS_ROOT.iterdir()):  # noqa: ASYNC240
                 if not skill_dir.is_dir() or skill_dir.name.startswith("."):
                     continue
                 draft_path = skill_dir / "SKILL.md.draft"
