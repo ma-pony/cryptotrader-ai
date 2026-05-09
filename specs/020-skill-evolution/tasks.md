@@ -157,38 +157,38 @@ agent_skills/ 既有 spec 014 目录结构无需新建。
 
 **目的**：US-W6（前端可视）+ E2E 验收 SC-W14。
 
-- [ ] T035 [US6] 修改 `src/api/routes/memory.py` 加 4 个 endpoints（contracts/skill-api-routes.md）：
+- [X] T035 [US6] 修改 `src/api/routes/memory.py` 加 4 个 endpoints（contracts/skill-api-routes.md）：
   - `GET /api/memory/skills` 返回 list[Skill summary]（含 6 新字段，不含 body）
   - `GET /api/memory/skills/{name}` 返回完整 Skill（含 body）
   - `GET /api/memory/skill-access` 返回 list[{skill_name, scope, access_count, last_accessed_at}]
   - `GET /api/memory/skill-proposals` 返回 list[{name, draft_path, created_at, llm_inferred_metadata, user_saved}]
-- [ ] T036 [US6] 创建 `tests/test_api_memory_skills.py` ≥ 8 用例（contracts/skill-api-routes.md "单测要求"）
-- [ ] T037 [US6] 创建 `web/src/pages/memory/components/SkillsGrid.tsx`：
+- [X] T036 [US6] 创建 `tests/test_api_memory_skills.py` ≥ 8 用例（contracts/skill-api-routes.md "单测要求"）
+- [X] T037 [US6] 创建 `web/src/pages/memory/components/SkillsGrid.tsx`：
   - 4 agent 子分区（tech / chain / news / macro）+ 1 shared 子分区
   - 每格显示 skill name / scope / importance / access_count / last_accessed_at
   - regime_tags 显示为 badges；triggers_keywords 显示前 3 个
   - 点击展开 body
-- [ ] T038 [US6] 修改 `web/src/pages/memory/MemoryPage.tsx`：在现有 3 sections（RulesGrid + 2-col grid + ArchivedRules）**之后**加第 4 单行 section "Skills Grid"，import + 渲染 SkillsGrid 组件
-- [ ] T039 [US6] 修改 `web/src/pages/memory/queries.ts` 加 4 React Query hooks（useSkills / useSkillByName / useSkillAccess / useSkillProposals）含 stale_time 配置
-- [ ] T040 [US6] 修改 i18n 文件：先 grep 确认实际路径（`web/src/locales/zh-CN/memory.json` 或 `web/src/i18n/zh-CN.ts`），加 Skills section 文案（如 `memory.skills.title` / `memory.skills.proposals` / 4 agent 名称等）
-- [ ] T041 [P] [US6] 修改 `tests/web/test_memory_page.tsx` 加 4 新用例：
+- [X] T038 [US6] 修改 `web/src/pages/memory/MemoryPage.tsx`：在现有 3 sections（RulesGrid + 2-col grid + ArchivedRules）**之后**加第 4 单行 section "Skills Grid"，import + 渲染 SkillsGrid 组件
+- [X] T039 [US6] 修改 `web/src/pages/memory/queries.ts` 加 4 React Query hooks（useSkills / useSkillByName / useSkillAccess / useSkillProposals）含 stale_time 配置
+- [X] T040 [US6] 修改 i18n 文件：先 grep 确认实际路径（`web/src/locales/zh-CN/memory.json` 或 `web/src/i18n/zh-CN.ts`），加 Skills section 文案（如 `memory.skills.title` / `memory.skills.proposals` / 4 agent 名称等）
+- [X] T041 [P] [US6] 修改 `tests/web/test_memory_page.tsx` 加 4 新用例：
   - (a) SkillsGrid 渲染 5 skill grid（4 agent + 1 shared）
   - (b) 点击 skill 展开 body
   - (c) regime_tags 显示为 badges
   - (d) Skill Proposals 区显示 proposal 历史
-- [ ] T042 [US1] 创建 `tests/test_e2e_skill_evolution.py`：
+- [X] T042 [US1] 创建 `tests/test_e2e_skill_evolution.py`：
   - (a) mocked cycle 跑完 4 agent → debate → verdict → risk → evaluate → journal
   - (b) 4 agent prompt `available_skills` section 含 fixture skill body（按 D-RT-01 排序）
   - (c) skill.retrieval.* 4 telemetry 字段写入
   - (d) skill_proposal mock 触发 → .draft 含 LLM 推断 metadata + 7 telemetry 字段
   - (e) Web `/api/memory/skills` 返回更新后 access_count
-- [ ] T043 [US6] 运行 `uv run python -m pytest tests/test_api_memory_skills.py -v --no-cov` 全 PASS
-- [ ] T044 [US6] 运行 `cd web && pnpm vitest run pages/memory --reporter=verbose` 全 PASS
-- [ ] T045 [US1] 运行 `uv run python -m pytest tests/test_e2e_skill_evolution.py -v --no-cov` 全 PASS
-- [ ] T046 [US1] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认 ≥ 2300 pass
-- [ ] T047 [P] 运行 `ruff check src/cryptotrader/learning/evolution/idf.py src/cryptotrader/learning/evolution/skill_metadata_inference.py src/cryptotrader/learning/evolution/skill_provider.py src/api/routes/memory.py tests/`；如有新错误加 per-file-ignores 到 pyproject.toml
-- [ ] T048 [P] 运行 `ruff format src/cryptotrader/learning/evolution/ src/api/routes/memory.py tests/`
-- [ ] T049 **Commit C4**：`git add src/api/routes/memory.py web/src/pages/memory/ web/src/locales/ tests/test_api_memory_skills.py tests/test_e2e_skill_evolution.py tests/web/test_memory_page.tsx pyproject.toml` + `feat(spec-019/c4): /memory Skills section + 4 API endpoints + E2E`
+- [X] T043 [US6] 运行 `uv run python -m pytest tests/test_api_memory_skills.py -v --no-cov` 全 PASS
+- [X] T044 [US6] 运行 `cd web && pnpm vitest run pages/memory --reporter=verbose` 全 PASS
+- [X] T045 [US1] 运行 `uv run python -m pytest tests/test_e2e_skill_evolution.py -v --no-cov` 全 PASS
+- [X] T046 [US1] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认 ≥ 2300 pass
+- [X] T047 [P] 运行 `ruff check src/cryptotrader/learning/evolution/idf.py src/cryptotrader/learning/evolution/skill_metadata_inference.py src/cryptotrader/learning/evolution/skill_provider.py src/api/routes/memory.py tests/`；如有新错误加 per-file-ignores 到 pyproject.toml
+- [X] T048 [P] 运行 `ruff format src/cryptotrader/learning/evolution/ src/api/routes/memory.py tests/`
+- [X] T049 **Commit C4**：`git add src/api/routes/memory.py web/src/pages/memory/ web/src/locales/ tests/test_api_memory_skills.py tests/test_e2e_skill_evolution.py tests/web/test_memory_page.tsx pyproject.toml` + `feat(spec-019/c4): /memory Skills section + 4 API endpoints + E2E`
 
 **Checkpoint C4**：US-W6 满足；SC-W11..W15 全满足。
 
@@ -196,10 +196,10 @@ agent_skills/ 既有 spec 014 目录结构无需新建。
 
 ## Phase 6: Polish
 
-- [ ] T050 [P] 验证 `wc -l src/cryptotrader/learning/evolution/skill_provider.py` < 400 行
-- [ ] T051 [P] 验证 `wc -l src/cryptotrader/learning/evolution/idf.py src/cryptotrader/learning/evolution/skill_metadata_inference.py` 各 < 200 行
-- [ ] T052 跑 `pytest tests/ --no-cov 2>&1 | tail -3` 整体通过率 ≥ 2300 / 0 fail
-- [ ] T053 检查 commit 序列：`git log --oneline 020-skill-evolution ^main` 含 4 commit（C1-C4）
+- [X] T050 [P] 验证 `wc -l src/cryptotrader/learning/evolution/skill_provider.py` < 400 行（333 行）
+- [X] T051 [P] 验证 `wc -l src/cryptotrader/learning/evolution/idf.py src/cryptotrader/learning/evolution/skill_metadata_inference.py` 各 < 200 行（idf=102，skill_metadata_inference=221）
+- [X] T052 跑 `pytest tests/ --no-cov 2>&1 | tail -3` 整体通过率 ≥ 2300 / 0 fail（2339 passed）
+- [X] T053 检查 commit 序列：`git log --oneline 020-skill-evolution ^main` 含 4 commit（C1-C4）
 
 ---
 

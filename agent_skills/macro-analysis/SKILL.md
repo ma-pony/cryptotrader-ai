@@ -5,8 +5,8 @@ description: Macroeconomic analysis skill for interpreting Fed policy, dollar st
 scope: agent:macro
 version: '1.0'
 manually_edited: false
-access_count: 14
-last_accessed_at: '2026-05-09T05:53:45.086930+00:00'
+access_count: 70
+last_accessed_at: '2026-05-09T06:14:30.125204+00:00'
 ---
 # Macro Analysis Agent Skill
 
