@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -134,8 +134,8 @@ async def test_evaluate_node_ive_classification(tmp_path: Path):
         reasoning="Market noise",
         diagnostic_answers=["uncertain"] * 5,
     )
-    with patch("cryptotrader.learning.evolution.ive.classify_case", return_value=mock_fc):
-        classifications = provider.classify_pending_cases()
+    with patch("cryptotrader.learning.evolution.ive.classify_case", new=AsyncMock(return_value=mock_fc)):
+        classifications = await provider.classify_pending_cases()
 
     assert isinstance(classifications, list)
     assert len(classifications) >= 1

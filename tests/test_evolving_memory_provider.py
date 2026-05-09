@@ -10,6 +10,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from cryptotrader.agents.skills.schema import PatternRecord, PnLTrack
 from cryptotrader.learning.evolution.provider import (
     EvolvingMemoryProvider,
@@ -153,17 +155,20 @@ def test_access_count_incremented_on_access(tmp_path: Path):
     assert updated.access_count == 1
 
 
-def test_ive_exception_returns_empty_string(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_ive_exception_returns_empty_string(tmp_path: Path):
     """T026(e): IVE LLM exception in classify_pending_cases → noise result + warning."""
+    from unittest.mock import AsyncMock
+
     _make_case_file(tmp_path, cycle_id="unclassified", ive_classification=None)
 
     provider = EvolvingMemoryProvider(memory_root=tmp_path)
     with patch(
         "cryptotrader.learning.evolution.ive.classify_case",
-        side_effect=RuntimeError("LLM down"),
+        new=AsyncMock(side_effect=RuntimeError("LLM down")),
     ):
         # Should not raise; problem case should be skipped
-        results = provider.classify_pending_cases()
+        results = await provider.classify_pending_cases()
     # Either empty (exception skipped) or returned noise
     assert isinstance(results, list)
 
@@ -238,13 +243,14 @@ def test_evaluate_all_rules_returns_transitions(tmp_path: Path):
     assert t.new_state == "probationary"
 
 
-def test_classify_pending_skips_already_classified(tmp_path: Path):
+@pytest.mark.asyncio
+async def test_classify_pending_skips_already_classified(tmp_path: Path):
     """T026 extra: cases with existing ive_classification are skipped."""
     existing_cls = {"failure_type": "noise", "confidence": 0.5, "reasoning": "already done"}
     _make_case_file(tmp_path, cycle_id="classified_001", ive_classification=existing_cls)
 
     provider = EvolvingMemoryProvider(memory_root=tmp_path)
-    results = provider.classify_pending_cases()
+    results = await provider.classify_pending_cases()
 
     # Should be empty since the case is already classified
     assert results == []

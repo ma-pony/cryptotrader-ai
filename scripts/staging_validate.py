@@ -121,6 +121,7 @@ def _check_otel_fields() -> None:
         usage_metadata={
             "input_tokens": 100,
             "output_tokens": 50,
+            "total_tokens": 150,
             "cache_read_input_tokens": 80,
             "cache_creation_input_tokens": 20,
         },

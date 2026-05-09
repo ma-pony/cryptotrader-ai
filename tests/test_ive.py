@@ -1,17 +1,16 @@
 """spec 018 IVE unit tests — tests/test_ive.py
 
 SC-Z8: >= 8 use cases PASS.
+spec 020a FR-Z12: migrated to async (classify_case is now async def).
 """
 
 from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
-if TYPE_CHECKING:
-    import pytest
+import pytest
 
 from cryptotrader.agents.skills.schema import CaseRecord
 from cryptotrader.learning.evolution.ive import (
@@ -56,12 +55,13 @@ def _make_llm(failure_type: str, confidence: float = 0.8) -> MagicMock:
 # ── basic classification tests ────────────────────────────────────────────────
 
 
-def test_classify_implementation():
+@pytest.mark.asyncio
+async def test_classify_implementation():
     """T018(a): mock LLM returns implementation -> FailureClassification."""
     case = _make_case()
     mock_llm = _make_llm("implementation")
 
-    result = classify_case(case, llm_callable=mock_llm)
+    result = await classify_case(case, llm_callable=mock_llm)
 
     assert result.failure_type == "implementation"
     assert result.case_id == "test_cycle"
@@ -69,27 +69,30 @@ def test_classify_implementation():
     assert len(result.diagnostic_answers) == 5
 
 
-def test_classify_fundamental():
+@pytest.mark.asyncio
+async def test_classify_fundamental():
     """T018(b): mock LLM returns fundamental."""
     case = _make_case()
     mock_llm = _make_llm("fundamental")
 
-    result = classify_case(case, llm_callable=mock_llm)
+    result = await classify_case(case, llm_callable=mock_llm)
 
     assert result.failure_type == "fundamental"
 
 
-def test_classify_noise():
+@pytest.mark.asyncio
+async def test_classify_noise():
     """T018(c): mock LLM returns noise."""
     case = _make_case()
     mock_llm = _make_llm("noise")
 
-    result = classify_case(case, llm_callable=mock_llm)
+    result = await classify_case(case, llm_callable=mock_llm)
 
     assert result.failure_type == "noise"
 
 
-def test_llm_failure_returns_noise(caplog: pytest.LogCaptureFixture):
+@pytest.mark.asyncio
+async def test_llm_failure_returns_noise(caplog: pytest.LogCaptureFixture):
     """T018(d): LLM call raises exception -> returns noise + warning log."""
 
     def _failing_llm(_sys: str, _usr: str) -> str:
@@ -98,14 +101,15 @@ def test_llm_failure_returns_noise(caplog: pytest.LogCaptureFixture):
     case = _make_case()
 
     with caplog.at_level("WARNING"):
-        result = classify_case(case, llm_callable=_failing_llm)
+        result = await classify_case(case, llm_callable=_failing_llm)
 
     assert result.failure_type == "noise"
     assert result.case_id == "test_cycle"
     assert any("LLM" in r.message or "noise" in r.message for r in caplog.records)
 
 
-def test_invalid_json_retries_then_noise(caplog: pytest.LogCaptureFixture):
+@pytest.mark.asyncio
+async def test_invalid_json_retries_then_noise(caplog: pytest.LogCaptureFixture):
     """T018(e): LLM returns non-JSON -> retry once -> still invalid -> noise."""
     call_count = 0
 
@@ -117,13 +121,14 @@ def test_invalid_json_retries_then_noise(caplog: pytest.LogCaptureFixture):
     case = _make_case()
 
     with caplog.at_level("WARNING"):
-        result = classify_case(case, llm_callable=_bad_json_llm)
+        result = await classify_case(case, llm_callable=_bad_json_llm)
 
     assert result.failure_type == "noise"
     assert call_count == 2  # called twice (initial + retry)
 
 
-def test_prompt_contains_case_context():
+@pytest.mark.asyncio
+async def test_prompt_contains_case_context():
     """T018(f): prompt includes trade_execution data and 5 diagnostic questions."""
     captured_prompts: list[str] = []
 
@@ -146,7 +151,7 @@ def test_prompt_contains_case_context():
             "fill_status": "stopped_out",
         }
     )
-    classify_case(case, llm_callable=_capturing_llm)
+    await classify_case(case, llm_callable=_capturing_llm)
 
     assert len(captured_prompts) == 1
     prompt = captured_prompts[0]
@@ -157,7 +162,8 @@ def test_prompt_contains_case_context():
     assert "5." in prompt
 
 
-def test_same_regime_context_in_prompt():
+@pytest.mark.asyncio
+async def test_same_regime_context_in_prompt():
     """T018(g): same-regime cases appear in prompt context."""
     captured: list[str] = []
 
@@ -175,13 +181,14 @@ def test_same_regime_context_in_prompt():
     main_case = _make_case(cycle_id="main_case")
     ctx_case = _make_case(cycle_id="ctx_case_001", pair="BTC/USDT", final_pnl=-50.0)
 
-    classify_case(main_case, llm_callable=_cap_llm, same_regime_cases=[ctx_case])
+    await classify_case(main_case, llm_callable=_cap_llm, same_regime_cases=[ctx_case])
 
     prompt = captured[0]
     assert "ctx_case_001" in prompt
 
 
-def test_empty_trade_execution_prompt_well_formed():
+@pytest.mark.asyncio
+async def test_empty_trade_execution_prompt_well_formed():
     """T018(h): empty trade_execution -> prompt still well-formed."""
 
     def _ok_llm(sys_p: str, usr_p: str) -> str:
@@ -197,7 +204,7 @@ def test_empty_trade_execution_prompt_well_formed():
         )
 
     case = _make_case(trade_execution=None)
-    result = classify_case(case, llm_callable=_ok_llm)
+    result = await classify_case(case, llm_callable=_ok_llm)
     assert result.failure_type == "noise"
     assert result.case_id == "test_cycle"
 

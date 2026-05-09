@@ -273,7 +273,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # spec 020a: staging_validate + new test files use Chinese docstrings/comments and
 # pytest.mark.asyncio patterns. PT015 is suppressed for run_step error path tests
 # that intentionally use assert False to simulate failures.
-"tests/test_staging_validate.py" = ["RUF001", "RUF002", "RUF003", "PT015"]
+"tests/test_staging_validate.py" = ["RUF001", "RUF002", "RUF003", "PT015", "E402"]
 "tests/test_llm_usage_cache_attr.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_ive_async.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_ive.py" = ["RUF001", "RUF002", "RUF003"]
