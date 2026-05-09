@@ -201,7 +201,7 @@ def _case_passes_filters(case: Any, from_dt: datetime, to_dt: datetime, agent: s
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
 
-@router.get("/api/memory/rules", response_model=RulesList)
+@router.get("/rules", response_model=RulesList)
 async def get_memory_rules(
     agent: str | None = Query(default=None, description="tech/chain/news/macro"),
     status: str | None = Query(default=None, description="observed/probationary/active/deprecated/archived"),
@@ -266,7 +266,7 @@ async def get_memory_rules(
         )
 
 
-@router.get("/api/memory/cases", response_model=CasesList)
+@router.get("/cases", response_model=CasesList)
 async def get_memory_cases(
     from_: str | None = Query(default=None, alias="from", description="ISO8601 start time"),
     to: str | None = Query(default=None, description="ISO8601 end time"),
@@ -331,7 +331,7 @@ async def get_memory_cases(
         )
 
 
-@router.get("/api/memory/transitions", response_model=TransitionsList)
+@router.get("/transitions", response_model=TransitionsList)
 async def get_memory_transitions(
     since: str | None = Query(default=None, description="ISO8601 start time; defaults to 24h ago"),
 ) -> JSONResponse:
@@ -390,7 +390,7 @@ async def get_memory_transitions(
         )
 
 
-@router.get("/api/memory/archived", response_model=ArchivedList)
+@router.get("/archived", response_model=ArchivedList)
 async def get_memory_archived() -> JSONResponse:
     """FR-Z43: 返回 archived patterns 列表（从 .archived/ 子目录读取）。"""
     try:
