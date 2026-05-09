@@ -8,9 +8,9 @@
 
 ## Phase 2: Foundational
 
-- [ ] T001 [P] 在 `src/cryptotrader/config.py` 加 `EvolutionDaemonConfig` dataclass（enabled / cron / actions / llm_model / propose_threshold 5 字段，按 data-model.md Entity 1）
-- [ ] T002 [P] 在 `config/default.toml` 加 `[evolution_daemon]` section（enabled=true / cron="0 0 * * *" / actions=["pareto","regime","skill_proposal"] / llm_model="" / propose_threshold=10）
-- [ ] T003 [P] 在 `src/cryptotrader/config.py` 的 `load_config()` 中解析 `[evolution_daemon]` section 到 `EvolutionDaemonConfig`
+- [X] T001 [P] 在 `src/cryptotrader/config.py` 加 `EvolutionDaemonConfig` dataclass（enabled / cron / actions / llm_model / propose_threshold 5 字段，按 data-model.md Entity 1）
+- [X] T002 [P] 在 `config/default.toml` 加 `[evolution_daemon]` section（enabled=true / cron="0 0 * * *" / actions=["pareto","regime","skill_proposal"] / llm_model="" / propose_threshold=10）
+- [X] T003 [P] 在 `src/cryptotrader/config.py` 的 `load_config()` 中解析 `[evolution_daemon]` section 到 `EvolutionDaemonConfig`
 
 ---
 
@@ -20,12 +20,12 @@
 
 **Independent Test**：50 active rules（含 10 低 win_rate）→ daemon 跑完后 ≥ 10 rules 转 archived。
 
-- [ ] T004 [P] [US1] 创建 `src/cryptotrader/ops/__init__.py`（空文件，标记包）
-- [ ] T005 [US1] 创建 `src/cryptotrader/ops/daemon.py`：`EvolutionDaemon` 类骨架（`__init__` + `run_once` + `run_forever` + `_acquire_locks` 上下文管理器，按 research.md Decision 1）
-- [ ] T006 [US1] 在 `src/cryptotrader/ops/daemon.py` 实现 `_action_pareto()`：调 `cryptotrader.learning.evolution.pareto:rank_rules` + 被支配 rules 转 maturity=archived（按 research.md Decision 2 + spec FR-D6 clarify Q1）
-- [ ] T007 [P] [US1] 创建 `tests/test_evolution_daemon.py`：`test_pareto_action_archives_dominated_rules` 用例（构造 50 fixture rules，断言 ≥ 10 archived）
-- [ ] T008 [US1] 在 `tests/test_evolution_daemon.py` 加 `test_pareto_action_empty_rules` 用例（0 active rules → PASS 0ms 不抛异常）
-- [ ] T009 [US1] 在 `tests/test_evolution_daemon.py` 加 `test_pareto_action_all_frontier` 用例（全部 frontier 成员 → 0 archived，idempotent）
+- [X] T004 [P] [US1] 创建 `src/cryptotrader/ops/__init__.py`（空文件，标记包）
+- [X] T005 [US1] 创建 `src/cryptotrader/ops/daemon.py`：`EvolutionDaemon` 类骨架（`__init__` + `run_once` + `run_forever` + `_acquire_locks` 上下文管理器，按 research.md Decision 1）
+- [X] T006 [US1] 在 `src/cryptotrader/ops/daemon.py` 实现 `_action_pareto()`：调 `cryptotrader.learning.evolution.pareto:rank_rules` + 被支配 rules 转 maturity=archived（按 research.md Decision 2 + spec FR-D6 clarify Q1）
+- [X] T007 [P] [US1] 创建 `tests/test_evolution_daemon.py`：`test_pareto_action_archives_dominated_rules` 用例（构造 50 fixture rules，断言 ≥ 10 archived）
+- [X] T008 [US1] 在 `tests/test_evolution_daemon.py` 加 `test_pareto_action_empty_rules` 用例（0 active rules → PASS 0ms 不抛异常）
+- [X] T009 [US1] 在 `tests/test_evolution_daemon.py` 加 `test_pareto_action_all_frontier` 用例（全部 frontier 成员 → 0 archived，idempotent）
 
 ---
 
@@ -35,10 +35,10 @@
 
 **Independent Test**：100 cases stale → ≥ 30% regime_tags 改变。
 
-- [ ] T010 [P] [US2] 在 `src/cryptotrader/learning/memory.py` 加 `refilter_records_by_regime() -> int` thin public wrapper（按 research.md Decision 3 + spec FR-D7）
-- [ ] T011 [US2] 在 `src/cryptotrader/ops/daemon.py` 实现 `_action_regime()`：调 `refilter_records_by_regime()`，返回 changed_count 到 ActionResult.details
-- [ ] T012 [P] [US2] 在 `tests/test_evolution_daemon.py` 加 `test_regime_action_recalculates_stale_tags` 用例（构造 100 cases stale → 断言 ≥ 30 changed）
-- [ ] T013 [US2] 在 `tests/test_evolution_daemon.py` 加 `test_regime_action_idempotent` 用例（已是 current regime → 0 changed）
+- [X] T010 [P] [US2] 在 `src/cryptotrader/learning/memory.py` 加 `refilter_records_by_regime() -> int` thin public wrapper（按 research.md Decision 3 + spec FR-D7）
+- [X] T011 [US2] 在 `src/cryptotrader/ops/daemon.py` 实现 `_action_regime()`：调 `refilter_records_by_regime()`，返回 changed_count 到 ActionResult.details
+- [X] T012 [P] [US2] 在 `tests/test_evolution_daemon.py` 加 `test_regime_action_recalculates_stale_tags` 用例（构造 100 cases stale → 断言 ≥ 30 changed）
+- [X] T013 [US2] 在 `tests/test_evolution_daemon.py` 加 `test_regime_action_idempotent` 用例（已是 current regime → 0 changed）
 
 ---
 
@@ -48,10 +48,10 @@
 
 **Independent Test**：12 active rules（agent:tech）→ `.draft` 被创建含 LLM metadata。
 
-- [ ] T014 [US3] 在 `src/cryptotrader/ops/daemon.py` 实现 `_action_skill_proposal()`：4 agents 独立循环检查 `len(active_rules_per_agent) >= propose_threshold`，满足时调 `propose_new_skill(scope=...)` （按 spec FR-D8 clarify Q2）
-- [ ] T015 [P] [US3] 在 `tests/test_evolution_daemon.py` 加 `test_skill_proposal_threshold_met` 用例（12 rules agent:tech → .draft 创建 + frontmatter 含 metadata）
-- [ ] T016 [P] [US3] 在 `tests/test_evolution_daemon.py` 加 `test_skill_proposal_threshold_not_met` 用例（8 rules → 不创建 .draft + step PASS）
-- [ ] T017 [US3] 在 `tests/test_evolution_daemon.py` 加 `test_skill_proposal_per_agent_independent` 用例（tech=12 / chain=8 / news=15 / macro=5 → 创建 2 .draft 文件）
+- [X] T014 [US3] 在 `src/cryptotrader/ops/daemon.py` 实现 `_action_skill_proposal()`：4 agents 独立循环检查 `len(active_rules_per_agent) >= propose_threshold`，满足时调 `propose_new_skill(scope=...)` （按 spec FR-D8 clarify Q2）
+- [X] T015 [P] [US3] 在 `tests/test_evolution_daemon.py` 加 `test_skill_proposal_threshold_met` 用例（12 rules agent:tech → .draft 创建 + frontmatter 含 metadata）
+- [X] T016 [P] [US3] 在 `tests/test_evolution_daemon.py` 加 `test_skill_proposal_threshold_not_met` 用例（8 rules → 不创建 .draft + step PASS）
+- [X] T017 [US3] 在 `tests/test_evolution_daemon.py` 加 `test_skill_proposal_per_agent_independent` 用例（tech=12 / chain=8 / news=15 / macro=5 → 创建 2 .draft 文件）
 
 ---
 
