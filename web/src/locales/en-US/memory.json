@@ -24,5 +24,16 @@
     "active": "Active",
     "deprecated": "Deprecated",
     "archived": "Archived"
+  },
+  "skills": {
+    "title": "Skills List",
+    "empty": "No skills found",
+    "proposals": "Skill Proposals",
+    "agents": {
+      "tech": "Technical Analysis",
+      "chain": "On-Chain Analysis",
+      "news": "News Sentiment",
+      "macro": "Macro Economics"
+    }
   }
 }

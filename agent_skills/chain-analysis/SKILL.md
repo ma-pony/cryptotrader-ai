@@ -1,11 +1,13 @@
 ---
 name: chain-analysis
-description: On-chain analysis skill for interpreting blockchain data including funding rates, exchange flows, whale activity, and open interest to gauge market positioning.
+description: On-chain analysis skill for interpreting blockchain data including funding
+  rates, exchange flows, whale activity, and open interest to gauge market positioning.
 scope: agent:chain
-version: "1.0"
+version: '1.0'
 manually_edited: false
+access_count: 70
+last_accessed_at: '2026-05-09T06:14:30.112531+00:00'
 ---
-
 # On-Chain Analysis Agent Skill
 
 ## Agent Role

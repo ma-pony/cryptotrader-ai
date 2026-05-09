@@ -14,6 +14,7 @@ from pathlib import Path
 from cryptotrader.agents.skills._constants import DEFAULT_AGENT_MEMORY_DIR, DEFAULT_AGENT_SKILLS_DIR, VALID_AGENT_IDS
 from cryptotrader.agents.skills._frontmatter import parse_frontmatter, render_frontmatter
 from cryptotrader.agents.skills._io import atomic_write
+from cryptotrader.learning.evolution.skill_metadata_inference import infer_skill_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +121,84 @@ def _build_draft_content(
     return header + "".join(lines)
 
 
+def _add_metadata_to_frontmatter(draft_content: str, metadata: dict) -> str:
+    """把 LLM 推断的 metadata 合并到 draft frontmatter（spec 019 FR-W16）。
+
+    仅在 frontmatter 中不存在对应字段时写入（不覆盖已有值）。
+    """
+    import yaml
+
+    # 找 frontmatter 分隔符
+    if not draft_content.startswith("---"):
+        return draft_content
+    second = draft_content.find("\n---", 3)
+    if second == -1:
+        return draft_content
+
+    yaml_str = draft_content[3:second].strip()
+    body = draft_content[second + 4 :]
+
+    try:
+        fm = yaml.safe_load(yaml_str)
+        if not isinstance(fm, dict):
+            return draft_content
+    except Exception:
+        return draft_content
+
+    # 合并 metadata（不覆盖已有字段）
+    for key, val in metadata.items():
+        if key not in fm:
+            fm[key] = val
+
+    # 重新渲染 frontmatter
+    from cryptotrader.agents.skills._frontmatter import render_frontmatter
+
+    return render_frontmatter(fm) + body
+
+
+def _emit_proposal_telemetry(
+    proposed_name: str,
+    draft_path: Path,
+    metadata: dict,
+    llm_call_failed: bool,
+) -> None:
+    """写 7 个 OpenTelemetry span attributes（spec 019 FR-W29）。"""
+    attrs = {
+        "skill.proposal.name": proposed_name,
+        "skill.proposal.draft_path": str(draft_path),
+        "skill.proposal.llm_inferred_regime_tags": str(metadata.get("regime_tags", [])),
+        "skill.proposal.llm_inferred_triggers_keywords": str(metadata.get("triggers_keywords", [])),
+        "skill.proposal.llm_inferred_importance": float(metadata.get("importance", 0.5)),
+        "skill.proposal.llm_inferred_confidence": float(metadata.get("confidence", 0.5)),
+        "skill.proposal.llm_call_failed": llm_call_failed,
+    }
+    span_attached = False
+    try:
+        from opentelemetry import trace
+
+        span = trace.get_current_span()
+        if span is not None and span.is_recording():
+            for key, val in attrs.items():
+                if isinstance(val, list | dict):
+                    span.set_attribute(key, str(val))
+                else:
+                    span.set_attribute(key, val)
+            span_attached = True
+    except Exception:
+        pass
+
+    if not span_attached:
+        logger.info(
+            "skill_proposal name=%s draft_path=%s regime_tags=%s importance=%.2f confidence=%.2f llm_failed=%s",
+            proposed_name,
+            draft_path,
+            metadata.get("regime_tags", []),
+            metadata.get("importance", 0.5),
+            metadata.get("confidence", 0.5),
+            llm_call_failed,
+        )
+
+
 def propose_new_skill(
     scope: str,
     memory_dir: Path | None = None,
@@ -130,6 +209,8 @@ def propose_new_skill(
     FR-016a: 按 scope 过滤：
       - "agent:<id>": 仅分析该 agent 的 patterns
       - "shared": 跨 4 agent 找共性
+
+    spec 019 FR-W16: 创建 .draft 时调 LLM 推断 metadata 写入 frontmatter。
 
     Returns:
         Path to .draft file (in output_dir), or None on failure.
@@ -163,12 +244,48 @@ def propose_new_skill(
     common_tags = _find_common_regime_subset(patterns)
     draft_content = _build_draft_content(proposed_name, scope, patterns, common_tags)
 
+    # spec 019 FR-W16: 调 LLM 推断 metadata，合并到 frontmatter
+    _default_metadata = {
+        "regime_tags": [],
+        "triggers_keywords": [],
+        "importance": 0.5,
+        "confidence": 0.5,
+    }
+    llm_call_failed = False
+    try:
+        description = f"Proposed skill based on {len(patterns)} active patterns with common regime tags: {', '.join(common_tags) or 'various'}."
+        metadata = infer_skill_metadata(
+            name=proposed_name,
+            description=description,
+            body=draft_content,
+        )
+        # 检查是否返回了默认值（LLM 失败）
+        if (
+            metadata.get("triggers_keywords") == []
+            and metadata.get("regime_tags") == []
+            and metadata.get("importance") == 0.5
+        ):
+            llm_call_failed = True
+    except Exception:
+        logger.warning("propose_new_skill: LLM metadata inference failed", exc_info=True)
+        metadata = _default_metadata
+        llm_call_failed = True
+
+    # 把 metadata 合并到 draft frontmatter（access_count=0 / last_accessed_at 由迁移脚本处理）
+    metadata["access_count"] = 0
+    from datetime import UTC, datetime
+
+    metadata["last_accessed_at"] = datetime.now(UTC).isoformat()
+    draft_content = _add_metadata_to_frontmatter(draft_content, metadata)
+
     # 写入 draft 文件（不覆盖已存在的 SKILL.md）
     draft_path = o_dir / proposed_name / "SKILL.md.draft"
     draft_path.parent.mkdir(parents=True, exist_ok=True)
     try:
         atomic_write(draft_path, draft_content)
         logger.info("propose_new_skill: draft written to %s", draft_path)
+        # spec 019 FR-W29: 写 7 telemetry attributes
+        _emit_proposal_telemetry(proposed_name, draft_path, metadata, llm_call_failed)
         return draft_path
     except Exception:
         logger.warning("propose_new_skill: failed to write draft", exc_info=True)

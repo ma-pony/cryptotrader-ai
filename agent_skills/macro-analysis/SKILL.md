@@ -1,11 +1,13 @@
 ---
 name: macro-analysis
-description: Macroeconomic analysis skill for interpreting Fed policy, dollar strength, ETF flows, and risk-on/risk-off sentiment to assess crypto macro tailwinds and headwinds.
+description: Macroeconomic analysis skill for interpreting Fed policy, dollar strength,
+  ETF flows, and risk-on/risk-off sentiment to assess crypto macro tailwinds and headwinds.
 scope: agent:macro
-version: "1.0"
+version: '1.0'
 manually_edited: false
+access_count: 70
+last_accessed_at: '2026-05-09T06:14:30.125204+00:00'
 ---
-
 # Macro Analysis Agent Skill
 
 ## Agent Role

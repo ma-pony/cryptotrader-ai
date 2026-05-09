@@ -1,11 +1,13 @@
 ---
 name: tech-analysis
-description: Technical analysis skill for interpreting price action, chart patterns, and momentum indicators to generate directional trading signals.
+description: Technical analysis skill for interpreting price action, chart patterns,
+  and momentum indicators to generate directional trading signals.
 scope: agent:tech
-version: "1.0"
+version: '1.0'
 manually_edited: false
+access_count: 90
+last_accessed_at: '2026-05-09T06:14:42.293521+00:00'
 ---
-
 # Technical Analysis Agent Skill
 
 ## Agent Role
