@@ -34,7 +34,7 @@ def test_evaluate_node_runs_on_valid_state():
     with patch("cryptotrader.nodes.evolution._memory_provider", mock_provider, create=True):
         with patch("cryptotrader.nodes.agents._memory_provider", mock_provider):
             state = _make_state()
-            result = asyncio.get_event_loop().run_until_complete(evaluate_node(state))
+            result = asyncio.run(evaluate_node(state))
 
     assert isinstance(result, dict)
 
@@ -49,7 +49,7 @@ def test_evaluate_node_calls_evaluate_all_rules_and_classify():
 
     with patch("cryptotrader.nodes.agents._memory_provider", mock_provider):
         state = _make_state()
-        asyncio.get_event_loop().run_until_complete(evaluate_node(state))
+        asyncio.run(evaluate_node(state))
 
     mock_provider.evaluate_all_rules.assert_called_once()
     mock_provider.classify_pending_cases.assert_called_once()
@@ -67,7 +67,7 @@ def test_evaluate_node_exception_returns_empty_dict(caplog):
 
     with patch("cryptotrader.nodes.agents._memory_provider", mock_provider), caplog.at_level(logging.WARNING):
         state = _make_state()
-        result = asyncio.get_event_loop().run_until_complete(evaluate_node(state))
+        result = asyncio.run(evaluate_node(state))
 
     assert result == {}
 
@@ -130,6 +130,6 @@ def test_evaluate_node_none_provider_returns_empty():
 
     with patch("cryptotrader.nodes.agents._memory_provider", None):
         state = _make_state()
-        result = asyncio.get_event_loop().run_until_complete(evaluate_node(state))
+        result = asyncio.run(evaluate_node(state))
 
     assert result == {}
