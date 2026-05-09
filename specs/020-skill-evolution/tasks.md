@@ -64,31 +64,31 @@ agent_skills/ 既有 spec 014 目录结构无需新建。
 
 **Checkpoint**：C2 后 `tests/test_idf.py` + `test_skill_metadata_inference.py` 全 PASS。
 
-- [ ] T011 [US3] 创建 `src/cryptotrader/learning/evolution/idf.py`：
+- [x] T011 [US3] 创建 `src/cryptotrader/learning/evolution/idf.py`：
   - `compute_idf(corpus_keywords: list[list[str]]) -> dict[str, float]`：从 list of skill keywords 计算 IDF 表
   - `extract_query_keywords(snapshot: dict) -> set[str]`：从 snapshot dict 字段名 + 关键值小写化提取
   - `score_skill(skill_keywords, query_keywords, idf_table) -> float`：score = sum(idf[kw] for kw in skill_kw if kw.lower() in query)
-- [ ] T012 [P] [US3] 创建 `tests/test_idf.py` ≥ 6 用例：
+- [x] T012 [P] [US3] 创建 `tests/test_idf.py` ≥ 6 用例：
   - (a) 单 skill corpus → idf table 含全部关键词
   - (b) 5 skill corpus → 共享关键词低 IDF（`log(5/k)`）
   - (c) 空 corpus → 空 dict
   - (d) extract_query_keywords 从 snapshot dict 提取字段名
   - (e) score_skill 加和 IDF（含小写匹配）
   - (f) score_skill 空交集 → 0
-- [ ] T013 [US5] 创建 `src/cryptotrader/learning/evolution/skill_metadata_inference.py`：
+- [x] T013 [US5] 创建 `src/cryptotrader/learning/evolution/skill_metadata_inference.py`：
   - `infer_skill_metadata(name, description, body, llm_callable=None) -> dict`
   - LLM prompt 含 spec 014 regime taxonomy + 现有 5 skill mapping 作 examples（research.md Decision 4）
   - 输出 JSON parse + 重试 1 次 + 失败时返回默认值（regime_tags=[] / triggers_keywords=[] / importance=0.5 / confidence=0.5）
-- [ ] T014 [P] [US5] 创建 `tests/test_skill_metadata_inference.py` ≥ 6 用例：
+- [x] T014 [P] [US5] 创建 `tests/test_skill_metadata_inference.py` ≥ 6 用例：
   - (a) mock LLM 返回合法 JSON → 输出与 LLM 一致
   - (b) mock LLM 异常 → 默认值 + warning log
   - (c) LLM 输出非合法 JSON → 重试 1 次后返回默认值
   - (d) prompt 含正确 context（name + description + body 摘要 + 5 skill examples）
   - (e) regime_tags 子集校验（只允许 spec 014 既有 8 个值）
   - (f) importance / confidence ∈ [0,1] 验证
-- [ ] T015 [US3/US5] 运行 `uv run python -m pytest tests/test_idf.py tests/test_skill_metadata_inference.py -v --no-cov` 全 PASS
-- [ ] T016 [US3/US5] 运行完整回归无回归
-- [ ] T017 **Commit C2**：`git add src/cryptotrader/learning/evolution/idf.py src/cryptotrader/learning/evolution/skill_metadata_inference.py tests/test_idf.py tests/test_skill_metadata_inference.py` + `feat(spec-019/c2): IDF + LLM metadata inference modules`
+- [x] T015 [US3/US5] 运行 `uv run python -m pytest tests/test_idf.py tests/test_skill_metadata_inference.py -v --no-cov` 全 PASS
+- [x] T016 [US3/US5] 运行完整回归无回归
+- [x] T017 **Commit C2**：`git add src/cryptotrader/learning/evolution/idf.py src/cryptotrader/learning/evolution/skill_metadata_inference.py tests/test_idf.py tests/test_skill_metadata_inference.py` + `feat(spec-019/c2): IDF + LLM metadata inference modules`
 
 **Checkpoint C2**：算法层 2 模块独立可用，单测全 PASS。
 
