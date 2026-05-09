@@ -18,14 +18,14 @@
 
 **Independent Test**：`python scripts/staging_validate.py --dry-run` exit 0 + stdout ≥ 6 个 PASS 行。
 
-- [ ] T001 [P] [US1] 创建 `scripts/staging_validate.py`，含 `StepResult` dataclass + `run_step()` 工具函数（按 research.md Decision 3）
-- [ ] T002 [US1] 在 `scripts/staging_validate.py` 实现 step 1（migrate_017_to_018 dry-run）：subprocess 调 `python scripts/migrate_017_to_018.py --dry-run`，失败返回 stderr
-- [ ] T003 [US1] 在 `scripts/staging_validate.py` 实现 step 2（migrate_018_to_019 dry-run）：同 step 1 模式
-- [ ] T004 [US1] 在 `scripts/staging_validate.py` 实现 step 3（single cycle smoke）：mock `langchain_openai.ChatOpenAI.ainvoke` + 调 `cryptotrader.scheduler.run_one_cycle()` 单次触发
-- [ ] T005 [US1] 在 `scripts/staging_validate.py` 实现 step 4（OTel 字段校验）：使用 `InMemorySpanExporter`，断言 4 agent span 各含 spec 017a FR-X18 8 字段 + 本 spec 3 cache 字段
-- [ ] T006 [US1] 在 `scripts/staging_validate.py` 实现 step 5（retrieval 校验）：实例化 `EvolvingSkillProvider` + 调 `get_available_skills(agent_id="tech", snapshot={...})`，断言返回 ≥ 1 skill
-- [ ] T007 [US1] 在 `scripts/staging_validate.py` 实现 main() + argparse + exit code 逻辑（任一 FAIL exit 1）
-- [ ] T008 [P] [US1] 创建 `tests/test_staging_validate.py`：单测 `run_step` 成功路径 / 失败路径 / 输出格式
+- [x] T001 [P] [US1] 创建 `scripts/staging_validate.py`，含 `StepResult` dataclass + `run_step()` 工具函数（按 research.md Decision 3）
+- [x] T002 [US1] 在 `scripts/staging_validate.py` 实现 step 1（migrate_017_to_018 dry-run）：subprocess 调 `python scripts/migrate_017_to_018.py --dry-run`，失败返回 stderr
+- [x] T003 [US1] 在 `scripts/staging_validate.py` 实现 step 2（migrate_018_to_019 dry-run）：同 step 1 模式
+- [x] T004 [US1] 在 `scripts/staging_validate.py` 实现 step 3（single cycle smoke）：mock `langchain_openai.ChatOpenAI.ainvoke` + 调 `cryptotrader.scheduler.run_one_cycle()` 单次触发
+- [x] T005 [US1] 在 `scripts/staging_validate.py` 实现 step 4（OTel 字段校验）：使用 `InMemorySpanExporter`，断言 4 agent span 各含 spec 017a FR-X18 8 字段 + 本 spec 3 cache 字段
+- [x] T006 [US1] 在 `scripts/staging_validate.py` 实现 step 5（retrieval 校验）：实例化 `EvolvingSkillProvider` + 调 `get_available_skills(agent_id="tech", snapshot={...})`，断言返回 ≥ 1 skill
+- [x] T007 [US1] 在 `scripts/staging_validate.py` 实现 main() + argparse + exit code 逻辑（任一 FAIL exit 1）
+- [x] T008 [P] [US1] 创建 `tests/test_staging_validate.py`：单测 `run_step` 成功路径 / 失败路径 / 输出格式
 
 ---
 
@@ -35,11 +35,11 @@
 
 **Independent Test**：`docs/rollback-trilogy.md` 存在且 grep 验证含 ≥ 4 个 `## Spec` 段（020a + 019 + 018 + 017b），每段含 git revert / DB / 验证 step + known data loss 段落。
 
-- [ ] T009 [P] [US2] 创建 `docs/rollback-trilogy.md` 含适用范围 + 紧急联系信息（按 research.md Decision 4 模板）
-- [ ] T010 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 020a 回退" 段（git revert + 验证 + known data loss = 无）
-- [ ] T011 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 019 回退" 段（git revert 3fbf941 + rm .draft + pytest test_e2e_skill_evolution + known data loss）
-- [ ] T012 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 018 回退" 段（git revert 458a0f2 + 14afc50 + 1c0302d + DB drop archived + pytest test_e2e_memory_evolution + known data loss）
-- [ ] T013 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 017b 回退" 段（git revert 5b65a4a + 18e231e + git checkout config/agents + pytest test_e2e_prompt_externalization + known data loss）
+- [x] T009 [P] [US2] 创建 `docs/rollback-trilogy.md` 含适用范围 + 紧急联系信息（按 research.md Decision 4 模板）
+- [x] T010 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 020a 回退" 段（git revert + 验证 + known data loss = 无）
+- [x] T011 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 019 回退" 段（git revert 3fbf941 + rm .draft + pytest test_e2e_skill_evolution + known data loss）
+- [x] T012 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 018 回退" 段（git revert 458a0f2 + 14afc50 + 1c0302d + DB drop archived + pytest test_e2e_memory_evolution + known data loss）
+- [x] T013 [US2] 在 `docs/rollback-trilogy.md` 加 "Spec 017b 回退" 段（git revert 5b65a4a + 18e231e + git checkout config/agents + pytest test_e2e_prompt_externalization + known data loss）
 
 ---
 

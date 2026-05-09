@@ -142,7 +142,9 @@ known-first-party = ["cryptotrader", "api", "cli"]
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = ["T201"]
 # Scripts are entry-layer launchers and may import graph.py / nodes (TID251 exempt).
-"scripts/**/*.py" = ["T201", "TID251"]
+# staging_validate.py uses Chinese docstrings/comments (RUF002/RUF003),
+# subprocess for migrate dry-run (S603), and Callable at runtime (TCH003).
+"scripts/**/*.py" = ["T201", "TID251", "RUF002", "RUF003", "S603", "TCH003"]
 # journal/store.py: SQLAlchemy declarative classes (Base, Row) assigned in functions
 # follow class-naming convention even though N806 sees them as variables.
 "src/cryptotrader/journal/store.py" = ["N806"]
@@ -268,3 +270,16 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # tests are allowed to import any module for integration and boundary testing.
 # S603 exempted: subprocess.run calls in tests invoke known, trusted CLI tools (ruff, pytest).
 "tests/*.py" = ["TID251", "S603"]
+# spec 020a: staging_validate + new test files use Chinese docstrings/comments and
+# pytest.mark.asyncio patterns. PT015 is suppressed for run_step error path tests
+# that intentionally use assert False to simulate failures.
+"tests/test_staging_validate.py" = ["RUF001", "RUF002", "RUF003", "PT015"]
+"tests/test_llm_usage_cache_attr.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_ive_async.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_ive.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_metrics_endpoint_cache.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_e2e_trilogy_ops.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
+# spec 020a: observability module uses Chinese docstrings/comments.
+"src/cryptotrader/observability/*.py" = ["RUF001", "RUF002", "RUF003"]
+# spec 020a: observability imports in log_llm_usage are used at runtime (TCH003).
+"src/cryptotrader/agents/base.py" = ["TCH003"]
