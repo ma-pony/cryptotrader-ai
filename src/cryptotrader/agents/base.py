@@ -347,8 +347,15 @@ class BaseAgent:
         return cfg.models.analysis or cfg.models.fallback
 
     def _snapshot_to_dict(self, snapshot: DataSnapshot) -> dict:
-        """Convert DataSnapshot to dict consumable by render_crypto_snapshot."""
-        liq = snapshot.onchain.liquidations_24h if snapshot.onchain else {}
+        """Convert DataSnapshot to dict consumable by render_crypto_snapshot.
+
+        All optional substructures (onchain/news/macro) get consistent None guards
+        to prevent AttributeError when spec 014 cold-start or collect_data
+        partial failures leave fields as None.
+        """
+        onchain = snapshot.onchain
+        news = snapshot.news
+        macro = snapshot.macro
         return {
             "pair": snapshot.pair,
             "timestamp": str(snapshot.timestamp),
@@ -356,16 +363,16 @@ class BaseAgent:
             "volatility": snapshot.market.volatility,
             "funding_rate": snapshot.market.funding_rate,
             "onchain": {
-                "open_interest": snapshot.onchain.open_interest,
-                "exchange_netflow": snapshot.onchain.exchange_netflow,
-                "liquidations_24h": liq,
+                "open_interest": onchain.open_interest if onchain else 0,
+                "exchange_netflow": onchain.exchange_netflow if onchain else 0,
+                "liquidations_24h": onchain.liquidations_24h if onchain else {},
             },
             "news": {
-                "headlines": list(snapshot.news.headlines),
+                "headlines": list(news.headlines) if news else [],
             },
             "macro": {
-                "fed_rate": snapshot.macro.fed_rate,
-                "dxy": snapshot.macro.dxy,
+                "fed_rate": macro.fed_rate if macro else 0,
+                "dxy": macro.dxy if macro else 0,
             },
         }
 

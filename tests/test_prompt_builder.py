@@ -346,3 +346,29 @@ class TestMissingFields:
         assert "BTC/USDT" in usr_msg.content
         # None 值 → "<missing>"
         assert "<missing>" in usr_msg.content
+
+
+# ── (h) experience 参数旁路 MemoryProvider（spec 017b FR-Y6b / SC-Y11 第 45 用例） ──────────
+
+
+class TestExperienceParameterBypass:
+    """spec 017b FR-Y6b：experience 非空时 PromptBuilder 跳过 MemoryProvider。"""
+
+    def test_build_experience_overrides_memory_provider(self, config_dir: Path, noop_skills: MagicMock) -> None:
+        # mock memory provider — 期望从未被调用
+        mock_mem = MagicMock()
+        mock_mem.get_recent_memory = MagicMock(return_value="provider-fallback-content")
+        b = PromptBuilder(
+            agent_id="tech",
+            config_dir=config_dir,
+            memory_provider=mock_mem,
+            skill_provider=noop_skills,
+        )
+        exp_text = "HISTORICAL_EXPERIENCE: 来自上游 verbal_reinforcement 节点的字符串"
+        _, usr_msg = b.build(SAMPLE_SNAPSHOT, SAMPLE_PORTFOLIO, experience=exp_text)
+        # experience 应注入到 recent_memory section
+        assert exp_text in usr_msg.content
+        # MemoryProvider.get_recent_memory 未被调用
+        mock_mem.get_recent_memory.assert_not_called()
+        # provider 的 fallback 内容不应出现
+        assert "provider-fallback-content" not in usr_msg.content
