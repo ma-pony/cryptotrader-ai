@@ -176,9 +176,10 @@ class EvolvingMemoryProvider:
 
     # ── classify_pending_cases ─────────────────────────────────────────────────
 
-    def classify_pending_cases(self) -> list[FailureClassification]:
+    async def classify_pending_cases(self) -> list[FailureClassification]:
         """FR-Z16: 对 ive_classification==None 的 case 运行 IVE LLM 分类。
 
+        spec 020a FR-Z10: made async to await classify_case (no longer blocks event loop).
         返回 list[FailureClassification]。
         """
         from cryptotrader.learning.evolution.ive import classify_case
@@ -196,7 +197,8 @@ class EvolvingMemoryProvider:
                 if case.ive_classification is not None:
                     continue  # 已分类，跳过
 
-                classification = classify_case(case)
+                # spec 020a FR-Z10: await async classify_case
+                classification = await classify_case(case)
                 classifications.append(classification)
 
                 # 写回 IVE Classification 段

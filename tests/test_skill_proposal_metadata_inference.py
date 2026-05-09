@@ -192,3 +192,37 @@ class TestProposeNewSkillMetadataInference:
         content = draft_path.read_text(encoding="utf-8")
         # shared scope 生成名称以 shared- 开头
         assert "shared-" in str(draft_path)
+
+    def test_llm_failure_writes_flag(self, tmp_path):
+        """spec 020a SC-Z6: LLM 推断抛异常时 .draft frontmatter 含 inference_failed: true。
+
+        FR-Z16: skill_metadata_inference 失败路径写 inference_failed: True。
+        FR-Z17: propose_new_skill 把 inference_failed 透传到 .draft frontmatter。
+        """
+        from cryptotrader.learning.skill_proposal import propose_new_skill
+
+        memory_dir = tmp_path / "agent_memory"
+        output_dir = tmp_path / "agent_skills"
+        _write_pattern(memory_dir, "tech", "pattern-failure-test")
+
+        with patch(
+            "cryptotrader.learning.skill_proposal.infer_skill_metadata",
+            side_effect=RuntimeError("OpenAI API unavailable"),
+        ):
+            draft_path = propose_new_skill(
+                scope="agent:tech",
+                memory_dir=memory_dir,
+                output_dir=output_dir,
+            )
+
+        assert draft_path is not None, "draft file should still be written on LLM failure"
+        content = draft_path.read_text(encoding="utf-8")
+
+        # spec 020a FR-Z17: inference_failed: true must appear in frontmatter
+        assert "inference_failed: true" in content, (
+            f"Expected 'inference_failed: true' in draft frontmatter; got:\n{content[:500]}"
+        )
+
+        # spec 020a edge case: default metadata values must be present
+        assert "importance: 0.5" in content
+        assert "confidence: 0.5" in content

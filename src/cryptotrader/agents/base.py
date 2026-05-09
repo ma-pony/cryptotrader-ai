@@ -275,6 +275,9 @@ def log_llm_usage(response: Any, *, caller: str) -> None:
     从 AIMessage.usage_metadata 中提取 input_tokens, output_tokens, model_name,
     并通过 structlog 以 llm_usage 事件命名空间记录, 支持后续按时间窗口汇总成本报告。
 
+    spec 020a FR-Z7~Z9: 同时写 3 个 OTel span attr (llm.cache.*)
+    并向 CacheMetricsAggregator 推送 hit_rate 供 /metrics 端点消费.
+
     Args:
         response: LLM 调用返回的 AIMessage 对象.
         caller: 调用方标识 (如 agent_id 或函数名), 用于日志定位.
@@ -295,6 +298,33 @@ def log_llm_usage(response: Any, *, caller: str) -> None:
         prompt_details = usage.get("input_token_details") or {}
         cache_read = prompt_details.get("cached", 0) if isinstance(prompt_details, dict) else 0
 
+    # spec 020a FR-Z7: 提取 cache_creation_input_tokens
+    cache_creation: int = usage.get("cache_creation_input_tokens", 0) or 0
+
+    # spec 020a FR-Z8: cache hit rate (read+creation=0 -> 0, no exception)
+    total_cache = cache_read + cache_creation
+    cache_hit_rate: float = (cache_read / total_cache) if total_cache > 0 else 0.0
+
+    # spec 020a FR-Z8/Z9: write OTel span attr (is_recording() guard for uninit SDK)
+    try:
+        from opentelemetry import trace as _otel_trace
+
+        span = _otel_trace.get_current_span()
+        if span is not None and span.is_recording():
+            span.set_attribute("llm.cache.read_tokens", cache_read)
+            span.set_attribute("llm.cache.creation_tokens", cache_creation)
+            span.set_attribute("llm.cache.hit_rate", cache_hit_rate)
+    except Exception:
+        pass  # OTel SDK not initialized: silent, does not affect cycle
+
+    # spec 020a FR-Z18: 向进程内聚合器推送 hit_rate 供 /metrics 端点消费
+    try:
+        from cryptotrader.observability.cache_metrics import get_cache_metrics_aggregator
+
+        get_cache_metrics_aggregator().record(cache_hit_rate)
+    except Exception:
+        pass  # 聚合器异常不影响 cycle 运行
+
     _structlog.info(
         "llm_usage",
         caller=caller,
@@ -304,6 +334,8 @@ def log_llm_usage(response: Any, *, caller: str) -> None:
         total_tokens=input_tokens + output_tokens,
         prompt_cache_hit=cache_read > 0,
         cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+        cache_hit_rate=cache_hit_rate,
     )
 
 

@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import Response
-from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, generate_latest
+from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Gauge, generate_latest
 from pydantic import BaseModel
 
 from cryptotrader._compat import UTC
@@ -22,6 +22,19 @@ from cryptotrader.metrics import get_metrics_collector
 logger = logging.getLogger(__name__)
 router = APIRouter()
 api_router = APIRouter(prefix="/api/metrics", tags=["metrics"])
+
+# ---------------------------------------------------------------------------
+# spec 020a FR-Z18: 2 new Prometheus Gauges (in-process sliding-window)
+# ---------------------------------------------------------------------------
+
+LLM_CACHE_HIT_RATE_GAUGE = Gauge(
+    "llm_cache_hit_rate_24h_avg",
+    "LLM prompt cache hit rate, 24h sliding window average",
+)
+IVE_CLASSIFY_FAILURE_RATE_GAUGE = Gauge(
+    "ive_classify_failure_rate_1h_avg",
+    "IVE classify_case failure rate, 1h sliding window average",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -178,8 +191,22 @@ def _histogram_quantile(metric_name: str, quantile: float, *, filter_labels: dic
 
 @router.get("/metrics")
 async def prometheus_metrics() -> Response:
-    """Return Prometheus text format metrics."""
+    """Return Prometheus text format metrics.
+
+    spec 020a FR-Z18: lazy-updates the 2 sliding-window Gauges before generating
+    the Prometheus text output so dashboard can see current values.
+    """
     try:
+        # spec 020a: update sliding-window gauges from in-process aggregators
+        try:
+            from cryptotrader.observability.cache_metrics import get_cache_metrics_aggregator
+            from cryptotrader.observability.ive_metrics import get_ive_metrics_aggregator
+
+            LLM_CACHE_HIT_RATE_GAUGE.set(get_cache_metrics_aggregator().average())
+            IVE_CLASSIFY_FAILURE_RATE_GAUGE.set(get_ive_metrics_aggregator().failure_rate())
+        except Exception:
+            logger.debug("spec 020a gauge update failed (non-blocking)", exc_info=True)
+
         data = generate_latest()
         return Response(content=data, media_type=CONTENT_TYPE_LATEST)
     except Exception:
@@ -281,6 +308,8 @@ class MetricsSummaryV2Response(BaseModel):
     decisions_per_day: float = 0.0
     latency_histogram: list[LatencyHistogramBucketOut] = []
     cost_14d: list[DailyCostPointOut] = []
+    # spec 020a FR-Z19: IVE classify_case failure rate (1h sliding window)
+    ive_failure_rate: float = 0.0
 
 
 def _pipeline_histogram_buckets() -> list[LatencyHistogramBucketOut]:
@@ -412,6 +441,15 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
     )
     latency_hist = _pipeline_histogram_buckets()
 
+    # spec 020a FR-Z19: read IVE failure rate from in-process aggregator
+    ive_failure_rate = 0.0
+    try:
+        from cryptotrader.observability.ive_metrics import get_ive_metrics_aggregator
+
+        ive_failure_rate = get_ive_metrics_aggregator().failure_rate()
+    except Exception:
+        logger.info("metrics_summary_v2: ive aggregator unavailable", exc_info=True)
+
     return MetricsSummaryV2Response(
         counters=MetricsCounters(
             trades_total=trades_total,
@@ -433,4 +471,5 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
         decisions_per_day=decisions_per_day,
         latency_histogram=latency_hist,
         cost_14d=cost_14d,
+        ive_failure_rate=ive_failure_rate,
     )

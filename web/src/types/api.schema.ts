@@ -397,6 +397,8 @@ export const MetricsSummarySchema = z.object({
   decisions_per_day: z.number().default(0),
   latency_histogram: z.array(LatencyHistogramBucketSchema).default([]),
   cost_14d: z.array(DailyCostPointSchema).default([]),
+  // spec 020a FR-Z19: IVE classify_case failure rate (1h sliding window)
+  ive_failure_rate: z.number().default(0),
 });
 
 // ── §7 Triggers ──

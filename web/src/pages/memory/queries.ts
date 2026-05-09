@@ -185,6 +185,7 @@ export const SkillItemSchema = z.object({
   last_accessed_at: z.string().nullable(),
   manually_edited: z.boolean(),
   description: z.string(),
+  inference_failed: z.boolean().optional().default(false),
 });
 export type SkillItem = z.infer<typeof SkillItemSchema>;
 

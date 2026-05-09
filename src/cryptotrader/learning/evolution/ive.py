@@ -176,17 +176,20 @@ def _parse_llm_response(raw: str, case_id: str, retry_fn: Callable[[], str] | No
 # ── 主函数 ────────────────────────────────────────────────────────────────────
 
 
-def classify_case(
+async def classify_case(
     case: CaseRecord,
     llm_callable: Callable[[str, str], str] | None = None,
     same_regime_cases: list[CaseRecord] | None = None,
 ) -> FailureClassification:
     """Classify a trade case using IVE 5 diagnostic questions.
 
+    spec 020a FR-Z10: converted to async def; default LLM path uses await llm.ainvoke().
+    When llm_callable is provided (e.g. in tests), it is called synchronously as before.
+
     Args:
         case: The CaseRecord to classify.
-        llm_callable: Optional callable(system_prompt, user_prompt) -> str.
-            If None, uses project default LLM (create_llm from agents.base).
+        llm_callable: Optional sync callable(system_prompt, user_prompt) -> str.
+            If None, uses project default LLM via await llm.ainvoke() (FR-Z10).
         same_regime_cases: Optional list of recent cases with same regime_tags for context.
 
     Returns:
@@ -215,36 +218,52 @@ def classify_case(
         same_regime_context=same_regime_ctx,
     )
 
-    if llm_callable is None:
-        llm_callable = _get_default_llm_callable()
-
     try:
-        raw = llm_callable(_SYSTEM_PROMPT, user_prompt)
-        return _parse_llm_response(
-            raw,
-            case_id,
-            retry_fn=lambda: llm_callable(_SYSTEM_PROMPT, user_prompt),  # type: ignore[union-attr]
-        )
+        if llm_callable is not None:
+            # Test/override path: sync callable provided by caller
+            raw = llm_callable(_SYSTEM_PROMPT, user_prompt)
+            result = _parse_llm_response(
+                raw,
+                case_id,
+                retry_fn=lambda: llm_callable(_SYSTEM_PROMPT, user_prompt),  # type: ignore[union-attr]
+            )
+        else:
+            # spec 020a FR-Z10: default async path — await llm.ainvoke (no sync blocking)
+            raw = await _async_llm_call(_SYSTEM_PROMPT, user_prompt)
+            result = _parse_llm_response(raw, case_id, retry_fn=None)
+
+        # spec 020a FR-Z22: record success to IveMetricsAggregator
+        _record_ive_metric(success=True)
+        return result
+
     except Exception:
         logger.warning(
             "IVE: LLM call failed for case %s, returning noise classification",
             case_id,
             exc_info=True,
         )
+        # spec 020a FR-Z22: record failure to IveMetricsAggregator
+        _record_ive_metric(success=False)
         return _noise_result(case_id)
 
 
-def _get_default_llm_callable() -> Callable[[str, str], str]:
-    """Return a synchronous callable using project default LLM."""
+async def _async_llm_call(system_prompt: str, user_prompt: str) -> str:
+    """Default async LLM call path (spec 020a FR-Z10: await llm.ainvoke)."""
+    from langchain_core.messages import HumanMessage, SystemMessage
 
-    def _call(system_prompt: str, user_prompt: str) -> str:
-        from langchain_core.messages import HumanMessage, SystemMessage
+    from cryptotrader.agents.base import create_llm
 
-        from cryptotrader.agents.base import create_llm
+    llm = create_llm()
+    messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+    result = await llm.ainvoke(messages)
+    return str(result.content) if hasattr(result, "content") else str(result)
 
-        llm = create_llm()
-        messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
-        result = llm.invoke(messages)
-        return str(result.content) if hasattr(result, "content") else str(result)
 
-    return _call
+def _record_ive_metric(success: bool) -> None:
+    """Push success/failure to IveMetricsAggregator (spec 020a FR-Z18, non-blocking)."""
+    try:
+        from cryptotrader.observability.ive_metrics import get_ive_metrics_aggregator
+
+        get_ive_metrics_aggregator().record(success=success)
+    except Exception:
+        pass
