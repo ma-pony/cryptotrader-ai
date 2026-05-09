@@ -57,13 +57,13 @@ def extract_query_keywords(snapshot: dict) -> set[str]:
             stripped = value.strip().lower()
             if stripped:
                 keywords.add(stripped)
-        elif isinstance(value, (int, float)):
+        elif isinstance(value, int | float):
             keywords.add(str(value).lower())
         elif isinstance(value, dict):
             for k, v in value.items():
                 keywords.add(str(k).lower())
                 _add(v)
-        elif isinstance(value, (list, tuple)):
+        elif isinstance(value, list | tuple):
             for item in value:
                 _add(item)
 

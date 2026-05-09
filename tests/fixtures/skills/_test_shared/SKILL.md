@@ -2,10 +2,11 @@
 name: test-shared-skill
 description: Shared test skill for E2E prompt externalization tests (spec 017b).
 scope: shared
-version: "1.0"
+version: '1.0'
 manually_edited: false
+access_count: 32
+last_accessed_at: '2026-05-09T05:53:45.037797+00:00'
 ---
-
 ## TEST SHARED SKILL
 
 This skill is shared across all agents in E2E tests.

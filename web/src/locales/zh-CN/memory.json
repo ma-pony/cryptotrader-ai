@@ -24,5 +24,16 @@
     "active": "活跃",
     "deprecated": "废弃",
     "archived": "已归档"
+  },
+  "skills": {
+    "title": "Skills 列表",
+    "empty": "暂无 skill 记录",
+    "proposals": "Skill 提案",
+    "agents": {
+      "tech": "技术分析",
+      "chain": "链上分析",
+      "news": "新闻情绪",
+      "macro": "宏观经济"
+    }
   }
 }

@@ -12,6 +12,7 @@ import { ArchivedRules } from './components/ArchivedRules';
 import { CasesTimeline } from './components/CasesTimeline';
 import { RecentTransitions } from './components/RecentTransitions';
 import { RulesGrid } from './components/RulesGrid';
+import { SkillsGrid } from './components/SkillsGrid';
 
 const MemoryPage = () => {
   const { t } = useTranslation('memory');
@@ -43,6 +44,11 @@ const MemoryPage = () => {
         {/* Section 3: Archived rules */}
         <section aria-labelledby="memory-archived-heading">
           <ArchivedRules />
+        </section>
+
+        {/* Section 4: Skills Grid (spec 019) */}
+        <section aria-labelledby="memory-skills-heading">
+          <SkillsGrid />
         </section>
       </div>
     </PageBoundary>
