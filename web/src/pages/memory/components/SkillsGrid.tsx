@@ -53,6 +53,25 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
             ))}
           </div>
         )}
+        {item.triggers_keywords.length > 0 && (
+          <div className="flex gap-1 flex-wrap" data-testid="triggers-keywords">
+            {item.triggers_keywords.slice(0, 5).map((kw) => (
+              <Badge key={kw} variant="outline" className="text-[9px] px-1 py-0 text-muted-foreground">
+                {kw}
+              </Badge>
+            ))}
+            {item.triggers_keywords.length > 5 && (
+              <span className="text-[9px] text-muted-foreground self-center">
+                +{item.triggers_keywords.length - 5} more
+              </span>
+            )}
+          </div>
+        )}
+        {item.inference_failed && (
+          <Badge variant="destructive" className="text-[9px] px-1 py-0 w-fit" data-testid="inference-failed-badge">
+            inference failed
+          </Badge>
+        )}
       </div>
     </div>
   );
