@@ -23,6 +23,8 @@ from cryptotrader.security import sanitize_input
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from cryptotrader.agents.prompt_builder import PromptBuilder
+
 _logger = logging.getLogger(__name__)
 logger = _logger
 _structlog = structlog.get_logger(__name__)
@@ -327,48 +329,12 @@ async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
     return response
 
 
-ANALYSIS_FRAMEWORK = """
-Rules:
-- Base your analysis ONLY on the provided data. Do not rely on general market knowledge or historical patterns.
-- Every claim must reference a specific data point from the input.
-- If data is missing or insufficient, say so and lower your confidence accordingly.
-- Do NOT default to neutral. Take a directional stance when the data supports one.
-
-Pre-signal checklist (you MUST verify each before outputting your signal):
-1. Contradiction check: Are there signals in the data that CONTRADICT my direction? If yes, have I explicitly
-acknowledged them and explained why I'm overriding?
-2. Evidence grounding: Does every claim in my reasoning reference a specific number or data point? If I catch
-myself saying "the market looks..." without citing data, stop and fix it.
-3. Confidence sanity: Would I bet real money at this confidence level? 0.8+ means I see strong convergence with
-no red flags. If I'm unsure, my confidence should be below 0.6.
-4. Base rate awareness: Most of the time, the correct signal is hold. A directional call requires clear evidence,
-not just a slight lean.
-5. Recency trap: Am I overweighting the most recent data point while ignoring the broader context in the window?
-
-Confidence calibration:
-- 0.9-1.0: Multiple strong, converging signals with no contradictions
-- 0.7-0.8: Clear directional signal from primary indicators, minor contradictions
-- 0.5-0.6: Mixed signals, slight lean in one direction
-- 0.3-0.4: Weak or conflicting signals, low conviction
-- 0.1-0.2: Almost no signal, data insufficient or contradictory
-
-Data sufficiency self-assessment:
-- "high": Your core data sources are present and complete. You can make a well-informed directional call.
-- "medium": Some data is present but key sources are missing or stale. Moderate confidence at best.
-- "low": Most of your core data is missing, zero, or placeholder. You MUST set confidence ≤ 0.3 and direction
-  to "neutral". Do NOT guess a direction without data — say "insufficient data" in reasoning.
-
-CRITICAL: Output ONLY a JSON object. No code, no tools, no markdown fences, no explanations.
-Your ENTIRE response must be valid JSON matching this schema:
-{"direction": "bullish|bearish|neutral", "confidence": 0.0-1.0, "data_sufficiency": "high|medium|low",
-"reasoning": "2-3 sentences citing specific data", "key_factors": ["factor1", ...], "risk_flags": ["risk1", ...],
-"data_points": {"indicator": value, ...}}"""
-
-
 class BaseAgent:
-    def __init__(self, agent_id: str, role_description: str, model: str = "") -> None:
+    """Single-LLM-call agent using PromptBuilder for prompt assembly (spec 017b)."""
+
+    def __init__(self, *, agent_id: str, prompt_builder: PromptBuilder, model: str = "") -> None:
         self.agent_id = agent_id
-        self.role_description = role_description
+        self._prompt_builder = prompt_builder
         self.model = model
 
     def _resolve_model(self) -> str:
@@ -380,13 +346,39 @@ class BaseAgent:
         cfg = load_config()
         return cfg.models.analysis or cfg.models.fallback
 
+    def _snapshot_to_dict(self, snapshot: DataSnapshot) -> dict:
+        """Convert DataSnapshot to dict consumable by render_crypto_snapshot."""
+        liq = snapshot.onchain.liquidations_24h if snapshot.onchain else {}
+        return {
+            "pair": snapshot.pair,
+            "timestamp": str(snapshot.timestamp),
+            "ticker": snapshot.market.ticker,
+            "volatility": snapshot.market.volatility,
+            "funding_rate": snapshot.market.funding_rate,
+            "onchain": {
+                "open_interest": snapshot.onchain.open_interest,
+                "exchange_netflow": snapshot.onchain.exchange_netflow,
+                "liquidations_24h": liq,
+            },
+            "news": {
+                "headlines": list(snapshot.news.headlines),
+            },
+            "macro": {
+                "fed_rate": snapshot.macro.fed_rate,
+                "dxy": snapshot.macro.dxy,
+            },
+        }
+
     async def analyze(self, snapshot: DataSnapshot, experience: str = "") -> AgentAnalysis:
-        prompt = self._build_prompt(snapshot, experience)
-        system = self.role_description + ANALYSIS_FRAMEWORK
         try:
+            sys_msg, usr_msg = self._prompt_builder.build(
+                snapshot=self._snapshot_to_dict(snapshot),
+                portfolio={},
+                experience=experience,
+            )
             model = self._resolve_model()
             llm = create_llm(model=model)
-            messages = [SystemMessage(content=system), HumanMessage(content=prompt)]
+            messages = [sys_msg, usr_msg]
             from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
 
             if should_cache(model=model, role=self.agent_id):
@@ -416,55 +408,6 @@ class BaseAgent:
                 is_mock=True,
                 data_sufficiency="low",
             )
-
-    def _build_prompt(self, snapshot: DataSnapshot, experience: str) -> str:
-        fr = snapshot.market.funding_rate
-        liq = snapshot.onchain.liquidations_24h
-        vol_ratio = liq.get("volume_ratio", 0)
-        fut_vol = liq.get("futures_volume", 0)
-
-        parts = [
-            f"Pair: {snapshot.pair}",
-            f"Timestamp: {snapshot.timestamp}",
-            f"Ticker: {snapshot.market.ticker}",
-            f"Volatility: {snapshot.market.volatility:.4f}",
-            f"Funding rate: {fr:.6f}"
-            + (
-                " (ELEVATED — crowded long)"
-                if fr > FUNDING_RATE_HIGH
-                else " (NEGATIVE — crowded short)"
-                if fr < FUNDING_RATE_LOW
-                else ""
-            ),
-        ]
-        if fut_vol > 0:
-            parts.append(
-                f"Futures volume: {fut_vol:,.0f} BTC, vs 20d avg: {vol_ratio:.2f}x"
-                + (" (SPIKE)" if vol_ratio > 1.5 else " (LOW)" if vol_ratio < 0.7 else "")
-            )
-        if snapshot.onchain.open_interest > 0:
-            parts.append(f"Open interest: {snapshot.onchain.open_interest:,.0f}")
-        # News headlines — apply sanitize_input() to each external headline before
-        # embedding into the prompt (req 7.5: prompt injection defence).
-        # Internal system prompts (role_description, ANALYSIS_FRAMEWORK) are NOT sanitized.
-        if snapshot.news.headlines:
-            safe_headlines = [sanitize_input(h) for h in snapshot.news.headlines]
-            parts.append("News headlines:\n" + "\n".join(f"  - {h}" for h in safe_headlines if h))
-
-        # Data quality warnings — tell agents when sources are empty
-        warnings = []
-        if snapshot.onchain.open_interest == 0 and snapshot.onchain.exchange_netflow == 0:
-            warnings.append("On-chain data unavailable (no API keys configured). Do NOT infer from missing data.")
-        if not snapshot.news.headlines:
-            warnings.append("News sentiment unavailable. Do NOT assume neutral sentiment from missing data.")
-        if hasattr(snapshot, "macro") and snapshot.macro.fed_rate == 0 and snapshot.macro.dxy == 0:
-            warnings.append("Macro data unavailable (FRED/DXY). Do NOT infer from zero values — they are missing.")
-        if warnings:
-            parts.append("⚠ DATA QUALITY WARNINGS:\n" + "\n".join(f"  - {w}" for w in warnings))
-
-        if experience:
-            parts.append(sanitize_input(experience, max_chars=4000))
-        return "\n".join(parts)
 
     @staticmethod
     def _regex_fallback(text: str) -> dict | None:
@@ -565,9 +508,9 @@ def _create_chat_model(model: str, temperature: float = 0.2):
 
 
 class ToolAgent(BaseAgent):
-    """Agent with tool-calling capability via LangChain create_agent.
+    """Agent with tool-calling capability via LangChain create_agent (spec 017b).
 
-    Unlike BaseAgent (single LLM call), ToolAgent runs a model→tool→model loop,
+    Unlike BaseAgent (single LLM call), ToolAgent runs a model->tool->model loop,
     allowing the AI to actively query data sources during analysis.
 
     In backtest_mode, skips tool-calling entirely and uses BaseAgent's single LLM call
@@ -576,13 +519,14 @@ class ToolAgent(BaseAgent):
 
     def __init__(
         self,
+        *,
         agent_id: str,
-        role_description: str,
+        prompt_builder: PromptBuilder,
         tools: Sequence,
         model: str = "",
         backtest_mode: bool = False,
     ) -> None:
-        super().__init__(agent_id, role_description, model)
+        super().__init__(agent_id=agent_id, prompt_builder=prompt_builder, model=model)
         self.tools = list(tools)
         self.backtest_mode = backtest_mode
 
@@ -591,23 +535,20 @@ class ToolAgent(BaseAgent):
         if self.backtest_mode:
             return await super().analyze(snapshot, experience)
 
-        prompt = self._build_prompt(snapshot, experience)
-        system = self.role_description + ANALYSIS_FRAMEWORK
-
         try:
             from langchain.agents import create_agent
 
-            from cryptotrader.agents.skills.middleware import SkillsInjectionMiddleware
-
-            skills_addendum = SkillsInjectionMiddleware(agent_id=self.agent_id).build_system_addendum()
-            if skills_addendum:
-                system = system + "\n\n" + skills_addendum
+            sys_msg, usr_msg = self._prompt_builder.build(
+                snapshot=self._snapshot_to_dict(snapshot),
+                portfolio={},
+                experience=experience,
+            )
 
             llm = _create_chat_model(self.model)
-            agent = create_agent(llm, tools=self.tools, system_prompt=system)
+            agent = create_agent(llm, tools=self.tools, system_prompt=sys_msg.content)
 
             result = await agent.ainvoke(
-                {"messages": [{"role": "user", "content": prompt}]},
+                {"messages": [{"role": "user", "content": usr_msg.content}]},
             )
 
             # Extract final message text from agent output

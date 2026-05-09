@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.config import AgentConfig, AgentsConfig, AppConfig, ModelConfig
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
@@ -55,6 +56,16 @@ async def _hang_forever(*args, **kwargs):
     await asyncio.sleep(999)
 
 
+def _fake_pb() -> MagicMock:
+    """Return a MagicMock that satisfies the PromptBuilder interface."""
+    pb = MagicMock()
+    pb.build.return_value = (
+        SystemMessage(content="system"),
+        HumanMessage(content="user"),
+    )
+    return pb
+
+
 @pytest.mark.asyncio
 async def test_agent_timeout_uses_per_agent_config():
     """Agent with timeout_seconds=1 should timeout and return mock result."""
@@ -69,6 +80,7 @@ async def test_agent_timeout_uses_per_agent_config():
     state = _make_state()
     with (
         patch("cryptotrader.config.load_config", return_value=cfg),
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
         patch("cryptotrader.agents.base.create_llm"),
         patch("cryptotrader.agents.tech.TechAgent.analyze", new=_hang_forever),
     ):
@@ -92,6 +104,7 @@ async def test_agent_timeout_falls_back_to_global():
     state = _make_state()
     with (
         patch("cryptotrader.config.load_config", return_value=cfg),
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
         patch("cryptotrader.agents.base.create_llm"),
         patch("cryptotrader.agents.tech.TechAgent.analyze", new=_hang_forever),
     ):

@@ -263,7 +263,7 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
         except Exception:
             logger.warning("Bias detection failed, continuing without calibration", exc_info=True)
 
-        # Skills injection is handled by SkillsInjectionMiddleware in ToolAgent.analyze().
+        # Skills injection is handled by PromptBuilder (spec 017b) in agent.analyze().
         # Background distillation is triggered by run_reflection() node (nodes/reflection.py).
 
     return {

@@ -2,11 +2,42 @@
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.config import AgentConfig, AgentsConfig
+
+# ── shared helpers ──────────────────────────────────────────────────────────
+
+
+def _fake_pb(agent_id: str = "tech") -> MagicMock:
+    """Return a MagicMock satisfying the PromptBuilder interface."""
+    pb = MagicMock()
+    pb.build.return_value = (
+        SystemMessage(content=f"system:{agent_id}"),
+        HumanMessage(content="user"),
+    )
+    return pb
+
+
+def _real_pb(agent_id: str) -> PromptBuilder:  # type: ignore[name-defined]  # noqa: F821
+    """Build a real PromptBuilder pointing at the repo's config/agents/ directory."""
+    from cryptotrader.agents.prompt_builder import (
+        DefaultMemoryProvider,
+        DefaultSkillProvider,
+        PromptBuilder,
+    )
+
+    repo_root = Path(__file__).parent.parent
+    return PromptBuilder(
+        agent_id=agent_id,
+        config_dir=repo_root / "config" / "agents",
+        memory_provider=DefaultMemoryProvider(memory_root=repo_root / "agent_memory"),
+        skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
+    )
 
 
 @pytest.fixture
@@ -19,6 +50,9 @@ def _reset_config_cache():
     cfg_mod._cached_config = original
 
 
+# ── SC-002: TOML config model end-to-end ───────────────────────────────────
+
+
 class TestSC002ModelConfig:
     """SC-002: TOML config model end-to-end."""
 
@@ -27,7 +61,7 @@ class TestSC002ModelConfig:
             "news_agent": AgentConfig(agent_id="news_agent", model="gpt-5"),
         }
         cfg = AgentsConfig(_agents=agents)
-        agent = cfg.build("news_agent")
+        agent = cfg.build("news_agent", prompt_builder=_real_pb("news"))
         assert agent.model == "gpt-5"
 
     def test_custom_timeout_on_agent_config(self):
@@ -38,6 +72,9 @@ class TestSC002ModelConfig:
         agent_cfg = cfg.get("news_agent")
         assert agent_cfg is not None
         assert agent_cfg.timeout_seconds == 30
+
+
+# ── SC-003: enabled=false excludes agent from pipeline ─────────────────────
 
 
 class TestSC003EnabledFalse:
@@ -59,75 +96,87 @@ class TestSC003EnabledFalse:
         }
         cfg = AgentsConfig(_agents=agents)
         with pytest.raises(AgentNotFoundError):
-            cfg.build("tech_agent")
+            cfg.build("tech_agent", prompt_builder=_fake_pb())
+
+
+# ── SC-004: Skill injection via PromptBuilder ──────────────────────────────
 
 
 class TestSC004SkillInjection:
-    """SC-004: Skill file content injected into prompt."""
+    """SC-004: Skills now injected via PromptBuilder._render_skills (spec 017b)."""
 
-    def test_skill_content_in_role_description(self, tmp_path):
-        skill_dir = tmp_path / "skills"
-        skill_dir.mkdir()
-        (skill_dir / "momentum_strategy.md").write_text("RSI < 35 and MACD golden cross")
+    def test_skill_rendered_by_prompt_builder(self, tmp_path):
+        """DefaultSkillProvider discovers and renders skill body into prompt."""
+        from cryptotrader.agents.prompt_builder import (
+            DefaultMemoryProvider,
+            DefaultSkillProvider,
+            PromptBuilder,
+        )
 
-        with patch(
-            "cryptotrader.agents.skill_loader._DEFAULT_SEARCH_PATHS",
-            [skill_dir],
-        ):
-            agents = {
-                "tech_agent": AgentConfig(
-                    agent_id="tech_agent",
-                    skills=["momentum_strategy"],
-                ),
-            }
-            cfg = AgentsConfig(_agents=agents)
-            agent = cfg.build("tech_agent")
+        # Create a shared SKILL.md in a temp skills dir (name must be kebab-case)
+        shared_dir = tmp_path / "_shared"
+        shared_dir.mkdir(parents=True)
+        skill_md = shared_dir / "SKILL.md"
+        skill_md.write_text(
+            "---\nname: momentum-strategy\nscope: shared\ndescription: RSI strategy\n---\n"
+            "RSI below 35 and MACD golden cross"
+        )
 
-        assert "RSI < 35" in agent.role_description
-        assert "STRATEGY SKILLS" in agent.role_description
+        repo_root = Path(__file__).parent.parent
+        pb = PromptBuilder(
+            agent_id="tech",
+            config_dir=repo_root / "config" / "agents",
+            memory_provider=DefaultMemoryProvider(memory_root=repo_root / "agent_memory"),
+            skill_provider=DefaultSkillProvider(skills_root=tmp_path),
+        )
+        sys_msg, usr_msg = pb.build(snapshot={}, portfolio={})
+        # skill body appears somewhere in the assembled prompt (sys or user slot)
+        full_prompt = sys_msg.content + usr_msg.content
+        assert "RSI below 35" in full_prompt
+
+
+# ── SC-005: Custom agent registered and buildable ──────────────────────────
 
 
 class TestSC005CustomAgent:
-    """SC-005: Custom agent registered and buildable."""
+    """SC-005: Custom agent with tools is buildable via AgentsConfig.build()."""
 
-    def test_custom_agent_builds(self, tmp_path):
-        prompt_file = tmp_path / "whale_prompt.md"
-        prompt_file.write_text("You analyze whale behavior.")
+    def test_custom_agent_with_tools_builds(self):
+        from cryptotrader.agents.base import ToolAgent
+
         agents = {
             "whale_agent": AgentConfig(
                 agent_id="whale_agent",
-                prompt_template=str(prompt_file),
                 tools=["get_whale_transfers"],
             ),
         }
         cfg = AgentsConfig(_agents=agents)
-        agent = cfg.build("whale_agent")
+        agent = cfg.build("whale_agent", prompt_builder=_fake_pb("whale_agent"))
         assert agent.agent_id == "whale_agent"
-        assert "whale behavior" in agent.role_description
+        assert isinstance(agent, ToolAgent)
         assert len(agent.tools) == 1
 
 
-class TestSC010PromptTemplateOverride:
-    """SC-010: Custom prompt_template replaces built-in ROLE constant."""
+# ── SC-010: PromptBuilder config file drives system prompt ─────────────────
 
-    def test_custom_prompt_replaces_builtin_role(self, tmp_path):
-        from cryptotrader.agents.tech import ROLE as BUILTIN_ROLE
 
-        custom_content = "You are a custom technical analyst using quantum computing."
-        prompt_file = tmp_path / "custom_tech.md"
-        prompt_file.write_text(custom_content)
+class TestSC010PromptBuilderConfig:
+    """SC-010: config/agents/<id>.md system_prompt section drives the agent system prompt."""
 
-        agents = {
-            "tech_agent": AgentConfig(
-                agent_id="tech_agent",
-                prompt_template=str(prompt_file),
-            ),
-        }
-        cfg = AgentsConfig(_agents=agents)
-        agent = cfg.build("tech_agent")
+    def test_config_system_prompt_appears_in_message(self):
+        """system_prompt section from config/agents/tech.md ends up in SystemMessage."""
+        pb = _real_pb("tech")
+        sys_msg, _ = pb.build(snapshot={}, portfolio={})
+        # tech.md system_prompt contains the TechAgent role text
+        assert len(sys_msg.content) > 50
+        # Verify PromptBuilder config loaded successfully
+        assert pb.config.agent_id == "tech"
 
-        from cryptotrader.agents.base import BaseAgent
-
-        assert isinstance(agent, BaseAgent)
-        assert custom_content in agent.role_description
-        assert BUILTIN_ROLE not in agent.role_description
+    def test_four_builtin_config_files_loadable(self):
+        """All four builtin agent config files are valid and loadable."""
+        for agent_id in ("tech", "chain", "news", "macro"):
+            pb = _real_pb(agent_id)
+            assert pb.config.agent_id == agent_id
+            sys_msg, usr_msg = pb.build(snapshot={}, portfolio={})
+            assert isinstance(sys_msg.content, str)
+            assert isinstance(usr_msg.content, str)

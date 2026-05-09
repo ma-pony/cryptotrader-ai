@@ -23,10 +23,14 @@ class TestAgentConfig:
         assert cfg.model == ""
         assert cfg.timeout_seconds == 0
         assert cfg.enabled is True
-        assert cfg.prompt_template == ""
         assert cfg.tools == []
         assert cfg.skills == []
         assert cfg.regime_skills == {}
+
+    def test_no_prompt_template_field(self):
+        """prompt_template was removed in spec 017b — AgentConfig no longer has it."""
+        cfg = AgentConfig(agent_id="test")
+        assert not hasattr(cfg, "prompt_template")
 
 
 class TestAgentsConfig:
@@ -103,7 +107,6 @@ class TestBuildAgentsConfig:
                 },
                 "whale_agent": {
                     "model": "claude-3.5",
-                    "prompt_template": "prompts/whale.md",
                     "tools": ["get_whale_transfers"],
                 },
             }
@@ -169,13 +172,6 @@ class TestValidateConfigAgents:
         }
         cfg = AppConfig(agents=AgentsConfig(_agents=agents))
         with pytest.raises(ConfigurationError, match="agents"):
-            validate_config(cfg)
-
-    def test_prompt_template_missing_file_raises(self):
-        cfg = self._make_app_config(
-            whale_agent={"prompt_template": "/nonexistent/path/whale.md"},
-        )
-        with pytest.raises(ConfigurationError, match="prompt_template"):
             validate_config(cfg)
 
     def test_invalid_timeout_raises(self):

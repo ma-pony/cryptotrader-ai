@@ -4,12 +4,52 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
+from cryptotrader.agents.prompt_builder import (
+    DefaultMemoryProvider,
+    DefaultSkillProvider,
+    PromptBuilder,
+)
 from cryptotrader.state import ArenaState
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
+
+# Module-level singletons: one PromptBuilder per agent_id, shared across cycles.
+_memory_provider: DefaultMemoryProvider | None = None
+_skill_provider: DefaultSkillProvider | None = None
+_prompt_builders: dict[str, PromptBuilder] = {}
+
+
+def _get_or_build_pb(agent_id: str, model: str) -> PromptBuilder:
+    """Return cached PromptBuilder for agent_id, building it on first access.
+
+    agent_id follows the full registry name (e.g. "tech_agent"); the config file
+    uses the short name without the "_agent" suffix (e.g. "config/agents/tech.md").
+    Paths are resolved relative to the repo root (parent of src/), so the function
+    works correctly regardless of the process cwd.
+    """
+    global _memory_provider, _skill_provider
+    # Resolve repo root as the directory three levels above this file:
+    # nodes/agents.py → nodes/ → cryptotrader/ → src/ → <repo_root>/
+    _repo_root = Path(__file__).parent.parent.parent.parent
+    if _memory_provider is None:
+        _memory_provider = DefaultMemoryProvider(memory_root=_repo_root / "agent_memory")
+        _skill_provider = DefaultSkillProvider(skills_root=_repo_root / "agent_skills")
+    if agent_id not in _prompt_builders:
+        # Strip "_agent" suffix: "tech_agent" → "tech", "chain_agent" → "chain"
+        short_id = agent_id.removesuffix("_agent")
+        _prompt_builders[agent_id] = PromptBuilder(
+            agent_id=short_id,
+            config_dir=_repo_root / "config" / "agents",
+            memory_provider=_memory_provider,
+            skill_provider=_skill_provider,
+            model=model,
+        )
+    return _prompt_builders[agent_id]
+
 
 # Degraded analysis result returned when an agent times out or fails
 _MOCK_ANALYSIS_RESULT: dict[str, Any] = {
@@ -39,7 +79,6 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         return {"data": {"analyses": {agent_type: prev_analyses[agent_type]}}}
 
     backtest_mode = state["metadata"].get("backtest_mode", False)
-    regime_tags = state["data"].get("regime_tags", [])
     cfg = load_config()
 
     agent_cfg = cfg.agents.get(agent_type)
@@ -49,11 +88,12 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         models_cfg = state["metadata"].get("models", {})
         model = models_cfg.get(agent_type, state["metadata"].get("analysis_model", ""))
 
+    pb = _get_or_build_pb(agent_type, model)
     try:
         agent = cfg.agents.build(
             agent_type,
+            prompt_builder=pb,
             backtest_mode=backtest_mode,
-            regime_tags=regime_tags,
             model_override=model,
         )
     except KeyError:
@@ -63,16 +103,20 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         from cryptotrader.agents.tech import TechAgent
 
         agents_fallback: dict[str, Any] = {
-            "tech_agent": lambda m: TechAgent(model=m),
-            "chain_agent": lambda m: ChainAgent(model=m, backtest_mode=backtest_mode),
-            "news_agent": lambda m: NewsAgent(model=m, backtest_mode=backtest_mode),
-            "macro_agent": lambda m: MacroAgent(model=m),
+            "tech_agent": lambda m: TechAgent(prompt_builder=_get_or_build_pb(agent_type, m), model=m),
+            "chain_agent": lambda m: ChainAgent(
+                prompt_builder=_get_or_build_pb(agent_type, m), model=m, backtest_mode=backtest_mode
+            ),
+            "news_agent": lambda m: NewsAgent(
+                prompt_builder=_get_or_build_pb(agent_type, m), model=m, backtest_mode=backtest_mode
+            ),
+            "macro_agent": lambda m: MacroAgent(prompt_builder=_get_or_build_pb(agent_type, m), model=m),
         }
         agent = agents_fallback[agent_type](model)
     snapshot = state["data"]["snapshot"]
 
     # Build experience context from legacy state fields (steering/corrections only)
-    # Skills are now injected via SkillsInjectionMiddleware inside ToolAgent.analyze()
+    # Skills are now injected via PromptBuilder (spec 017b) inside agent.analyze()
     experience = _build_experience(state, agent_type)
 
     # Inject live steering instructions (T024)
@@ -208,7 +252,7 @@ async def _publish_agent_done(
 def _build_experience(state: ArenaState, agent_type: str) -> str:
     """Build experience string from state fields (steering/corrections only).
 
-    Skills injection is handled by SkillsInjectionMiddleware inside ToolAgent.analyze().
+    Skills injection is handled by PromptBuilder (spec 017b) inside agent.analyze().
     """
     experience = state["data"].get("experience", "")
     agent_corrections = state["data"].get("agent_corrections", {})

@@ -12,6 +12,7 @@ import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.models import (
     AgentAnalysis,
@@ -74,6 +75,16 @@ def _base_state(pair: str = "BTC/USDT", price: float = 50000.0, **extra_data) ->
     }
 
 
+def _fake_pb() -> MagicMock:
+    """Return a MagicMock satisfying the PromptBuilder interface."""
+    pb = MagicMock()
+    pb.build.return_value = (
+        SystemMessage(content="system"),
+        HumanMessage(content="user"),
+    )
+    return pb
+
+
 def _make_mock_cfg(timeout_seconds: float = 0.05) -> MagicMock:
     """Build a mock AppConfig with the given timeout_seconds."""
     cfg = MagicMock()
@@ -116,6 +127,7 @@ async def test_agent_timeout_degrades_to_mock():
         await asyncio.sleep(10)  # far exceeds 0.05 s timeout
 
     with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
         patch("cryptotrader.agents.tech.TechAgent") as mock_agent_cls,
         patch("cryptotrader.config.load_config", return_value=_make_mock_cfg(0.05)),
     ):
@@ -145,6 +157,7 @@ async def test_agent_timeout_does_not_block_pipeline():
     )
 
     with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
         patch("cryptotrader.agents.tech.TechAgent") as mock_tech,
         patch("cryptotrader.agents.chain.ChainAgent") as mock_chain,
         patch("cryptotrader.config.load_config", return_value=_make_mock_cfg(0.05)),
@@ -168,6 +181,7 @@ async def test_agent_non_timeout_exception_is_logged(caplog):
     from cryptotrader.nodes.agents import tech_analyze
 
     with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
         patch("cryptotrader.agents.tech.TechAgent") as mock_agent_cls,
         patch("cryptotrader.config.load_config", return_value=_make_mock_cfg(60)),
     ):
@@ -193,6 +207,7 @@ async def test_agent_timeout_warning_logged(caplog):
         await asyncio.sleep(10)
 
     with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
         patch("cryptotrader.agents.tech.TechAgent") as mock_agent_cls,
         patch("cryptotrader.config.load_config", return_value=_make_mock_cfg(0.05)),
     ):

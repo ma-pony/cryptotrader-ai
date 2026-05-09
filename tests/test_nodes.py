@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.models import (
     AgentAnalysis,
@@ -67,6 +68,16 @@ def _base_state(pair="BTC/USDT", price=50000.0, **extra_data):
     }
 
 
+def _fake_pb() -> MagicMock:
+    """Return a MagicMock satisfying the PromptBuilder interface."""
+    pb = MagicMock()
+    pb.build.return_value = (
+        SystemMessage(content="system"),
+        HumanMessage(content="user"),
+    )
+    return pb
+
+
 # ── nodes/agents.py ──
 
 
@@ -85,7 +96,10 @@ async def test_run_agent_tech():
         risk_flags=[],
     )
 
-    with patch("cryptotrader.agents.tech.TechAgent") as mock_agent:
+    with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
+        patch("cryptotrader.agents.tech.TechAgent") as mock_agent,
+    ):
         instance = mock_agent.return_value
         instance.analyze = AsyncMock(return_value=mock_analysis)
         result = await tech_analyze(_base_state())
@@ -112,11 +126,14 @@ async def test_run_agent_uses_model_from_config():
         reasoning="Mixed signals",
     )
 
-    with patch("cryptotrader.agents.chain.ChainAgent") as mock_agent:
+    with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
+        patch("cryptotrader.agents.chain.ChainAgent") as mock_agent,
+    ):
         instance = mock_agent.return_value
         instance.analyze = AsyncMock(return_value=mock_analysis)
         await chain_analyze(state)
-        mock_agent.assert_called_once_with(model="claude-3-haiku", backtest_mode=False)
+        mock_agent.assert_called_once_with(prompt_builder=ANY, model="claude-3-haiku", backtest_mode=False)
 
 
 @pytest.mark.asyncio
@@ -141,7 +158,10 @@ async def test_run_agent_all_four():
         mock_analysis = AgentAnalysis(
             agent_id=key, pair="BTC/USDT", direction="bearish", confidence=0.6, reasoning="test"
         )
-        with patch(f"{module}.{cls_name}") as m:
+        with (
+            patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
+            patch(f"{module}.{cls_name}") as m,
+        ):
             m.return_value.analyze = AsyncMock(return_value=mock_analysis)
             result = await funcs[key](_base_state())
             assert key in result["data"]["analyses"]
@@ -869,10 +889,13 @@ async def test_backtest_agent_no_real_llm_calls():
         reasoning="Test backtest",
     )
 
-    with patch("cryptotrader.agents.chain.ChainAgent") as mock_agent:
+    with (
+        patch("cryptotrader.nodes.agents._get_or_build_pb", return_value=_fake_pb()),
+        patch("cryptotrader.agents.chain.ChainAgent") as mock_agent,
+    ):
         instance = mock_agent.return_value
         instance.analyze = AsyncMock(return_value=mock_analysis)
         result = await chain_analyze(state)
-        mock_agent.assert_called_once_with(model="gpt-4o-mini", backtest_mode=True)
+        mock_agent.assert_called_once_with(prompt_builder=ANY, model="gpt-4o-mini", backtest_mode=True)
         analysis = result["data"]["analyses"]["chain_agent"]
         assert analysis["direction"] == "bullish"

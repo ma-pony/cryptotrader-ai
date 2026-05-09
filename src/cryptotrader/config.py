@@ -7,6 +7,10 @@ import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cryptotrader.agents.prompt_builder import PromptBuilder
 
 try:
     import tomllib
@@ -432,7 +436,6 @@ class AgentConfig:
     model: str = ""
     timeout_seconds: int = 0
     enabled: bool = True
-    prompt_template: str = ""
     tools: list[str] = field(default_factory=list)
     skills: list[str] = field(default_factory=list)
     regime_skills: dict[str, list[str]] = field(default_factory=dict)
@@ -466,8 +469,9 @@ class AgentsConfig:
     def build(
         self,
         agent_id: str,
+        *,
+        prompt_builder: PromptBuilder,
         backtest_mode: bool = False,
-        regime_tags: list[str] | None = None,
         model_override: str = "",
     ):
         """Dynamically construct an Agent instance from registry config.
@@ -486,83 +490,44 @@ class AgentsConfig:
         if not agent_cfg.enabled:
             raise AgentNotFoundError(agent_id, [a.agent_id for a in self.list_active()])
 
-        role_description = self._resolve_role(agent_id, agent_cfg)
         model = model_override or agent_cfg.model
-        skill_content = self._resolve_skills(agent_cfg, regime_tags)
 
-        if agent_id in _BUILTIN_AGENT_IDS and not agent_cfg.tools and not agent_cfg.prompt_template:
-            return self._build_builtin(agent_id, model, backtest_mode, skill_content)
+        if agent_id in _BUILTIN_AGENT_IDS and not agent_cfg.tools:
+            return self._build_builtin(
+                agent_id, prompt_builder=prompt_builder, model=model, backtest_mode=backtest_mode
+            )
 
         if agent_cfg.tools:
             tools = self._resolve_tools(agent_cfg)
-            agent = ToolAgent(
+            return ToolAgent(
                 agent_id=agent_id,
-                role_description=role_description,
+                prompt_builder=prompt_builder,
                 tools=tools,
                 model=model,
                 backtest_mode=backtest_mode,
             )
-        else:
-            agent = BaseAgent(agent_id=agent_id, role_description=role_description, model=model)
-
-        if skill_content:
-            agent.role_description = agent.role_description + "\n\n--- STRATEGY SKILLS ---\n" + skill_content
-        return agent
+        return BaseAgent(agent_id=agent_id, prompt_builder=prompt_builder, model=model)
 
     @staticmethod
-    def _build_builtin(agent_id: str, model: str, backtest_mode: bool, skill_content: str):
+    def _build_builtin(
+        agent_id: str,
+        *,
+        prompt_builder: PromptBuilder,
+        model: str,
+        backtest_mode: bool,
+    ):
         from cryptotrader.agents.chain import ChainAgent
         from cryptotrader.agents.macro import MacroAgent
         from cryptotrader.agents.news import NewsAgent
         from cryptotrader.agents.tech import TechAgent
 
         builders = {
-            "tech_agent": lambda: TechAgent(model=model),
-            "chain_agent": lambda: ChainAgent(model=model, backtest_mode=backtest_mode),
-            "news_agent": lambda: NewsAgent(model=model, backtest_mode=backtest_mode),
-            "macro_agent": lambda: MacroAgent(model=model),
+            "tech_agent": lambda: TechAgent(prompt_builder=prompt_builder, model=model),
+            "chain_agent": lambda: ChainAgent(prompt_builder=prompt_builder, model=model, backtest_mode=backtest_mode),
+            "news_agent": lambda: NewsAgent(prompt_builder=prompt_builder, model=model, backtest_mode=backtest_mode),
+            "macro_agent": lambda: MacroAgent(prompt_builder=prompt_builder, model=model),
         }
-        agent = builders[agent_id]()
-        if skill_content:
-            agent.role_description = agent.role_description + "\n\n--- STRATEGY SKILLS ---\n" + skill_content
-        return agent
-
-    @staticmethod
-    def _resolve_role(agent_id: str, agent_cfg: AgentConfig) -> str:
-        if agent_cfg.prompt_template:
-            pt = Path(agent_cfg.prompt_template)
-            if not pt.is_absolute():
-                pt = Path.cwd() / pt
-            if not pt.exists():
-                raise ConfigurationError(
-                    field_path=f"agents.{agent_id}.prompt_template",
-                    expected=f"file must exist: {agent_cfg.prompt_template}",
-                )
-            return pt.read_text(encoding="utf-8")
-
-        builtin_roles = {
-            "tech_agent": "cryptotrader.agents.tech",
-            "chain_agent": "cryptotrader.agents.chain",
-            "news_agent": "cryptotrader.agents.news",
-            "macro_agent": "cryptotrader.agents.macro",
-        }
-        if agent_id in builtin_roles:
-            import importlib
-
-            mod = importlib.import_module(builtin_roles[agent_id])
-            return mod.ROLE
-        return f"You are {agent_id}, a specialized analysis agent."
-
-    def _resolve_skills(self, agent_cfg: AgentConfig, regime_tags: list[str] | None) -> str:
-        if not agent_cfg.skills and not agent_cfg.regime_skills:
-            return ""
-        from cryptotrader.agents.skill_loader import SkillLoader
-        from cryptotrader.agents.skill_selector import SkillSelector
-
-        loader = SkillLoader()
-        selector = SkillSelector()
-        contents = selector.select(agent_cfg, regime_tags or [], loader)
-        return "\n\n".join(contents) if contents else ""
+        return builders[agent_id]()
 
     @staticmethod
     def _resolve_tools(agent_cfg: AgentConfig) -> list:
@@ -658,15 +623,6 @@ def validate_config(cfg: AppConfig) -> None:
             expected="at least 1 enabled agent",
         )
     for ac in cfg.agents._agents.values():
-        if ac.prompt_template:
-            pt = Path(ac.prompt_template)
-            if not pt.is_absolute():
-                pt = Path.cwd() / pt
-            if not pt.exists():
-                raise ConfigurationError(
-                    field_path=f"agents.{ac.agent_id}.prompt_template",
-                    expected=f"file must exist: {ac.prompt_template}",
-                )
         if ac.timeout_seconds != 0 and ac.timeout_seconds < 1:
             raise ConfigurationError(
                 field_path=f"agents.{ac.agent_id}.timeout_seconds",

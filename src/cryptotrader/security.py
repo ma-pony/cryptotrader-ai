@@ -5,7 +5,7 @@ injection attacks when external data (news headlines, on-chain text fields,
 user-supplied strings) is embedded into LLM prompts.
 
 Only external data fields should pass through sanitize_input().
-Internal system prompts (role_description, ANALYSIS_FRAMEWORK) are trusted
+Internal system prompts (system_prompt section in config/agents/<id>.md) are trusted
 content and must NOT be sanitized.
 """
 
