@@ -224,6 +224,18 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # project's CLAUDE.md guidance ("generate responses in Simplified Chinese").
 "src/cryptotrader/agents/prompt_builder.py" = ["RUF001", "RUF002", "RUF003", "C901", "PERF401", "C401", "PERF403"]
 "tests/test_prompt_builder.py" = ["RUF001", "RUF002", "RUF003"]
+# spec 019 migration script + tests + new evolution modules use Chinese docstrings/comments.
+"scripts/migrate_018_to_019.py" = ["RUF001", "RUF002", "RUF003", "C901"]
+"tests/test_migrate_018_to_019.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/learning/evolution/idf.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/learning/evolution/skill_metadata_inference.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/learning/evolution/skill_provider.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_idf.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skill_metadata_inference.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_evolving_skill_provider.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skill_proposal_metadata_inference.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_api_memory_skills.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_e2e_skill_evolution.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_token_budget.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_config_loader.py" = ["RUF001", "RUF002", "RUF003", "E501"]
 # portfolio/manager.py: same SQLAlchemy declarative-class pattern as journal/store.

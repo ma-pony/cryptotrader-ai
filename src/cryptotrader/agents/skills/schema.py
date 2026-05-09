@@ -47,6 +47,7 @@ class Skill:
     """高层能力包，对应 agent_skills/<name>/SKILL.md。
 
     initial 5 个，运行时可增长；遵循 Anthropic Skills 协议。
+    spec 019 新增 6 字段（全部带 default，向后兼容旧实例）。
     """
 
     name: str
@@ -57,6 +58,13 @@ class Skill:
     manually_edited: bool = False
     version: str = "1.0"
     mtime: float = 0.0  # 磁盘 mtime，用于缓存失效
+    # spec 019 新增字段（FR-W2）
+    regime_tags: list[str] = field(default_factory=list)
+    triggers_keywords: list[str] = field(default_factory=list)
+    importance: float = 0.5
+    access_count: int = 0
+    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    confidence: float = 0.5
 
     @property
     def agent_id(self) -> str | None:
