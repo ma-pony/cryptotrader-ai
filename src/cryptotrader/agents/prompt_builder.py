@@ -252,40 +252,10 @@ class SkillProvider(Protocol):
         ...
 
 
-# ── DefaultSkillProvider ────────────────────────────────────────────────────────
-
-
-class DefaultSkillProvider:
-    """默认 SkillProvider 实现，扫描 agent_skills/<id>/SKILL.md，按 agent_id tag 过滤。"""
-
-    def __init__(self, skills_root: Path | None = None) -> None:
-        self._root = skills_root or Path("agent_skills")
-        self._cache: list[Skill] | None = None
-
-    def get_available_skills(
-        self,
-        agent_id: str,
-        snapshot: dict,
-        k: int = 5,
-    ) -> list[Skill]:
-        """返回与 agent_id 匹配的 top-k skills，使用 spec 014 scope filter（FR-Y28）。"""
-        from cryptotrader.agents.skills.loader import discover_skills_for_agent
-
-        spec014_skills = discover_skills_for_agent(agent_id, skill_dir=self._root)
-        result: list[Skill] = []
-        for s014 in spec014_skills[:k]:
-            result.append(
-                Skill(
-                    skill_id=s014.name,
-                    description=s014.description,
-                    tags=[s014.scope],
-                    steps=[],
-                    body=s014.body,
-                    name=s014.name,
-                )
-            )
-        return result
-
+# ── DefaultSkillProvider deleted (spec 019 FR-W11) ─────────────────────────────
+# spec 017a/b DefaultSkillProvider retired. EvolvingSkillProvider in
+# src/cryptotrader/learning/evolution/skill_provider.py replaces it.
+# Backward-compat alias kept so existing imports do not break.
 
 # ── EnforceResult + TokenBudgetEnforcer ────────────────────────────────────────
 

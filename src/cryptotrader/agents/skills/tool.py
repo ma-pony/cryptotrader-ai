@@ -116,8 +116,13 @@ def _record_metric(name: str, result: str) -> None:
 # ── LangChain BaseTool 接口 ──
 
 
-def _make_load_skill_tool(skill_dir: Path | None = None):
-    """创建 LangChain BaseTool 实例（FR-021 + FR-022）。"""
+def _make_load_skill_tool(provider: Any | None = None, skill_dir: Path | None = None):
+    """创建 LangChain BaseTool 实例（FR-021 + FR-022）。
+
+    spec 019 FR-W13: 接受 provider 参数（EvolvingSkillProvider）。
+    provider 非空 -> 走 provider.get_skill_by_name(name)（access_count 累计）。
+    provider 为 None -> 走 spec 014 兜底（直接读文件，兼容旧路径）。
+    """
     try:
         from langchain_core.tools import tool
 
@@ -131,6 +136,18 @@ def _make_load_skill_tool(skill_dir: Path | None = None):
             Returns:
                 The skill body as a string, or an error message.
             """
+            # spec 019: provider path (access_count accumulated via provider)
+            if provider is not None:
+                try:
+                    skill = provider.get_skill_by_name(name)
+                    if skill is None:
+                        logger.warning("load_skill_tool: provider returned None for skill '%s'", name)
+                        return f"Error: skill not found: {name}"
+                    return skill.body
+                except Exception as exc:
+                    logger.warning("load_skill_tool: provider error for '%s': %s", name, exc)
+                    return f"Error: provider error for skill {name}"
+            # spec 014 fallback: direct file read (no access_count accumulation)
             result = load_skill(name, skill_dir=skill_dir)
             if "error" in result:
                 return f"Error: {result['error']} (skill: {name})"
@@ -142,5 +159,6 @@ def _make_load_skill_tool(skill_dir: Path | None = None):
         return None
 
 
-# Module-level tool instance (default skill_dir)
+# Module-level tool instance (default: provider=None, spec 014 fallback path)
+# nodes/agents.py replaces this with provider-injected version at init time (FR-W14).
 load_skill_tool = _make_load_skill_tool()

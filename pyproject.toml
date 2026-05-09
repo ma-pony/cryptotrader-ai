@@ -222,18 +222,18 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # spec 017a (PromptBuilder Foundation): docstrings + section labels + test
 # fixtures use Chinese characters and fullwidth punctuation, matching the
 # project's CLAUDE.md guidance ("generate responses in Simplified Chinese").
-"src/cryptotrader/agents/prompt_builder.py" = ["RUF001", "RUF002", "RUF003", "C901", "PERF401", "C401", "PERF403"]
+"src/cryptotrader/agents/prompt_builder.py" = ["RUF001", "RUF002", "RUF003", "C901", "PERF401", "C401", "PERF403", "TC003"]
 "tests/test_prompt_builder.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 019 migration script + tests + new evolution modules use Chinese docstrings/comments.
 "scripts/migrate_018_to_019.py" = ["RUF001", "RUF002", "RUF003", "C901"]
 "tests/test_migrate_018_to_019.py" = ["RUF001", "RUF002", "RUF003"]
 "src/cryptotrader/learning/evolution/idf.py" = ["RUF001", "RUF002", "RUF003", "C901"]
 "src/cryptotrader/learning/evolution/skill_metadata_inference.py" = ["RUF001", "RUF002", "RUF003", "TC003", "E501", "SIM108"]
-"src/cryptotrader/learning/evolution/skill_provider.py" = ["RUF001", "RUF002", "RUF003"]
+"src/cryptotrader/learning/evolution/skill_provider.py" = ["RUF001", "RUF002", "RUF003", "C901"]
 "tests/test_idf.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_skill_metadata_inference.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_evolving_skill_provider.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/test_skill_proposal_metadata_inference.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skill_proposal_metadata_inference.py" = ["RUF001", "RUF002", "RUF003", "TC003", "F841"]
 "tests/test_api_memory_skills.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_e2e_skill_evolution.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_token_budget.py" = ["RUF001", "RUF002", "RUF003"]

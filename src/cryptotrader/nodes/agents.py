@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from cryptotrader.agents.prompt_builder import (
-    DefaultSkillProvider,
     PromptBuilder,
 )
 from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
+from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
 from cryptotrader.state import ArenaState
 from cryptotrader.tracing import node_logger
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level singletons: one PromptBuilder per agent_id, shared across cycles.
 _memory_provider: EvolvingMemoryProvider | None = None
-_skill_provider: DefaultSkillProvider | None = None
+_skill_provider: EvolvingSkillProvider | None = None  # spec 019: replaced DefaultSkillProvider
 _prompt_builders: dict[str, PromptBuilder] = {}
 
 
@@ -37,7 +37,12 @@ def _get_or_build_pb(agent_id: str, model: str) -> PromptBuilder:
     _repo_root = Path(__file__).parent.parent.parent.parent
     if _memory_provider is None:
         _memory_provider = EvolvingMemoryProvider(memory_root=_repo_root / "agent_memory")
-        _skill_provider = DefaultSkillProvider(skills_root=_repo_root / "agent_skills")
+        # spec 019: EvolvingSkillProvider replaces DefaultSkillProvider (FR-W12)
+        _skill_provider = EvolvingSkillProvider(skill_root=_repo_root / "agent_skills")
+        # spec 019: wire load_skill_tool to use EvolvingSkillProvider (FR-W14)
+        import cryptotrader.agents.skills.tool as _skill_tool_mod
+
+        _skill_tool_mod.load_skill_tool = _skill_tool_mod._make_load_skill_tool(provider=_skill_provider)
     if agent_id not in _prompt_builders:
         # Strip "_agent" suffix: "tech_agent" → "tech", "chain_agent" → "chain"
         short_id = agent_id.removesuffix("_agent")

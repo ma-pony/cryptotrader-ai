@@ -86,3 +86,65 @@ class TestLoadSkillFunction:
         # 第 11 次应被限流
         result = load_skill("trading-knowledge", skill_dir=skills_dir, trace_id=trace_id)
         assert result.get("error") == "rate_limit_per_cycle", "第 11 次应返回 rate_limit_per_cycle"
+
+
+class TestLoadSkillToolProviderInjection:
+    """spec 019 FR-W13/W14: _make_load_skill_tool provider 注入测试。"""
+
+    def test_provider_path_returns_skill_body(self):
+        """provider 非空时应走 provider.get_skill_by_name(name)。"""
+        from unittest.mock import MagicMock
+
+        from cryptotrader.agents.skills.tool import _make_load_skill_tool
+
+        mock_skill = MagicMock()
+        mock_skill.body = "Provider skill body content"
+        mock_provider = MagicMock()
+        mock_provider.get_skill_by_name.return_value = mock_skill
+
+        tool = _make_load_skill_tool(provider=mock_provider)
+        assert tool is not None
+        result = tool.invoke({"name": "tech-analysis"})
+        assert result == "Provider skill body content"
+        mock_provider.get_skill_by_name.assert_called_once_with("tech-analysis")
+
+    def test_provider_returns_none_gives_error_message(self):
+        """provider.get_skill_by_name 返回 None 时应返回 error 字符串。"""
+        from unittest.mock import MagicMock
+
+        from cryptotrader.agents.skills.tool import _make_load_skill_tool
+
+        mock_provider = MagicMock()
+        mock_provider.get_skill_by_name.return_value = None
+
+        tool = _make_load_skill_tool(provider=mock_provider)
+        assert tool is not None
+        result = tool.invoke({"name": "missing-skill"})
+        assert "Error" in result
+        assert "missing-skill" in result
+
+    def test_provider_exception_gives_error_message(self):
+        """provider.get_skill_by_name 抛出异常时应返回 error 字符串。"""
+        from unittest.mock import MagicMock
+
+        from cryptotrader.agents.skills.tool import _make_load_skill_tool
+
+        mock_provider = MagicMock()
+        mock_provider.get_skill_by_name.side_effect = RuntimeError("db gone")
+
+        tool = _make_load_skill_tool(provider=mock_provider)
+        assert tool is not None
+        result = tool.invoke({"name": "tech-analysis"})
+        assert "Error" in result
+
+    def test_provider_none_fallback_to_file_not_found(self, tmp_path):
+        """provider=None 时应走 spec 014 文件读取兜底路径。"""
+        from cryptotrader.agents.skills.tool import _make_load_skill_tool
+
+        skills_dir = tmp_path / "agent_skills"
+        skills_dir.mkdir()
+        tool = _make_load_skill_tool(provider=None, skill_dir=skills_dir)
+        assert tool is not None
+        result = tool.invoke({"name": "nonexistent"})
+        assert "Error" in result
+        assert "nonexistent" in result
