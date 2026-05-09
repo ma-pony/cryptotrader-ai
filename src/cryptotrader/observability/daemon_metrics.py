@@ -178,7 +178,7 @@ def record_run_event(redis_client: object | None = None) -> None:
         redis_client.zadd(_REDIS_KEY_RUNS, {json.dumps({"ts": now}): now})
         redis_client.zremrangebyscore(_REDIS_KEY_RUNS, "-inf", now - _24H)
     except Exception:
-        logger.debug("record_run_event: redis write failed", exc_info=True)
+        logger.info("record_run_event: redis write failed", exc_info=True)
 
 
 def record_llm_failure_event(*, failed: bool, redis_client: object | None = None) -> None:
@@ -192,7 +192,7 @@ def record_llm_failure_event(*, failed: bool, redis_client: object | None = None
         redis_client.zadd(_REDIS_KEY_LLM_FAILURES, {json.dumps({"ts": now, "failed": failed}): now})
         redis_client.zremrangebyscore(_REDIS_KEY_LLM_FAILURES, "-inf", now - _24H)
     except Exception:
-        logger.debug("record_llm_failure_event: redis write failed", exc_info=True)
+        logger.info("record_llm_failure_event: redis write failed", exc_info=True)
 
 
 def record_draft_event(redis_client: object | None = None) -> None:
@@ -206,7 +206,7 @@ def record_draft_event(redis_client: object | None = None) -> None:
         redis_client.zadd(_REDIS_KEY_DRAFTS, {json.dumps({"ts": now}): now})
         redis_client.zremrangebyscore(_REDIS_KEY_DRAFTS, "-inf", now - _7D)
     except Exception:
-        logger.debug("record_draft_event: redis write failed", exc_info=True)
+        logger.info("record_draft_event: redis write failed", exc_info=True)
 
 
 def get_run_count_24h_from_redis(redis_client: object | None = None) -> float:
@@ -219,7 +219,7 @@ def get_run_count_24h_from_redis(redis_client: object | None = None) -> float:
         now = time()
         return float(redis_client.zcount(_REDIS_KEY_RUNS, now - _24H, "+inf"))
     except Exception:
-        logger.debug("get_run_count_24h_from_redis: redis read failed", exc_info=True)
+        logger.info("get_run_count_24h_from_redis: redis read failed", exc_info=True)
         return 0.0
 
 
@@ -238,7 +238,7 @@ def get_llm_failure_rate_24h_from_redis(redis_client: object | None = None) -> f
         failures = sum(1 for m in members if json.loads(m).get("failed", False))
         return failures / total
     except Exception:
-        logger.debug("get_llm_failure_rate_24h_from_redis: redis read failed", exc_info=True)
+        logger.info("get_llm_failure_rate_24h_from_redis: redis read failed", exc_info=True)
         return 0.0
 
 
@@ -252,7 +252,7 @@ def get_draft_count_7d_from_redis(redis_client: object | None = None) -> float:
         now = time()
         return float(redis_client.zcount(_REDIS_KEY_DRAFTS, now - _7D, "+inf"))
     except Exception:
-        logger.debug("get_draft_count_7d_from_redis: redis read failed", exc_info=True)
+        logger.info("get_draft_count_7d_from_redis: redis read failed", exc_info=True)
         return 0.0
 
 
@@ -267,5 +267,5 @@ def _get_redis() -> object | None:
         redis_url = cfg.infrastructure.redis_url or "redis://localhost:6379/0"
         return redis_lib.from_url(redis_url, decode_responses=True)
     except Exception:
-        logger.debug("daemon_metrics: Redis unavailable", exc_info=True)
+        logger.info("daemon_metrics: Redis unavailable", exc_info=True)
         return None
