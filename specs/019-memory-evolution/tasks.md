@@ -86,35 +86,35 @@
 
 **⚠️ Atomic**：T022-T039 必须**全部完成**才能跑测试 / 提交 C3。中间状态会让 4 agent 拿不到 memory。
 
-- [ ] T022 [US1] 创建 `src/cryptotrader/learning/evolution/provider.py`：
+- [x] T022 [US1] 创建 `src/cryptotrader/learning/evolution/provider.py`：
   - `EvolvingMemoryProvider` class（实现 spec 017a `MemoryProvider` Protocol）
   - 构造：`__init__(memory_root: Path = Path("agent_memory"), top_k_rules: int = 5, top_n_cases: int = 5)`
   - `get_recent_memory()` 6 步流程见 contracts/evolving-memory-provider.md FR-Z8
   - `evaluate_all_rules() -> list[Transition]` 见 FR-Z13
   - `classify_pending_cases() -> list[FailureClassification]` 见 FR-Z16
   - 全局 try/except 容错（FR-Z9）：异常时返回空 + warning log
-- [ ] T023 [US3] 在 `provider.py` 实现归档逻辑：rule.fundamental_failure_streak >= 3 时 → 调 fsm.evaluate_transitions 升 archived → 移文件到 `<agent>/patterns/.archived/<rule_name>.md` + 更新 frontmatter maturity
-- [ ] T024 [US1] 修改 `src/cryptotrader/agents/prompt_builder.py`：删除 `class DefaultMemoryProvider`（spec 017a 路径错代码）；保留 `MemoryProvider` Protocol + `DefaultSkillProvider`（仍由 spec 019 处理）
-- [ ] T025 [US1] 修改 `src/cryptotrader/nodes/agents.py:_get_or_build_pb`：把 `DefaultMemoryProvider` import 改为 `EvolvingMemoryProvider`，初始化处替换
-- [ ] T026 [US1] 创建 `tests/test_evolving_memory_provider.py` ≥ 10 用例（见 spec.md SC-Z4 + contract 单测要求）
-- [ ] T027 [US1] 运行 `uv run python -m pytest tests/test_evolving_memory_provider.py -v --no-cov` 确认 PASS
-- [ ] T028 [US3] 创建 `src/cryptotrader/nodes/evolution.py`：
+- [x] T023 [US3] 在 `provider.py` 实现归档逻辑：rule.fundamental_failure_streak >= 3 时 → 调 fsm.evaluate_transitions 升 archived → 移文件到 `<agent>/patterns/.archived/<rule_name>.md` + 更新 frontmatter maturity
+- [x] T024 [US1] 修改 `src/cryptotrader/agents/prompt_builder.py`：删除 `class DefaultMemoryProvider`（spec 017a 路径错代码）；保留 `MemoryProvider` Protocol + `DefaultSkillProvider`（仍由 spec 019 处理）
+- [x] T025 [US1] 修改 `src/cryptotrader/nodes/agents.py:_get_or_build_pb`：把 `DefaultMemoryProvider` import 改为 `EvolvingMemoryProvider`，初始化处替换
+- [x] T026 [US1] 创建 `tests/test_evolving_memory_provider.py` ≥ 10 用例（见 spec.md SC-Z4 + contract 单测要求）
+- [x] T027 [US1] 运行 `uv run python -m pytest tests/test_evolving_memory_provider.py -v --no-cov` 确认 PASS
+- [x] T028 [US3] 创建 `src/cryptotrader/nodes/evolution.py`：
   - `async def evaluate_node(state: ArenaState) -> dict` 节点
   - 内部从 nodes/agents.py 取 module-level `_memory_provider`（现在是 EvolvingMemoryProvider）
   - 调 `provider.evaluate_all_rules()` 拿 transitions
   - 调 `provider.classify_pending_cases()` 拿 classifications
   - 写 OpenTelemetry 6 attribute（FR-Z30）
   - 异常 catch + log warning + return `{}`（不修改 state）
-- [ ] T029 [US3] 创建 `tests/test_evolution_node.py` ≥ 4 用例：(a) evaluate_node 在 fixture state 下跑通；(b) 调 provider.evaluate_all_rules + classify_pending_cases；(c) 异常时返回空 dict + warning；(d) telemetry 6 字段写入
-- [ ] T030 [US3] 修改 `src/cryptotrader/graph.py:_build_full_graph`：在 `risk_gate` 节点之后、`journal_trade` / `journal_rejection` 之前插入 `evaluate` 节点。具体策略：在 risk_router 之后加 evaluate 共享给两条 journal 分支
-- [ ] T031 [US3] 修改 `src/cryptotrader/nodes/journal.py:write_case`：写入新 schema（含 trade_execution / causal_chain / ive_classification 默认空字段；保持向后兼容旧 case 读取）
-- [ ] T032 [US3] 修改 `src/cryptotrader/nodes/execution.py`：trade 完成后回写 case 的 `trade_execution` 字段（entry / sl / tp / fill_status / hit_sl / hit_tp / exit_reason）
-- [ ] T033 [US3] 修改 `src/cryptotrader/nodes/journal.py:write_case`：填充 `causal_chain` 字段（per-agent tool_calls 摘要 + verbal_reinforcement_input + debate_intermediate）— 从 state 中提取
-- [ ] T034 [US1/US3] 运行 `uv run python -m pytest tests/test_evolving_memory_provider.py tests/test_evolution_node.py -v --no-cov` 全 PASS
-- [ ] T035 [US1] 运行完整回归 `uv run python -m pytest tests/ --no-cov -x --ignore=tests/test_e2e_memory_evolution.py 2>&1 | tail -10` 确认无回归
-- [ ] T036 [US1] 运行 `grep -rn "class DefaultMemoryProvider" src/cryptotrader/` 断言返回空（DefaultMemoryProvider 退役）
-- [ ] T037 [US1] 验证 `nodes/agents.py:_get_or_build_pb` 返回的 PromptBuilder 含 `EvolvingMemoryProvider`（python -c 跑或单测断言）
-- [ ] T038 [US1] 在 staging / dev 环境跑 `python scripts/migrate_017_to_018.py --dry-run` 验证迁移路径无错（不需要实际修改）
+- [x] T029 [US3] 创建 `tests/test_evolution_node.py` ≥ 4 用例：(a) evaluate_node 在 fixture state 下跑通；(b) 调 provider.evaluate_all_rules + classify_pending_cases；(c) 异常时返回空 dict + warning；(d) telemetry 6 字段写入
+- [x] T030 [US3] 修改 `src/cryptotrader/graph.py:_build_full_graph`：在 `risk_gate` 节点之后、`journal_trade` / `journal_rejection` 之前插入 `evaluate` 节点。具体策略：在 risk_router 之后加 evaluate 共享给两条 journal 分支
+- [x] T031 [US3] 修改 `src/cryptotrader/nodes/journal.py:write_case`：写入新 schema（含 trade_execution / causal_chain / ive_classification 默认空字段；保持向后兼容旧 case 读取）
+- [x] T032 [US3] 修改 `src/cryptotrader/nodes/execution.py`：trade 完成后回写 case 的 `trade_execution` 字段（entry / sl / tp / fill_status / hit_sl / hit_tp / exit_reason）
+- [x] T033 [US3] 修改 `src/cryptotrader/nodes/journal.py:write_case`：填充 `causal_chain` 字段（per-agent tool_calls 摘要 + verbal_reinforcement_input + debate_intermediate）— 从 state 中提取
+- [x] T034 [US1/US3] 运行 `uv run python -m pytest tests/test_evolving_memory_provider.py tests/test_evolution_node.py -v --no-cov` 全 PASS
+- [x] T035 [US1] 运行完整回归 `uv run python -m pytest tests/ --no-cov -x --ignore=tests/test_e2e_memory_evolution.py 2>&1 | tail -10` 确认无回归
+- [x] T036 [US1] 运行 `grep -rn "class DefaultMemoryProvider" src/cryptotrader/` 断言返回空（DefaultMemoryProvider 退役）
+- [x] T037 [US1] 验证 `nodes/agents.py:_get_or_build_pb` 返回的 PromptBuilder 含 `EvolvingMemoryProvider`（python -c 跑或单测断言）
+- [x] T038 [US1] 在 staging / dev 环境跑 `python scripts/migrate_017_to_018.py --dry-run` 验证迁移路径无错（不需要实际修改）
 - [ ] T039 **Commit C3**：atomic 提交 — `git add src/cryptotrader/learning/evolution/provider.py src/cryptotrader/agents/prompt_builder.py src/cryptotrader/nodes/agents.py src/cryptotrader/nodes/evolution.py src/cryptotrader/nodes/journal.py src/cryptotrader/nodes/execution.py src/cryptotrader/graph.py tests/test_evolving_memory_provider.py tests/test_evolution_node.py` + commit message `feat(spec-018/c3): EvolvingMemoryProvider integration + evaluate node + cases schema migration (atomic)`
 
 **Checkpoint C3**：US-Z1 / US-Z2 / US-Z3 / US-Z4 全部满足；4 agent 真正走 EvolvingMemoryProvider 路径；DefaultMemoryProvider 退役。
