@@ -61,23 +61,23 @@
 
 **Independent Test**：mock OpenAIAPIError → daemon exit 0 + skill_proposal SKIP + pareto/regime PASS + Gauge 输出。
 
-- [ ] T018 [US4] 在 `src/cryptotrader/ops/daemon.py` 加 soft_degrade 逻辑：`_run_action()` 包装 try/except (OpenAIAPIError, TimeoutError, NetworkError) → ActionResult(status=SKIP)（按 research.md Decision 2 + spec FR-D10）
-- [ ] T019 [US4] 在 `src/cryptotrader/ops/daemon.py` 加 OTel span 写入：`evolution.daemon.run` 父 span + `evolution.daemon.<action>` 子 span，attr `step.status` / `step.duration_ms` / `step.<details>`（按 spec FR-D11）
-- [ ] T020 [US4] 在 `src/cryptotrader/ops/daemon.py` 实现 `_acquire_locks()` fcntl.flock 5s timeout（字母顺序 cases→patterns，按 spec FR-D12 clarify Q3）；timeout 时 daemon 整次跳过 exit 0 + log warning
-- [ ] T021 [P] [US4] 创建 `src/cryptotrader/observability/daemon_metrics.py`：3 个 redis-backed sliding window helper（按 research.md Decision 4 简化版 — redis sorted set）
-- [ ] T022 [US4] 在 `src/api/routes/metrics.py` 注册 3 Prometheus Gauge：`evolution_daemon_run_count_24h` / `evolution_daemon_llm_failure_rate_24h` / `skill_proposal_draft_count_7d`；endpoint lazy update from redis
-- [ ] T023 [P] [US4] 创建 `tests/test_daemon_metrics.py`：3 aggregator 单测（record / count / failure_rate / total，含 sliding window evict 边界）
-- [ ] T024 [P] [US4] 在 `tests/test_evolution_daemon.py` 加 `test_soft_degrade_llm_failure` 用例（mock OpenAIAPIError → exit 0 + 1 SKIP + 2 PASS）
-- [ ] T025 [US4] 在 `tests/test_evolution_daemon.py` 加 `test_lock_timeout_skips_run` 用例（已被锁 → daemon exit 0 + log warning + 不跑 actions）
-- [ ] T026 [P] [US4] 创建 `tests/test_metrics_endpoint_evolution.py`：mock redis events → /metrics 输出含 3 Gauge
+- [X] T018 [US4] 在 `src/cryptotrader/ops/daemon.py` 加 soft_degrade 逻辑：`_run_action()` 包装 try/except (OpenAIAPIError, TimeoutError, NetworkError) → ActionResult(status=SKIP)（按 research.md Decision 2 + spec FR-D10）
+- [X] T019 [US4] 在 `src/cryptotrader/ops/daemon.py` 加 OTel span 写入：`evolution.daemon.run` 父 span + `evolution.daemon.<action>` 子 span，attr `step.status` / `step.duration_ms` / `step.<details>`（按 spec FR-D11）
+- [X] T020 [US4] 在 `src/cryptotrader/ops/daemon.py` 实现 `_acquire_locks()` fcntl.flock 5s timeout（字母顺序 cases→patterns，按 spec FR-D12 clarify Q3）；timeout 时 daemon 整次跳过 exit 0 + log warning
+- [X] T021 [P] [US4] 创建 `src/cryptotrader/observability/daemon_metrics.py`：3 个 redis-backed sliding window helper（按 research.md Decision 4 简化版 — redis sorted set）
+- [X] T022 [US4] 在 `src/api/routes/metrics.py` 注册 3 Prometheus Gauge：`evolution_daemon_run_count_24h` / `evolution_daemon_llm_failure_rate_24h` / `skill_proposal_draft_count_7d`；endpoint lazy update from redis
+- [X] T023 [P] [US4] 创建 `tests/test_daemon_metrics.py`：3 aggregator 单测（record / count / failure_rate / total，含 sliding window evict 边界）
+- [X] T024 [P] [US4] 在 `tests/test_evolution_daemon.py` 加 `test_soft_degrade_llm_failure` 用例（mock OpenAIAPIError → exit 0 + 1 SKIP + 2 PASS）
+- [X] T025 [US4] 在 `tests/test_evolution_daemon.py` 加 `test_lock_timeout_skips_run` 用例（已被锁 → daemon exit 0 + log warning + 不跑 actions）
+- [X] T026 [P] [US4] 创建 `tests/test_metrics_endpoint_evolution.py`：mock redis events → /metrics 输出含 3 Gauge
 
 ---
 
 ## Phase 7: CLI + Docker-compose
 
-- [ ] T027 [US4] 在 `src/cli/main.py` 加 `arena evolution-daemon` 命令（按 research.md Decision 6）：`--once` flag / env check / 调用 EvolutionDaemon
-- [ ] T028 [US4] 在 `docker-compose.yml` 加 `evolution-daemon` service（按 research.md Decision 5）：command / env / volumes / depends_on / resources
-- [ ] T029 [P] 创建 `tests/test_evolution_daemon_cli.py`：CLI 入口测试（`--once` / `EVOLUTION_DAEMON_ENABLED=false` 立即 exit / typer 输出格式）
+- [X] T027 [US4] 在 `src/cli/main.py` 加 `arena evolution-daemon` 命令（按 research.md Decision 6）：`--once` flag / env check / 调用 EvolutionDaemon
+- [X] T028 [US4] 在 `docker-compose.yml` 加 `evolution-daemon` service（按 research.md Decision 5）：command / env / volumes / depends_on / resources
+- [X] T029 [P] 创建 `tests/test_evolution_daemon_cli.py`：CLI 入口测试（`--once` / `EVOLUTION_DAEMON_ENABLED=false` 立即 exit / typer 输出格式）
 
 ---
 
