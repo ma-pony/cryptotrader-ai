@@ -1,0 +1,28 @@
+{
+  "title": "Memory Evolution",
+  "description": "Rule FSM states, IVE classification history, archived records",
+  "loading": "Loading…",
+  "rules_grid": {
+    "title": "Rule State Matrix",
+    "agent": "Agent"
+  },
+  "cases_timeline": {
+    "title": "IVE Classification Timeline (24h)",
+    "empty": "No cases in the last 24h"
+  },
+  "archived_rules": {
+    "title": "Archived Rules",
+    "empty": "No archived rules"
+  },
+  "transitions": {
+    "title": "FSM Transitions",
+    "empty": "No recent state transitions"
+  },
+  "maturity": {
+    "observed": "Observed",
+    "probationary": "Probationary",
+    "active": "Active",
+    "deprecated": "Deprecated",
+    "archived": "Archived"
+  }
+}

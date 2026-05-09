@@ -635,4 +635,19 @@ async def place_order(state: ArenaState) -> dict:
     except Exception:
         logger.info("Notification send failed", exc_info=True)
 
-    return {"data": {"order": order_data}}
+    # spec 018 T032: backfill trade_execution field for CaseRecord
+    verdict_data = state["data"].get("verdict", {})
+    trade_execution: dict = {
+        "entry_price": filled_price,
+        "amount": filled_amount,
+        "side": order.side,
+        "pair": pair,
+        "fill_status": "filled",
+        "hit_sl": False,
+        "hit_tp": False,
+        "exit_reason": verdict_data.get("action", ""),
+        "stop_loss": verdict_data.get("stop_loss"),
+        "take_profit": verdict_data.get("take_profit"),
+    }
+
+    return {"data": {"order": order_data, "trade_execution": trade_execution}}

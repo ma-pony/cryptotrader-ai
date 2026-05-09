@@ -24,13 +24,14 @@ def _fake_pb(agent_id: str = "tech") -> PromptBuilder:
 
 def _real_pb(agent_id: str) -> PromptBuilder:
     """Build a real PromptBuilder pointing at the repo's config/agents/ directory."""
-    from cryptotrader.agents.prompt_builder import DefaultMemoryProvider, DefaultSkillProvider
+    from cryptotrader.agents.prompt_builder import DefaultSkillProvider
+    from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
     repo_root = Path(__file__).parent.parent
     return PromptBuilder(
         agent_id=agent_id,
         config_dir=repo_root / "config" / "agents",
-        memory_provider=DefaultMemoryProvider(memory_root=repo_root / "agent_memory"),
+        memory_provider=EvolvingMemoryProvider(memory_root=repo_root / "agent_memory"),
         skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
     )
 

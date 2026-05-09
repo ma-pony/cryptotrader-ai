@@ -6,7 +6,6 @@ config/agents/<name>.md（YAML frontmatter + Markdown body），由 PromptBuilde
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import time
@@ -251,78 +250,6 @@ class SkillProvider(Protocol):
     ) -> list[Skill]:
         """返回 ranked skill 列表，长度 ≤ k；空返回 []。"""
         ...
-
-
-# ── DefaultMemoryProvider ───────────────────────────────────────────────────────
-
-
-class DefaultMemoryProvider:
-    """默认 MemoryProvider 实现，复用 spec 014 agent_memory/<agent_id>/{patterns.md, cases.jsonl}。"""
-
-    def __init__(
-        self,
-        memory_root: Path | None = None,
-        top_k_patterns: int = 5,
-        top_k_cases: int = 3,
-    ) -> None:
-        self._root = memory_root or Path("agent_memory")
-        self._k_patterns = top_k_patterns
-        self._k_cases = top_k_cases
-
-    def get_recent_memory(
-        self,
-        agent_id: str,
-        snapshot: dict,
-        k: int = 5,
-    ) -> str:
-        """读取 patterns.md + cases.jsonl 返回格式化 markdown。"""
-        agent_dir = self._root / agent_id
-        if not agent_dir.exists():
-            return "暂无历史记忆"
-
-        patterns = self._read_patterns(agent_dir / "patterns.md")
-        cases = self._read_cases(agent_dir / "cases.jsonl")
-
-        if not patterns and not cases:
-            return "暂无历史记忆"
-
-        parts = []
-        if patterns:
-            parts.append("### Patterns\n" + "\n".join(f"- {p}" for p in patterns[: self._k_patterns]))
-        if cases:
-            parts.append("### Cases\n" + "\n".join(f"- {c}" for c in cases[: self._k_cases]))
-        return "\n\n".join(parts)
-
-    def _read_patterns(self, path: Path) -> list[str]:
-        """每行 '- ' 开头视作一条 pattern。"""
-        if not path.exists():
-            return []
-        lines = path.read_text(encoding="utf-8").splitlines()
-        return [ln[2:].strip() for ln in lines if ln.startswith("- ")]
-
-    def _read_cases(self, path: Path) -> list[str]:
-        """逐行解析 JSONL，解析失败行跳过 + warning。"""
-        if not path.exists():
-            return []
-        cases: list[str] = []
-        for ln in path.read_text(encoding="utf-8").splitlines():
-            ln = ln.strip()
-            if not ln:
-                continue
-            try:
-                obj = json.loads(ln)
-            except json.JSONDecodeError as e:
-                logger.warning("cases.jsonl 第 %d 行解析失败: %s", len(cases) + 1, e)
-                continue
-            cases.append(self._format_case(obj))
-        return cases
-
-    def _format_case(self, obj: dict) -> str:
-        cid = obj.get("case_id", "?")
-        ctx = obj.get("context", "")
-        outcome = obj.get("outcome", "")
-        pnl = obj.get("pnl", "")
-        return f"[{cid}] {ctx} → {outcome} (PnL: {pnl})"
 
 
 # ── DefaultSkillProvider ────────────────────────────────────────────────────────

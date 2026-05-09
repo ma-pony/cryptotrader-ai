@@ -8,17 +8,17 @@ from pathlib import Path
 from typing import Any
 
 from cryptotrader.agents.prompt_builder import (
-    DefaultMemoryProvider,
     DefaultSkillProvider,
     PromptBuilder,
 )
+from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 from cryptotrader.state import ArenaState
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
 
 # Module-level singletons: one PromptBuilder per agent_id, shared across cycles.
-_memory_provider: DefaultMemoryProvider | None = None
+_memory_provider: EvolvingMemoryProvider | None = None
 _skill_provider: DefaultSkillProvider | None = None
 _prompt_builders: dict[str, PromptBuilder] = {}
 
@@ -36,7 +36,7 @@ def _get_or_build_pb(agent_id: str, model: str) -> PromptBuilder:
     # nodes/agents.py → nodes/ → cryptotrader/ → src/ → <repo_root>/
     _repo_root = Path(__file__).parent.parent.parent.parent
     if _memory_provider is None:
-        _memory_provider = DefaultMemoryProvider(memory_root=_repo_root / "agent_memory")
+        _memory_provider = EvolvingMemoryProvider(memory_root=_repo_root / "agent_memory")
         _skill_provider = DefaultSkillProvider(skills_root=_repo_root / "agent_skills")
     if agent_id not in _prompt_builders:
         # Strip "_agent" suffix: "tech_agent" → "tech", "chain_agent" → "chain"

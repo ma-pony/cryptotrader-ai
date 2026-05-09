@@ -229,16 +229,16 @@ class TestAgentBaseIntegration:
         from pathlib import Path
 
         from cryptotrader.agents.prompt_builder import (
-            DefaultMemoryProvider,
             DefaultSkillProvider,
             PromptBuilder,
         )
+        from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
         repo_root = Path(__file__).parent.parent
         pb = PromptBuilder(
             agent_id="tech",
             config_dir=repo_root / "config" / "agents",
-            memory_provider=DefaultMemoryProvider(memory_root=repo_root / "agent_memory"),
+            memory_provider=EvolvingMemoryProvider(memory_root=repo_root / "agent_memory"),
             skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
         )
         system_prompt_body = pb.config.body_sections["system_prompt"]

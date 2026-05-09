@@ -65,6 +65,8 @@ def _render_case_content(
     risk_gate_passed: bool,
     execution_status: dict | None,
     final_pnl: float | None,
+    trade_execution: dict | None = None,
+    causal_chain: dict | None = None,
 ) -> str:
     """渲染 case 文件内容（frontmatter + markdown body）。"""
     now = datetime.now(UTC).isoformat()
@@ -75,6 +77,10 @@ def _render_case_content(
         "verdict_action": verdict_action,
         "final_pnl": final_pnl,
         "risk_gate_passed": risk_gate_passed,
+        # spec 018 新增字段（默认 None，回填时更新）
+        "trade_execution": trade_execution,
+        "causal_chain": causal_chain,
+        "ive_classification": None,
     }
     header = render_frontmatter(fm)
 
@@ -103,6 +109,26 @@ def _render_case_content(
         for k, v in execution_status.items():
             lines.append(f"- **{k}**: {v}\n")
 
+    # spec 018: Trade Execution
+    lines.append("\n## Trade Execution\n")
+    if trade_execution:
+        for k, v in trade_execution.items():
+            lines.append(f"- **{k}**: {v}\n")
+    else:
+        lines.append("(no trade execution data)\n")
+
+    # spec 018: Causal Chain
+    lines.append("\n## Causal Chain\n")
+    if causal_chain:
+        for k, v in causal_chain.items():
+            lines.append(f"- **{k}**: {v}\n")
+    else:
+        lines.append("(no causal chain data)\n")
+
+    # spec 018: IVE Classification (placeholder — filled by classify_pending_cases)
+    lines.append("\n## IVE Classification\n")
+    lines.append("(pending classification)\n")
+
     return header + "".join(lines)
 
 
@@ -120,12 +146,15 @@ def write_case(
     execution_status: dict | None,
     final_pnl: float | None,
     memory_dir: Path | None = None,
+    trade_execution: dict | None = None,
+    causal_chain: dict | None = None,
 ) -> Path | None:
     """写入单个 trading cycle 的 case 记录（per-cycle 单文件）。
 
     FR-006: 写入 agent_memory/cases/<cycle_id>.md
     FR-007: 失败时 logger.warning 后返回 None，不阻塞 cycle
     FR-013: 原子写（temp + rename）
+    spec 018: 支持 trade_execution / causal_chain 新字段
     """
     mem = memory_dir or DEFAULT_AGENT_MEMORY_DIR
     ensure_memory_dirs(mem)
@@ -140,6 +169,8 @@ def write_case(
         risk_gate_passed=risk_gate_passed,
         execution_status=execution_status,
         final_pnl=final_pnl,
+        trade_execution=trade_execution,
+        causal_chain=causal_chain,
     )
     try:
         atomic_write(path, content)

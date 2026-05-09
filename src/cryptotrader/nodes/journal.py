@@ -42,6 +42,7 @@ _LATENCY_STAGE_MAP: dict[str, str] = {
     "record_rejection": "execute",
     "journal_trade": "execute",
     "journal_rejection": "execute",
+    "evaluate": "execute",  # spec 018: FSM + IVE evaluation node
 }
 
 
@@ -148,6 +149,47 @@ async def _get_portfolio_snapshot(state: ArenaState) -> dict:
         return {}
 
 
+def _build_causal_chain(state: ArenaState) -> dict | None:
+    """spec 018 T033: 从 state 提取 causal_chain（per-agent tool_calls 摘要 + 关键 state 字段）。"""
+    try:
+        data = state.get("data", {})
+        chain: dict = {}
+
+        # verbal_reinforcement_input: 记忆注入摘要
+        experience_memory = data.get("experience_memory")
+        if experience_memory:
+            chain["verbal_reinforcement_input"] = str(experience_memory)[:500]
+
+        # per-agent tool_calls 摘要（从 analyses 提取 key_factors + data_points）
+        analyses = data.get("analyses", {})
+        agent_summaries: dict[str, dict] = {}
+        for agent_id, analysis in analyses.items():
+            if isinstance(analysis, dict):
+                agent_summaries[agent_id] = {
+                    "key_factors": analysis.get("key_factors", [])[:3],
+                    "direction": analysis.get("direction", ""),
+                    "confidence": analysis.get("confidence", 0.0),
+                }
+            elif hasattr(analysis, "key_factors"):
+                agent_summaries[agent_id] = {
+                    "key_factors": (analysis.key_factors or [])[:3],
+                    "direction": getattr(analysis, "direction", ""),
+                    "confidence": getattr(analysis, "confidence", 0.0),
+                }
+        if agent_summaries:
+            chain["agent_summaries"] = agent_summaries
+
+        # debate_intermediate: 辩论轮次摘要
+        debate_turns = data.get("debate_turns") or []
+        if debate_turns:
+            chain["debate_intermediate"] = [str(t)[:200] for t in debate_turns[:3]]
+
+        return chain if chain else None
+    except Exception:
+        logger.debug("_build_causal_chain failed (non-blocking)", exc_info=True)
+        return None
+
+
 def _write_memory_case(state: ArenaState, commit: Any, pair_str: str, raw_verdict: dict | None) -> None:
     """FR-006: 写入 agent_memory/cases/<cycle_id>.md（per-cycle 单文件）。
 
@@ -179,6 +221,12 @@ def _write_memory_case(state: ArenaState, commit: Any, pair_str: str, raw_verdic
         risk_gate_passed = commit.risk_gate.passed if commit.risk_gate else True
         exec_status = commit.execution_status
 
+        # spec 018 新增字段：trade_execution + causal_chain
+        trade_execution: dict | None = state["data"].get("trade_execution")
+
+        # causal_chain: 从 state 提取各 agent tool_calls 摘要 + verbal_reinforcement_input + debate_intermediate
+        causal_chain: dict | None = _build_causal_chain(state)
+
         write_case(
             cycle_id=cycle_id,
             pair=pair_str,
@@ -189,6 +237,8 @@ def _write_memory_case(state: ArenaState, commit: Any, pair_str: str, raw_verdic
             risk_gate_passed=risk_gate_passed,
             execution_status=exec_status,
             final_pnl=commit.pnl,
+            trade_execution=trade_execution,
+            causal_chain=causal_chain,
         )
 
         # T041 / FR-026: 有 final_pnl 时立即更新 pattern PnL track

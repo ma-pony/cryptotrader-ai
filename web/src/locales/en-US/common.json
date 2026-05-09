@@ -12,6 +12,7 @@
     "metrics": "Metrics",
     "chat": "AI Chat",
     "market": "Market",
+    "memory": "Memory",
     "scheduler": "Scheduler",
     "section": {
       "trading": "Trading",

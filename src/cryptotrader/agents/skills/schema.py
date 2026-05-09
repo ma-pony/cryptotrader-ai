@@ -12,7 +12,7 @@ from typing import Literal
 
 # ── Maturity 枚举 ──
 
-Maturity = Literal["observed", "probationary", "active", "deprecated"]
+Maturity = Literal["observed", "probationary", "active", "deprecated", "archived"]
 
 
 # ── PnL 追踪 ──
@@ -86,6 +86,12 @@ class PatternRecord:
     file_path: Path = field(default_factory=lambda: Path("."))
     manually_edited: bool = False
     version: int = 1
+    # spec 018 新增字段（FR-Z6）
+    importance: float = 0.5
+    access_count: int = 0
+    last_accessed_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    last_modified_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    fundamental_failure_streak: int = 0
 
 
 @dataclass
@@ -104,6 +110,10 @@ class CaseRecord:
     execution_status: dict | None = None
     final_pnl: float | None = None
     file_path: Path = field(default_factory=lambda: Path("."))
+    # spec 018 新增字段（FR-Z6b）
+    trade_execution: dict | None = None
+    causal_chain: dict | None = None
+    ive_classification: dict | None = None
 
 
 @dataclass

@@ -31,6 +31,7 @@ from api.routes import (
     health,
     hitl,
     market,
+    memory,
     metrics,
     portfolio_v2,
     risk,
@@ -436,3 +437,4 @@ app.include_router(chat.router, dependencies=[Depends(verify_api_key)])
 app.include_router(chat_control.router, dependencies=[Depends(verify_api_key)])
 app.include_router(hitl.router, dependencies=[Depends(verify_api_key)])
 app.include_router(market.router, dependencies=[Depends(verify_api_key)])
+app.include_router(memory.router, prefix="/api/memory", dependencies=[Depends(verify_api_key)])

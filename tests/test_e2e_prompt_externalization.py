@@ -28,15 +28,15 @@ CONFIG_DIR = REPO_ROOT / "config" / "agents"
 def _build_pb(agent_id: str, skills_root: Path | None = None):
     """Build a real PromptBuilder for agent_id, optionally overriding the skills root."""
     from cryptotrader.agents.prompt_builder import (
-        DefaultMemoryProvider,
         DefaultSkillProvider,
         PromptBuilder,
     )
+    from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
     return PromptBuilder(
         agent_id=agent_id,
         config_dir=CONFIG_DIR,
-        memory_provider=DefaultMemoryProvider(memory_root=REPO_ROOT / "agent_memory"),
+        memory_provider=EvolvingMemoryProvider(memory_root=REPO_ROOT / "agent_memory"),
         skill_provider=DefaultSkillProvider(skills_root=skills_root or REPO_ROOT / "agent_skills"),
     )
 
