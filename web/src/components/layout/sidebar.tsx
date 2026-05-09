@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  Brain,
   Briefcase,
   CalendarClock,
   Gauge,
@@ -25,6 +26,7 @@ type NavLabelKey =
   | 'nav.debate'
   | 'nav.backtest'
   | 'nav.risk'
+  | 'nav.memory'
   | 'nav.metrics'
   | 'nav.chat'
   | 'nav.market'
@@ -71,6 +73,7 @@ const NAV_SECTIONS: NavSection[] = [
     defaultTitle: '运维',
     items: [
       { to: '/risk', labelKey: 'nav.risk', icon: ShieldCheck },
+      { to: '/memory', labelKey: 'nav.memory', icon: Brain },
       { to: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
       { to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
     ],

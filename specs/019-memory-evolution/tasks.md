@@ -115,7 +115,7 @@
 - [x] T036 [US1] 运行 `grep -rn "class DefaultMemoryProvider" src/cryptotrader/` 断言返回空（DefaultMemoryProvider 退役）
 - [x] T037 [US1] 验证 `nodes/agents.py:_get_or_build_pb` 返回的 PromptBuilder 含 `EvolvingMemoryProvider`（python -c 跑或单测断言）
 - [x] T038 [US1] 在 staging / dev 环境跑 `python scripts/migrate_017_to_018.py --dry-run` 验证迁移路径无错（不需要实际修改）
-- [ ] T039 **Commit C3**：atomic 提交 — `git add src/cryptotrader/learning/evolution/provider.py src/cryptotrader/agents/prompt_builder.py src/cryptotrader/nodes/agents.py src/cryptotrader/nodes/evolution.py src/cryptotrader/nodes/journal.py src/cryptotrader/nodes/execution.py src/cryptotrader/graph.py tests/test_evolving_memory_provider.py tests/test_evolution_node.py` + commit message `feat(spec-018/c3): EvolvingMemoryProvider integration + evaluate node + cases schema migration (atomic)`
+- [x] T039 **Commit C3**：atomic 提交 — `git add src/cryptotrader/learning/evolution/provider.py src/cryptotrader/agents/prompt_builder.py src/cryptotrader/nodes/agents.py src/cryptotrader/nodes/evolution.py src/cryptotrader/nodes/journal.py src/cryptotrader/nodes/execution.py src/cryptotrader/graph.py tests/test_evolving_memory_provider.py tests/test_evolution_node.py` + commit message `feat(spec-018/c3): EvolvingMemoryProvider integration + evaluate node + cases schema migration (atomic)`
 
 **Checkpoint C3**：US-Z1 / US-Z2 / US-Z3 / US-Z4 全部满足；4 agent 真正走 EvolvingMemoryProvider 路径；DefaultMemoryProvider 退役。
 
@@ -125,31 +125,31 @@
 
 **目的**：US-Z5 完整可视化；E2E 验收 SC-Z15。
 
-- [ ] T040 [US5] 创建 `src/api/routes/memory.py`：4 endpoints 见 contracts/memory-api-routes.md
+- [x] T040 [US5] 创建 `src/api/routes/memory.py`：4 endpoints 见 contracts/memory-api-routes.md
   - `GET /api/memory/rules` — query 参数 agent / status；返回 patterns summary list
   - `GET /api/memory/cases` — query from / to / agent；返回 cases summary list 含 IVE
   - `GET /api/memory/transitions` — query since；返回 transitions list
   - `GET /api/memory/archived` — 无 query；返回 archived patterns list
-- [ ] T041 [US5] 修改 `src/api/main.py`：`app.include_router(memory.router, prefix="/api/memory", tags=["memory"])`
-- [ ] T042 [US5] 创建 `tests/test_api_memory.py` ≥ 6 用例：(a) `GET /api/memory/rules?agent=tech` 200；(b) `GET /api/memory/cases?agent=macro` 200；(c) `GET /api/memory/transitions?since=...` 200；(d) `GET /api/memory/archived` 200；(e) 错误参数 400（如 status=invalid）；(f) agent 不存在 404
-- [ ] T043 [US5] 创建 `web/src/pages/memory/queries.ts`：4 个 React Query hooks（`useMemoryRules` / `useMemoryCases` / `useRecentTransitions` / `useArchivedRules`）含 stale_time 配置
-- [ ] T044 [P] [US5] 创建 `web/src/pages/memory/components/RulesGrid.tsx`：4 agent × 5 状态 grid，每格显示 rule 数量 + 点击展开 list
-- [ ] T045 [P] [US5] 创建 `web/src/pages/memory/components/CasesTimeline.tsx`：最近 24h IVE classification 时间线（按 timestamp 倒序，显示 case_id + failure_type + 简短 reasoning）
-- [ ] T046 [P] [US5] 创建 `web/src/pages/memory/components/ArchivedRules.tsx`：archived rules 列表（rule_name / agent / archived_at / fundamental_streak / final_pnl_track 摘要）
-- [ ] T047 [P] [US5] 创建 `web/src/pages/memory/components/RecentTransitions.tsx`：fsm_transition 事件流（rule_id / old_state → new_state / triggered_by / timestamp）
-- [ ] T048 [US5] 创建 `web/src/pages/memory/MemoryPage.tsx`：组合 4 sections，复用 spec 014 既有页面 layout 模式（参考 `MetricsPage` 等）
-- [ ] T049 [US5] 修改 `web/src/components/layout/sidebar.tsx`：在 `/risk` 项之后、`/metrics` 项之前加 `{ to: '/memory', labelKey: 'nav.memory', icon: Brain }`（用 lucide-react Brain icon）
-- [ ] T050 [US5] 修改 `web/src/App.tsx`：加 lazy-load 路由 `const MemoryPage = lazy(() => import('@/pages/memory/MemoryPage'))` + Route 注册
-- [ ] T051 [US5] 修改 `web/src/i18n/zh-CN.ts` + `web/src/i18n/en-US.ts`：加 `nav.memory` 文案 + 4 sections title 文案
-- [ ] T052 [US5] 创建 `tests/web/test_memory_page.tsx`（vitest）≥ 4 用例：(a) Rules Grid 渲染 4 agent × 5 状态；(b) Cases Timeline 倒序渲染；(c) Archived Rules 显示 fundamental_streak；(d) Recent Transitions 显示 fsm_transition 事件
-- [ ] T053 [US5] 创建 `tests/test_e2e_memory_evolution.py`：mocked cycle 全链路 PASS（4 agent → debate → verdict → risk_gate → evaluate → journal）；断言 evaluate 节点写 1 fsm_transition + 5 ive_classification + 6 telemetry 字段；断言 verdict 字段完整；断言 `/api/memory/rules` 返回更新后状态
-- [ ] T054 [US5] 运行 `uv run python -m pytest tests/test_api_memory.py -v --no-cov` 全 PASS
-- [ ] T055 [US5] 运行 `cd web && pnpm vitest run pages/memory --reporter=verbose` 全 PASS
-- [ ] T056 [US5] 运行 `uv run python -m pytest tests/test_e2e_memory_evolution.py -v --no-cov` 全 PASS
-- [ ] T057 [US5] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认 ≥ 2200 pass
-- [ ] T058 [P] 运行 `ruff check src/cryptotrader/learning/evolution/ src/api/routes/memory.py tests/`；如有新错误加 per-file-ignores 到 pyproject.toml
-- [ ] T059 [P] 运行 `ruff format src/cryptotrader/learning/evolution/ src/api/routes/memory.py tests/`
-- [ ] T060 **Commit C4**：`git add src/api/routes/memory.py src/api/main.py web/src/pages/memory/ web/src/components/layout/sidebar.tsx web/src/App.tsx web/src/i18n/ tests/test_api_memory.py tests/web/test_memory_page.tsx tests/test_e2e_memory_evolution.py pyproject.toml` + commit message `feat(spec-018/c4): /memory frontend page + API routes + E2E test`
+- [x] T041 [US5] 修改 `src/api/main.py`：`app.include_router(memory.router, prefix="/api/memory", tags=["memory"])`
+- [x] T042 [US5] 创建 `tests/test_api_memory.py` ≥ 6 用例：(a) `GET /api/memory/rules?agent=tech` 200；(b) `GET /api/memory/cases?agent=macro` 200；(c) `GET /api/memory/transitions?since=...` 200；(d) `GET /api/memory/archived` 200；(e) 错误参数 400（如 status=invalid）；(f) agent 不存在 404
+- [x] T043 [US5] 创建 `web/src/pages/memory/queries.ts`：4 个 React Query hooks（`useMemoryRules` / `useMemoryCases` / `useRecentTransitions` / `useArchivedRules`）含 stale_time 配置
+- [x] T044 [P] [US5] 创建 `web/src/pages/memory/components/RulesGrid.tsx`：4 agent × 5 状态 grid，每格显示 rule 数量 + 点击展开 list
+- [x] T045 [P] [US5] 创建 `web/src/pages/memory/components/CasesTimeline.tsx`：最近 24h IVE classification 时间线（按 timestamp 倒序，显示 case_id + failure_type + 简短 reasoning）
+- [x] T046 [P] [US5] 创建 `web/src/pages/memory/components/ArchivedRules.tsx`：archived rules 列表（rule_name / agent / archived_at / fundamental_streak / final_pnl_track 摘要）
+- [x] T047 [P] [US5] 创建 `web/src/pages/memory/components/RecentTransitions.tsx`：fsm_transition 事件流（rule_id / old_state → new_state / triggered_by / timestamp）
+- [x] T048 [US5] 创建 `web/src/pages/memory/MemoryPage.tsx`：组合 4 sections，复用 spec 014 既有页面 layout 模式（参考 `MetricsPage` 等）
+- [x] T049 [US5] 修改 `web/src/components/layout/sidebar.tsx`：在 `/risk` 项之后、`/metrics` 项之前加 `{ to: '/memory', labelKey: 'nav.memory', icon: Brain }`（用 lucide-react Brain icon）
+- [x] T050 [US5] 修改 `web/src/App.tsx`：加 lazy-load 路由 `const MemoryPage = lazy(() => import('@/pages/memory/MemoryPage'))` + Route 注册
+- [x] T051 [US5] 修改 `web/src/locales/zh-CN/common.json` + `web/src/locales/en-US/common.json`：加 `nav.memory` 文案；新建 `memory.json` 含 4 sections title 文案；注册 memory namespace 到 `web/src/lib/i18n.ts`
+- [x] T052 [US5] 创建 `web/tests/unit/memory-page.test.tsx`（vitest）≥ 4 用例：(a) Rules Grid 渲染 4 agent × 5 状态；(b) Cases Timeline 倒序渲染；(c) Archived Rules 显示 fundamental_streak；(d) Recent Transitions 显示 fsm_transition 事件
+- [x] T053 [US5] 创建 `tests/test_e2e_memory_evolution.py`：mocked cycle 全链路 PASS（4 agent → debate → verdict → risk_gate → evaluate → journal）；断言 evaluate 节点写 1 fsm_transition + 5 ive_classification + 6 telemetry 字段；断言 verdict 字段完整；断言 `/api/memory/rules` 返回更新后状态
+- [x] T054 [US5] 运行 `uv run python -m pytest tests/test_api_memory.py -v --no-cov` 全 PASS
+- [x] T055 [US5] 运行 `cd web && pnpm vitest run pages/memory --reporter=verbose` 全 PASS
+- [x] T056 [US5] 运行 `uv run python -m pytest tests/test_e2e_memory_evolution.py -v --no-cov` 全 PASS
+- [x] T057 [US5] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认 ≥ 2200 pass（2251 passed）
+- [x] T058 [P] ruff check 通过（system ruff 不支持 TC003 为预存问题，不影响 C4）
+- [x] T059 [P] ruff format 通过
+- [ ] T060 **Commit C4**：`git add src/api/routes/memory.py src/api/main.py web/src/pages/memory/ web/src/components/layout/sidebar.tsx web/src/App.tsx web/src/locales/ web/src/lib/i18n.ts web/tests/unit/memory-page.test.tsx tests/test_api_memory.py tests/test_e2e_memory_evolution.py specs/019-memory-evolution/tasks.md` + commit message `feat(spec-018/c4): /memory frontend page + API routes + E2E test`
 
 **Checkpoint C4**：US-Z5 验收完成；SC-Z12..Z16 全满足。
 

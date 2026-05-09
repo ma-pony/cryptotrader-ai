@@ -1,0 +1,28 @@
+{
+  "title": "记忆演化",
+  "description": "规则 FSM 状态、IVE 分类历史、归档记录",
+  "loading": "加载中…",
+  "rules_grid": {
+    "title": "规则状态矩阵",
+    "agent": "Agent"
+  },
+  "cases_timeline": {
+    "title": "IVE 分类时间线 (24h)",
+    "empty": "最近 24h 无 case 记录"
+  },
+  "archived_rules": {
+    "title": "已归档规则",
+    "empty": "暂无归档规则"
+  },
+  "transitions": {
+    "title": "FSM 状态转换",
+    "empty": "最近无状态转换"
+  },
+  "maturity": {
+    "observed": "观察中",
+    "probationary": "试用期",
+    "active": "活跃",
+    "deprecated": "废弃",
+    "archived": "已归档"
+  }
+}
