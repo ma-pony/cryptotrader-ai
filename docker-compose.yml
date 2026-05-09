@@ -118,6 +118,34 @@ services:
           memory: 512m
           cpus: "1.0"
 
+  # spec 022 FR-D15/D16: Evolution reflect daemon (Pareto + regime + skill proposal)
+  # Runs daily via APScheduler CronTrigger; isolated from scheduler service.
+  evolution-daemon:
+    build: .
+    command: arena evolution-daemon
+    environment:
+      EVOLUTION_DAEMON_ENABLED: ${EVOLUTION_DAEMON_ENABLED:-true}
+      CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-http://localhost:4317}
+    env_file:
+      - .env
+    volumes:
+      - ctdata:/home/appuser/.cryptotrader
+      - ./agent_memory:/app/agent_memory
+      - ./agent_skills:/app/agent_skills
+      - ./config:/app/config:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+          cpus: "0.5"
+
   # Reverse proxy with automatic Let's Encrypt — only used in VPS
   # deployment (see docs/DEPLOYMENT.md). Local-dev runs ``api`` and
   # ``web`` on host ports directly without Caddy. Use ``--profile prod``

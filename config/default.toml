@@ -274,3 +274,11 @@ name = "cryptotrader-news"
 transport = "stdio"
 enabled = true
 tools = ["news_rss", "news_sosovalue"]
+
+[evolution_daemon]
+# spec 022 FR-D4: Evolution reflect daemon configuration
+enabled = true
+cron = "0 0 * * *"
+actions = ["pareto", "regime", "skill_proposal"]
+llm_model = ""
+propose_threshold = 10

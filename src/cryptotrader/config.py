@@ -257,6 +257,20 @@ class ExecutionConfig:
     graph_timeout_s: int = 300
 
 
+# ── Evolution Daemon ──
+
+
+@dataclass
+class EvolutionDaemonConfig:
+    """spec 022 FR-D4: Evolution reflect daemon configuration."""
+
+    enabled: bool = True
+    cron: str = "0 0 * * *"
+    actions: list = field(default_factory=lambda: ["pareto", "regime", "skill_proposal"])
+    llm_model: str = ""
+    propose_threshold: int = 10
+
+
 # ── Scheduler ──
 
 
@@ -572,6 +586,7 @@ class AppConfig:
     hitl: HitlConfig = field(default_factory=HitlConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    evolution_daemon: EvolutionDaemonConfig = field(default_factory=EvolutionDaemonConfig)
 
     @property
     def reflection(self) -> ExperienceConfig:
@@ -965,6 +980,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         hitl=_build_hitl_config(toml_data),
         agents=_build_agents_config(toml_data),
         mcp=_build_mcp_config(toml_data),
+        evolution_daemon=EvolutionDaemonConfig(**toml_data.get("evolution_daemon", {})),
     )
 
 
