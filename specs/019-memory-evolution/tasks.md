@@ -48,8 +48,8 @@
 
 **Checkpoint**：C2 后 `tests/test_fsm.py` / `test_pareto.py` / `test_ive.py` 全 PASS。
 
-- [ ] T012 [US2] 创建 `src/cryptotrader/learning/evolution/__init__.py`（空模块）
-- [ ] T013 [US2] 创建 `src/cryptotrader/learning/evolution/fsm.py`：
+- [x] T012 [US2] 创建 `src/cryptotrader/learning/evolution/__init__.py`（空模块）
+- [x] T013 [US2] 创建 `src/cryptotrader/learning/evolution/fsm.py`：
   - `Transition` dataclass（rule_id / agent_id / old_state / new_state / triggered_by / timestamp）
   - `evaluate_transitions(rule: PatternRecord) -> PatternRecord | None` 实现状态转换：
     - `observed → probationary`：`pnl_track.successes >= 3`
@@ -57,22 +57,22 @@
     - `active → archived`：`fundamental_failure_streak >= 3`
     - `active → probationary`：rule 在 active 被 reflect 修改（用 manually_edited 或 last_modified_at 更新检测）
     - `deprecated` / `archived`：终态，return None
-- [ ] T014 [P] [US2] 创建 `tests/test_fsm.py` ≥ 12 用例：(a) observed + successes<3 → 不变；(b) observed + successes=3 → probationary；(c) probationary + 5 cycle 无修改 → active；(d) probationary + 3 days 无修改 → active；(e) active + frontmatter 不全 → 不变；(f) active + body=300 行 → 不变（已经是 active 不再升）；(g) active + fundamental_streak<3 → 不变；(h) active + fundamental_streak=3 → archived；(i) active + manually_edited=true → probationary（撤销）；(j) deprecated → 不变；(k) archived → 不变；(l) probationary + body>300 行 → 不升
-- [ ] T015 [US2] 创建 `src/cryptotrader/learning/evolution/pareto.py`：`rank_rules(rules: list[PatternRecord]) -> list[PatternRecord]` 实现双目标 Pareto frontier：
+- [x] T014 [P] [US2] 创建 `tests/test_fsm.py` ≥ 12 用例：(a) observed + successes<3 → 不变；(b) observed + successes=3 → probationary；(c) probationary + 5 cycle 无修改 → active；(d) probationary + 3 days 无修改 → active；(e) active + frontmatter 不全 → 不变；(f) active + body=300 行 → 不变（已经是 active 不再升）；(g) active + fundamental_streak<3 → 不变；(h) active + fundamental_streak=3 → archived；(i) active + manually_edited=true → probationary（撤销）；(j) deprecated → 不变；(k) archived → 不变；(l) probationary + body>300 行 → 不升
+- [x] T015 [US2] 创建 `src/cryptotrader/learning/evolution/pareto.py`：`rank_rules(rules: list[PatternRecord]) -> list[PatternRecord]` 实现双目标 Pareto frontier：
   - `win_rate = pnl_track.successes / max(1, pnl_track.successes + pnl_track.losses)`（0 trade → 0.5）
   - `confidence_proxy = importance × maturity_weight`（active=1.0 / probationary=0.6 / observed=0.3 / deprecated=0.0 / archived=0.0）
   - 输出：先按 Pareto 非支配前沿分层，再在层内按 `win_rate * confidence_proxy` 倒序
-- [ ] T016 [P] [US2] 创建 `tests/test_pareto.py` ≥ 6 用例：(a) 单 rule 返回 unchanged；(b) 2 rule 一支配一被支配 → 支配在前；(c) 2 rule Pareto 互不支配 → 同层按乘积排序；(d) win_rate=0 + active 排在 win_rate=1.0 + observed 之后（confidence weight）；(e) 0 trade rule 默认 win_rate=0.5；(f) 5 rule 混合层级正确
-- [ ] T017 [US3] 创建 `src/cryptotrader/learning/evolution/ive.py`：
+- [x] T016 [P] [US2] 创建 `tests/test_pareto.py` ≥ 6 用例：(a) 单 rule 返回 unchanged；(b) 2 rule 一支配一被支配 → 支配在前；(c) 2 rule Pareto 互不支配 → 同层按乘积排序；(d) win_rate=0 + active 排在 win_rate=1.0 + observed 之后（confidence weight）；(e) 0 trade rule 默认 win_rate=0.5；(f) 5 rule 混合层级正确
+- [x] T017 [US3] 创建 `src/cryptotrader/learning/evolution/ive.py`：
   - `FailureClassification` dataclass（case_id / failure_type / reasoning / confidence / diagnostic_answers）
   - `classify_case(case: CaseRecord, llm_callable: Callable | None = None) -> FailureClassification` 实现 5 诊断问题 LLM 调用：
     - prompt 模板见 research.md Decision 3
     - 输出 JSON 解析（同 spec 014 既有 json_retry 兜底逻辑）
     - LLM 失败时 return `FailureClassification(failure_type="noise", confidence=0.0, ...)`
-- [ ] T018 [US3] 创建 `tests/test_ive.py` ≥ 8 用例：(a) mock LLM 返回 implementation；(b) mock LLM 返回 fundamental；(c) mock LLM 返回 noise；(d) LLM 调用失败 → 返回 noise + warning log；(e) LLM 输出非合法 JSON → 重试 1 次后返回 noise；(f) 5 诊断问题 prompt 含正确 case context（含 trade_execution 字段）；(g) 同 regime 下 case 在 prompt 中作 context；(h) Empty trade_execution 时 prompt 仍 well-formed
-- [ ] T019 [US2/US3] 运行 `uv run python -m pytest tests/test_fsm.py tests/test_pareto.py tests/test_ive.py -v --no-cov` 全 PASS
-- [ ] T020 [US2/US3] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认无回归
-- [ ] T021 **Commit C2**：`git add src/cryptotrader/learning/evolution/ tests/test_fsm.py tests/test_pareto.py tests/test_ive.py` + commit message `feat(spec-018/c2): FSM + Pareto + IVE algorithm modules`
+- [x] T018 [US3] 创建 `tests/test_ive.py` ≥ 8 用例：(a) mock LLM 返回 implementation；(b) mock LLM 返回 fundamental；(c) mock LLM 返回 noise；(d) LLM 调用失败 → 返回 noise + warning log；(e) LLM 输出非合法 JSON → 重试 1 次后返回 noise；(f) 5 诊断问题 prompt 含正确 case context（含 trade_execution 字段）；(g) 同 regime 下 case 在 prompt 中作 context；(h) Empty trade_execution 时 prompt 仍 well-formed
+- [x] T019 [US2/US3] 运行 `uv run python -m pytest tests/test_fsm.py tests/test_pareto.py tests/test_ive.py -v --no-cov` 全 PASS
+- [x] T020 [US2/US3] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认无回归
+- [x] T021 **Commit C2**：`git add src/cryptotrader/learning/evolution/ tests/test_fsm.py tests/test_pareto.py tests/test_ive.py` + commit message `feat(spec-018/c2): FSM + Pareto + IVE algorithm modules`
 
 **Checkpoint C2**：算法层 3 模块独立可用，单测全 PASS。
 
