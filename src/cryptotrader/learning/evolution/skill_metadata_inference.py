@@ -201,7 +201,9 @@ def infer_skill_metadata(
     if raw is not None:
         parsed = _parse_response(raw)
         if parsed is not None:
-            return _validate_and_normalize(parsed)
+            result = _validate_and_normalize(parsed)
+            result["inference_failed"] = False  # spec 020a FR-Z16: success path
+            return result
         logger.warning("infer_skill_metadata: first parse failed for '%s', retrying", name)
     else:
         logger.warning("infer_skill_metadata: LLM call failed for '%s', retrying", name)
@@ -211,11 +213,15 @@ def infer_skill_metadata(
     if raw2 is not None:
         parsed2 = _parse_response(raw2)
         if parsed2 is not None:
-            return _validate_and_normalize(parsed2)
+            result2 = _validate_and_normalize(parsed2)
+            result2["inference_failed"] = False  # spec 020a FR-Z16: success path
+            return result2
 
-    # 最终回退默认值
+    # 最终回退默认值 (spec 020a FR-Z16: except path writes inference_failed: True)
     logger.warning(
         "infer_skill_metadata: retry also failed for '%s'; using default metadata",
         name,
     )
-    return dict(_DEFAULT_METADATA)
+    default = dict(_DEFAULT_METADATA)
+    default["inference_failed"] = True  # spec 020a FR-Z16
+    return default

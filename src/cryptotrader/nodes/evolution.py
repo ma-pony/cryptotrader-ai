@@ -34,8 +34,8 @@ async def evaluate_node(state: ArenaState) -> dict:
         # FSM 状态转换
         transitions = _memory_provider.evaluate_all_rules()
 
-        # IVE failure 分类
-        classifications = _memory_provider.classify_pending_cases()
+        # IVE failure 分类 (spec 020a FR-Z10: classify_pending_cases now async)
+        classifications = await _memory_provider.classify_pending_cases()
 
         duration_ms = (time.monotonic() - t0) * 1000
 

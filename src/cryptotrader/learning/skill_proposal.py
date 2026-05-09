@@ -250,6 +250,7 @@ def propose_new_skill(
         "triggers_keywords": [],
         "importance": 0.5,
         "confidence": 0.5,
+        "inference_failed": True,  # spec 020a FR-Z17: default path = failure
     }
     llm_call_failed = False
     try:
@@ -259,16 +260,14 @@ def propose_new_skill(
             description=description,
             body=draft_content,
         )
-        # 检查是否返回了默认值（LLM 失败）
-        if (
-            metadata.get("triggers_keywords") == []
-            and metadata.get("regime_tags") == []
-            and metadata.get("importance") == 0.5
-        ):
-            llm_call_failed = True
+        # spec 020a FR-Z17: inference_failed is now set by infer_skill_metadata itself;
+        # fall back to True if the key is somehow missing
+        if "inference_failed" not in metadata:
+            metadata["inference_failed"] = False
+        llm_call_failed = bool(metadata.get("inference_failed", False))
     except Exception:
         logger.warning("propose_new_skill: LLM metadata inference failed", exc_info=True)
-        metadata = _default_metadata
+        metadata = dict(_default_metadata)  # includes inference_failed: True
         llm_call_failed = True
 
     # 把 metadata 合并到 draft frontmatter（access_count=0 / last_accessed_at 由迁移脚本处理）
