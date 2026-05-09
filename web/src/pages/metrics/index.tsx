@@ -218,9 +218,7 @@ const MetricsContent = () => {
               {t('ive.title', { defaultValue: 'IVE 分类失败率 (1h)' })}
             </div>
             <div className="font-mono text-2xl font-semibold tabular-nums">
-              {((data as { ive_failure_rate?: number }).ive_failure_rate != null
-                ? ((data as { ive_failure_rate: number }).ive_failure_rate * 100).toFixed(1)
-                : '0.0')}%
+              {(data.ive_failure_rate * 100).toFixed(1)}%
             </div>
             <div className="mt-1 text-[10px] text-muted-foreground">
               {t('ive.hint', { defaultValue: '1h 滑动窗口 · IVE classify_case 失败比例' })}
@@ -228,14 +226,7 @@ const MetricsContent = () => {
             <div className="mt-3 h-2 w-full overflow-hidden rounded-full bg-muted">
               <div
                 className="h-full rounded-full bg-rose-500 transition-all"
-                style={{
-                  width: `${Math.min(
-                    100,
-                    (data as { ive_failure_rate?: number }).ive_failure_rate != null
-                      ? ((data as { ive_failure_rate: number }).ive_failure_rate * 100)
-                      : 0,
-                  ).toFixed(1)}%`,
-                }}
+                style={{ width: `${Math.min(100, data.ive_failure_rate * 100).toFixed(1)}%` }}
               />
             </div>
           </CardContent>
