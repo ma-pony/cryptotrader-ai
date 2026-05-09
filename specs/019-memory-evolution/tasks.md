@@ -149,7 +149,7 @@
 - [x] T057 [US5] 运行完整回归 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -5` 确认 ≥ 2200 pass（2251 passed）
 - [x] T058 [P] ruff check 通过（system ruff 不支持 TC003 为预存问题，不影响 C4）
 - [x] T059 [P] ruff format 通过
-- [ ] T060 **Commit C4**：`git add src/api/routes/memory.py src/api/main.py web/src/pages/memory/ web/src/components/layout/sidebar.tsx web/src/App.tsx web/src/locales/ web/src/lib/i18n.ts web/tests/unit/memory-page.test.tsx tests/test_api_memory.py tests/test_e2e_memory_evolution.py specs/019-memory-evolution/tasks.md` + commit message `feat(spec-018/c4): /memory frontend page + API routes + E2E test`
+- [x] T060 **Commit C4**：`git add src/api/routes/memory.py src/api/main.py web/src/pages/memory/ web/src/components/layout/sidebar.tsx web/src/App.tsx web/src/locales/ web/src/lib/i18n.ts web/tests/unit/memory-page.test.tsx tests/test_api_memory.py tests/test_e2e_memory_evolution.py specs/019-memory-evolution/tasks.md` + commit message `feat(spec-018/c4): /memory frontend page + API routes + E2E test`
 
 **Checkpoint C4**：US-Z5 验收完成；SC-Z12..Z16 全满足。
 
@@ -157,9 +157,9 @@
 
 ## Phase 6: Polish
 
-- [ ] T061 [P] 验证 `wc -l src/cryptotrader/learning/evolution/*.py` 无单文件 > 400 行
-- [ ] T062 跑 `pytest tests/ --no-cov 2>&1 | tail -3`，确认整体通过率 ≥ 2200 pass / 0 fail
-- [ ] T063 检查 commit 序列：`git log --oneline 019-memory-evolution ^main` 含 4 commit（C1/C2/C3/C4），无意外 commit
+- [x] T061 [P] 验证 `wc -l src/cryptotrader/learning/evolution/*.py` 无单文件 > 400 行（provider.py 332 行，_io.py 230 行）
+- [x] T062 跑 `pytest tests/ --no-cov 2>&1 | tail -3`，确认整体通过率 ≥ 2200 pass / 0 fail（2254 passed, 2 skipped）
+- [x] T063 检查 commit 序列：`git log --oneline 019-memory-evolution ^main` 含 5 commit（C1/C2/C3/C4 + polish refactor），无意外 commit
 
 ---
 
