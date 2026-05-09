@@ -193,6 +193,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "scripts/migrate_017_to_018.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_migrate_017_to_018.py" = ["RUF001", "RUF002", "RUF003", "S603", "S607"]
 # spec 018 evolution modules use Chinese docstrings/comments.
+"src/cryptotrader/learning/evolution/_io.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "src/cryptotrader/learning/evolution/provider.py" = ["RUF001", "RUF002", "RUF003", "PERF401"]
 "src/cryptotrader/nodes/evolution.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_evolving_memory_provider.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
