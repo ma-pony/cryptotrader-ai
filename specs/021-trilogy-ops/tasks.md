@@ -49,14 +49,14 @@
 
 **Independent Test**：1 mocked cycle 后 OTel trace 中 ≥ 4 agent LLM span 各含 3 cache 字段；`curl /metrics | grep llm_cache_hit_rate` 返回 gauge。
 
-- [ ] T014 [P] [US3] 创建 `src/cryptotrader/observability/__init__.py`（空文件，标记包）
-- [ ] T015 [P] [US3] 创建 `src/cryptotrader/observability/cache_metrics.py`：`CacheMetricsAggregator` 类（24h sliding window deque + Lock）
-- [ ] T016 [P] [US3] 创建 `src/cryptotrader/observability/ive_metrics.py`：`IveMetricsAggregator` 类（1h sliding window deque + Lock）
-- [ ] T017 [US3] 修改 `src/cryptotrader/agents/base.py:log_llm_usage()`：加 `cache_creation_input_tokens` 提取 + 写 OTel span attr 3 字段（按 research.md Decision 1）+ 调 `CacheMetricsAggregator.record(hit_rate)`
-- [ ] T018 [US3] 修改 `src/api/routes/metrics.py`：注册 `LLM_CACHE_HIT_RATE_GAUGE` + `IVE_CLASSIFY_FAILURE_RATE_GAUGE` 到 prometheus REGISTRY；`prometheus_metrics()` endpoint 触发前先 `gauge.set(aggregator.average())`
-- [ ] T019 [P] [US3] 创建 `tests/test_llm_usage_cache_attr.py`：使用 `InMemorySpanExporter` 验证 3 cache 字段写入；含 read=0+creation=0 边界测试 + OTel SDK 未初始化兜底测试
-- [ ] T020 [P] [US3] 创建 `tests/test_metrics_endpoint_cache.py`：mock cache aggregator + 调 `/metrics` 验证 gauge 输出
-- [ ] T021 [P] [US3] 修改 `web/src/pages/metrics/index.tsx`：加 2 个 panel（cache hit rate / IVE failure rate）从 prometheus output 解析
+- [x] T014 [P] [US3] 创建 `src/cryptotrader/observability/__init__.py`（空文件，标记包）
+- [x] T015 [P] [US3] 创建 `src/cryptotrader/observability/cache_metrics.py`：`CacheMetricsAggregator` 类（24h sliding window deque + Lock）
+- [x] T016 [P] [US3] 创建 `src/cryptotrader/observability/ive_metrics.py`：`IveMetricsAggregator` 类（1h sliding window deque + Lock）
+- [x] T017 [US3] 修改 `src/cryptotrader/agents/base.py:log_llm_usage()`：加 `cache_creation_input_tokens` 提取 + 写 OTel span attr 3 字段（按 research.md Decision 1）+ 调 `CacheMetricsAggregator.record(hit_rate)`
+- [x] T018 [US3] 修改 `src/api/routes/metrics.py`：注册 `LLM_CACHE_HIT_RATE_GAUGE` + `IVE_CLASSIFY_FAILURE_RATE_GAUGE` 到 prometheus REGISTRY；`prometheus_metrics()` endpoint 触发前先 `gauge.set(aggregator.average())`
+- [x] T019 [P] [US3] 创建 `tests/test_llm_usage_cache_attr.py`：使用 `InMemorySpanExporter` 验证 3 cache 字段写入；含 read=0+creation=0 边界测试 + OTel SDK 未初始化兜底测试
+- [x] T020 [P] [US3] 创建 `tests/test_metrics_endpoint_cache.py`：mock cache aggregator + 调 `/metrics` 验证 gauge 输出
+- [x] T021 [P] [US3] 修改 `web/src/pages/metrics/index.tsx`：加 2 个 panel（cache hit rate / IVE failure rate）从 prometheus output 解析
 
 ---
 
@@ -66,11 +66,11 @@
 
 **Independent Test**：`grep -n "llm.invoke" src/cryptotrader/learning/evolution/ive.py` 返回空；`pytest tests/test_ive_async.py` PASS。
 
-- [ ] T022 [US4] 修改 `src/cryptotrader/learning/evolution/ive.py:classify_case()`：`def` → `async def`，`llm.invoke(messages)` → `await llm.ainvoke(messages)`，加 `IveMetricsAggregator.record(success=...)` 调用（在 try / except 路径）
-- [ ] T023 [US4] grep 全 repo 找所有 `classify_case` 调用方（预计 `nodes/evaluate.py` + tests）
-- [ ] T024 [US4] 修改 `src/cryptotrader/nodes/evaluate.py:evaluate_node()`：classify_case 调用改 await
-- [ ] T025 [US4] 修改 `tests/test_ive.py` → `tests/test_ive_async.py`：所有用例改 `@pytest.mark.asyncio` + await
-- [ ] T026 [US4] 跑 `grep -rn "classify_case" src/ tests/` 校验全部调用方已改 await
+- [x] T022 [US4] 修改 `src/cryptotrader/learning/evolution/ive.py:classify_case()`：`def` → `async def`，`llm.invoke(messages)` → `await llm.ainvoke(messages)`，加 `IveMetricsAggregator.record(success=...)` 调用（在 try / except 路径）
+- [x] T023 [US4] grep 全 repo 找所有 `classify_case` 调用方（预计 `nodes/evaluate.py` + tests）
+- [x] T024 [US4] 修改 `src/cryptotrader/nodes/evaluate.py:evaluate_node()`：classify_case 调用改 await
+- [x] T025 [US4] 修改 `tests/test_ive.py` → `tests/test_ive_async.py`：所有用例改 `@pytest.mark.asyncio` + await
+- [x] T026 [US4] 跑 `grep -rn "classify_case" src/ tests/` 校验全部调用方已改 await
 
 ---
 
@@ -80,25 +80,25 @@
 
 **Independent Test**：`grep "triggers_keywords" web/src/pages/memory/components/SkillsGrid.tsx` ≥ 1 hit；`pytest tests/test_skill_proposal_metadata_inference.py::test_llm_failure_writes_flag` PASS。
 
-- [ ] T027 [P] [US5] 修改 `web/src/pages/memory/components/SkillsGrid.tsx`：加 `triggers_keywords` badge row（最多 5 + "+N more"，muted 色，空 list 不渲染）
-- [ ] T028 [P] [US5] 创建 `web/src/pages/memory/components/SkillsGrid.test.tsx`：Vitest 验证 8 keywords 显示 5 + "+3 more" / 空 list 不渲染 / regime + triggers 双 row
-- [ ] T029 [US5] 修改 `src/cryptotrader/learning/evolution/skill_metadata_inference.py`：在 LLM call except 路径写 `inference_failed: True` 到返回 metadata；正常路径 `inference_failed: False`
-- [ ] T030 [US5] 修改 `src/cryptotrader/learning/skill_proposal.py:propose_new_skill()`：把 metadata 中的 `inference_failed` 字段透传到 `.draft` frontmatter
-- [ ] T031 [US5] 修改 `tests/test_skill_proposal_metadata_inference.py`：加 `test_llm_failure_writes_flag` 用例（mock LLM 抛 OpenAI 异常 → 验证 .draft 含 `inference_failed: true`）
+- [x] T027 [P] [US5] 修改 `web/src/pages/memory/components/SkillsGrid.tsx`：加 `triggers_keywords` badge row（最多 5 + "+N more"，muted 色，空 list 不渲染）
+- [x] T028 [P] [US5] 创建 `web/src/pages/memory/components/SkillsGrid.test.tsx`：Vitest 验证 8 keywords 显示 5 + "+3 more" / 空 list 不渲染 / regime + triggers 双 row
+- [x] T029 [US5] 修改 `src/cryptotrader/learning/evolution/skill_metadata_inference.py`：在 LLM call except 路径写 `inference_failed: True` 到返回 metadata；正常路径 `inference_failed: False`
+- [x] T030 [US5] 修改 `src/cryptotrader/learning/skill_proposal.py:propose_new_skill()`：把 metadata 中的 `inference_failed` 字段透传到 `.draft` frontmatter
+- [x] T031 [US5] 修改 `tests/test_skill_proposal_metadata_inference.py`：加 `test_llm_failure_writes_flag` 用例（mock LLM 抛 OpenAI 异常 → 验证 .draft 含 `inference_failed: true`）
 
 ---
 
 ## Phase 8: Polish & Cross-Cutting
 
-- [ ] T032 [P] 创建 `tests/test_e2e_trilogy_ops.py`：mocked 单 cycle 跑完后断言 OTel trace 含 ≥ 4 agent LLM span 各 3 cache 字段，retrieval ≥ 1 hit
-- [ ] T033 跑 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -3` 验证 ≥ 2339 passed / 0 failed（SC-Z8）
-- [ ] T034 跑 `uv run ruff check src/ scripts/ tests/` 修复任何新增 lint warning（如需 per-file-ignores 加到 pyproject.toml）
-- [ ] T035 跑 `cd web && pnpm lint` 修复前端 lint warning
-- [ ] T036 跑 `python scripts/staging_validate.py --dry-run` 自检全 PASS（SC-Z1）
-- [ ] T037 跑 SC-Z4 grep 校验：`grep -n "llm.invoke" src/cryptotrader/learning/evolution/ive.py` 返回空
-- [ ] T038 跑 SC-Z5 grep 校验：`grep "triggers_keywords" web/src/pages/memory/components/SkillsGrid.tsx` ≥ 1 hit
+- [x] T032 [P] 创建 `tests/test_e2e_trilogy_ops.py`：mocked 单 cycle 跑完后断言 OTel trace 含 ≥ 4 agent LLM span 各 3 cache 字段，retrieval ≥ 1 hit
+- [x] T033 跑 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -3` 验证 ≥ 2339 passed / 0 failed（SC-Z8）
+- [x] T034 跑 `uv run ruff check src/ scripts/ tests/` 修复任何新增 lint warning（如需 per-file-ignores 加到 pyproject.toml）
+- [x] T035 跑 `cd web && pnpm lint` 修复前端 lint warning
+- [x] T036 跑 `python scripts/staging_validate.py --dry-run` 自检全 PASS（SC-Z1）
+- [x] T037 跑 SC-Z4 grep 校验：`grep -n "llm.invoke" src/cryptotrader/learning/evolution/ive.py` 返回空
+- [x] T038 跑 SC-Z5 grep 校验：`grep "triggers_keywords" web/src/pages/memory/components/SkillsGrid.tsx` ≥ 1 hit
 - [ ] T039 [P] 跑前端 manual smoke：启动 `cd web && pnpm dev` → 访问 `/memory` 看 SkillsGrid triggers badges → 访问 `/metrics` 看 2 个新 panel（SC-Z7）
-- [ ] T040 跑 `git log --oneline 021-trilogy-ops..main | wc -l` ≤ 4 commit 校验（SC-Z11）
+- [x] T040 跑 `git log --oneline 021-trilogy-ops..main | wc -l` ≤ 4 commit 校验（SC-Z11）
 
 ---
 
