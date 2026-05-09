@@ -118,11 +118,14 @@ class EvolutionDaemon:
                     exit_code = 1
                     break
 
-            return RunResult(
+            run_result = RunResult(
                 actions_run=results,
                 total_duration_ms=total_ms,
                 exit_code=exit_code,
             )
+            # FR-D13/FR-D14: record metrics events to Redis for Prometheus gauges
+            _record_run_metrics(run_result)
+            return run_result
 
     async def run_forever(self) -> None:
         """Start APScheduler CronTrigger loop; blocks until SIGTERM/SIGINT.
@@ -509,3 +512,35 @@ def _record_span_exc(span: object, exc: Exception, status: str) -> None:
     with suppress(Exception):
         span.record_exception(exc)  # type: ignore[union-attr]
         span.set_attribute("step.status", status)  # type: ignore[union-attr]
+
+
+# ---------------------------------------------------------------------------
+# FR-D13/FR-D14: post-run Redis metrics recording
+# ---------------------------------------------------------------------------
+
+
+def _record_run_metrics(run_result: RunResult) -> None:
+    """Record daemon run events to Redis for Prometheus gauge lazy-update.
+
+    FR-D13: DaemonRunCountAggregator / DaemonLLMFailureAggregator /
+            SkillProposalDraftAggregator via Redis sorted sets.
+    Silently no-ops when Redis is unavailable (all helpers guard internally).
+    """
+    from contextlib import suppress
+
+    with suppress(Exception):
+        from cryptotrader.observability.daemon_metrics import (
+            record_draft_event,
+            record_llm_failure_event,
+            record_run_event,
+        )
+
+        record_run_event()
+
+        has_llm_skip = any(a.status == "SKIP" for a in run_result.actions_run)
+        record_llm_failure_event(failed=has_llm_skip)
+
+        for action in run_result.actions_run:
+            if action.name == "skill_proposal":
+                for _ in action.details.get("drafts_created", []):
+                    record_draft_event()
