@@ -179,7 +179,7 @@ def _emit_proposal_telemetry(
         span = trace.get_current_span()
         if span is not None and span.is_recording():
             for key, val in attrs.items():
-                if isinstance(val, (list, dict)):
+                if isinstance(val, list | dict):
                     span.set_attribute(key, str(val))
                 else:
                     span.set_attribute(key, val)

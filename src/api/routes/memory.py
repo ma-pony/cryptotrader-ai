@@ -568,10 +568,24 @@ async def get_memory_skills(
 @router.get("/skills/{name}", response_model=SkillDetail)
 async def get_memory_skill_detail(name: str) -> JSONResponse:
     """spec 019 FR-W18: 返回 skill 详情（含 body）。"""
+    # 路径穿越防护：skill name 不允许包含路径分隔符或 ".."
+    if not name or "/" in name or "\\" in name or ".." in name:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_query", "detail": "invalid skill name"},
+        )
     try:
         from cryptotrader.learning.evolution.skill_provider import _load_skill_from_path
 
         skill_md = _SKILLS_ROOT / name / "SKILL.md"
+        # 二次校验：确保解析后路径仍在 skills root 内（防止符号链接绕过）
+        try:
+            skill_md.resolve().relative_to(_SKILLS_ROOT.resolve())
+        except ValueError:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "invalid_query", "detail": "invalid skill name"},
+            )
         if not skill_md.exists():
             return JSONResponse(
                 status_code=404,
