@@ -22,12 +22,12 @@
 
 **Independent Test**：跑 `arena evolution-daemon --once` → `git log evolution -1` 含 trailer + actions details。
 
-- [ ] T006 [US1] 修改 `src/cryptotrader/ops/daemon.py:run_once()`：actions 跑完后调 `GitLineageHook(branch="evolution").commit_changes(summary)`；调 `record_lineage_event(success=...)` 写 metrics
-- [ ] T007 [US1] 在 `daemon.py:run_once()` 构造 daemon summary dict（type="daemon" + actions list）传给 lineage hook
-- [ ] T008 [P] [US1] 创建 `tests/test_lineage.py`：`test_commit_changes_creates_orphan_evolution_branch` 用例（首次跑 orphan 创建 + commit 含 trailer）
-- [ ] T009 [P] [US1] 在 `tests/test_lineage.py` 加 `test_commit_changes_with_no_changes` 用例（无 dirty → 不创建空 commit）
-- [ ] T010 [P] [US1] 在 `tests/test_lineage.py` 加 `test_commit_changes_protects_dev_workspace` 用例（main branch dev 改动 stash + 恢复路径）
-- [ ] T011 [P] [US1] 在 `tests/test_lineage.py` 加 `test_commit_failure_soft_fail` 用例（mock subprocess CalledProcessError → result.success=False + working tree 改动保留）
+- [x] T006 [US1] 修改 `src/cryptotrader/ops/daemon.py:run_once()`：actions 跑完后调 `GitLineageHook(branch="evolution").commit_changes(summary)`；调 `record_lineage_event(success=...)` 写 metrics
+- [x] T007 [US1] 在 `daemon.py:run_once()` 构造 daemon summary dict（type="daemon" + actions list）传给 lineage hook
+- [x] T008 [P] [US1] 创建 `tests/test_lineage.py`：`test_commit_changes_creates_orphan_evolution_branch` 用例（首次跑 orphan 创建 + commit 含 trailer）
+- [x] T009 [P] [US1] 在 `tests/test_lineage.py` 加 `test_commit_changes_with_no_changes` 用例（无 dirty → 不创建空 commit）
+- [x] T010 [P] [US1] 在 `tests/test_lineage.py` 加 `test_commit_changes_protects_dev_workspace` 用例（main branch dev 改动 stash + 恢复路径）
+- [x] T011 [P] [US1] 在 `tests/test_lineage.py` 加 `test_commit_failure_soft_fail` 用例（mock subprocess CalledProcessError → result.success=False + working tree 改动保留）
 
 ---
 
@@ -37,10 +37,10 @@
 
 **Independent Test**：mock pareto rerank 5 transitions → daemon 跑完 → `git log evolution --grep="rule_id"` 出现 5 行。
 
-- [ ] T012 [US2] 修改 `src/cryptotrader/ops/daemon.py:_action_pareto()`：archive 时收集 transition dict（rule_id / agent_id / old_state / new_state / triggered_by="pareto_dominated"）到 `ActionResult.details["transitions"]`
-- [ ] T013 [US2] 在 `daemon.py:run_once()` 处理 ActionResult.details["transitions"] 累积到 daemon summary（同 commit 含 transitions list）
-- [ ] T014 [P] [US2] 创建 `tests/test_daemon_lineage_integration.py`：`test_daemon_pareto_archives_recorded_in_transitions` 用例（5 rules archived → transitions list 长度 5）
-- [ ] T015 [US2] 在 `tests/test_daemon_lineage_integration.py` 加 `test_daemon_run_once_commits_with_transitions` 用例（daemon 跑完 → evolution branch 含 1 commit + message 含 5 transitions）
+- [x] T012 [US2] 修改 `src/cryptotrader/ops/daemon.py:_action_pareto()`：archive 时收集 transition dict（rule_id / agent_id / old_state / new_state / triggered_by="pareto_dominated"）到 `ActionResult.details["transitions"]`
+- [x] T013 [US2] 在 `daemon.py:run_once()` 处理 ActionResult.details["transitions"] 累积到 daemon summary（同 commit 含 transitions list）
+- [x] T014 [P] [US2] 创建 `tests/test_daemon_lineage_integration.py`：`test_daemon_pareto_archives_recorded_in_transitions` 用例（5 rules archived → transitions list 长度 5）
+- [x] T015 [US2] 在 `tests/test_daemon_lineage_integration.py` 加 `test_daemon_run_once_commits_with_transitions` 用例（daemon 跑完 → evolution branch 含 1 commit + message 含 5 transitions）
 
 ---
 
@@ -50,12 +50,12 @@
 
 **Independent Test**：`grep "time.sleep" daemon.py` 0 hits；mock SIGTERM → daemon 在 ≤ 30s 内 graceful exit。
 
-- [ ] T016 [US3] 修改 `src/cryptotrader/ops/daemon.py:_try_acquire_locks`：`def` → `async def`，`time.sleep(0.1)` → `await asyncio.sleep(0.1)`
-- [ ] T017 [US3] 修改 `daemon.py` 所有 `_try_acquire_locks()` 调用方加 `await`
-- [ ] T018 [US3] 修改 `daemon.py:run_forever()`：用 `loop.add_signal_handler(SIGTERM/SIGINT, ...)` 设置 shutdown flag；handler 调用 `_scheduler.shutdown(wait=True)` 等当前 run_once 完成；`redis.close()` + OTel flush
-- [ ] T019 [P] [US3] 创建 `tests/test_daemon_signal_handler.py`：`test_run_forever_sigterm_graceful_shutdown` 用例（asyncio task + 模拟 SIGTERM + 验证 30s 内 exit）
-- [ ] T020 [US3] 在 `tests/test_daemon_signal_handler.py` 加 `test_sigterm_during_run_once_waits_for_completion` 用例（SIGTERM 在 run_once 中途 → 等当前 action 完成）
-- [ ] T021 [US3] 跑 `grep -n "time.sleep" src/cryptotrader/ops/daemon.py` 校验返回空（仅 await asyncio.sleep）
+- [x] T016 [US3] 修改 `src/cryptotrader/ops/daemon.py:_try_acquire_locks`：`def` → `async def`，`time.sleep(0.1)` → `await asyncio.sleep(0.1)`
+- [x] T017 [US3] 修改 `daemon.py` 所有 `_try_acquire_locks()` 调用方加 `await`
+- [x] T018 [US3] 修改 `daemon.py:run_forever()`：用 `loop.add_signal_handler(SIGTERM/SIGINT, ...)` 设置 shutdown flag；handler 调用 `_scheduler.shutdown(wait=True)` 等当前 run_once 完成；`redis.close()` + OTel flush
+- [x] T019 [P] [US3] 创建 `tests/test_daemon_signal_handler.py`：`test_run_forever_sigterm_graceful_shutdown` 用例（asyncio task + 模拟 SIGTERM + 验证 30s 内 exit）
+- [x] T020 [US3] 在 `tests/test_daemon_signal_handler.py` 加 `test_sigterm_during_run_once_waits_for_completion` 用例（SIGTERM 在 run_once 中途 → 等当前 action 完成）
+- [x] T021 [US3] 跑 `grep -n "time.sleep" src/cryptotrader/ops/daemon.py` 校验返回空（仅 await asyncio.sleep）
 
 ---
 

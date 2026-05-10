@@ -51,12 +51,15 @@ class GitLineageHook:
     def commit_changes(self, message_summary: dict) -> CommitResult:
         """Commit dirty agent_memory/ + agent_skills/ to the evolution branch.
 
-        FR-L3: (a) detect dirty, (b) stash dev changes, (c) ensure evolution
-        branch, (d) git add -A agent_memory/ agent_skills/, (e) commit,
-        (f) restore original branch, (g) pop stash.
-
-        FR-L9: on failure, restore original branch + working tree, write OTel
-        error span, return CommitResult(success=False).
+        Strategy (FR-L3):
+        - Untracked files survive branch switches in git, so no stash is needed
+          in the normal case.  We stash only if checkout fails due to a conflict.
+        - Path A (branch exists):   git checkout evolution  (fallback: stash+checkout)
+        - Path B (first run):       git checkout --orphan evolution + rm --cached .
+        - In both paths only the paths that exist on disk are staged, avoiding the
+          "fatal: pathspec did not match" error when agent_skills/ is absent.
+        - FR-L9: any failure → best-effort restore + OTel error span +
+          CommitResult(success=False); daemon continues normally (exit 0).
         """
         span_ctx = _get_span_ctx("evolution.lineage.commit")
         with span_ctx as span:
@@ -64,33 +67,49 @@ class GitLineageHook:
             original_branch: str | None = None
             stash_pushed = False
             try:
-                # (a) 检测 dirty (限 agent_memory/ + agent_skills/)
+                # (a) early-exit when nothing in the evolution paths is dirty
                 if not self._has_changes():
-                    logger.debug("[lineage] no dirty files in agent_memory/ or agent_skills/ — skipping commit")
+                    logger.debug("[lineage] no dirty files in evolution paths — skipping commit")
                     return CommitResult(success=True, commit_sha=None, error=None, duration_ms=0)
 
-                # (b) stash dev 改动 (保护 dev workspace)
                 original_branch = self._current_branch()
-                stash_out = self._git("stash", "push", "--include-untracked", "--keep-index", "-m", self._stash_marker)
-                stash_pushed = "No local changes" not in stash_out
 
-                # (c) checkout / orphan-create evolution branch
-                self._ensure_branch()
+                if self._branch_exists():
+                    # Path A: checkout existing evolution branch.
+                    # Untracked files are preserved through branch switches so no
+                    # stash is needed. If checkout fails (conflicting tracked file),
+                    # fall back to stash-then-checkout.
+                    try:
+                        self._git("checkout", self.branch)
+                    except subprocess.CalledProcessError:
+                        stash_out = self._git("stash", "push", "--include-untracked", "-m", self._stash_marker)
+                        stash_pushed = "No local changes" not in stash_out
+                        self._git("checkout", self.branch)
+                else:
+                    # Path B: first run — orphan creation.
+                    # git preserves working tree through --orphan so the
+                    # agent_memory/ files remain available after the switch.
+                    self._git("checkout", "--orphan", self.branch)
+                    from contextlib import suppress
 
-                # (d) stage agent_memory/ + agent_skills/
-                self._git("add", "-A", "agent_memory/", "agent_skills/")
+                    with suppress(subprocess.CalledProcessError):
+                        self._git("rm", "-rf", "--cached", ".")
+
+                # (d) stage only paths that exist (agent_skills/ may be absent)
+                self._add_evolution_paths()
 
                 # (e) commit
                 msg = self._build_message(message_summary)
                 self._git("commit", "-m", msg)
                 sha = self._git("rev-parse", "HEAD").strip()
 
-                # (f) 切回原 branch
+                # (f) restore original branch
                 self._git("checkout", original_branch)
 
-                # (g) 恢复 stash
+                # (g) restore dev workspace when stash was used
                 if stash_pushed:
                     self._restore_stash()
+                    stash_pushed = False
 
                 duration_ms = int((time() - start) * 1000)
                 logger.info("[lineage] committed to %s: %s (duration=%dms)", self.branch, sha, duration_ms)
@@ -101,17 +120,14 @@ class GitLineageHook:
                 duration_ms = int((time() - start) * 1000)
                 logger.warning("[lineage] commit failed (soft-fail): %s", exc, exc_info=True)
                 _record_span_exc(span, exc)
-                # 尽力恢复原 branch + stash
-                try:
+                from contextlib import suppress
+
+                with suppress(Exception):
                     if original_branch:
                         self._git("checkout", original_branch)
-                except Exception:
-                    pass
-                try:
+                with suppress(Exception):
                     if stash_pushed:
                         self._restore_stash()
-                except Exception:
-                    pass
                 return CommitResult(success=False, commit_sha=None, error=str(exc), duration_ms=duration_ms)
 
     # ------------------------------------------------------------------
@@ -142,21 +158,23 @@ class GitLineageHook:
         """Return the current branch name (or HEAD if detached)."""
         return self._git("rev-parse", "--abbrev-ref", "HEAD").strip()
 
-    def _ensure_branch(self) -> None:
-        """Checkout evolution branch; orphan-create if it doesn't exist yet.
+    def _add_evolution_paths(self) -> None:
+        """Stage agent_memory/ and agent_skills/ — skipping paths that don't exist.
 
-        FR-L7: orphan creation does not inherit main history — clean audit log.
+        git add -A with a non-existent path argument exits 128 ("pathspec did not
+        match any files"), so we only pass paths that are present on disk.
         """
-        try:
-            self._git("checkout", self.branch)
-        except subprocess.CalledProcessError:
-            # Branch doesn't exist — create as orphan (no parent commits)
-            self._git("checkout", "--orphan", self.branch)
-            # Clear the index so the orphan starts empty
-            from contextlib import suppress
+        paths = [p for p in ("agent_memory/", "agent_skills/") if (self.repo / p.rstrip("/")).exists()]
+        if paths:
+            self._git("add", "-A", *paths)
 
-            with suppress(subprocess.CalledProcessError):
-                self._git("rm", "-rf", "--cached", ".")
+    def _branch_exists(self) -> bool:
+        """Return True if self.branch already exists in the local repo."""
+        try:
+            out = self._git("branch", "--list", self.branch)
+            return bool(out.strip())
+        except subprocess.CalledProcessError:
+            return False
 
     def _restore_stash(self) -> None:
         """Pop the stash with our marker if it exists.

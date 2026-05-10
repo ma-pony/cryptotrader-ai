@@ -272,7 +272,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/api/main.py" = ["TID251", "E402"]
 # tests are allowed to import any module for integration and boundary testing.
 # S603 exempted: subprocess.run calls in tests invoke known, trusted CLI tools (ruff, pytest).
-"tests/*.py" = ["TID251", "S603"]
+"tests/*.py" = ["TID251", "S603", "S607", "ASYNC100"]
 # spec 020a: staging_validate + new test files use Chinese docstrings/comments and
 # pytest.mark.asyncio patterns. PT015 is suppressed for run_step error path tests
 # that intentionally use assert False to simulate failures.
