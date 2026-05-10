@@ -579,3 +579,64 @@ def parse_applied(
                 name,
             )
     return result
+
+
+# ── spec 022 FR-D7: public wrapper for daemon ──
+
+
+def refilter_records_by_regime(memory_dir: Path | None = None) -> int:
+    """Re-tag all cases with the current market regime; return count of changed cases.
+
+    spec 022 FR-D7: thin public wrapper over _filter_records_by_regime.
+    Reads all cases from agent_memory/cases/, computes new regime_tags for each
+    case using tag_regime() on the case's market summary fields, writes back any
+    changed tags via atomic_write.
+
+    Returns:
+        Number of case files whose regime_tags were updated.
+    """
+    from cryptotrader.config import RegimeThresholdsConfig
+    from cryptotrader.learning.regime import tag_regime
+
+    mem = memory_dir or DEFAULT_AGENT_MEMORY_DIR
+    changed = 0
+
+    cases = _read_cases(mem)
+    if not cases:
+        logger.debug("refilter_records_by_regime: no cases found")
+        return 0
+
+    thresholds = RegimeThresholdsConfig()
+
+    for case in cases:
+        file_path: Path | None = case.get("_file")
+        if file_path is None:
+            continue
+
+        old_tags: list = case.get("regime_tags") or []
+
+        summary = {
+            "funding_rate": case.get("funding_rate", 0),
+            "volatility": case.get("volatility", 0),
+            "price_change_7d": case.get("price_change_7d"),
+            "fear_greed_index": case.get("fear_greed_index"),
+        }
+        new_tags = tag_regime(summary, thresholds)
+
+        if sorted(old_tags) == sorted(new_tags):
+            continue
+
+        # Update regime_tags in the frontmatter
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            fm, body = parse_frontmatter(content, path=file_path)
+            fm["regime_tags"] = new_tags
+            new_content = render_frontmatter(fm) + body
+            atomic_write(file_path, new_content)
+            changed += 1
+            logger.debug("refilter_records_by_regime: updated %s %s→%s", file_path.name, old_tags, new_tags)
+        except Exception:
+            logger.warning("refilter_records_by_regime: failed to update %s", file_path, exc_info=True)
+
+    logger.info("refilter_records_by_regime: changed=%d / total=%d", changed, len(cases))
+    return changed

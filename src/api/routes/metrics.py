@@ -36,6 +36,23 @@ IVE_CLASSIFY_FAILURE_RATE_GAUGE = Gauge(
     "IVE classify_case failure rate, 1h sliding window average",
 )
 
+# ---------------------------------------------------------------------------
+# spec 022 FR-D14: 3 new Prometheus Gauges (evolution daemon, lazy Redis update)
+# ---------------------------------------------------------------------------
+
+EVOLUTION_DAEMON_RUN_COUNT_GAUGE = Gauge(
+    "evolution_daemon_run_count_24h",
+    "Evolution daemon runs in the last 24h (sliding window)",
+)
+EVOLUTION_DAEMON_LLM_FAILURE_RATE_GAUGE = Gauge(
+    "evolution_daemon_llm_failure_rate_24h",
+    "Evolution daemon LLM failure rate in the last 24h (sliding window)",
+)
+SKILL_PROPOSAL_DRAFT_COUNT_GAUGE = Gauge(
+    "skill_proposal_draft_count_7d",
+    "Skill proposal .draft files created in the last 7 days (sliding window)",
+)
+
 
 # ---------------------------------------------------------------------------
 # Response model
@@ -206,6 +223,20 @@ async def prometheus_metrics() -> Response:
             IVE_CLASSIFY_FAILURE_RATE_GAUGE.set(get_ive_metrics_aggregator().failure_rate())
         except Exception:
             logger.debug("spec 020a gauge update failed (non-blocking)", exc_info=True)
+
+        # spec 022 FR-D14: lazy update evolution daemon gauges from Redis
+        try:
+            from cryptotrader.observability.daemon_metrics import (
+                get_draft_count_7d_from_redis,
+                get_llm_failure_rate_24h_from_redis,
+                get_run_count_24h_from_redis,
+            )
+
+            EVOLUTION_DAEMON_RUN_COUNT_GAUGE.set(get_run_count_24h_from_redis())
+            EVOLUTION_DAEMON_LLM_FAILURE_RATE_GAUGE.set(get_llm_failure_rate_24h_from_redis())
+            SKILL_PROPOSAL_DRAFT_COUNT_GAUGE.set(get_draft_count_7d_from_redis())
+        except Exception:
+            logger.debug("spec 022 daemon gauge update failed (non-blocking)", exc_info=True)
 
         data = generate_latest()
         return Response(content=data, media_type=CONTENT_TYPE_LATEST)

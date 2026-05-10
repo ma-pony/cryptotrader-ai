@@ -889,5 +889,44 @@ def mcp_call(
         raise typer.Exit(code=1) from e
 
 
+# ── Evolution Daemon (spec 022) ──
+
+
+@app.command("evolution-daemon")
+def evolution_daemon(
+    once: bool = typer.Option(False, "--once", help="Run once (dry-run) and exit"),
+    config_path: str = typer.Option("config/default.toml", "--config", help="Path to TOML config"),
+) -> None:
+    """Run the evolution reflect daemon (Pareto / regime / skill proposal).
+
+    spec 022 FR-D2: arena evolution-daemon [--once] [--config PATH]
+    """
+    import os
+
+    if os.getenv("EVOLUTION_DAEMON_ENABLED", "true").lower() not in ("true", "1", "yes"):
+        console.print("[evolution-daemon] disabled by EVOLUTION_DAEMON_ENABLED env var; exiting.")
+        raise typer.Exit(0)
+
+    from cryptotrader.config import load_config
+    from cryptotrader.ops.daemon import EvolutionDaemon
+
+    cfg = load_config(config_path)
+
+    # FR-D5: toml-level enabled check
+    if not cfg.evolution_daemon.enabled:
+        console.print("[evolution-daemon] disabled by config (evolution_daemon.enabled=false); exiting.")
+        raise typer.Exit(0)
+
+    daemon = EvolutionDaemon(config=cfg.evolution_daemon)
+
+    if once:
+        result = asyncio.run(daemon.run_once())
+        console.print(f"[evolution-daemon] run_once exit_code={result.exit_code}")
+        for action in result.actions_run:
+            console.print(f"  [{action.name}] {action.status} {action.duration_ms}ms")
+        raise typer.Exit(result.exit_code)
+    asyncio.run(daemon.run_forever())
+
+
 if __name__ == "__main__":
     app()
