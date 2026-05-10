@@ -271,6 +271,7 @@ class EvolutionDaemon:
         t0 = time.monotonic()
         archived_count = 0
         processed_count = 0
+        transitions: list[dict] = []
 
         for agent_id in sorted(VALID_AGENT_IDS):
             patterns_dir = DEFAULT_AGENT_MEMORY_DIR / agent_id / "patterns"
@@ -290,7 +291,6 @@ class EvolutionDaemon:
             # Compute frontier: non-dominated members stay active; dominated -> archived
             frontier_ids = _compute_frontier_ids(active_rules)
 
-            transitions: list[dict] = []
             for rule in active_rules:
                 processed_count += 1
                 if id(rule) not in frontier_ids:

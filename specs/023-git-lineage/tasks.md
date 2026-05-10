@@ -65,23 +65,23 @@
 
 **Independent Test**：grep aria-label ≥ 3 hits + Vitest 测试 PASS。
 
-- [ ] T022 [P] [US4] 修改 `web/src/pages/memory/components/SkillsGrid.tsx`：regime badge 加 `aria-label={\`Regime: ${tag}\`}`
-- [ ] T023 [P] [US4] 在 SkillsGrid.tsx triggers badge 加 `aria-label={\`Trigger keyword: ${kw}\`}`
-- [ ] T024 [P] [US4] 在 SkillsGrid.tsx inference_failed indicator 加 `aria-label="Inference failed during proposal"`
-- [ ] T025 [US4] 修改 `web/src/pages/memory/components/SkillsGrid.test.tsx`：加 `describe("a11y")` block 含 3 个用例（验证 regime / triggers / inference_failed badge 各含 aria-label 属性）
+- [x] T022 [P] [US4] 修改 `web/src/pages/memory/components/SkillsGrid.tsx`：regime badge 加 `aria-label={\`Regime: ${tag}\`}`
+- [x] T023 [P] [US4] 在 SkillsGrid.tsx triggers badge 加 `aria-label={\`Trigger keyword: ${kw}\`}`
+- [x] T024 [P] [US4] 在 SkillsGrid.tsx inference_failed indicator 加 `aria-label="Inference failed during proposal"`
+- [x] T025 [US4] 修改 `web/src/pages/memory/components/SkillsGrid.test.tsx`：加 `describe("a11y")` block 含 3 个用例（验证 regime / triggers / inference_failed badge 各含 aria-label 属性）
 
 ---
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T026 [P] 创建 `tests/test_e2e_git_lineage.py`：mocked daemon cycle 端到端测试（daemon → evolution branch 创建 → commit 含 trailer → metrics gauge update）
-- [ ] T027 跑 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -3` 验证 ≥ 2439 passed / 0 failed（SC-L7）
-- [ ] T028 跑 `uv run ruff check src/cryptotrader/ops/lineage.py src/cryptotrader/observability/daemon_metrics.py src/cryptotrader/ops/daemon.py tests/test_lineage.py tests/test_daemon_signal_handler.py tests/test_daemon_lineage_integration.py tests/test_e2e_git_lineage.py` clean
-- [ ] T029 跑 SC-L1：`uv run arena evolution-daemon --once` 后 `git log evolution -1 --format=%B` 含 "Auto-Generated-By: spec-020c"
-- [ ] T030 跑 SC-L2：`git log evolution --grep="Auto-Generated-By" --oneline` ≥ 1
-- [ ] T031 跑 SC-L3：`grep -n "time.sleep" src/cryptotrader/ops/daemon.py` 返回空
-- [ ] T032 跑 SC-L5：`grep -c "aria-label" web/src/pages/memory/components/SkillsGrid.tsx` ≥ 3
-- [ ] T033 跑 `git log --oneline 023-git-lineage..main | wc -l` ≤ 4 commit 校验（SC-L10）
+- [x] T026 [P] 创建 `tests/test_e2e_git_lineage.py`：mocked daemon cycle 端到端测试（daemon → evolution branch 创建 → commit 含 trailer → metrics gauge update）
+- [x] T027 跑 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -3` 验证 ≥ 2439 passed / 0 failed（SC-L7）— 2458 passed, 0 failed
+- [x] T028 跑 `uv run ruff check src/cryptotrader/ops/lineage.py src/cryptotrader/observability/daemon_metrics.py src/cryptotrader/ops/daemon.py tests/test_lineage.py tests/test_daemon_signal_handler.py tests/test_daemon_lineage_integration.py tests/test_e2e_git_lineage.py` clean
+- [x] T029 跑 SC-L1：`uv run arena evolution-daemon --once` 后 `git log evolution -1 --format=%B` 含 "Auto-Generated-By: spec-020c"
+- [x] T030 跑 SC-L2：`git log evolution --grep="Auto-Generated-By" --oneline` ≥ 1
+- [x] T031 跑 SC-L3：`grep -n "time.sleep" src/cryptotrader/ops/daemon.py` 返回空
+- [x] T032 跑 SC-L5：`grep -c "aria-label" web/src/pages/memory/components/SkillsGrid.tsx` ≥ 3
+- [x] T033 跑 `git log --oneline 023-git-lineage..main | wc -l` ≤ 4 commit 校验（SC-L10）
 
 ---
 
