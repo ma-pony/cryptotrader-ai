@@ -53,6 +53,19 @@ SKILL_PROPOSAL_DRAFT_COUNT_GAUGE = Gauge(
     "Skill proposal .draft files created in the last 7 days (sliding window)",
 )
 
+# ---------------------------------------------------------------------------
+# spec 020c FR-L14: 2 new Prometheus Gauges (evolution lineage, in-process)
+# ---------------------------------------------------------------------------
+
+EVOLUTION_COMMIT_COUNT_GAUGE = Gauge(
+    "evolution_commit_count_24h",
+    "Evolution branch commit count in last 24h (sliding window)",
+)
+EVOLUTION_COMMIT_FAILURE_RATE_GAUGE = Gauge(
+    "evolution_commit_failure_rate_24h",
+    "Evolution lineage commit failure rate in last 24h (sliding window)",
+)
+
 
 # ---------------------------------------------------------------------------
 # Response model
@@ -237,6 +250,18 @@ async def prometheus_metrics() -> Response:
             SKILL_PROPOSAL_DRAFT_COUNT_GAUGE.set(get_draft_count_7d_from_redis())
         except Exception:
             logger.debug("spec 022 daemon gauge update failed (non-blocking)", exc_info=True)
+
+        # spec 020c FR-L14: lazy update lineage gauges from in-process aggregators
+        try:
+            from cryptotrader.observability.daemon_metrics import (
+                get_lineage_commit_count_aggregator,
+                get_lineage_commit_failure_aggregator,
+            )
+
+            EVOLUTION_COMMIT_COUNT_GAUGE.set(get_lineage_commit_count_aggregator().count())
+            EVOLUTION_COMMIT_FAILURE_RATE_GAUGE.set(get_lineage_commit_failure_aggregator().failure_rate())
+        except Exception:
+            logger.debug("spec 020c lineage gauge update failed (non-blocking)", exc_info=True)
 
         data = generate_latest()
         return Response(content=data, media_type=CONTENT_TYPE_LATEST)

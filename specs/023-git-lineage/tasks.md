@@ -8,11 +8,11 @@
 
 ## Phase 2: Foundational
 
-- [ ] T001 [P] 创建 `src/cryptotrader/ops/lineage.py`：`GitLineageHook` 类骨架（`__init__` + `commit_changes` + 私有 helper `_git` / `_has_changes` / `_current_branch` / `_ensure_branch` / `_restore_stash`，按 research.md Decision 1）
-- [ ] T002 [P] 在 `src/cryptotrader/ops/lineage.py` 实现 `_build_message(summary: dict) -> str` 模板（按 research.md Decision 2，支持 type=daemon / type=transitions）
-- [ ] T003 [US4] 在 `src/cryptotrader/observability/daemon_metrics.py` 加 `LineageCommitCountAggregator` (24h) + `LineageCommitFailureAggregator` (24h)（复用 spec 020a 模式）
-- [ ] T004 [US4] 在 `src/cryptotrader/observability/daemon_metrics.py` 加 `record_lineage_event(*, success: bool)` 入口函数 + module-level singletons
-- [ ] T005 [US4] 修改 `src/api/routes/metrics.py`：注册 `EVOLUTION_COMMIT_COUNT_GAUGE` + `EVOLUTION_COMMIT_FAILURE_RATE_GAUGE`；`/metrics` endpoint lazy update from aggregator
+- [x] T001 [P] 创建 `src/cryptotrader/ops/lineage.py`：`GitLineageHook` 类骨架（`__init__` + `commit_changes` + 私有 helper `_git` / `_has_changes` / `_current_branch` / `_ensure_branch` / `_restore_stash`，按 research.md Decision 1）
+- [x] T002 [P] 在 `src/cryptotrader/ops/lineage.py` 实现 `_build_message(summary: dict) -> str` 模板（按 research.md Decision 2，支持 type=daemon / type=transitions）
+- [x] T003 [US4] 在 `src/cryptotrader/observability/daemon_metrics.py` 加 `LineageCommitCountAggregator` (24h) + `LineageCommitFailureAggregator` (24h)（复用 spec 020a 模式）
+- [x] T004 [US4] 在 `src/cryptotrader/observability/daemon_metrics.py` 加 `record_lineage_event(*, success: bool)` 入口函数 + module-level singletons
+- [x] T005 [US4] 修改 `src/api/routes/metrics.py`：注册 `EVOLUTION_COMMIT_COUNT_GAUGE` + `EVOLUTION_COMMIT_FAILURE_RATE_GAUGE`；`/metrics` endpoint lazy update from aggregator
 
 ---
 

@@ -145,6 +145,9 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # staging_validate.py uses Chinese docstrings/comments (RUF002/RUF003),
 # subprocess for migrate dry-run (S603), and Callable at runtime (TCH003).
 "scripts/**/*.py" = ["T201", "TID251", "RUF002", "RUF003", "S603", "TCH003"]
+# spec 020c: lineage.py uses subprocess to invoke git CLI (intentional, no user input).
+# S603 (subprocess call) and S607 (partial path) are false positives here.
+"src/cryptotrader/ops/lineage.py" = ["S603", "S607"]
 # journal/store.py: SQLAlchemy declarative classes (Base, Row) assigned in functions
 # follow class-naming convention even though N806 sees them as variables.
 "src/cryptotrader/journal/store.py" = ["N806"]
