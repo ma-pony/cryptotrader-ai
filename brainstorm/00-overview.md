@@ -14,7 +14,7 @@ Last updated: 2026-05-09
 | 04  | 2026-05-09 | Spec 018 — Memory Evolution                   | [specs/019-memory-evolution/](../specs/019-memory-evolution/)             | ✅ Spec Ready + Implementation 合并 main |
 | 05  | 2026-05-09 | Spec 019 — Skill Evolution                    | [specs/020-skill-evolution/](../specs/020-skill-evolution/)               | ✅ Spec Ready + Implementation 合并 main |
 | 06  | 2026-05-09 | Spec 020a — Trilogy Ops（cache 观测 + advisory + 部署 + monitoring） | [specs/021-trilogy-ops/](../specs/021-trilogy-ops/)                       | ✅ Spec Ready + Implementation 合并 main |
-| 07  | 2026-05-09 | Spec 020b — Evolution Daemon（reflect daemon 算法运维） | （待 `/speckit-specify` 创建）                                            | Active brainstorm；7 决策已敲定 + 4 项 spot-check 完成，待 ship |
+| 07  | 2026-05-09 | Spec 020b — Evolution Daemon（reflect daemon 算法运维） | [specs/022-evolution-daemon/](../specs/022-evolution-daemon/)             | ✅ Spec Ready + Implementation 合并 main |
 
 ## 进行中的依赖链
 
@@ -30,9 +30,9 @@ spec 016 Phase 1+2  ──┐
                                    │
                                    ├──> spec 020a (cache 观测 + advisory + 部署 + monitoring，已合并 main)
                                    │
-                                   ├──> spec 020b (evolution daemon，本会话，待 ship)
+                                   ├──> spec 020b (evolution daemon，已合并 main)
                                    │
-                                   └──> spec 020c (git lineage + 020a P2 收尾，待启动)
+                                   └──> spec 020c (git lineage + 020a/020b P2 收尾，待启动)
 ```
 
 ## 已合并 spec
@@ -43,6 +43,7 @@ spec 016 Phase 1+2  ──┐
 - **spec 018**：Memory Evolution（commit 458a0f2 + 14afc50 + 1c0302d，2026-05-09）
 - **spec 019**：Skill Evolution（commit 3fbf941，2026-05-09）
 - **spec 020a**：Trilogy Ops（commit 38d0762，2026-05-09）
+- **spec 020b**：Evolution Daemon（commit d70240c，2026-05-09）
 
 ## Open Threads
 
