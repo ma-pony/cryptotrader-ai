@@ -122,9 +122,15 @@ class GitLineageHook:
                 _record_span_exc(span, exc)
                 from contextlib import suppress
 
+                # Restore original branch first so subsequent reset acts on it.
                 with suppress(Exception):
                     if original_branch:
                         self._git("checkout", original_branch)
+                # Clear any agent_memory/agent_skills paths that were staged by
+                # _add_evolution_paths() before the commit failed — leaving them
+                # staged would pollute the original branch's index.
+                with suppress(Exception):
+                    self._git("reset", "HEAD", "--", "agent_memory/", "agent_skills/")
                 with suppress(Exception):
                     if stash_pushed:
                         self._restore_stash()
