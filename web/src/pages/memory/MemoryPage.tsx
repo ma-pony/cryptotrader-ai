@@ -22,7 +22,7 @@ const MemoryPage = () => {
       <div className="space-y-6">
         <PageHeader
           title={t('title', { defaultValue: '记忆演化' })}
-          description={t('description', {
+          subtitle={t('description', {
             defaultValue: '规则 FSM 状态、IVE 分类历史、归档记录',
           })}
         />
