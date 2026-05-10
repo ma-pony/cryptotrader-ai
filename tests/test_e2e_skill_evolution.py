@@ -211,8 +211,8 @@ Pattern body.
                 "triggers_keywords": ["funding"],
                 "importance": 0.6,
                 "confidence": 0.6,
+                "inference_failed": False,
             },
-            llm_call_failed=False,
         )
         # 正常返回即 PASS
 

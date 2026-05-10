@@ -160,9 +160,11 @@ def _emit_proposal_telemetry(
     proposed_name: str,
     draft_path: Path,
     metadata: dict,
-    llm_call_failed: bool,
 ) -> None:
-    """写 7 个 OpenTelemetry span attributes（spec 019 FR-W29）。"""
+    """写 7 个 OpenTelemetry span attributes（spec 019 FR-W29 + spec 020c P2-3：
+    llm_call_failed 局部变量已合并到 metadata["inference_failed"] 单一来源；
+    OTel attr 名保留 llm_call_failed 用于后向兼容 dashboard）。"""
+    inference_failed = bool(metadata.get("inference_failed", False))
     attrs = {
         "skill.proposal.name": proposed_name,
         "skill.proposal.draft_path": str(draft_path),
@@ -170,7 +172,7 @@ def _emit_proposal_telemetry(
         "skill.proposal.llm_inferred_triggers_keywords": str(metadata.get("triggers_keywords", [])),
         "skill.proposal.llm_inferred_importance": float(metadata.get("importance", 0.5)),
         "skill.proposal.llm_inferred_confidence": float(metadata.get("confidence", 0.5)),
-        "skill.proposal.llm_call_failed": llm_call_failed,
+        "skill.proposal.llm_call_failed": inference_failed,
     }
     span_attached = False
     try:
@@ -195,7 +197,7 @@ def _emit_proposal_telemetry(
             metadata.get("regime_tags", []),
             metadata.get("importance", 0.5),
             metadata.get("confidence", 0.5),
-            llm_call_failed,
+            inference_failed,
         )
 
 
@@ -252,7 +254,6 @@ def propose_new_skill(
         "confidence": 0.5,
         "inference_failed": True,  # spec 020a FR-Z17: default path = failure
     }
-    llm_call_failed = False
     try:
         description = f"Proposed skill based on {len(patterns)} active patterns with common regime tags: {', '.join(common_tags) or 'various'}."
         metadata = infer_skill_metadata(
@@ -260,15 +261,13 @@ def propose_new_skill(
             description=description,
             body=draft_content,
         )
-        # spec 020a FR-Z17: inference_failed is now set by infer_skill_metadata itself;
-        # fall back to True if the key is somehow missing
+        # spec 020a FR-Z17: inference_failed is set by infer_skill_metadata itself;
+        # fall back to False if the key is somehow missing (success path).
         if "inference_failed" not in metadata:
             metadata["inference_failed"] = False
-        llm_call_failed = bool(metadata.get("inference_failed", False))
     except Exception:
         logger.warning("propose_new_skill: LLM metadata inference failed", exc_info=True)
         metadata = dict(_default_metadata)  # includes inference_failed: True
-        llm_call_failed = True
 
     # 把 metadata 合并到 draft frontmatter（access_count=0 / last_accessed_at 由迁移脚本处理）
     metadata["access_count"] = 0
@@ -284,7 +283,7 @@ def propose_new_skill(
         atomic_write(draft_path, draft_content)
         logger.info("propose_new_skill: draft written to %s", draft_path)
         # spec 019 FR-W29: 写 7 telemetry attributes
-        _emit_proposal_telemetry(proposed_name, draft_path, metadata, llm_call_failed)
+        _emit_proposal_telemetry(proposed_name, draft_path, metadata)
         return draft_path
     except Exception:
         logger.warning("propose_new_skill: failed to write draft", exc_info=True)

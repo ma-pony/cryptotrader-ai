@@ -42,7 +42,9 @@ cryptotrader-ai/
 │   │   │   ├── news.py        # NewsAgent（ToolAgent）
 │   │   │   ├── macro.py       # MacroAgent（BaseAgent）
 │   │   │   ├── data_tools.py  # LangChain @tool 定义（6 Chain + 3 News）
-│   │   │   ├── skill_loader.py / skill_selector.py  # 配置驱动的 agent skill 注入
+│   │   │   ├── prompt_builder.py     # 配置驱动 prompt 组装（spec 017a）
+│   │   │   ├── snapshot_renderer.py  # snapshot 渲染（spec 017b 解耦后单文件）
+│   │   │   ├── skills/               # SKILL.md 协议 + 加载（spec 014）
 │   │   │   └── _indicators.py # 纯 pandas/numpy 技术指标（替代 pandas_ta）
 │   │   ├── backtest/
 │   │   │   ├── engine.py      # BacktestEngine（LLM + SMA 模式）
@@ -83,7 +85,24 @@ cryptotrader-ai/
 │   │   │   ├── verbal.py      # 语言强化（Regime-aware 历史案例检索）
 │   │   │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
 │   │   │   ├── context.py     # GSSC 引擎（gather → select → structure）
-│   │   │   └── regime.py      # Regime 标签 + Jaccard 匹配
+│   │   │   ├── regime.py      # Regime 标签 + Jaccard 匹配
+│   │   │   ├── memory.py      # MemoryProvider Protocol + refilter_records_by_regime
+│   │   │   ├── skill_proposal.py     # propose_new_skill + LLM 自动 metadata（spec 019）
+│   │   │   └── evolution/             # Memory + Skill Evolution（spec 018/019）
+│   │   │       ├── fsm.py             # 5-signal Maturity FSM transitions
+│   │   │       ├── pareto.py          # Pareto frontier rank_rules
+│   │   │       ├── ive.py             # IVE failure classification（async）
+│   │   │       ├── idf.py             # IDF + D-RT-01 retrieval（spec 019）
+│   │   │       ├── provider.py        # EvolvingMemoryProvider
+│   │   │       ├── skill_provider.py  # EvolvingSkillProvider
+│   │   │       └── skill_metadata_inference.py  # LLM metadata 推断
+│   │   ├── observability/             # spec 020a/b/c sliding window aggregator
+│   │   │   ├── cache_metrics.py       # spec 020a LLM cache hit rate（24h）
+│   │   │   ├── ive_metrics.py         # spec 020a IVE failure rate（1h）
+│   │   │   └── daemon_metrics.py      # spec 020b/c daemon + lineage（redis sorted set）
+│   │   ├── ops/                       # 运维 ops（spec 020b/c）
+│   │   │   ├── daemon.py              # EvolutionDaemon（daily reflect daemon）
+│   │   │   └── lineage.py             # GitLineageHook（spec 020c auto-commit）
 │   │   ├── nodes/             # LangGraph 节点
 │   │   │   ├── agents.py      # 4 Agent fan-out
 │   │   │   ├── data.py        # 数据收集 + PnL 更新 + 趋势上下文
@@ -115,10 +134,10 @@ cryptotrader-ai/
 │   ├── cli/
 │   │   └── main.py            # Typer CLI（arena 命令）
 ├── web/                       # React 19 + Vite 7 前端
-├── tests/                     # 347 个测试，70% 覆盖率
+├── tests/                     # 2458 个测试，70%+ 覆盖率
 ├── pyproject.toml             # 项目配置 + 依赖
 ├── Makefile                   # 快捷命令
-├── docker-compose.yml         # PostgreSQL 16 + Redis 7 + Scheduler 服务
+├── docker-compose.yml         # 8 service：postgres / redis / api / web / scheduler / caddy / evolution-daemon
 └── CLAUDE.md                  # AI 编码指南
 ```
 

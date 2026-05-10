@@ -6,7 +6,7 @@ AI-powered crypto trading system using LangGraph multi-agent debate.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1813%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2458%20passed-brightgreen.svg)]()
 
 ## Overview
 
@@ -26,6 +26,9 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 - **Live trading ready** — ccxt-based exchange adapters with retry, precision, and timeout handling
 - **APScheduler automation** — Periodic trading cycles with daily portfolio summaries
 - **61+ data sources** — Unified SQLite store across 7 categories with rate limiting per source
+- **Trilogy Evolution System** (spec 016→020c, 2026-05-09) — config-driven prompts (`config/agents/<name>.md`) + Memory Evolution (5-signal Maturity FSM + Pareto + IVE failure classification) + Skill Evolution (D-RT-01 retrieval + LLM-inferred metadata) + standalone `evolution-daemon` docker service (daily Pareto rerank + Regime recluster + Skill proposal auto-trigger, soft degrade) + Git Lineage (auto-commit to `evolution` branch with `Auto-Generated-By: spec-020c` trailer)
+- **Anthropic prompt cache observability** — `apply_cache_control()` in production; OTel span attrs `llm.cache.{read,creation,hit_rate}`; Prometheus `llm_cache_hit_rate_24h_avg` gauge
+- **11 Prometheus gauges** — cache hit rate / IVE failure / daemon run / lineage commit / etc.; dashboard-only (no alertmanager) to avoid alert fatigue
 
 ## Architecture
 

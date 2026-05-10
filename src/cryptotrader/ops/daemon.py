@@ -18,7 +18,10 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from cryptotrader.config import EvolutionDaemonConfig
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +74,7 @@ class EvolutionDaemon:
         await daemon.run_forever()                # blocks on APScheduler cron
     """
 
-    def __init__(self, config: object) -> None:  # EvolutionDaemonConfig
+    def __init__(self, config: EvolutionDaemonConfig) -> None:
         self.config = config
         self._scheduler = None
 
@@ -384,9 +387,9 @@ class EvolutionDaemon:
                     if draft_path is not None:
                         drafts_created.append(str(draft_path))
                         logger.info("[skill_proposal] draft created: %s", draft_path)
-                except Exception as exc:
+                except Exception:
                     # LLM failure inside propose_new_skill bubbles up to _run_action soft degrade
-                    raise exc
+                    raise
             else:
                 logger.debug(
                     "[skill_proposal] agent=%s active_rules=%d < threshold=%d — skipping",
@@ -427,10 +430,8 @@ def _classify_soft_degrade(exc: BaseException) -> str | None:
     if "openai" in module.lower() or "OpenAI" in exc_type_name:
         return "openai_api_error"
 
-    # asyncio / concurrent timeout
-    if isinstance(exc, asyncio.TimeoutError):
-        return "timeout"
-    if exc_type_name in ("TimeoutError", "asyncio.TimeoutError"):
+    # asyncio / concurrent / builtin TimeoutError (Py 3.11+ unifies them)
+    if isinstance(exc, TimeoutError):
         return "timeout"
 
     # httpx / network errors

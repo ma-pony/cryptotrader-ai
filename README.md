@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1813%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2458%20passed-brightgreen.svg)]()
 
 ## 概述
 
@@ -27,6 +27,9 @@
 - **APScheduler 自动化** — 周期性交易循环 + 每日组合摘要
 - **61+ 数据源** — 统一 SQLite 存储，覆盖 7 个类别，按源独立限速
 - **可观测性优先** — 拒单事件携带 root cause 异常信息（`[ConnectionError: ...]`）；执行层失败与风控解耦（`execution_status` vs `risk_gate`）；CI 守护禁止 `logger.debug(..., exc_info=True)` 吞异常
+- **Trilogy 进化系统**（spec 016→020c，2026-05-09）— 配置驱动 prompt（`config/agents/<name>.md`）+ Memory Evolution（5-signal Maturity FSM + Pareto + IVE failure classification）+ Skill Evolution（D-RT-01 retrieval + LLM 自动 metadata 推断）+ 独立 docker-compose `evolution-daemon` service（daily Pareto 全局重排 + Regime 重新聚类 + Skill proposal auto-trigger，soft degrade）+ Git Lineage（auto-commit 到独立 `evolution` branch，trailer `Auto-Generated-By: spec-020c`）
+- **完整 Anthropic prompt cache 观测** — `apply_cache_control()` 生产级；OTel span attr `llm.cache.{read,creation,hit_rate}`；Prometheus `llm_cache_hit_rate_24h_avg` gauge
+- **11 Prometheus Gauge** — cache hit rate / IVE failure / daemon run count / lineage commit / 等；不告警仅 dashboard 可视避免 alert fatigue
 
 ## 系统架构
 
