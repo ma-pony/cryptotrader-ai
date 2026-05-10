@@ -89,7 +89,7 @@ class EvolutionDaemon:
         t_start = time.monotonic()
         with _get_span_ctx("evolution.daemon.run"):
             try:
-                acquired, lock_fds = _try_acquire_locks(_LOCK_PATHS_ALPHABETICAL, _LOCK_TIMEOUT_S)
+                acquired, lock_fds = await _try_acquire_locks(_LOCK_PATHS_ALPHABETICAL, _LOCK_TIMEOUT_S)
             except Exception:
                 logger.warning("[evolution-daemon] unexpected error acquiring locks", exc_info=True)
                 acquired, lock_fds = False, []
@@ -125,13 +125,21 @@ class EvolutionDaemon:
             )
             # FR-D13/FR-D14: record metrics events to Redis for Prometheus gauges
             _record_run_metrics(run_result)
+
+            # spec 020c FR-L4: auto-commit changed agent_memory/ + agent_skills/ to evolution branch
+            _commit_lineage(run_result)
+
             return run_result
 
     async def run_forever(self) -> None:
         """Start APScheduler CronTrigger loop; blocks until SIGTERM/SIGINT.
 
         FR-D3: AsyncIOScheduler + CronTrigger from crontab string.
+        spec 020c FR-L11: SIGTERM/SIGINT graceful shutdown via loop.add_signal_handler.
+        Waits for the current run_once() to finish before shutting down (wait=True).
         """
+        import signal
+
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
         from apscheduler.triggers.cron import CronTrigger
 
@@ -142,8 +150,46 @@ class EvolutionDaemon:
         )
         self._scheduler.start()
         logger.info("[evolution-daemon] scheduler started; cron=%s", self.config.cron)
-        # Block indefinitely (SIGTERM/SIGINT will cancel this)
-        await asyncio.Event().wait()
+
+        # spec 020c: graceful shutdown flag + signal handlers
+        self._shutdown_flag = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        def _on_signal() -> None:
+            logger.info("[evolution-daemon] shutdown signal received, waiting for current run_once to finish")
+            self._shutdown_flag.set()
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, _on_signal)
+
+        await self._shutdown_flag.wait()
+
+        # Graceful shutdown: wait=True lets the current run_once job finish (≤ 30s)
+        logger.info("[evolution-daemon] scheduler shutdown (wait=True) ...")
+        self._scheduler.shutdown(wait=True)
+        logger.info("[evolution-daemon] scheduler shutdown complete")
+
+        # Close Redis connection if available
+        try:
+            from cryptotrader.observability.daemon_metrics import _get_redis
+
+            rc = _get_redis()
+            if rc is not None:
+                rc.close()
+                logger.info("[evolution-daemon] redis closed")
+        except Exception:
+            logger.info("[evolution-daemon] redis close skipped", exc_info=True)
+
+        # Flush OTel provider if available
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            provider = _otel_trace.get_tracer_provider()
+            if hasattr(provider, "shutdown"):
+                provider.shutdown()
+                logger.info("[evolution-daemon] OTel flush complete, exit 0")
+        except Exception:
+            logger.info("[evolution-daemon] OTel flush skipped", exc_info=True)
 
     # ------------------------------------------------------------------
     # Internal: action dispatch + soft degrade wrapper
@@ -225,6 +271,7 @@ class EvolutionDaemon:
         t0 = time.monotonic()
         archived_count = 0
         processed_count = 0
+        transitions: list[dict] = []
 
         for agent_id in sorted(VALID_AGENT_IDS):
             patterns_dir = DEFAULT_AGENT_MEMORY_DIR / agent_id / "patterns"
@@ -247,12 +294,23 @@ class EvolutionDaemon:
             for rule in active_rules:
                 processed_count += 1
                 if id(rule) not in frontier_ids:
+                    old_maturity = rule.maturity
                     rule.maturity = "archived"
                     if rule.file_path is not None:
                         try:
                             _save_pattern_to_path(rule, rule.file_path)
                             archived_count += 1
                             logger.info("[pareto] archived rule: %s/%s", agent_id, rule.name)
+                            # spec 020c T012: collect transition for lineage batch commit
+                            transitions.append(
+                                {
+                                    "rule_id": rule.name,
+                                    "agent_id": agent_id,
+                                    "old_state": old_maturity,
+                                    "new_state": "archived",
+                                    "triggered_by": "pareto_dominated",
+                                }
+                            )
                         except Exception:
                             logger.warning("[pareto] failed to save archived rule %s", rule.name, exc_info=True)
 
@@ -264,7 +322,11 @@ class EvolutionDaemon:
             name="pareto",
             status="PASS",
             duration_ms=duration_ms,
-            details={"archived_count": archived_count, "processed_count": processed_count},
+            details={
+                "archived_count": archived_count,
+                "processed_count": processed_count,
+                "transitions": transitions,
+            },
         )
 
     # ------------------------------------------------------------------
@@ -416,29 +478,41 @@ def _compute_frontier_ids(rules: list) -> set[int]:
     return frontier
 
 
-def _try_acquire_locks(lock_paths: list[str], timeout_s: float) -> tuple[bool, list]:
+def _prepare_lock_file(lp_str: str):  # type: ignore[return]
+    """Ensure lock file exists and return an open writable file object.
+
+    Synchronous helper — called from async _try_acquire_locks to avoid
+    ASYNC230/ASYNC240 violations (pathlib.Path methods must not be used
+    directly inside async functions per ruff ASYNC230/ASYNC240 rules).
+    Returns an open IO object, or raises OSError on failure.
+    """
+    lp = Path(lp_str)
+    lp.parent.mkdir(parents=True, exist_ok=True)
+    if not lp.exists():
+        lp.touch()
+    return lp.open("w")
+
+
+async def _try_acquire_locks(lock_paths: list[str], timeout_s: float) -> tuple[bool, list]:
     """Try to acquire fcntl.flock exclusive locks in order; 5s timeout each.
 
     FR-D12: alphabetical order (cases → patterns); timeout → skip run.
+    spec 020c FR-L10: async def + await asyncio.sleep (replaces sync time.sleep).
     Returns (acquired: bool, open_fds: list[IO]).
     """
     import errno
 
     fds = []
     for lp_str in sorted(lock_paths):  # alphabetical order enforced
-        lp = Path(lp_str)
-        lp.parent.mkdir(parents=True, exist_ok=True)
-        if not lp.exists():
-            lp.touch()
         try:
-            fd = lp.open("w")
+            fd = _prepare_lock_file(lp_str)
             fds.append(fd)
         except OSError as exc:
-            logger.warning("[evolution-daemon] cannot open lock file %s: %s", lp, exc)
+            logger.warning("[evolution-daemon] cannot open lock file %s: %s", lp_str, exc)
             _release_locks(fds)
             return False, []
 
-        # Poll-based flock with timeout (fcntl.LOCK_NB + sleep)
+        # Poll-based flock with timeout (fcntl.LOCK_NB + await asyncio.sleep)
         deadline = time.monotonic() + timeout_s
         acquired_this = False
         while True:
@@ -448,14 +522,14 @@ def _try_acquire_locks(lock_paths: list[str], timeout_s: float) -> tuple[bool, l
                 break
             except OSError as exc:
                 if exc.errno not in (errno.EACCES, errno.EAGAIN, errno.EWOULDBLOCK):
-                    logger.warning("[evolution-daemon] flock error on %s: %s", lp, exc)
+                    logger.warning("[evolution-daemon] flock error on %s: %s", lp_str, exc)
                     _release_locks(fds)
                     return False, []
                 if time.monotonic() >= deadline:
-                    logger.warning("[evolution-daemon] lock timeout on %s after %.1fs", lp, timeout_s)
+                    logger.warning("[evolution-daemon] lock timeout on %s after %.1fs", lp_str, timeout_s)
                     _release_locks(fds)
                     return False, []
-                time.sleep(0.1)
+                await asyncio.sleep(0.1)
 
         if not acquired_this:
             _release_locks(fds)
@@ -544,3 +618,37 @@ def _record_run_metrics(run_result: RunResult) -> None:
             if action.name == "skill_proposal":
                 for _ in action.details.get("drafts_created", []):
                     record_draft_event()
+
+
+# ---------------------------------------------------------------------------
+# spec 020c FR-L4: lineage auto-commit after each run_once()
+# ---------------------------------------------------------------------------
+
+
+def _build_lineage_summary(run_result: RunResult) -> dict:
+    """Build the summary dict for GitLineageHook.commit_changes().
+
+    T007: constructs type="daemon" summary with actions list including
+    per-action details; _action_pareto transitions are included in details.
+    """
+    actions = [{"name": a.name, "status": a.status, "details": a.details} for a in run_result.actions_run]
+    return {"type": "daemon", "actions": actions}
+
+
+def _commit_lineage(run_result: RunResult) -> None:
+    """Auto-commit agent_memory/ + agent_skills/ changes to the evolution branch.
+
+    spec 020c FR-L4: called at the end of run_once() after metrics are recorded.
+    Soft-fail: any git error is caught, OTel span recorded, daemon exits 0.
+    """
+    from contextlib import suppress
+
+    with suppress(Exception):
+        from cryptotrader.observability.daemon_metrics import record_lineage_event
+        from cryptotrader.ops.lineage import GitLineageHook
+
+        summary = _build_lineage_summary(run_result)
+        commit_result = GitLineageHook(branch="evolution").commit_changes(summary)
+        record_lineage_event(success=commit_result.success)
+        if not commit_result.success:
+            logger.info("[evolution-daemon] lineage commit soft-failed: %s", commit_result.error)

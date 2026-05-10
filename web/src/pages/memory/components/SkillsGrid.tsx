@@ -47,7 +47,7 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
         {item.regime_tags.length > 0 && (
           <div className="flex gap-1 flex-wrap">
             {item.regime_tags.map((tag) => (
-              <Badge key={tag} variant="secondary" className="text-[9px] px-1 py-0">
+              <Badge key={tag} variant="secondary" className="text-[9px] px-1 py-0" aria-label={`Regime: ${tag}`}>
                 {tag}
               </Badge>
             ))}
@@ -56,7 +56,7 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
         {item.triggers_keywords.length > 0 && (
           <div className="flex gap-1 flex-wrap" data-testid="triggers-keywords">
             {item.triggers_keywords.slice(0, 5).map((kw) => (
-              <Badge key={kw} variant="outline" className="text-[9px] px-1 py-0 text-muted-foreground">
+              <Badge key={kw} variant="outline" className="text-[9px] px-1 py-0 text-muted-foreground" aria-label={`Trigger keyword: ${kw}`}>
                 {kw}
               </Badge>
             ))}
@@ -68,7 +68,7 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
           </div>
         )}
         {item.inference_failed && (
-          <Badge variant="destructive" className="text-[9px] px-1 py-0 w-fit" data-testid="inference-failed-badge">
+          <Badge variant="destructive" className="text-[9px] px-1 py-0 w-fit" data-testid="inference-failed-badge" aria-label="Inference failed during proposal">
             inference failed
           </Badge>
         )}

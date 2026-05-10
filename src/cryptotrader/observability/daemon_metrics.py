@@ -256,6 +256,109 @@ def get_draft_count_7d_from_redis(redis_client: object | None = None) -> float:
         return 0.0
 
 
+# ---------------------------------------------------------------------------
+# spec 020c FR-L13: Lineage commit aggregators (24h sliding window)
+# ---------------------------------------------------------------------------
+
+
+class LineageCommitCountAggregator:
+    """24h sliding window count of evolution branch commits.
+
+    Thread-safe deque ring buffer; evicts entries older than 24h on every
+    record() / count() call.  Mirrors DaemonRunCountAggregator pattern (spec 020a).
+    """
+
+    def __init__(self, window_seconds: int = 86400) -> None:
+        self._window = window_seconds
+        self._buffer: deque[float] = deque()
+        self._lock = Lock()
+
+    def record(self) -> None:
+        """Record one lineage commit at current timestamp."""
+        with self._lock:
+            now = time()
+            self._buffer.append(now)
+            self._evict(now)
+
+    def count(self) -> int:
+        """Return number of commits in the sliding window."""
+        with self._lock:
+            self._evict(time())
+            return len(self._buffer)
+
+    def _evict(self, now: float) -> None:
+        cutoff = now - self._window
+        while self._buffer and self._buffer[0] < cutoff:
+            self._buffer.popleft()
+
+
+class LineageCommitFailureAggregator:
+    """24h sliding window lineage commit failure rate.
+
+    Each record() call pushes (timestamp, failed: bool).
+    failure_rate() returns failed/total over the window.
+    Mirrors DaemonLLMFailureAggregator pattern (spec 020a).
+    """
+
+    def __init__(self, window_seconds: int = 86400) -> None:
+        self._window = window_seconds
+        self._buffer: deque[tuple[float, bool]] = deque()
+        self._lock = Lock()
+
+    def record(self, *, failed: bool) -> None:
+        """Record one lineage commit outcome."""
+        with self._lock:
+            now = time()
+            self._buffer.append((now, failed))
+            self._evict(now)
+
+    def failure_rate(self) -> float:
+        """Return fraction of failed commits in the sliding window (0.0 if empty)."""
+        with self._lock:
+            self._evict(time())
+            if not self._buffer:
+                return 0.0
+            return sum(1 for _, f in self._buffer if f) / len(self._buffer)
+
+    def _evict(self, now: float) -> None:
+        cutoff = now - self._window
+        while self._buffer and self._buffer[0][0] < cutoff:
+            self._buffer.popleft()
+
+
+# spec 020c: module-level singletons for lineage aggregators
+
+_lineage_commit_count_agg: LineageCommitCountAggregator | None = None
+_lineage_commit_failure_agg: LineageCommitFailureAggregator | None = None
+
+
+def get_lineage_commit_count_aggregator() -> LineageCommitCountAggregator:
+    global _lineage_commit_count_agg
+    if _lineage_commit_count_agg is None:
+        _lineage_commit_count_agg = LineageCommitCountAggregator()
+    return _lineage_commit_count_agg
+
+
+def get_lineage_commit_failure_aggregator() -> LineageCommitFailureAggregator:
+    global _lineage_commit_failure_agg
+    if _lineage_commit_failure_agg is None:
+        _lineage_commit_failure_agg = LineageCommitFailureAggregator()
+    return _lineage_commit_failure_agg
+
+
+def record_lineage_event(*, success: bool) -> None:
+    """Record a lineage commit outcome to both in-process aggregators.
+
+    FR-L13: called by daemon run_once() after GitLineageHook.commit_changes().
+    Silently no-ops on any error (consistent with spec 020a pattern).
+    """
+    try:
+        get_lineage_commit_count_aggregator().record()
+        get_lineage_commit_failure_aggregator().record(failed=not success)
+    except Exception:
+        logger.info("record_lineage_event: aggregator update failed", exc_info=True)
+
+
 def _get_redis() -> object | None:
     """Lazily obtain Redis client from config. Returns None on any error."""
     try:

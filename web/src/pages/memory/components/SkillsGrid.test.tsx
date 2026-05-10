@@ -95,6 +95,42 @@ describe('SkillsGrid — triggers_keywords badges', () => {
   });
 });
 
+describe('SkillsGrid — a11y aria-labels', () => {
+  it('regime badge has aria-label="Regime: <tag>"', () => {
+    vi.mocked(useSkills).mockReturnValue({
+      data: { items: [makeItem({ regime_tags: ['bull', 'high_vol'] } as never)], total: 1 },
+      isLoading: false,
+    } as never);
+
+    renderGrid();
+    expect(screen.getByRole('generic', { name: 'Regime: bull' })).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: 'Regime: high_vol' })).toBeInTheDocument();
+  });
+
+  it('triggers keyword badge has aria-label="Trigger keyword: <kw>"', () => {
+    vi.mocked(useSkills).mockReturnValue({
+      data: { items: [makeItem({ triggers_keywords: ['BTC', 'breakout'] } as never)], total: 1 },
+      isLoading: false,
+    } as never);
+
+    renderGrid();
+    expect(screen.getByRole('generic', { name: 'Trigger keyword: BTC' })).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: 'Trigger keyword: breakout' })).toBeInTheDocument();
+  });
+
+  it('inference_failed badge has aria-label="Inference failed during proposal"', () => {
+    vi.mocked(useSkills).mockReturnValue({
+      data: { items: [makeItem({ inference_failed: true } as never)], total: 1 },
+      isLoading: false,
+    } as never);
+
+    renderGrid();
+    expect(
+      screen.getByRole('generic', { name: 'Inference failed during proposal' }),
+    ).toBeInTheDocument();
+  });
+});
+
 describe('SkillsGrid — inference_failed flag', () => {
   it('shows inference-failed badge when inference_failed is true', () => {
     vi.mocked(useSkills).mockReturnValue({

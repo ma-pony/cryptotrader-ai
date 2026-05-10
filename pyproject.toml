@@ -145,6 +145,9 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # staging_validate.py uses Chinese docstrings/comments (RUF002/RUF003),
 # subprocess for migrate dry-run (S603), and Callable at runtime (TCH003).
 "scripts/**/*.py" = ["T201", "TID251", "RUF002", "RUF003", "S603", "TCH003"]
+# spec 020c: lineage.py uses subprocess to invoke git CLI (intentional, no user input).
+# S603 (subprocess call) and S607 (partial path) are false positives here.
+"src/cryptotrader/ops/lineage.py" = ["S603", "S607"]
 # journal/store.py: SQLAlchemy declarative classes (Base, Row) assigned in functions
 # follow class-naming convention even though N806 sees them as variables.
 "src/cryptotrader/journal/store.py" = ["N806"]
@@ -269,7 +272,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/api/main.py" = ["TID251", "E402"]
 # tests are allowed to import any module for integration and boundary testing.
 # S603 exempted: subprocess.run calls in tests invoke known, trusted CLI tools (ruff, pytest).
-"tests/*.py" = ["TID251", "S603"]
+"tests/*.py" = ["TID251", "S603", "S607", "ASYNC100"]
 # spec 020a: staging_validate + new test files use Chinese docstrings/comments and
 # pytest.mark.asyncio patterns. PT015 is suppressed for run_step error path tests
 # that intentionally use assert False to simulate failures.
