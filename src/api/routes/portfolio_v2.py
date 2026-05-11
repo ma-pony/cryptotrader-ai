@@ -58,24 +58,34 @@ class PositionOut(BaseModel):
 
 
 class PnlBreakdown(BaseModel):
-    """Decompose a window's equity change into realized vs everything-else.
+    """Decompose a window's equity change into 4 fundamental buckets.
 
-    `realized` = sum of close-action commit PnL inside the window.
-    `non_realized` = total equity delta minus realized; absorbs all of:
-        - unrealized PnL changes on open positions (mark-to-market)
-        - funding payments (perp positions, accrued 3×/day)
-        - trading fees
-        - any deposits/withdrawals that hit `total_value`
-    `external_flow` is a coarse heuristic that flags days where `cash` itself
-    jumped by more than the daily realized PnL would explain, indicating a
-    likely deposit/withdrawal. Helps users separate "策略涨" from "充值涨".
+    Identity:  delta = realized + funding + fees + unrealized_delta (+ residual)
+
+    - `realized`         : sum of close-action commit PnL in window (journal).
+    - `funding`          : net perp funding payments received/paid (OKX history).
+                           Positive = received (short on positive funding,
+                           or long on negative funding).
+    - `fees`              : maker/taker fees paid on trades in window
+                           (always negative for fee outflow; sign-flipped here
+                           so a $15 fee shows as -$15).
+    - `unrealized_delta` : derived = delta - (realized + funding + fees).
+                           Captures Δunrealized on open positions + any minor
+                           residuals (e.g. capped fetch_my_trades pagination,
+                           micro-adjustments). Not a separate exchange query.
+
+    Fields with `_known=False` indicate the exchange call failed or paper-mode
+    is on; the UI should de-emphasize those buckets but still show realized
+    (which always comes from the local journal).
     """
 
     window: str  # "24h" | "7d" | "30d"
     delta: float
     realized: float
-    non_realized: float
-    external_flow_hint: float  # > 0 = likely net deposit, < 0 = withdrawal
+    funding: float
+    fees: float
+    unrealized_delta: float
+    exchange_data_available: bool = True
 
 
 class PortfolioSnapshotOut(BaseModel):
@@ -405,22 +415,110 @@ def _serialize_positions(raw_positions: dict) -> list[PositionOut]:
 # ── Routes ──
 
 
+# ── Exchange history cache (funding + fees) ─────────────────────────────────
+#
+# OKX `fetch_funding_history` + `fetch_my_trades` are ~300-800ms each and the
+# dashboard polls /api/portfolio/snapshot every 30s. Cache aggressively so the
+# attribution breakdown doesn't double the snapshot latency. 60s TTL is well
+# inside the user's perception threshold for fresh PnL.
+_EX_HISTORY_TTL_SEC = 60.0
+_ex_history_cache: dict[str, tuple[float, dict]] = {}
+
+
+async def _fetch_exchange_history(now: datetime) -> dict | None:
+    """Return ``{(window, kind): float}`` of funding/fee totals per window, or
+    None if the live exchange is unreachable or running in paper mode.
+
+    Keys: ``("24h", "funding")``, ``("7d", "funding")``, ``("30d", "funding")``,
+    ditto ``"fees"``. Fees are returned as negative (cost).
+    """
+    cache_key = "okx"
+    now_mono = time.monotonic()
+    cached = _ex_history_cache.get(cache_key)
+    if cached and now_mono - cached[0] < _EX_HISTORY_TTL_SEC:
+        return cached[1]
+
+    from cryptotrader.config import load_config
+
+    cfg = load_config()
+    okx_cfg = cfg.exchanges.get("okx") if hasattr(cfg.exchanges, "get") else None
+    if not okx_cfg or not okx_cfg.api_key:
+        return None
+    if getattr(cfg, "engine", "paper") != "live":
+        return None  # paper mode has no real exchange history
+
+    try:
+        import ccxt.async_support as ccxt
+    except ImportError:
+        return None
+
+    ex = ccxt.okx(
+        {
+            "apiKey": okx_cfg.api_key,
+            "secret": okx_cfg.secret,
+            "password": okx_cfg.passphrase,
+            "options": {"defaultType": "swap"},
+        }
+    )
+    if okx_cfg.sandbox:
+        ex.set_sandbox_mode(True)
+
+    result: dict[tuple[str, str], float] = {}
+    try:
+        for window, days in (("24h", 1), ("7d", 7), ("30d", 30)):
+            since_ms = int((now - timedelta(days=days)).timestamp() * 1000)
+            # Funding
+            try:
+                fundings = await asyncio.wait_for(
+                    ex.fetch_funding_history(since=since_ms, limit=200), timeout=4.0
+                )
+                result[(window, "funding")] = sum(
+                    float(f.get("amount", 0) or 0) for f in (fundings or [])
+                )
+            except Exception:
+                logger.info("fetch_funding_history failed for %s", window, exc_info=True)
+                result[(window, "funding")] = 0.0
+            # Fees
+            try:
+                trades = await asyncio.wait_for(
+                    ex.fetch_my_trades(since=since_ms, limit=200), timeout=4.0
+                )
+                total_fee = 0.0
+                for t in trades or []:
+                    fee = t.get("fee") or {}
+                    total_fee += abs(float(fee.get("cost", 0) or 0))
+                result[(window, "fees")] = -total_fee  # sign-flip so + means cost
+            except Exception:
+                logger.info("fetch_my_trades failed for %s", window, exc_info=True)
+                result[(window, "fees")] = 0.0
+    except Exception:
+        logger.warning("Exchange history fetch failed", exc_info=True)
+        return None
+    finally:
+        try:
+            await ex.close()
+        except Exception:  # pragma: no cover
+            pass
+
+    _ex_history_cache[cache_key] = (now_mono, {"_available": True, **{f"{w}:{k}": v for (w, k), v in result.items()}})
+    return _ex_history_cache[cache_key][1]
+
+
 async def _compute_pnl_breakdowns(
     database_url: str | None, current_equity: float
 ) -> list[PnlBreakdown]:
-    """Build 24h / 7d / 30d attribution buckets.
+    """Build 24h / 7d / 30d attribution with 4 buckets:
+    realized / funding / fees / unrealized_delta.
 
-    For each window: realized = sum of close-action commit pnl in-window;
-    non_realized = (current equity - equity at window start) - realized.
-    external_flow_hint flags windows where cash jumps don't match realized PnL
-    (likely deposits/withdrawals).
-
-    Heuristic, not exact — separating funding from unrealized swing requires
-    a `fetch_funding_history` round-trip that we skip on the hot path.
+    realized comes from the local journal; funding + fees from OKX history
+    (cached 60s). unrealized_delta is derived to make the identity hold.
     """
     snaps = await _load_snapshots(database_url)
     commits = await _load_commits(database_url)
     now = datetime.now(UTC)
+    ex_hist = await _fetch_exchange_history(now)
+    exchange_ok = bool(ex_hist and ex_hist.get("_available"))
+
     out: list[PnlBreakdown] = []
 
     def _norm(t: Any) -> datetime | None:
@@ -432,21 +530,17 @@ async def _compute_pnl_breakdowns(
 
     for window, hours in (("24h", 24), ("7d", 24 * 7), ("30d", 24 * 30)):
         cutoff = now - timedelta(hours=hours)
-        # Snapshot at the window's left edge (earliest snap with ts >= cutoff).
         eq_start = None
-        cash_start = None
         for s in snaps:
             t = _norm(s.get("timestamp"))
             if t and t >= cutoff:
                 eq_start = float(s.get("total_value", 0.0) or 0.0)
-                cash_start = float(s.get("cash", 0.0) or 0.0)
                 break
         if eq_start is None:
             continue
 
         delta = current_equity - eq_start
-        # realized in window — commits use ``c.verdict.action`` + ``c.timestamp``
-        # (matching _commit_pnl_stats above; bare ``c.action`` does not exist).
+
         realized = 0.0
         for c in commits:
             ts = _coerce_timestamp(getattr(c, "timestamp", None))
@@ -464,23 +558,19 @@ async def _compute_pnl_breakdowns(
                 continue
             realized += float(pnl_val)
 
-        non_realized = delta - realized
-
-        # External flow hint: large cash jump unexplained by realized PnL.
-        # Heuristic: |Δcash − realized| > $1000 in window suggests deposit.
-        latest_cash = float(snaps[-1].get("cash", 0.0) or 0.0) if snaps else 0.0
-        cash_delta = latest_cash - (cash_start or 0.0)
-        external_hint = 0.0
-        if abs(cash_delta - realized) > 1000:
-            external_hint = cash_delta - realized
+        funding = float(ex_hist.get(f"{window}:funding", 0.0)) if ex_hist else 0.0
+        fees = float(ex_hist.get(f"{window}:fees", 0.0)) if ex_hist else 0.0
+        unrealized_delta = delta - realized - funding - fees
 
         out.append(
             PnlBreakdown(
                 window=window,
                 delta=round(delta, 2),
                 realized=round(realized, 2),
-                non_realized=round(non_realized, 2),
-                external_flow_hint=round(external_hint, 2),
+                funding=round(funding, 2),
+                fees=round(fees, 2),
+                unrealized_delta=round(unrealized_delta, 2),
+                exchange_data_available=exchange_ok,
             )
         )
     return out

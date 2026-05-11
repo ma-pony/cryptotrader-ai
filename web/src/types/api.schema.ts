@@ -32,8 +32,10 @@ export const PnlBreakdownSchema = z.object({
   window: z.string(), // "24h" | "7d" | "30d"
   delta: z.number(),
   realized: z.number(),
-  non_realized: z.number(),
-  external_flow_hint: z.number().default(0),
+  funding: z.number().default(0),
+  fees: z.number().default(0),
+  unrealized_delta: z.number().default(0),
+  exchange_data_available: z.boolean().default(false),
 });
 export type PnlBreakdown = z.infer<typeof PnlBreakdownSchema>;
 
