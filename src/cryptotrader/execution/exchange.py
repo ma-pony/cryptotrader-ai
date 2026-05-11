@@ -246,6 +246,16 @@ class LiveExchange:
         params: dict[str, Any] = {}
         if pair.market_type != "spot":
             params["posSide"] = await self._derive_pos_side(order)
+            # spec 021 H1: pass tdMode so OKX uses the configured margin mode
+            # (isolated / cross) on this order. Without it, OKX defaults to
+            # the account-default tdMode which may NOT match the mgnMode we
+            # set in _ensure_leverage above — manifesting as sCode=51008
+            # "Insufficient USDT margin" even with $95k free cash, because
+            # isolated mode wants the per-pair subaccount which is empty
+            # until first funding (cross mode uses the main account pool).
+            # Mirrors mgnMode arg in set_leverage call (line 134) so the
+            # order-side and leverage-side modes stay aligned.
+            params["tdMode"] = self._margin_mode
 
         try:
             result = await self._retry(

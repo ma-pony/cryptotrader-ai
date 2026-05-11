@@ -137,7 +137,13 @@ async def test_perp_close_passes_pos_side_long_for_existing_long():
     args, _ = mock_inst.create_order.call_args
     # ccxt positional: (symbol, type, side, amount, price, params)
     assert len(args) == 6, "params dict must be passed positionally"
-    assert args[5] == {"posSide": "long"}, f"expected posSide=long, got {args[5]}"
+    # spec 021 H1: tdMode now accompanies posSide so OKX uses the configured
+    # isolated/cross margin mode for the order — fixes spurious sCode=51008
+    # "Insufficient USDT margin" when isolated-mode leverage + default tdMode
+    # disagree.
+    assert args[5] == {"posSide": "long", "tdMode": "isolated"}, (
+        f"expected posSide+tdMode, got {args[5]}"
+    )
 
 
 @pytest.mark.asyncio
@@ -152,7 +158,7 @@ async def test_perp_close_passes_pos_side_short_for_existing_short():
         await ex.place_order(order)
 
     args, _ = mock_inst.create_order.call_args
-    assert args[5] == {"posSide": "short"}
+    assert args[5] == {"posSide": "short", "tdMode": "isolated"}
 
 
 @pytest.mark.asyncio
@@ -167,7 +173,9 @@ async def test_perp_open_with_no_existing_position_infers_pos_side_from_side():
         await ex.place_order(order)
 
     args, _ = mock_inst.create_order.call_args
-    assert args[5] == {"posSide": "long"}, "buy with no existing position → posSide=long"
+    assert args[5] == {"posSide": "long", "tdMode": "isolated"}, (
+        "buy with no existing position → posSide=long + tdMode=isolated"
+    )
 
 
 @pytest.mark.asyncio
