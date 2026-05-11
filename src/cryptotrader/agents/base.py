@@ -17,6 +17,10 @@ import structlog
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
+# Apply DeepSeek / GLM-4 thinking-mode reasoning_content round-trip patch before
+# any ChatOpenAI is constructed.  Importing this module is the only side effect.
+import cryptotrader.llm.reasoning_compat  # noqa: F401
+
 from cryptotrader.models import AgentAnalysis, DataSnapshot
 from cryptotrader.security import sanitize_input
 
