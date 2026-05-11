@@ -150,6 +150,16 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
             timeout_seconds,
         )
         mock = dict(_MOCK_ANALYSIS_RESULT)
+        # Emit the standard result-line even on degraded paths so downstream
+        # audits / dashboards see a consistent per-agent record per cycle.
+        logger.info(
+            "%s result: direction=%s confidence=%.2f mock=%s sufficiency=%s (degraded=timeout)",
+            agent_type,
+            mock.get("direction"),
+            float(mock.get("confidence", 0.0)),
+            True,
+            mock.get("data_sufficiency", "low"),
+        )
         await _publish_agent_done(event_bus, agent_type, mock, steered, state)
         return {"data": {"analyses": {agent_type: mock}}}
     except Exception:
@@ -159,6 +169,14 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
             exc_info=True,
         )
         mock = dict(_MOCK_ANALYSIS_RESULT)
+        logger.info(
+            "%s result: direction=%s confidence=%.2f mock=%s sufficiency=%s (degraded=exception)",
+            agent_type,
+            mock.get("direction"),
+            float(mock.get("confidence", 0.0)),
+            True,
+            mock.get("data_sufficiency", "low"),
+        )
         await _publish_agent_done(event_bus, agent_type, mock, steered, state)
         return {"data": {"analyses": {agent_type: mock}}}
 
