@@ -183,57 +183,95 @@ class TestComputeExtras:
         assert extras["avg_trade_pnl"] is None
 
     @pytest.mark.asyncio
-    async def test_total_return_from_inception_snapshot(self) -> None:
+    async def test_total_return_realized_plus_unrealized(self) -> None:
+        """total_return = sum(realized close-action pnl since inception) + sum(unrealized).
+
+        2026-05-11 redesign: ``total_return`` is *trading* P&L, not ``equity -
+        baseline``. The old formula counted USDT deposits as profit; the new
+        formula counts only closed-trade P&L plus current mark-to-market.
+        """
         base = datetime(2026, 1, 1, tzinfo=UTC)
-        snaps = [
-            {"timestamp": base.isoformat(), "total_value": 100_000.0},
-            {"timestamp": (base + timedelta(days=1)).isoformat(), "total_value": 105_000.0},
-            {"timestamp": (base + timedelta(days=2)).isoformat(), "total_value": 110_000.0},
-        ]
+        snaps = [{"timestamp": base.isoformat(), "total_value": 100_000.0}]
+        # 3 closed trades since inception: +500, -200, +300 → realized 600
+        commits = []
+        for pnl in (500.0, -200.0, 300.0):
+            c = MagicMock()
+            c.pnl = pnl
+            c.order = MagicMock()
+            c.timestamp = base + timedelta(days=1)
+            c.verdict = MagicMock()
+            c.verdict.action = "close"
+            commits.append(c)
+        # Current open position with $400 unrealized profit
+        raw_positions = {"BTC/USDT:USDT": {"unrealized_pnl": 400.0}}
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
             patch("cryptotrader.journal.store.JournalStore") as js_cls,
         ):
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
-            js_cls.return_value.log = AsyncMock(return_value=[])
-            extras = await _compute_extras(None, current_equity=110_000.0)
-        # 110k - 100k inception = +10k; +10% ROI
-        assert extras["total_return"] == pytest.approx(10_000.0)
-        assert extras["total_return_pct"] == pytest.approx(0.1)
+            js_cls.return_value.log = AsyncMock(return_value=commits)
+            extras = await _compute_extras(None, current_equity=110_000.0, raw_positions=raw_positions)
+        # realized 600 + unrealized 400 = 1000; pct = 1000 / baseline 100_000 = 0.01
+        assert extras["total_return"] == pytest.approx(1000.0)
+        assert extras["total_return_pct"] == pytest.approx(0.01)
 
     @pytest.mark.asyncio
-    async def test_total_return_uses_configured_initial_capital_when_set(self) -> None:
-        """When config.portfolio.initial_capital > 0, it overrides the
-        first-snapshot baseline. Lets the user pin a stable reference even if
-        snapshots predate the initial deposit."""
-        from unittest.mock import MagicMock
+    async def test_total_return_pct_uses_configured_initial_capital_baseline(self) -> None:
+        """When config.portfolio.initial_capital > 0, it overrides the first-snapshot
+        baseline as the denominator for ``total_return_pct`` (numerator stays
+        realized + unrealized — the new trading-P&L definition)."""
+        from unittest.mock import MagicMock as _MagicMock
 
         base = datetime(2026, 1, 1, tzinfo=UTC)
         snaps = [{"timestamp": base.isoformat(), "total_value": 50_000.0}]
-        cfg = MagicMock()
+        cfg = _MagicMock()
         cfg.portfolio.initial_capital = 100_000.0
+        # 1 closed trade since inception: +1000 realized
+        c = MagicMock()
+        c.pnl = 1000.0
+        c.order = MagicMock()
+        c.timestamp = base + timedelta(days=1)
+        c.verdict = MagicMock()
+        c.verdict.action = "close"
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
             patch("cryptotrader.journal.store.JournalStore") as js_cls,
             patch("cryptotrader.config.load_config", return_value=cfg),
         ):
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
-            js_cls.return_value.log = AsyncMock(return_value=[])
-            extras = await _compute_extras(None, current_equity=110_000.0)
-        # Configured 100K beats snapshot 50K
-        assert extras["total_return"] == pytest.approx(10_000.0)
-        assert extras["total_return_pct"] == pytest.approx(0.1)
+            js_cls.return_value.log = AsyncMock(return_value=[c])
+            extras = await _compute_extras(None, current_equity=110_000.0, raw_positions=None)
+        # realized 1000 + unrealized 0 = 1000; pct uses configured baseline 100K → 0.01
+        assert extras["total_return"] == pytest.approx(1000.0)
+        assert extras["total_return_pct"] == pytest.approx(0.01)
 
     @pytest.mark.asyncio
-    async def test_total_return_negative(self) -> None:
+    async def test_total_return_negative_when_realized_plus_unrealized_negative(self) -> None:
+        """Net loss case: realized losses + unrealized losses sum to negative
+        total_return. Matches '总收益' definition; previously this would have
+        been wrong if the user funded $0 → +$3500 deposit → showed +$3500 gain
+        even with negative trading P&L."""
         base = datetime(2026, 1, 1, tzinfo=UTC)
         snaps = [{"timestamp": base.isoformat(), "total_value": 100_000.0}]
+        # 2 close trades, both losses: -500, -200 → realized -700
+        commits = []
+        for pnl in (-500.0, -200.0):
+            c = MagicMock()
+            c.pnl = pnl
+            c.order = MagicMock()
+            c.timestamp = base + timedelta(days=1)
+            c.verdict = MagicMock()
+            c.verdict.action = "close"
+            commits.append(c)
+        # Current position underwater by -50
+        raw_positions = {"ETH/USDT:USDT": {"unrealized_pnl": -50.0}}
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
             patch("cryptotrader.journal.store.JournalStore") as js_cls,
         ):
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
-            js_cls.return_value.log = AsyncMock(return_value=[])
-            extras = await _compute_extras(None, current_equity=92_500.0)
-        assert extras["total_return"] == pytest.approx(-7_500.0)
-        assert extras["total_return_pct"] == pytest.approx(-0.075)
+            js_cls.return_value.log = AsyncMock(return_value=commits)
+            extras = await _compute_extras(None, current_equity=92_500.0, raw_positions=raw_positions)
+        # realized -700 + unrealized -50 = -750
+        assert extras["total_return"] == pytest.approx(-750.0)
+        assert extras["total_return_pct"] == pytest.approx(-0.0075)

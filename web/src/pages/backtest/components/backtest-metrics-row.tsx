@@ -62,7 +62,7 @@ export const BacktestMetricsRow = ({ metrics }: Props) => {
       />
       <MetricItem
         label={t('metrics.win_rate', { defaultValue: '胜率' })}
-        value={formatPercent(metrics.win_rate * 100, 1)}
+        value={formatPercent(metrics.win_rate, 1)}
       />
       <MetricItem
         label={t('metrics.trades', { defaultValue: '交易数' })}

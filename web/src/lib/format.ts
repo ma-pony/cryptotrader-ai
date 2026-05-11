@@ -68,13 +68,28 @@ export const formatNumber = (value: number, fractionDigits = 2): string => {
   }).format(value);
 };
 
+/**
+ * Format a fraction as a percentage string.
+ *
+ * Input is expected as a fraction (e.g. ``0.0354`` for 3.54%, ``-0.02`` for
+ * -2%). The function multiplies by 100 internally so all callers can pass the
+ * native API/backend values directly (which are stored as ratios). For raw
+ * percent values that have already been pre-scaled, divide by 100 at the
+ * caller before passing.
+ *
+ * Background: backend ``total_return_pct``, ``pnl_24h_pct``, ``win_rate``,
+ * ``drawdown``, ``max_drawdown_pct`` are all fractions. A previous version of
+ * this helper rendered fractions directly (``0.035 → "0.04%"``) instead of
+ * scaling them, causing every dashboard percentage to be off by 100x.
+ */
 export const formatPercent = (value: number, fractionDigits = 2): string => {
   if (!Number.isFinite(value)) return '—';
-  const sign = value > 0 ? '+' : '';
+  const scaled = value * 100;
+  const sign = scaled > 0 ? '+' : '';
   return `${sign}${numberFormatter({
     minimumFractionDigits: fractionDigits,
     maximumFractionDigits: fractionDigits,
-  }).format(value)}%`;
+  }).format(scaled)}%`;
 };
 
 export const pnlClass = (value: number): string => {

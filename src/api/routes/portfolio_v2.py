@@ -183,8 +183,8 @@ def _commit_pnl_stats(
     commits: list,
     cutoff_30d: datetime,
     inception_cutoff: datetime | None = None,
-) -> tuple[int, float | None, float, float | None]:
-    """Return (total_trades, win_rate, realized_pnl_30d, avg_trade_pnl).
+) -> tuple[int, float | None, float, float | None, float]:
+    """Return (total_trades, win_rate, realized_pnl_30d, avg_trade_pnl, realized_cumulative).
 
     Two filters applied so the trade-level metrics align with the snapshot-
     based ``total_return`` instead of double-counting (2026-05-07 design):
@@ -227,13 +227,20 @@ def _commit_pnl_stats(
             avg_trade_pnl = round(sum(float(c.pnl) for c in settled) / len(settled), 2)
 
     realized = 0.0
+    realized_cumulative = 0.0
     for c in eligible:
-        ts_dt = _coerce_timestamp(c.timestamp)
-        if ts_dt is None or ts_dt < cutoff_30d or c.pnl is None:
+        if c.pnl is None:
             continue
-        realized += float(c.pnl)
+        pnl_val = float(c.pnl)
+        # Inception-to-date trading PnL (used by total_return).
+        realized_cumulative += pnl_val
+        # 30d-window realized PnL (legacy field).
+        ts_dt = _coerce_timestamp(c.timestamp)
+        if ts_dt is None or ts_dt < cutoff_30d:
+            continue
+        realized += pnl_val
 
-    return total, win_rate, round(realized, 2), avg_trade_pnl
+    return total, win_rate, round(realized, 2), avg_trade_pnl, round(realized_cumulative, 2)
 
 
 def _inception_equity(snaps: list[dict]) -> float | None:
@@ -258,7 +265,11 @@ def _inception_timestamp(snaps: list[dict]) -> datetime | None:
     return _coerce_timestamp(earliest.get("timestamp"))
 
 
-async def _compute_extras(database_url: str | None, current_equity: float) -> dict[str, object]:
+async def _compute_extras(
+    database_url: str | None,
+    current_equity: float,
+    raw_positions: dict | None = None,
+) -> dict[str, object]:
     """Derive (sharpe_90d, win_rate, total_trades, realized_pnl_30d, total_return, total_return_pct).
 
     - **sharpe_90d**: mean/std of daily equity returns over last 90 days, annualised
@@ -270,13 +281,18 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
       unrealized snapshot, not a realized trade outcome.
     - **realized_pnl_30d**: sum of close-action realized ``pnl`` in the last
       30 days, also subject to the inception cutoff.
-    - **total_return / total_return_pct**: inception-to-date PnL. Baseline is
-      ``config.portfolio.initial_capital`` when set (>0), otherwise the earliest
-      portfolio snapshot. Both 0.0 when neither is available.
+    - **total_return / total_return_pct**: *trading* PnL since inception:
+      cumulative realized PnL (sum of all closed-trade ``pnl`` since the first
+      portfolio snapshot) plus current unrealized PnL (mark-to-market on open
+      positions). Pct denominator is the baseline (config.portfolio.initial_capital
+      when set, otherwise inception equity).
 
-    The "inception cutoff" applied to commit stats matches the snapshot baseline
-    used for ``total_return`` so both metrics measure the same time window. See
-    the 2026-05-07 design note for the paradox this resolves.
+    *Why not ``equity - baseline``?* The earlier formula ``current_equity -
+    inception_equity`` silently included USDT deposits and withdrawals — a
+    $3,500 user top-up showed as $3,500 of "总收益". Trader-grade dashboards
+    measure trading P&L (closed + unrealized), independent of capital flows.
+    See 2026-05-11 deep-review for the paradox this resolves
+    ("17 trades each negative but total positive").
     """
     from cryptotrader.config import load_config
 
@@ -287,18 +303,26 @@ async def _compute_extras(database_url: str | None, current_equity: float) -> di
 
     commits = await _load_commits(database_url)
     inception_ts = _inception_timestamp(snaps)
-    total, win_rate, realized_30d, avg_trade_pnl = _commit_pnl_stats(
+    total, win_rate, realized_30d, avg_trade_pnl, realized_cumulative = _commit_pnl_stats(
         commits, now - timedelta(days=30), inception_cutoff=inception_ts
     )
 
-    # Baseline preference: explicit config > first snapshot > none.
+    # Sum unrealized PnL across all current positions (mark-to-market).
+    total_unrealized = 0.0
+    for pos in (raw_positions or {}).values():
+        if not isinstance(pos, dict):
+            continue
+        total_unrealized += float(pos.get("unrealized_pnl", 0.0) or 0.0)
+
+    # Trading PnL (excludes deposits/withdrawals).
+    total_return = realized_cumulative + total_unrealized
+
+    # Pct denominator: baseline equity. Preference: explicit config > first snapshot.
     configured = float(cfg.portfolio.initial_capital or 0.0)
     baseline: float | None = configured if configured > 0 else _inception_equity(snaps)
     if baseline is not None and baseline > 0:
-        total_return = current_equity - baseline
-        total_return_pct = current_equity / baseline - 1.0
+        total_return_pct = total_return / baseline
     else:
-        total_return = 0.0
         total_return_pct = 0.0
 
     return {
@@ -414,7 +438,11 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         logger.warning("Portfolio snapshot read failed: %s", exc)
         raise HTTPException(status_code=503, detail="Portfolio data unavailable") from exc
 
-    extras = await _compute_extras(config.infrastructure.database_url, current_equity=equity)
+    extras = await _compute_extras(
+        config.infrastructure.database_url,
+        current_equity=equity,
+        raw_positions=raw_positions,
+    )
 
     return PortfolioSnapshotOut(
         equity=equity,
