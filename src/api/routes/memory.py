@@ -424,6 +424,11 @@ async def get_memory_cases(
 
         if cases_dir.exists():
             for path in sorted(cases_dir.glob("*.md")):
+                # Skip README and other non-case markdown so the cases endpoint
+                # doesn't spam "_load_case_from_path failed" warnings on every
+                # poll (dashboard hits this every 30s).
+                if path.name == "README.md" or path.name.startswith("."):
+                    continue
                 case = _load_case_from_path(path)
                 if case is None:
                     continue
