@@ -28,6 +28,15 @@ export const PositionSchema = z.object({
   opened_at: z.string().nullable().optional(),
 });
 
+export const PnlBreakdownSchema = z.object({
+  window: z.string(), // "24h" | "7d" | "30d"
+  delta: z.number(),
+  realized: z.number(),
+  non_realized: z.number(),
+  external_flow_hint: z.number().default(0),
+});
+export type PnlBreakdown = z.infer<typeof PnlBreakdownSchema>;
+
 export const PortfolioSchema = z.object({
   equity: z.number(),
   cash: z.number(),
@@ -46,6 +55,8 @@ export const PortfolioSchema = z.object({
   total_return_pct: z.number().default(0),
   // Mean realized PnL per filled trade. Null until at least one trade has settled.
   avg_trade_pnl: z.number().nullable().optional(),
+  // spec 021: PnL attribution breakdown per window (24h / 7d / 30d).
+  pnl_breakdowns: z.array(PnlBreakdownSchema).default([]),
 });
 
 export const EquityPointSchema = z.object({

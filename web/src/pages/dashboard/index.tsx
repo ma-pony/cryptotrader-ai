@@ -8,6 +8,7 @@ import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 import { ActivityFeed } from './components/activity-feed';
 import { EquityChartSection } from './components/equity-chart-section';
 import { MetricCardsRow } from './components/metric-cards-row';
+import { PnlAttributionCard } from './components/pnl-attribution-card';
 import { PositionsTable } from './components/positions-table';
 import { SchedulerCard } from './components/scheduler-card';
 
@@ -21,6 +22,8 @@ const DashboardContent = () => {
       <PageHeader title={t('title', { defaultValue: '总览' })} />
 
       <MetricCardsRow data={portfolio.data} isLoading={portfolio.isLoading} connectionStatus={portfolio.connectionStatus} />
+
+      <PnlAttributionCard data={portfolio.data} isLoading={portfolio.isLoading} />
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <div className="lg:col-span-2">

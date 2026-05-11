@@ -6,7 +6,7 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
@@ -57,6 +57,27 @@ class PositionOut(BaseModel):
     opened_at: str | None = None
 
 
+class PnlBreakdown(BaseModel):
+    """Decompose a window's equity change into realized vs everything-else.
+
+    `realized` = sum of close-action commit PnL inside the window.
+    `non_realized` = total equity delta minus realized; absorbs all of:
+        - unrealized PnL changes on open positions (mark-to-market)
+        - funding payments (perp positions, accrued 3×/day)
+        - trading fees
+        - any deposits/withdrawals that hit `total_value`
+    `external_flow` is a coarse heuristic that flags days where `cash` itself
+    jumped by more than the daily realized PnL would explain, indicating a
+    likely deposit/withdrawal. Helps users separate "策略涨" from "充值涨".
+    """
+
+    window: str  # "24h" | "7d" | "30d"
+    delta: float
+    realized: float
+    non_realized: float
+    external_flow_hint: float  # > 0 = likely net deposit, < 0 = withdrawal
+
+
 class PortfolioSnapshotOut(BaseModel):
     equity: float
     cash: float
@@ -77,6 +98,8 @@ class PortfolioSnapshotOut(BaseModel):
     # Mean realized PnL per filled trade (commits with non-null pnl).
     # None when no settled trades exist yet.
     avg_trade_pnl: float | None = None
+    # 24h / 7d PnL attribution for the dashboard breakdown card.
+    pnl_breakdowns: list[PnlBreakdown] = []
 
 
 class EquityPointOut(BaseModel):
@@ -382,6 +405,87 @@ def _serialize_positions(raw_positions: dict) -> list[PositionOut]:
 # ── Routes ──
 
 
+async def _compute_pnl_breakdowns(
+    database_url: str | None, current_equity: float
+) -> list[PnlBreakdown]:
+    """Build 24h / 7d / 30d attribution buckets.
+
+    For each window: realized = sum of close-action commit pnl in-window;
+    non_realized = (current equity - equity at window start) - realized.
+    external_flow_hint flags windows where cash jumps don't match realized PnL
+    (likely deposits/withdrawals).
+
+    Heuristic, not exact — separating funding from unrealized swing requires
+    a `fetch_funding_history` round-trip that we skip on the hot path.
+    """
+    snaps = await _load_snapshots(database_url)
+    commits = await _load_commits(database_url)
+    now = datetime.now(UTC)
+    out: list[PnlBreakdown] = []
+
+    def _norm(t: Any) -> datetime | None:
+        if t is None:
+            return None
+        if isinstance(t, datetime):
+            return t if t.tzinfo else t.replace(tzinfo=UTC)
+        return None
+
+    for window, hours in (("24h", 24), ("7d", 24 * 7), ("30d", 24 * 30)):
+        cutoff = now - timedelta(hours=hours)
+        # Snapshot at the window's left edge (earliest snap with ts >= cutoff).
+        eq_start = None
+        cash_start = None
+        for s in snaps:
+            t = _norm(s.get("timestamp"))
+            if t and t >= cutoff:
+                eq_start = float(s.get("total_value", 0.0) or 0.0)
+                cash_start = float(s.get("cash", 0.0) or 0.0)
+                break
+        if eq_start is None:
+            continue
+
+        delta = current_equity - eq_start
+        # realized in window — commits use ``c.verdict.action`` + ``c.timestamp``
+        # (matching _commit_pnl_stats above; bare ``c.action`` does not exist).
+        realized = 0.0
+        for c in commits:
+            ts = _coerce_timestamp(getattr(c, "timestamp", None))
+            if not ts:
+                continue
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            if ts < cutoff:
+                continue
+            action = (getattr(getattr(c, "verdict", None), "action", "") or "").lower()
+            if action != "close":
+                continue
+            pnl_val = getattr(c, "pnl", None)
+            if pnl_val is None:
+                continue
+            realized += float(pnl_val)
+
+        non_realized = delta - realized
+
+        # External flow hint: large cash jump unexplained by realized PnL.
+        # Heuristic: |Δcash − realized| > $1000 in window suggests deposit.
+        latest_cash = float(snaps[-1].get("cash", 0.0) or 0.0) if snaps else 0.0
+        cash_delta = latest_cash - (cash_start or 0.0)
+        external_hint = 0.0
+        if abs(cash_delta - realized) > 1000:
+            external_hint = cash_delta - realized
+
+        out.append(
+            PnlBreakdown(
+                window=window,
+                delta=round(delta, 2),
+                realized=round(realized, 2),
+                non_realized=round(non_realized, 2),
+                external_flow_hint=round(external_hint, 2),
+            )
+        )
+    return out
+
+
 @router.get("/snapshot", response_model=PortfolioSnapshotOut)
 async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
     """Return current portfolio snapshot. Prefer live exchange over DB."""
@@ -443,6 +547,9 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         current_equity=equity,
         raw_positions=raw_positions,
     )
+    pnl_breakdowns = await _compute_pnl_breakdowns(
+        config.infrastructure.database_url, current_equity=equity
+    )
 
     return PortfolioSnapshotOut(
         equity=equity,
@@ -459,6 +566,7 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         total_return=float(cast("float", extras["total_return"])),
         total_return_pct=float(cast("float", extras["total_return_pct"])),
         avg_trade_pnl=cast("float | None", extras["avg_trade_pnl"]),
+        pnl_breakdowns=pnl_breakdowns,
     )
 
 
