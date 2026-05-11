@@ -402,6 +402,15 @@ class BaseAgent:
                 "open_interest": onchain.open_interest if onchain else 0,
                 "exchange_netflow": onchain.exchange_netflow if onchain else 0,
                 "liquidations_24h": onchain.liquidations_24h if onchain else {},
+                # spec 021 F1: full onchain payload so chain_agent has more
+                # than open_interest + exchange_netflow to reason on.
+                "whale_transfers": list(onchain.whale_transfers) if onchain else [],
+                "defi_tvl": onchain.defi_tvl if onchain else 0,
+                "defi_tvl_change_7d": onchain.defi_tvl_change_7d if onchain else 0,
+                "btc_active_addresses": onchain.btc_active_addresses if onchain else 0,
+                "btc_avg_fee_usd": onchain.btc_avg_fee_usd if onchain else 0,
+                "btc_tx_count": onchain.btc_tx_count if onchain else 0,
+                "data_quality": dict(onchain.data_quality) if onchain else {},
             },
             "news": {
                 "headlines": list(news.headlines) if news else [],

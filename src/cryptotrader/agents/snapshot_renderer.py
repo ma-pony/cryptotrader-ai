@@ -99,6 +99,76 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
     if open_interest and float(open_interest) > 0:
         parts.append(f"Open interest: {float(open_interest):,.0f}")
 
+    # ── On-chain context (spec 021 F1) ───────────────────────────────────────
+    # Render full onchain payload so chain_agent has signals beyond just
+    # open_interest + exchange_netflow. Previously these Binance-public
+    # derivative ratios were fetched every cycle but never made it into
+    # the prompt, leaving chain_agent permanently at sufficiency=low.
+    onchain_raw = snapshot.get("onchain", {})
+    if isinstance(onchain_raw, dict):
+        onchain_lines: list[str] = []
+        liq_dict = onchain_raw.get("liquidations_24h", {}) or {}
+        ls = float(liq_dict.get("long_short_ratio", 0) or 0)
+        top_t = float(liq_dict.get("top_trader_ratio", 0) or 0)
+        taker = float(liq_dict.get("taker_buy_sell_ratio", 0) or 0)
+        if ls > 0:
+            tag = " (crowded long)" if ls > 1.5 else " (crowded short)" if ls < 0.7 else ""
+            onchain_lines.append(f"Long/short account ratio: {ls:.2f}{tag}")
+        if top_t > 0:
+            tag = (
+                " (top traders net long)"
+                if top_t > 1.5
+                else " (top traders net short)"
+                if top_t < 0.7
+                else ""
+            )
+            onchain_lines.append(f"Top trader L/S ratio: {top_t:.2f}{tag}")
+        if taker > 0:
+            tag = (
+                " (aggressive buying)"
+                if taker > 1.1
+                else " (aggressive selling)"
+                if taker < 0.9
+                else ""
+            )
+            onchain_lines.append(f"Taker buy/sell ratio: {taker:.2f}{tag}")
+
+        liq_long = float(liq_dict.get("long_24h", 0) or 0)
+        liq_short = float(liq_dict.get("short_24h", 0) or 0)
+        if liq_long + liq_short > 0:
+            bigger = "long" if liq_long > liq_short else "short"
+            onchain_lines.append(
+                f"24h liquidations: long ${liq_long/1e6:.1f}M, short ${liq_short/1e6:.1f}M ({bigger}-heavy)"
+            )
+
+        whales = onchain_raw.get("whale_transfers", []) or []
+        if whales:
+            onchain_lines.append(f"Whale transfers (≥$500k, 24h): {len(whales)} events")
+
+        defi_tvl = float(onchain_raw.get("defi_tvl", 0) or 0)
+        defi_chg = float(onchain_raw.get("defi_tvl_change_7d", 0) or 0)
+        if defi_tvl > 0:
+            chg_tag = f" ({defi_chg:+.1%} 7d)" if abs(defi_chg) > 0.001 else ""
+            onchain_lines.append(f"DeFi TVL: ${defi_tvl/1e9:.2f}B{chg_tag}")
+
+        btc_addr = float(onchain_raw.get("btc_active_addresses", 0) or 0)
+        btc_fee = float(onchain_raw.get("btc_avg_fee_usd", 0) or 0)
+        bits = []
+        if btc_addr > 0:
+            bits.append(f"active addrs {btc_addr:,.0f}")
+        # Reject implausible fee values — the local store field is named
+        # `btc_avg_fee_usd` but historical data has values in satoshis (200k+),
+        # not USD. A real BTC avg fee in USD is ~$0.50-$100. Anything outside
+        # that range is a unit mismatch and would mislead the LLM ("avg fee
+        # $213k!?"), so suppress rather than render bad data.
+        if 0 < btc_fee < 1000:
+            bits.append(f"avg fee ${btc_fee:.2f}")
+        if bits:
+            onchain_lines.append("BTC network: " + ", ".join(bits))
+
+        if onchain_lines:
+            parts.append("On-chain context:\n  " + "\n  ".join(onchain_lines))
+
     # News headlines — apply sanitize_input() to each external headline
     # (spec 015 req 7.5: prompt injection defence).
     headlines = snapshot.get("headlines", [])
