@@ -396,8 +396,13 @@ async def trace_middleware(request: Request, call_next):
     raw_ip = request.client.host if request.client else "unknown"
     client_ip = _mask_client_ip(raw_ip)
 
-    # Rate limit (skip health/metrics for probes)
-    if request.url.path not in ("/health", "/metrics") and not await _check_rate_limit(raw_ip):
+    # Rate limit (skip health/metrics for probes; also skip when AUTH_MODE
+    # is disabled — i.e. trusted local dev: the dashboard fires 10+ memory
+    # endpoints on page load + 30s polling that quickly drains the 60 rpm
+    # bucket and shows persistent "加载中…" spinners).
+    auth_mode = os.environ.get("AUTH_MODE", "enabled").lower()
+    skip_rl = auth_mode == "disabled" or request.url.path in ("/health", "/metrics")
+    if not skip_rl and not await _check_rate_limit(raw_ip):
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
     trace_id = set_trace_id(request.headers.get("X-Trace-ID"))

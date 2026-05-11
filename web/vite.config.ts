@@ -35,6 +35,37 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
+    // Limit fs watcher scope. The project root contains a large Python tree
+    // (`src/`, `agent_memory/`, `.venv/`, `tests/`, log files in `/tmp`) that
+    // produces tens of thousands of fsevents per minute, occasionally
+    // overflowing macOS's kqueue/fsevents buffer and freezing Vite's module
+    // graph mid-transform — surfacing as recurring "Failed to resolve import
+    // @/stores/use-xxx-store" errors on otherwise healthy files. Restricting
+    // chokidar to the web subtree eliminates that pressure.
+    watch: {
+      ignored: [
+        '**/node_modules/**',
+        '**/.git/**',
+        '**/dist/**',
+        '**/coverage/**',
+        // Everything outside web/ — Python source, venv, agent memory, logs.
+        path.resolve(__dirname, '..', 'src') + '/**',
+        path.resolve(__dirname, '..', 'tests') + '/**',
+        path.resolve(__dirname, '..', '.venv') + '/**',
+        path.resolve(__dirname, '..', 'agent_memory') + '/**',
+        path.resolve(__dirname, '..', 'agent_skills') + '/**',
+        path.resolve(__dirname, '..', 'specs') + '/**',
+        path.resolve(__dirname, '..', 'brainstorm') + '/**',
+        path.resolve(__dirname, '..', '.specify') + '/**',
+        path.resolve(__dirname, '..', '.claude') + '/**',
+      ],
+      usePolling: false,
+    },
+    fs: {
+      // Confine module resolution to the web subtree so a stray import that
+      // escapes via `@/` won't crawl the entire monorepo.
+      allow: [path.resolve(__dirname)],
+    },
   },
   build: {
     target: 'es2022',
