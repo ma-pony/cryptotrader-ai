@@ -207,14 +207,32 @@ class LiveExchange:
 
         # Precision
         market = self._exchange.markets.get(order.pair, {})
-        amount = self._exchange.amount_to_precision(order.pair, order.amount) if market else order.amount
+        # spec 021 H1 真因: OKX swap orders quote `amount` as COUNT OF
+        # CONTRACTS, not base-currency units. contractSize varies per pair:
+        #   DOGE=1000, ETH=0.1, BTC=0.01, LINK/SOL=1.
+        # Sending 60418 DOGE base units gets interpreted as 60418 contracts
+        # × 1000 ctVal = 60M DOGE notional → sCode=51008 "Insufficient
+        # USDT margin" even with healthy cash balance. Convert base→contracts
+        # before handing to ccxt; spot keeps base-unit semantics.
+        contract_size = 1.0
+        if pair.market_type != "spot":
+            cs = market.get("contractSize")
+            if cs is not None:
+                try:
+                    cs_f = float(cs)
+                    if cs_f > 0:
+                        contract_size = cs_f
+                except (TypeError, ValueError):
+                    contract_size = 1.0
+        raw_amount = order.amount / contract_size if contract_size != 1.0 else order.amount
+        amount = self._exchange.amount_to_precision(order.pair, raw_amount) if market else raw_amount
         price = (
             self._exchange.price_to_precision(order.pair, order.price)
             if market and order.order_type == "limit"
             else order.price
         )
 
-        # Min order size check
+        # Min order size check (units match contracts for swap, base for spot)
         min_amount = market.get("limits", {}).get("amount", {}).get("min", 0)
         if min_amount and float(amount) < min_amount:
             raise ValueError(f"Order amount {amount} below minimum {min_amount}")
@@ -519,8 +537,24 @@ class LiveExchange:
                 symbol = p.get("symbol", "")
                 if not symbol:
                     continue
+                # spec 021 H1: keep internal "amount" in base-currency units
+                # so it composes with `target_amount = notional / price` in
+                # nodes/execution. ccxt exposes contractSize per market;
+                # multiply contracts → base units. Spot markets have no
+                # contractSize and the field stays 1.0 by convention.
+                market = (self._exchange.markets or {}).get(symbol, {}) or {}
+                cs_raw = market.get("contractSize")
+                contract_size = 1.0
+                if cs_raw is not None:
+                    try:
+                        cs_f = float(cs_raw)
+                        if cs_f > 0:
+                            contract_size = cs_f
+                    except (TypeError, ValueError):
+                        contract_size = 1.0
+                base_amount = contracts * contract_size
                 side = p.get("side", "long")
-                amount = contracts if side == "long" else -contracts
+                amount = base_amount if side == "long" else -base_amount
                 positions[symbol] = {
                     "amount": amount,
                     "side": side,
