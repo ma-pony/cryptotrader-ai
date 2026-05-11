@@ -55,7 +55,7 @@
 
 ## Phase 6: Polish & E2E
 
-- [ ] T016 [P] 创建 `tests/test_e2e_pattern_cold_start.py`：端到端 fixture 200+ cases → 跑 daemon `pattern_extraction` action → ≥ 3 patterns 创建 → API `/api/memory/rules` 返回 total > 0
+- [x] T016 [P] 创建 `tests/test_e2e_pattern_cold_start.py`：端到端 fixture 200+ cases → 跑 daemon `pattern_extraction` action → ≥ 3 patterns 创建 → API `/api/memory/rules` 返回 total > 0
 - [ ] T017 跑 `uv run python -m pytest tests/ --no-cov 2>&1 | tail -3` 验证 ≥ 2458 passed / 0 failed（SC-P7）
 - [ ] T018 跑 `uv run ruff check src/cryptotrader/learning/memory.py src/cryptotrader/ops/daemon.py src/cryptotrader/config.py src/cli/main.py tests/test_distill_patterns_cold_start.py tests/test_pattern_slug_generation.py tests/test_daemon_pattern_extraction.py tests/test_cli_experience_distill.py tests/test_e2e_pattern_cold_start.py` clean
 - [ ] T019 跑 SC-P1：`uv run arena experience distill --memory-dir agent_memory --cycles-window 200` exit 0 + ≥ 1 patterns created
