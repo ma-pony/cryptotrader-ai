@@ -572,6 +572,13 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
     try:
         exchange, _ = await _get_exchange(state, pair)
         balances = await exchange.get_balance()
+        # spec 021 D1: also pull `free` balance so risk-gate margin check can
+        # reject before sending the order to OKX (avoids sCode=51008 reject).
+        free_balances: dict = {}
+        try:
+            free_balances = await exchange.get_free_balance()
+        except (AttributeError, Exception):  # noqa: BLE001 — paper exchange / older adapter
+            free_balances = balances
 
         # Get positions with avg_price and unrealized PnL
         current_prices = {pair: current_price} if current_price else {}
@@ -587,6 +594,7 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
         return None
 
     cash = balances.get("USDT", 0.0)
+    free_cash = free_balances.get("USDT", cash)
 
     # Spec ledger 2026-05-01: ccxt's fetchPositions only returns derivatives.
     # Spot non-USDT balances (e.g. ETH from a spot market buy) were silently
@@ -621,6 +629,7 @@ async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | No
 
     return {
         "cash": cash,
+        "free_cash": free_cash,  # spec 021 D1: drives margin pre-check
         "positions": positions,
         "total_value": cash + total_pos_value,
     }

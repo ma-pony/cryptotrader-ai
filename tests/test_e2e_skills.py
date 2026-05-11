@@ -22,8 +22,8 @@ async def test_risk_gate_with_token_security():
 
     gate = RiskGate(config, redis_state)
 
-    # Verify 13 checks (12 + macro_concentration added 2026-05-07)
-    assert len(gate._checks) == 13
+    # Verify 14 checks (13 + available_margin added 2026-05-11 / spec 021 D1)
+    assert len(gate._checks) == 14
 
     # Verify token security and macro concentration checks are present
     check_names = [c.name for c in gate._checks]

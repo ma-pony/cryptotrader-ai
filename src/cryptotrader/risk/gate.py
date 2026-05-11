@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from cryptotrader.models import GateResult, TradeVerdict
+from cryptotrader.risk.checks.available_margin import AvailableMargin
 from cryptotrader.risk.checks.concentration import MacroConcentrationCheck
 from cryptotrader.risk.checks.cooldown import CooldownCheck
 from cryptotrader.risk.checks.correlation import CorrelationCheck
@@ -37,6 +38,10 @@ class RiskGate:
         self._checks = [
             MaxPositionSize(config.position),
             MaxTotalExposure(config.position, leverage=leverage),
+            # spec 021 D1: OKX sCode=51008 prevention — verify free USDT
+            # margin BEFORE submitting order. Runs after MaxTotalExposure
+            # so it sees any scale clamp that may already have happened.
+            AvailableMargin(config.position, leverage=leverage),
             DailyLossLimit(config.loss, redis_state, post_loss_minutes=config.cooldown.post_loss_minutes),
             DrawdownLimit(config.loss, redis_state),
             CVaRCheck(config.loss),

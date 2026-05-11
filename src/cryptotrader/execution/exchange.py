@@ -467,6 +467,18 @@ class LiveExchange:
         bal = await self._retry(self._exchange.fetch_balance)
         return {k: float(v) for k, v in bal.get("total", {}).items() if float(v) > 0}
 
+    async def get_free_balance(self) -> dict[str, float]:
+        """Return *free* (unlocked, openable) balance per asset.
+
+        ``get_balance`` returns ``total`` which includes margin locked by open
+        positions — using it for pre-trade margin sizing causes false "have
+        enough" decisions that OKX then rejects with ``sCode=51008
+        Insufficient USDT margin`` once the order hits the matching engine
+        (observed 2026-05-11 DOGE short rejection).
+        """
+        bal = await self._retry(self._exchange.fetch_balance)
+        return {k: float(v) for k, v in bal.get("free", {}).items() if float(v) > 0}
+
     async def fetch_ticker(self, symbol: str) -> dict[str, Any]:
         """Live market ticker. Used by portfolio sync to price non-traded
         balances when no historical cost basis exists (avoids inheriting the
