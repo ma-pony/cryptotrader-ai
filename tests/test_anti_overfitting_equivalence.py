@@ -75,7 +75,7 @@ class TestL2MinSampleThreshold:
     def test_too_few_samples_stays_observed(self, tmp_path):
         """样本数 < 5 时不晋升（保持 observed）。"""
         from cryptotrader.agents.skills.schema import PatternRecord, PnLTrack
-        from cryptotrader.learning.memory import _advance_maturity
+        from cryptotrader.learning.evolution.fsm import evaluate_transitions
 
         pattern = PatternRecord(
             name="test",
@@ -85,14 +85,14 @@ class TestL2MinSampleThreshold:
             pnl_track=PnLTrack(cases=3, wins=3, win_rate=1.0, avg_pnl=100.0),
             maturity="observed",
         )
-        new_maturity = _advance_maturity(pattern)
+        result = evaluate_transitions(pattern)
         # 3 cases < 5 minimum → 不晋升
-        assert new_maturity == "observed", f"样本不足时应保持 observed，实际: {new_maturity}"
+        assert result is None, f"样本不足时应保持 observed (no transition)，实际: {result}"
 
     def test_sufficient_samples_can_advance(self, tmp_path):
         """样本数 ≥ 5，win_rate 合格时可晋升。"""
         from cryptotrader.agents.skills.schema import PatternRecord, PnLTrack
-        from cryptotrader.learning.memory import _advance_maturity
+        from cryptotrader.learning.evolution.fsm import evaluate_transitions
 
         pattern = PatternRecord(
             name="test",
@@ -102,8 +102,9 @@ class TestL2MinSampleThreshold:
             pnl_track=PnLTrack(cases=6, wins=5, win_rate=0.83, avg_pnl=100.0),
             maturity="observed",
         )
-        new_maturity = _advance_maturity(pattern)
-        assert new_maturity in ("probationary", "active"), f"应晋升，实际: {new_maturity}"
+        result = evaluate_transitions(pattern)
+        assert result is not None, "应晋升，实际无转移"
+        assert result.maturity == "probationary", f"应到 probationary，实际: {result.maturity}"
 
 
 class TestL3GlobalVsSegment:

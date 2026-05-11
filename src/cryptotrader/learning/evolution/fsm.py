@@ -1,12 +1,20 @@
-"""spec 018 — 5-signal Maturity FSM.
+"""spec 018 / 021 — 唯一 Maturity FSM（合并旧 win_rate 路径 + 5 信号路径）。
 
-FR-Z11: evaluate_transitions(rule: PatternRecord) -> PatternRecord | None
 State transitions:
-  observed -> probationary  : pnl_track.successes >= 3
-  probationary -> active    : (now - last_modified_at) >= 3 days AND frontmatter filled AND body <= 300 lines
-  active -> archived        : fundamental_failure_streak >= 3
-  active -> probationary    : manually_edited == True (reflect modified in active state)
-  deprecated / archived     : terminal states, no transition
+  observed     -> probationary  : cases >= 5 AND win_rate >= 0.60                       (signal 1: PnL gate)
+  probationary -> active        : (now - last_modified_at) >= 3 days                    (signal 2: time gate)
+                                  AND frontmatter filled AND body <= 300 lines          (signal 3: quality gate)
+                                  AND cases >= 15 AND win_rate >= 0.65                  (signal 4: PnL gate)
+  active       -> archived      : fundamental_failure_streak >= 3                       (signal 5a: IVE failure)
+                                  OR (cases >= 10 AND win_rate < 0.40)                  (signal 5b: PnL collapse)
+  active       -> probationary  : manually_edited == True                               (signal 6: human edit reset)
+  deprecated / archived         : terminal states, no transition
+
+设计原则（spec 021）：
+- 唯一的 FSM 入口在此文件，删除 memory.py:_advance_maturity；
+- 同时使用「绝对 win 数 + win_rate 门槛」（避免 3 wins / 100 losses 也升 active）；
+- 同时使用「IVE fundamental 失败连续 3 次」+「win_rate 坍塌」双归档路径；
+- 取消 `deprecated` 中间态，性能坍塌直接 `archived`。
 """
 
 from __future__ import annotations
@@ -21,12 +29,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Threshold constants (D-EV-03)
-_OBSERVED_PROMO_SUCCESSES = 3  # signal 1: PnL success count
-_PROBATIONARY_PROMO_DAYS = 3  # signal 2+3: time since last modification (3 days ≈ 5 cycle proxy)
-_ARCHIVED_FUNDAMENTAL_STREAK = 3  # signal 5: consecutive fundamental failures
+# ── PnL 门槛 ──
+_OBSERVED_MIN_CASES = 5
+_OBSERVED_MIN_WIN_RATE = 0.60
+_PROBATIONARY_MIN_CASES = 15
+_PROBATIONARY_MIN_WIN_RATE = 0.65
+_ARCHIVED_MIN_CASES = 10
+_ARCHIVED_MAX_WIN_RATE = 0.40  # 低于此 + cases ≥ 10 视为 PnL 坍塌
 
-# Required frontmatter fields to consider "fully filled" (signal 3)
+# ── 时间 / 质量门槛 ──
+_PROBATIONARY_PROMO_DAYS = 3
+_ARCHIVED_FUNDAMENTAL_STREAK = 3
 _REQUIRED_FIELDS = ("name", "agent", "description", "maturity", "version")
 _MAX_BODY_LINES = 300
 
@@ -39,7 +52,7 @@ class Transition:
     agent_id: str
     old_state: str
     new_state: str
-    triggered_by: str  # pnl_threshold / time_elapsed / fundamental_streak / reflect_modified
+    triggered_by: str
     timestamp: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -61,10 +74,17 @@ def _time_since_modified(rule: PatternRecord) -> timedelta:
     """Calculate elapsed time since last_modified_at."""
     now = datetime.now(UTC)
     last_mod = rule.last_modified_at
-    # Ensure timezone-aware
     if last_mod.tzinfo is None:
         last_mod = last_mod.replace(tzinfo=UTC)
     return now - last_mod
+
+
+def _pnl_stats(rule: PatternRecord) -> tuple[int, float]:
+    """Return (cases, win_rate) tuple from PnLTrack, with 0/0 defaulting to (0, 0.0)."""
+    track = rule.pnl_track
+    cases = getattr(track, "cases", 0) or 0
+    win_rate = getattr(track, "win_rate", 0.0) or 0.0
+    return cases, float(win_rate)
 
 
 def evaluate_transitions(rule: PatternRecord) -> PatternRecord | None:
@@ -72,62 +92,77 @@ def evaluate_transitions(rule: PatternRecord) -> PatternRecord | None:
 
     Returns updated PatternRecord if state changed, or None if no transition.
     Does NOT persist changes — caller is responsible for writing back to file.
-
-    FR-Z11: 5-signal FSM.
-    FR-Z12: returns new PatternRecord or None.
     """
     from dataclasses import replace
 
     maturity = rule.maturity
 
-    # Terminal states: no further transitions
+    # Terminal states
     if maturity in ("deprecated", "archived"):
         return None
 
     now = datetime.now(UTC)
+    cases, win_rate = _pnl_stats(rule)
 
     if maturity == "observed":
-        # Signal 1: enough PnL successes
-        successes = rule.pnl_track.wins if hasattr(rule.pnl_track, "wins") else 0
-        if successes >= _OBSERVED_PROMO_SUCCESSES:
-            logger.debug("FSM: %s observed->probationary (successes=%d)", rule.name, successes)
-            return replace(
-                rule,
-                maturity="probationary",
-                last_modified_at=now,
+        if cases >= _OBSERVED_MIN_CASES and win_rate >= _OBSERVED_MIN_WIN_RATE:
+            logger.debug(
+                "FSM: %s observed->probationary (cases=%d, win_rate=%.2f)",
+                rule.name,
+                cases,
+                win_rate,
             )
+            return replace(rule, maturity="probationary", last_modified_at=now)
         return None
 
     if maturity == "probationary":
-        # Signal 2+3: time elapsed without reflect modification + quality checks
+        # 性能坍塌直接 archived（避免长期卡在 probationary 浪费 prompt 空间）
+        if cases >= _ARCHIVED_MIN_CASES and win_rate < _ARCHIVED_MAX_WIN_RATE:
+            logger.debug(
+                "FSM: %s probationary->archived (PnL collapse: cases=%d, win_rate=%.2f)",
+                rule.name,
+                cases,
+                win_rate,
+            )
+            return replace(rule, maturity="archived", last_modified_at=now)
+
         elapsed = _time_since_modified(rule)
         if (
             elapsed >= timedelta(days=_PROBATIONARY_PROMO_DAYS)
             and _frontmatter_filled(rule)
             and _body_within_limit(rule)
+            and cases >= _PROBATIONARY_MIN_CASES
+            and win_rate >= _PROBATIONARY_MIN_WIN_RATE
         ):
-            logger.debug("FSM: %s probationary->active (elapsed=%s)", rule.name, elapsed)
-            return replace(
-                rule,
-                maturity="active",
-                last_modified_at=now,
+            logger.debug(
+                "FSM: %s probationary->active (elapsed=%s, cases=%d, win_rate=%.2f)",
+                rule.name,
+                elapsed,
+                cases,
+                win_rate,
             )
+            return replace(rule, maturity="active", last_modified_at=now)
         return None
 
     if maturity == "active":
-        # Signal 5: fundamental failure streak triggers archival
+        # Path 1: IVE fundamental failure streak
         if rule.fundamental_failure_streak >= _ARCHIVED_FUNDAMENTAL_STREAK:
             logger.debug(
-                "FSM: %s active->archived (streak=%d)",
+                "FSM: %s active->archived (fundamental_streak=%d)",
                 rule.name,
                 rule.fundamental_failure_streak,
             )
-            return replace(
-                rule,
-                maturity="archived",
-                last_modified_at=now,
+            return replace(rule, maturity="archived", last_modified_at=now)
+        # Path 2: PnL collapse
+        if cases >= _ARCHIVED_MIN_CASES and win_rate < _ARCHIVED_MAX_WIN_RATE:
+            logger.debug(
+                "FSM: %s active->archived (PnL collapse: cases=%d, win_rate=%.2f)",
+                rule.name,
+                cases,
+                win_rate,
             )
-        # 撤销条件: reflect modified in active state -> demote to probationary
+            return replace(rule, maturity="archived", last_modified_at=now)
+        # Demote on human edit (re-validation needed)
         if rule.manually_edited:
             logger.debug("FSM: %s active->probationary (manually_edited)", rule.name)
             return replace(
@@ -150,9 +185,16 @@ def build_transition(
     if old_rule.maturity == "observed" and new_rule.maturity == "probationary":
         triggered_by = "pnl_threshold"
     elif old_rule.maturity == "probationary" and new_rule.maturity == "active":
-        triggered_by = "time_elapsed"
+        triggered_by = "time_elapsed_and_pnl"
+    elif old_rule.maturity == "probationary" and new_rule.maturity == "archived":
+        triggered_by = "pnl_collapse"
     elif old_rule.maturity == "active" and new_rule.maturity == "archived":
-        triggered_by = "fundamental_streak"
+        # 调用方可通过 fundamental_failure_streak 区分子原因
+        triggered_by = (
+            "fundamental_streak"
+            if old_rule.fundamental_failure_streak >= _ARCHIVED_FUNDAMENTAL_STREAK
+            else "pnl_collapse"
+        )
     elif old_rule.maturity == "active" and new_rule.maturity == "probationary":
         triggered_by = "reflect_modified"
     else:

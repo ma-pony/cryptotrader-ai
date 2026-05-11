@@ -99,12 +99,13 @@ async def test_evaluate_node_full_pipeline(tmp_path: Path):
     """SC-Z15(a): evaluate_node 调 FSM + IVE，返回 transitions + classifications。"""
     from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
-    _make_pattern_file(tmp_path, agent="tech", name="test_rule", maturity="observed", wins=3, cases=3)
+    # spec 021: 合并 FSM 要求 cases ≥ 5 + win_rate ≥ 0.60
+    _make_pattern_file(tmp_path, agent="tech", name="test_rule", maturity="observed", wins=4, cases=5)
     _make_case_file(tmp_path, cycle_id="cycle_e2e_001")
 
     provider = EvolvingMemoryProvider(memory_root=tmp_path)
 
-    # FSM: observed rule with 3 wins → should promote to probationary
+    # FSM: observed rule with cases≥5 + win_rate≥0.60 → should promote to probationary
     transitions = provider.evaluate_all_rules()
     assert isinstance(transitions, list)
     assert len(transitions) >= 1

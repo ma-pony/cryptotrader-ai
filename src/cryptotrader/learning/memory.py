@@ -3,9 +3,10 @@
 双层架构的核心数据层：
 - write_case(): 每 cycle 写入 agent_memory/cases/<cycle_id>.md（per-cycle 单文件）
 - update_final_pnl(): 平仓后回填 frontmatter final_pnl
-- distill_patterns(): 从 cases 蒸馏 patterns（4 层防过拟合）
+- distill_patterns(): 从 cases 蒸馏 patterns（4 层防过拟合 + FSM 转移）
 - update_pattern_pnl(): 解析 <agent>::<pattern> 更新 pnl_track
-- _advance_maturity(): maturity FSM
+
+FSM 唯一入口：`cryptotrader.learning.evolution.fsm.evaluate_transitions`（spec 021）。
 
 FR-006 / FR-007 / FR-008 / FR-009 / FR-010 / FR-011 / FR-012 / FR-013
 """
@@ -24,7 +25,7 @@ from cryptotrader.agents.skills._frontmatter import (
     render_frontmatter,
 )
 from cryptotrader.agents.skills._io import atomic_rename, atomic_write, ensure_memory_dirs
-from cryptotrader.agents.skills.schema import Maturity, PatternRecord, PnLTrack, ReflectionRun
+from cryptotrader.agents.skills.schema import PatternRecord, PnLTrack, ReflectionRun
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ def _set_otel_span_attrs(span: object, **attrs: object) -> None:
             span.set_attribute(key, val)  # type: ignore[union-attr]
 
 
-# L2: 最少样本量门槛
+# L2: 最少样本量门槛（防过拟合 helper 用，与 FSM 解耦）
 _MIN_SAMPLES_FOR_ADVANCEMENT = 5
 
 # L3: 区段 vs 全局最小差距
@@ -58,16 +59,6 @@ _DEFAULT_GLOBAL_VS_SEGMENT_DELTA = 0.15
 
 # L4: forbidden 最少反向样本量
 _MIN_ADVERSE_CASES = 2
-
-# maturity FSM 晋升阈值
-_MATURITY_ADVANCE_THRESHOLDS: dict[str, tuple[int, float]] = {
-    # maturity → (min_cases, min_win_rate) to advance
-    "observed": (_MIN_SAMPLES_FOR_ADVANCEMENT, 0.60),
-    "probationary": (15, 0.65),
-    "active": (30, 0.70),  # 触发 deprecated 时 win_rate < 0.40
-}
-
-_MATURITY_DEPRECATE_WIN_RATE = 0.40  # active 状态 win_rate 低于此 → deprecated
 
 
 # ── 辅助：读写 case 文件 ──
@@ -335,46 +326,6 @@ def update_pattern_pnl(
                 logger.warning("update_pattern_pnl: save failed for %s/%s", agent, name, exc_info=True)
 
 
-# ── Maturity FSM ──
-
-
-def _advance_maturity(pattern: PatternRecord) -> Maturity:
-    """计算 pattern 的新 maturity（FSM 转移）。
-
-    FR-011: observed → probationary → active → deprecated
-    """
-    current = pattern.maturity
-    track = pattern.pnl_track
-    cases = track.cases
-    win_rate = track.win_rate
-
-    if current == "deprecated":
-        return "deprecated"
-
-    if current == "active":
-        if win_rate < _MATURITY_DEPRECATE_WIN_RATE and cases >= 10:
-            return "deprecated"
-        return "active"
-
-    # observed → probationary
-    if current == "observed":
-        min_cases, min_win_rate = _MATURITY_ADVANCE_THRESHOLDS["observed"]
-        if cases >= min_cases and win_rate >= min_win_rate:
-            return "probationary"
-        return "observed"
-
-    # probationary → active
-    if current == "probationary":
-        min_cases, min_win_rate = _MATURITY_ADVANCE_THRESHOLDS["probationary"]
-        if cases >= min_cases and win_rate >= min_win_rate:
-            return "active"
-        if win_rate < _MATURITY_DEPRECATE_WIN_RATE and cases >= 5:
-            return "deprecated"
-        return "probationary"
-
-    return current  # type: ignore[return-value]
-
-
 # ── 4-Layer Anti-Overfitting Functions ──
 
 
@@ -545,7 +496,10 @@ def distill_patterns(
                 cases_processed=run.cases_processed,
             )
 
-        # 对每个 agent，更新已有 patterns 的 maturity
+        # 对每个 agent，跑唯一 FSM（spec 021：删除旧 _advance_maturity，统一调用
+        # evolution.fsm.evaluate_transitions）。
+        from cryptotrader.learning.evolution.fsm import evaluate_transitions
+
         for agent in VALID_AGENT_IDS:
             patterns_dir = mem / agent / "patterns"
             if not patterns_dir.exists():
@@ -556,20 +510,25 @@ def distill_patterns(
                 pattern = _load_pattern(pattern_file)
                 if pattern is None:
                     continue
-                new_maturity = _advance_maturity(pattern)
-                if new_maturity == "deprecated" and pattern.maturity != "deprecated":
-                    # 移到 archive
+                new_rule = evaluate_transitions(pattern)
+                if new_rule is None:
+                    continue  # 无转移
+                if new_rule.maturity == "archived":
                     arch = _archive_path(agent, pattern.name, mem)
                     try:
                         atomic_rename(pattern_file, arch)
                         run.patterns_archived += 1
-                        logger.info("Pattern archived (deprecated): %s/%s", agent, pattern.name)
+                        logger.info(
+                            "Pattern archived: %s/%s (from %s)",
+                            agent,
+                            pattern.name,
+                            pattern.maturity,
+                        )
                     except Exception:
                         logger.warning("Failed to archive pattern: %s", pattern_file, exc_info=True)
-                elif new_maturity != pattern.maturity:
-                    pattern.maturity = new_maturity
+                else:
                     try:
-                        _save_pattern(pattern, pattern_file)
+                        _save_pattern(new_rule, pattern_file)
                         run.patterns_updated += 1
                     except Exception:
                         logger.warning("Failed to update maturity: %s", pattern_file, exc_info=True)

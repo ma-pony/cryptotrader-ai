@@ -99,16 +99,18 @@ class TestDistillPatterns:
         assert pnl_track.get("cases", 0) == 6, "cases 应增加 1"
 
     def test_maturity_fsm_observed_to_probationary(self, tmp_path):
-        """maturity FSM: observed → probationary（样本数达 5 时晋升）（FR-011）。"""
-        from cryptotrader.learning.memory import _advance_maturity, _load_pattern
+        """maturity FSM: observed → probationary（cases≥5 + win_rate≥0.60 时晋升）（FR-011）。"""
+        from cryptotrader.learning.evolution.fsm import evaluate_transitions
+        from cryptotrader.learning.memory import _load_pattern
 
         mem_dir = _make_tmp_memory(tmp_path)
         pattern_file = mem_dir / "tech" / "patterns" / "test_fsm.md"
         _write_initial_pattern(pattern_file, "test_fsm", "tech", cases=5, wins=4, maturity="observed")
 
         pattern = _load_pattern(pattern_file)
-        new_maturity = _advance_maturity(pattern)
-        assert new_maturity in ("probationary", "active"), f"应晋升，实际: {new_maturity}"
+        result = evaluate_transitions(pattern)
+        assert result is not None, "应晋升，实际无转移"
+        assert result.maturity == "probationary", f"应到 probationary，实际: {result.maturity}"
 
     def test_reflection_failure_does_not_block_cycle(self, tmp_path):
         """reflection 失败（内部异常）不应抛出异常阻塞 cycle（FR-012）。"""

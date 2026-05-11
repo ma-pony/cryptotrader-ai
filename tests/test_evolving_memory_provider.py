@@ -229,8 +229,8 @@ def test_provider_implements_memory_provider_protocol(tmp_path: Path):
 
 def test_evaluate_all_rules_returns_transitions(tmp_path: Path):
     """T026 extra: evaluate_all_rules returns transitions for state changes."""
-    # Create observed rule with enough wins to promote to probationary
-    _make_pattern_file(tmp_path, name="promo_rule", maturity="observed", wins=3, cases=3)
+    # spec 021: 合并 FSM 要求 cases ≥ 5 + win_rate ≥ 0.60
+    _make_pattern_file(tmp_path, name="promo_rule", maturity="observed", wins=4, cases=5)
 
     provider = EvolvingMemoryProvider(memory_root=tmp_path)
     transitions = provider.evaluate_all_rules()
