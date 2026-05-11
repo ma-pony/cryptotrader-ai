@@ -10,10 +10,7 @@
 
 from pathlib import Path
 
-import pytest
-
 from cryptotrader.learning.memory import distill_patterns
-
 
 # ── helpers ──
 
@@ -126,14 +123,7 @@ def test_regime_tags_top3_voting(tmp_path):
     """不同 regime_tags 出现频次不同时，top-3 按频次降序、并列字母序选择。"""
     cases_dir = tmp_path / "cases"
     cases_dir.mkdir(parents=True, exist_ok=True)
-    # bull: 5次, bear: 3次, sideways: 2次, volatile: 1次
-    tag_scenarios = [
-        (["bull"] * 3),    # cycle 0-2: bull only (3 cases)
-        (["bull", "bear"]),  # cycle 3: bull+bear
-        (["bull", "bear"]),  # cycle 4: bull+bear → bull=5, bear=2 so far
-        (["bear"]),          # cycle 5: bear=3
-        (["sideways"]) * 2, # skip — just use 2 separate
-    ]
+    # bull: 4次, bear: 2次, sideways: 2次 — bull 最高，bear/sideways 并列字母序
     tags_per_case = [
         ["bull"],
         ["bull"],

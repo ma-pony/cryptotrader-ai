@@ -33,7 +33,8 @@ async def test_action_pattern_extraction_pass():
     mock_run.patterns_archived = 0
     mock_run.cases_processed = 50
 
-    with patch("cryptotrader.ops.daemon.EvolutionDaemon._action_pattern_extraction", new_callable=AsyncMock) as mock_action:
+    patch_target = "cryptotrader.ops.daemon.EvolutionDaemon._action_pattern_extraction"
+    with patch(patch_target, new_callable=AsyncMock) as mock_action:
         mock_action.return_value = ActionResult(
             name="pattern_extraction",
             status="PASS",
@@ -84,7 +85,7 @@ async def test_action_pattern_extraction_soft_degrade_on_exception():
     """
     daemon = _make_daemon()
 
-    with patch("cryptotrader.learning.memory.distill_patterns", side_effect=IOError("disk error")), \
+    with patch("cryptotrader.learning.memory.distill_patterns", side_effect=OSError("disk error")), \
          patch("cryptotrader.config.load_config") as mock_cfg:
         mock_cfg.return_value.experience.lookback_commits = 30
         # _run_action wraps _action_pattern_extraction；IOError → FAIL

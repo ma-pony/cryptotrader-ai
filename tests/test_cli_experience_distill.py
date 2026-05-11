@@ -6,7 +6,6 @@
   3. --cycles-window N 参数限制生效
 """
 
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -37,7 +36,7 @@ def test_experience_distill_default_params(tmp_path):
     """默认参数调用成功，输出包含 cases_processed / patterns_created。"""
     mock_run = _mock_run(patterns_created=3, cases_processed=25)
 
-    with patch("cryptotrader.learning.memory.distill_patterns", return_value=mock_run) as mock_distill, \
+    with patch("cryptotrader.learning.memory.distill_patterns", return_value=mock_run), \
          patch("cryptotrader.config.load_config") as mock_cfg:
         mock_cfg.return_value.experience.lookback_commits = 30
         result = runner.invoke(app, ["experience", "distill", "--memory-dir", str(tmp_path)])

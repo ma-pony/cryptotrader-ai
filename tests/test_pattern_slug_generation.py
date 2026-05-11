@@ -8,8 +8,6 @@
   5. non-ascii only input → "unnamed"
 """
 
-import pytest
-
 from cryptotrader.learning.memory import _make_pattern_slug
 
 

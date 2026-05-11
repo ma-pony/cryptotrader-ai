@@ -10,20 +10,26 @@
   4. 用 daemon _action_pattern_extraction 验证 PASS + details 含 new_count > 0
 """
 
-import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 from cryptotrader.learning.memory import distill_patterns
-from cryptotrader.ops.daemon import ActionResult, EvolutionDaemon
-
+from cryptotrader.ops.daemon import EvolutionDaemon
 
 # ── helpers ──
 
 
-def _write_case(path: Path, *, cycle_id: str, agent: str, pattern_slug: str, pnl: float = 1.0, regime_tags: list[str] | None = None) -> None:
+def _write_case(
+    path: Path,
+    *,
+    cycle_id: str,
+    agent: str,
+    pattern_slug: str,
+    pnl: float = 1.0,
+    regime_tags: list[str] | None = None,
+) -> None:
     tags_yaml = ""
     if regime_tags:
         items = "\n".join(f"  - {t}" for t in regime_tags)
@@ -109,9 +115,6 @@ async def test_e2e_daemon_pattern_extraction_pass(tmp_path):
 
     with patch("cryptotrader.config.load_config") as mock_cfg:
         mock_cfg.return_value.experience.lookback_commits = 200
-        # 让 distill_patterns 使用 tmp_path 作为 memory_dir
-        original_distill = distill_patterns.__module__
-
         with patch("cryptotrader.learning.memory.DEFAULT_AGENT_MEMORY_DIR", mem):
             result = await daemon._action_pattern_extraction()
 

@@ -250,7 +250,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # S104 — uvicorn's --host default is 0.0.0.0 by design (containers expose the port).
 # S603/S607 — `arena web` shells out to the user's local pnpm with hardcoded argv.
 # E402 — load_dotenv() must run before project imports that read env at import-time.
-"src/cli/main.py" = ["N806", "S104", "S603", "S607", "TID251", "E402"]
+"src/cli/main.py" = ["N806", "S104", "S603", "S607", "TID251", "E402", "RUF001", "RUF002", "RUF003", "E501"]
 # state.py uses operator, Sequence, BaseMessage at runtime inside Annotated[]
 # (LangGraph calls get_type_hints() to extract channel reducers at class creation)
 "src/cryptotrader/state.py" = ["TCH002", "TCH003"]
@@ -282,7 +282,15 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_ive.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_metrics_endpoint_cache.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_e2e_trilogy_ops.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
+# spec 021: new test files use Chinese docstrings/comments and pytest-asyncio style.
+"tests/test_distill_patterns_cold_start.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_pattern_slug_generation.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_daemon_pattern_extraction.py" = ["RUF001", "RUF002", "RUF003", "PT023"]
+"tests/test_cli_experience_distill.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_e2e_pattern_cold_start.py" = ["RUF001", "RUF002", "RUF003", "PT023"]
 # spec 020a: observability module uses Chinese docstrings/comments.
 "src/cryptotrader/observability/*.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 020a: observability imports in log_llm_usage are used at runtime (TCH003).
 "src/cryptotrader/agents/base.py" = ["TCH003"]
+# spec 021: daemon.py uses Chinese docstrings in new methods.
+"src/cryptotrader/ops/daemon.py" = ["RUF001", "RUF002", "RUF003"]
