@@ -239,6 +239,7 @@ class ExperienceConfig:
     model: str = ""  # empty = use models.analysis
     token_budget_pct: float = 0.30
     verify_win_rate_tolerance: float = 0.15
+    min_cases_per_pattern: int = 5
     regime_thresholds: RegimeThresholdsConfig = field(default_factory=RegimeThresholdsConfig)
 
 

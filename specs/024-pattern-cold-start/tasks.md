@@ -8,8 +8,8 @@
 
 ## Phase 2: Foundational
 
-- [ ] T001 [P] 在 `src/cryptotrader/config.py:ExperienceConfig` 加 `min_cases_per_pattern: int = 5` 字段
-- [ ] T002 [P] 在 `config/default.toml` `[experience]` 段加 `min_cases_per_pattern = 5`
+- [x] T001 [P] 在 `src/cryptotrader/config.py:ExperienceConfig` 加 `min_cases_per_pattern: int = 5` 字段
+- [x] T002 [P] 在 `config/default.toml` `[experience]` 段加 `min_cases_per_pattern = 5`
 
 ---
 
@@ -19,12 +19,12 @@
 
 **Independent Test**：`distill_patterns` 199 fixture cases → ≥ 1 pattern 创建。
 
-- [ ] T003 [US1] 在 `src/cryptotrader/learning/memory.py` 加私有 helper `_make_pattern_slug(applied_text: str, existing_dir: Path) -> str`（按 research.md Decision 2：lowercase + 非 alnum 替换 - + 截断 60 + collision `-N` 后缀）
-- [ ] T004 [US1] 在 `src/cryptotrader/learning/memory.py` 加私有 helper `_create_pattern_from_cases(slug, agent, applied_text, case_data_list) -> PatternRecord`（按 research.md Decision 3：pnls 过滤 None / source_cycles[:5] / regime_tags 频次 top 3 字母序兜底 / maturity="observed"）
-- [ ] T005 [US1] 修改 `distill_patterns()` 加 cold-start 路径：在统计 `agent_pattern_counts` 后 + 既有 maturity 更新前，按 `count >= cfg.experience.min_cases_per_pattern` 阈值创建 patterns；失败 isolated（单 pattern 失败不影响其他）
-- [ ] T006 [US1] 在 `distill_patterns()` cold-start 路径 写 OTel span `learning.distill.cold_start` + 3 attr（patterns_created / patterns_updated / cases_processed）
-- [ ] T007 [P] [US1] 创建 `tests/test_pattern_slug_generation.py`：5 用例（empty input / non-alnum chars / truncate 60 chars / collision -2 -3 / non-ascii fallback "unnamed"）
-- [ ] T008 [P] [US1] 创建 `tests/test_distill_patterns_cold_start.py`：5 用例（empty cases / freq below threshold / freq above threshold creates pattern / pnl all None creates with empty PnLTrack / regime_tags top 3 voting）
+- [x] T003 [US1] 在 `src/cryptotrader/learning/memory.py` 加私有 helper `_make_pattern_slug(applied_text: str, existing_dir: Path) -> str`（按 research.md Decision 2：lowercase + 非 alnum 替换 - + 截断 60 + collision `-N` 后缀）
+- [x] T004 [US1] 在 `src/cryptotrader/learning/memory.py` 加私有 helper `_create_pattern_from_cases(slug, agent, applied_text, case_data_list) -> PatternRecord`（按 research.md Decision 3：pnls 过滤 None / source_cycles[:5] / regime_tags 频次 top 3 字母序兜底 / maturity="observed"）
+- [x] T005 [US1] 修改 `distill_patterns()` 加 cold-start 路径：在统计 `agent_pattern_counts` 后 + 既有 maturity 更新前，按 `count >= cfg.experience.min_cases_per_pattern` 阈值创建 patterns；失败 isolated（单 pattern 失败不影响其他）
+- [x] T006 [US1] 在 `distill_patterns()` cold-start 路径 写 OTel span `learning.distill.cold_start` + 3 attr（patterns_created / patterns_updated / cases_processed）
+- [x] T007 [P] [US1] 创建 `tests/test_pattern_slug_generation.py`：5 用例（empty input / non-alnum chars / truncate 60 chars / collision -2 -3 / non-ascii fallback "unnamed"）
+- [x] T008 [P] [US1] 创建 `tests/test_distill_patterns_cold_start.py`：5 用例（empty cases / freq below threshold / freq above threshold creates pattern / pnl all None creates with empty PnLTrack / regime_tags top 3 voting）
 
 ---
 

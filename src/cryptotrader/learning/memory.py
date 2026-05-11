@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,6 +27,28 @@ from cryptotrader.agents.skills._io import atomic_rename, atomic_write, ensure_m
 from cryptotrader.agents.skills.schema import Maturity, PatternRecord, PnLTrack, ReflectionRun
 
 logger = logging.getLogger(__name__)
+
+
+def _get_otel_span(span_name: str) -> object:
+    """返回 OTel span context manager；OTel 不可用时返回 nullcontext。"""
+    from contextlib import nullcontext
+
+    try:
+        from opentelemetry import trace as _otel_trace
+
+        return _otel_trace.get_tracer(__name__).start_as_current_span(span_name)
+    except Exception:
+        return nullcontext()
+
+
+def _set_otel_span_attrs(span: object, **attrs: object) -> None:
+    """在 span 上设置属性；span 不支持时静默跳过。"""
+    from contextlib import suppress
+
+    for key, val in attrs.items():
+        with suppress(Exception):
+            span.set_attribute(key, val)  # type: ignore[union-attr]
+
 
 # L2: 最少样本量门槛
 _MIN_SAMPLES_FOR_ADVANCEMENT = 5
@@ -469,19 +492,58 @@ def distill_patterns(
         # distill_patterns 当前主路径采用简化 maturity FSM 驱动，不再在此重复全局 baseline 计算。
 
         # 解析 applied_patterns → 按 agent 分组
+        # agent_pattern_cases: agent → pattern_text → list[{cycle_id, pnl, regime_tags}]
+        agent_pattern_cases: dict[str, dict[str, list[dict]]] = {}
+        # 保留兼容 agent_pattern_counts（maturity FSM 路径已不依赖此变量，但保留兼容）
         agent_pattern_counts: dict[str, dict[str, list[float]]] = {}  # agent → pattern → [pnl...]
         for case in cases:
             body = case.get("_body", "")
             pnl = case.get("final_pnl")
+            cycle_id = case.get("cycle_id", "")
+            regime_tags = case.get("regime_tags") or []
             applied = _parse_applied_from_body(body)
             for agent, patterns in applied.items():
                 if agent not in VALID_AGENT_IDS:
                     continue
                 agent_pattern_counts.setdefault(agent, {})
+                agent_pattern_cases.setdefault(agent, {})
                 for p in patterns:
                     agent_pattern_counts[agent].setdefault(p, [])
+                    agent_pattern_cases[agent].setdefault(p, [])
                     if pnl is not None:
                         agent_pattern_counts[agent][p].append(float(pnl))
+                    agent_pattern_cases[agent][p].append(
+                        {"cycle_id": cycle_id, "pnl": pnl, "regime_tags": regime_tags}
+                    )
+
+        # spec 021: cold-start — 从高频 applied_patterns 创建新 PatternRecord
+        with _get_otel_span("learning.distill.cold_start") as cs_span:
+            from cryptotrader.config import load_config
+
+            threshold = load_config().experience.min_cases_per_pattern
+            for agent, pattern_map in agent_pattern_cases.items():
+                patterns_dir = mem / agent / "patterns"
+                patterns_dir.mkdir(parents=True, exist_ok=True)
+                for applied_text, case_data_list in pattern_map.items():
+                    if len(case_data_list) < threshold:
+                        continue
+                    slug = _make_pattern_slug(applied_text, patterns_dir)
+                    target_path = patterns_dir / f"{slug}.md"
+                    if target_path.exists():
+                        continue
+                    try:
+                        pattern = _create_pattern_from_cases(slug, agent, applied_text, case_data_list)
+                        _save_pattern(pattern, target_path)
+                        run.patterns_created += 1
+                        logger.info("cold-start: created pattern %s/%s", agent, slug)
+                    except Exception:
+                        logger.warning("cold-start: failed to save pattern %s/%s", agent, slug, exc_info=True)
+            _set_otel_span_attrs(
+                cs_span,
+                patterns_created=run.patterns_created,
+                patterns_updated=run.patterns_updated,
+                cases_processed=run.cases_processed,
+            )
 
         # 对每个 agent，更新已有 patterns 的 maturity
         for agent in VALID_AGENT_IDS:
@@ -538,6 +600,67 @@ def _parse_applied_from_body(body: str) -> dict[str, list[str]]:
                 result[agent].append(name)
         # bare name without prefix: skip at this level (needs originating_agent context)
     return result
+
+
+# ── spec 021: cold-start helpers ──
+
+
+def _make_pattern_slug(applied_text: str, existing_dir: Path) -> str:
+    """生成 filesystem-safe slug。
+
+    规则：lowercase + 非 alnum 替换 - + 截断 60 字符 + 去除前后 - + collision 加 -N 后缀。
+    """
+    base = re.sub(r"[^a-z0-9]+", "-", applied_text.lower()).strip("-")[:60]
+    if not base:
+        base = "unnamed"
+    if not (existing_dir / f"{base}.md").exists():
+        return base
+    for n in range(2, 1000):
+        candidate = f"{base}-{n}"
+        if not (existing_dir / f"{candidate}.md").exists():
+            return candidate
+    raise ValueError(f"slug collision space exhausted for: {applied_text}")
+
+
+def _create_pattern_from_cases(
+    slug: str,
+    agent: str,
+    applied_text: str,
+    case_data_list: list[dict],
+) -> PatternRecord:
+    """从 case_data_list 创建新 PatternRecord（maturity="observed"）。
+
+    case_data_list 每项含 cycle_id / pnl / regime_tags 字段。
+    """
+    pnls = [float(c["pnl"]) for c in case_data_list if c.get("pnl") is not None]
+    source_cycles = [c["cycle_id"] for c in case_data_list if c.get("cycle_id")][:5]
+    tag_counter: Counter[str] = Counter()
+    for c in case_data_list:
+        for t in (c.get("regime_tags") or []):
+            tag_counter[t] += 1
+    sorted_tags = sorted(tag_counter.items(), key=lambda x: (-x[1], x[0]))
+    regime_tags = [t for t, _ in sorted_tags[:3]]
+    # 计算 pnl_track 统计字段
+    n = len(pnls)
+    wins = sum(1 for p in pnls if p > 0)
+    win_rate = wins / n if n > 0 else 0.0
+    avg_pnl = sum(pnls) / n if n > 0 else 0.0
+    pnl_track = PnLTrack(cases=n, wins=wins, win_rate=round(win_rate, 4), avg_pnl=round(avg_pnl, 4))
+    body = (
+        f"# {applied_text}\n\n"
+        f"Auto-distilled from {len(case_data_list)} cases.\n\n"
+        f"Source cycles (first 5): {source_cycles}\n"
+    )
+    return PatternRecord(
+        name=slug,
+        agent=agent,
+        description=f"Auto-distilled pattern: {applied_text} (from {len(case_data_list)} cases)",
+        body=body,
+        pnl_track=pnl_track,
+        regime_tags=regime_tags,
+        maturity="observed",
+        source_cycles=source_cycles,
+    )
 
 
 # ── parse_applied (US5 support) ──

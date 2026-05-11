@@ -117,6 +117,7 @@ lookback_commits = 30
 model = ""
 token_budget_pct = 0.30
 verify_win_rate_tolerance = 0.15
+min_cases_per_pattern = 5
 
 [experience.regime_thresholds]
 high_funding = 0.0003
