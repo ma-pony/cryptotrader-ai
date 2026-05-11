@@ -3,6 +3,7 @@
  * 最近 24h IVE classification 时间线（按 timestamp 倒序）
  */
 
+import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -66,10 +67,20 @@ const CaseRow = ({ item }: { item: CaseItem }) => {
   );
 };
 
+// Bucket the "now" reference to a 5-minute grid so the React Query key only
+// changes every 5 min, instead of every render — otherwise `new Date()` on each
+// render yields a fresh `from` string, the query key churns, and `isLoading`
+// stays true forever showing a permanent "加载中…" spinner.
+const FIVE_MIN_MS = 5 * 60 * 1000;
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
 export const CasesTimeline = () => {
   const { t } = useTranslation('memory');
-  // Default: last 24h
-  const from = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  // Default: last 24h, snapped to a 5-minute bucket for query-key stability.
+  const from = useMemo(() => {
+    const bucketedNow = Math.floor(Date.now() / FIVE_MIN_MS) * FIVE_MIN_MS;
+    return new Date(bucketedNow - ONE_DAY_MS).toISOString();
+  }, []);
   const { data, isLoading } = useMemoryCases({ from });
   const items = data?.items ?? [];
 
