@@ -4,7 +4,21 @@
   "loading": "加载中…",
   "rules_grid": {
     "title": "规则状态矩阵",
-    "agent": "Agent"
+    "agent": "Agent",
+    "hint": "点击数字查看该分类下的全部规则"
+  },
+  "rules_detail": {
+    "title": "规则详情",
+    "list_title": "规则列表",
+    "empty": "没有匹配的规则",
+    "empty_hint": "尝试切换 agent / 状态过滤条件"
+  },
+  "pattern_detail": {
+    "stats": "统计",
+    "meta": "元数据",
+    "body": "规则正文",
+    "cases_chain": "来源 cycle 完整链条",
+    "not_found": "规则不存在"
   },
   "cases_timeline": {
     "title": "IVE 分类时间线 (24h)",

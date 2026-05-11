@@ -4,7 +4,21 @@
   "loading": "Loading…",
   "rules_grid": {
     "title": "Rule State Matrix",
-    "agent": "Agent"
+    "agent": "Agent",
+    "hint": "Click a count to view rules in that bucket"
+  },
+  "rules_detail": {
+    "title": "Rule Details",
+    "list_title": "Rule List",
+    "empty": "No matching rules",
+    "empty_hint": "Try adjusting agent / status filters"
+  },
+  "pattern_detail": {
+    "stats": "Stats",
+    "meta": "Metadata",
+    "body": "Rule Body",
+    "cases_chain": "Source Cycle Chain",
+    "not_found": "Rule not found"
   },
   "cases_timeline": {
     "title": "IVE Classification Timeline (24h)",

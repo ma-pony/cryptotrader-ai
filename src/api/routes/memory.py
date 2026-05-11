@@ -96,6 +96,42 @@ class CasesList(BaseModel):
     total: int
 
 
+class PatternDetail(BaseModel):
+    name: str
+    agent: str
+    description: str
+    body: str
+    maturity: str
+    importance: float
+    access_count: int
+    version: int
+    manually_edited: bool
+    regime_tags: list[str]
+    source_cycles: list[str]
+    last_accessed_at: str | None
+    last_modified_at: str | None
+    created: str | None
+    fundamental_failure_streak: int
+    pnl_track: PnLTrackOut
+
+
+class CaseDetail(BaseModel):
+    cycle_id: str
+    timestamp: str
+    pair: str
+    snapshot_summary: dict
+    agent_analyses: dict
+    verdict_action: str
+    verdict_reasoning: str
+    applied_patterns: list[str]
+    risk_gate_passed: bool
+    execution_status: dict | None
+    trade_execution: TradeExecutionOut | None
+    ive_classification: IVEClassificationOut | None
+    causal_chain: dict | None
+    final_pnl: float | None
+
+
 class TransitionItem(BaseModel):
     rule_id: str
     agent_id: str
@@ -265,6 +301,92 @@ async def get_memory_rules(
 
     except Exception as exc:
         logger.warning("GET /api/memory/rules failed", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "memory_io_error", "detail": str(exc)},
+        )
+
+
+@router.get("/patterns/{agent}/{name}", response_model=PatternDetail)
+async def get_pattern_detail(agent: str, name: str) -> JSONResponse:
+    """返回单条 pattern 详情，含 source_cycles 列表 + body 全文。"""
+    if agent not in _VALID_AGENTS:
+        return JSONResponse(status_code=404, content={"error": "agent_not_found"})
+    path = _MEMORY_ROOT / agent / "patterns" / f"{name}.md"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "pattern_not_found"})
+    try:
+        from cryptotrader.learning.evolution.provider import _load_pattern_from_path
+
+        rule = _load_pattern_from_path(path)
+        if rule is None:
+            return JSONResponse(status_code=404, content={"error": "pattern_not_found"})
+
+        detail = PatternDetail(
+            name=rule.name,
+            agent=rule.agent,
+            description=rule.description,
+            body=rule.body,
+            maturity=rule.maturity,
+            importance=rule.importance,
+            access_count=rule.access_count,
+            version=rule.version,
+            manually_edited=rule.manually_edited,
+            regime_tags=list(rule.regime_tags or []),
+            source_cycles=list(rule.source_cycles or []),
+            last_accessed_at=_dt_str(rule.last_accessed_at),
+            last_modified_at=_dt_str(rule.last_modified_at),
+            created=_dt_str(rule.created),
+            fundamental_failure_streak=rule.fundamental_failure_streak,
+            pnl_track=_pnl_track_out(rule.pnl_track),
+        )
+        return JSONResponse(
+            content=detail.model_dump(),
+            headers={"Cache-Control": "max-age=30"},
+        )
+    except Exception as exc:
+        logger.warning("GET /api/memory/patterns/%s/%s failed", agent, name, exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "memory_io_error", "detail": str(exc)},
+        )
+
+
+@router.get("/cases/{cycle_id}", response_model=CaseDetail)
+async def get_case_detail(cycle_id: str) -> JSONResponse:
+    """返回单个 cycle case 详情：agent_analyses / verdict / risk / execution / pnl 完整链条。"""
+    path = _MEMORY_ROOT / "cases" / f"{cycle_id}.md"
+    if not path.exists():
+        return JSONResponse(status_code=404, content={"error": "case_not_found"})
+    try:
+        from cryptotrader.learning.evolution.provider import _load_case_from_path
+
+        case = _load_case_from_path(path)
+        if case is None:
+            return JSONResponse(status_code=404, content={"error": "case_not_found"})
+
+        detail = CaseDetail(
+            cycle_id=case.cycle_id,
+            timestamp=_dt_str(case.timestamp) or "",
+            pair=case.pair,
+            snapshot_summary=case.snapshot_summary or {},
+            agent_analyses=case.agent_analyses or {},
+            verdict_action=case.verdict_action,
+            verdict_reasoning=case.verdict_reasoning,
+            applied_patterns=list(case.applied_patterns or []),
+            risk_gate_passed=case.risk_gate_passed,
+            execution_status=case.execution_status,
+            trade_execution=_build_trade_execution_out(case.trade_execution),
+            ive_classification=_build_ive_out(case.ive_classification),
+            causal_chain=case.causal_chain,
+            final_pnl=case.final_pnl,
+        )
+        return JSONResponse(
+            content=detail.model_dump(),
+            headers={"Cache-Control": "max-age=30"},
+        )
+    except Exception as exc:
+        logger.warning("GET /api/memory/cases/%s failed", cycle_id, exc_info=True)
         return JSONResponse(
             status_code=500,
             content={"error": "memory_io_error", "detail": str(exc)},

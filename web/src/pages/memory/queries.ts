@@ -171,6 +171,70 @@ export const useArchivedRules = () =>
     staleTime: 300_000,
   });
 
+// ── spec 021 pattern + case detail ────────────────────────────────────────────
+
+export const PatternDetailSchema = z.object({
+  name: z.string(),
+  agent: z.string(),
+  description: z.string(),
+  body: z.string(),
+  maturity: z.string(),
+  importance: z.number(),
+  access_count: z.number(),
+  version: z.number(),
+  manually_edited: z.boolean(),
+  regime_tags: z.array(z.string()),
+  source_cycles: z.array(z.string()),
+  last_accessed_at: z.string().nullable(),
+  last_modified_at: z.string().nullable(),
+  created: z.string().nullable(),
+  fundamental_failure_streak: z.number(),
+  pnl_track: PnLTrackSchema,
+});
+export type PatternDetail = z.infer<typeof PatternDetailSchema>;
+
+export const usePatternDetail = (agent: string, name: string) =>
+  useQuery({
+    queryKey: ['memory-pattern', agent, name],
+    queryFn: () =>
+      apiClient.get(
+        `/api/memory/patterns/${encodeURIComponent(agent)}/${encodeURIComponent(name)}`,
+        PatternDetailSchema,
+      ),
+    staleTime: 30_000,
+    enabled: Boolean(agent && name),
+  });
+
+export const CaseDetailSchema = z.object({
+  cycle_id: z.string(),
+  timestamp: z.string(),
+  pair: z.string(),
+  snapshot_summary: z.record(z.string(), z.unknown()),
+  agent_analyses: z.record(z.string(), z.string()),
+  verdict_action: z.string(),
+  verdict_reasoning: z.string(),
+  applied_patterns: z.array(z.string()),
+  risk_gate_passed: z.boolean(),
+  execution_status: z.record(z.string(), z.unknown()).nullable(),
+  trade_execution: TradeExecutionSchema.nullable(),
+  ive_classification: IVEClassificationSchema.nullable(),
+  causal_chain: z.record(z.string(), z.unknown()).nullable(),
+  final_pnl: z.number().nullable(),
+});
+export type CaseDetail = z.infer<typeof CaseDetailSchema>;
+
+export const useCaseDetail = (cycleId: string | null | undefined) =>
+  useQuery({
+    queryKey: ['memory-case', cycleId],
+    queryFn: () =>
+      apiClient.get(
+        `/api/memory/cases/${encodeURIComponent(cycleId as string)}`,
+        CaseDetailSchema,
+      ),
+    staleTime: 30_000,
+    enabled: Boolean(cycleId),
+  });
+
 // ── spec 019 Skill hooks ──────────────────────────────────────────────────────
 
 export const SkillItemSchema = z.object({
