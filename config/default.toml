@@ -173,7 +173,11 @@ token_tax_threshold = 10
 [execution]
 order_wait_seconds = 30
 retry_attempts = 3
-graph_timeout_s = 300
+# graph_timeout_s 600s 留 margin：5-pair 并发 + evaluate_node 慢调用（180-267s
+# in prod，与 spec 018 IVE classify_case 串行 LLM 有关）。300s 时观察到大量
+# Scheduler timed out 导致 graph 在 evaluate_node 后 cancel，execute/journal
+# 节点未触发 → 累计 17 actionable verdicts missed @ 8h live（2026-05-11 诊断）。
+graph_timeout_s = 600
 
 [notifications]
 webhook_url = ""
