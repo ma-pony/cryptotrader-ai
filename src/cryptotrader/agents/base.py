@@ -405,6 +405,20 @@ class BaseAgent:
             "macro": {
                 "fed_rate": macro.fed_rate if macro else 0,
                 "dxy": macro.dxy if macro else 0,
+                "btc_dominance": macro.btc_dominance if macro else 0,
+                "fear_greed_index": macro.fear_greed_index if macro else 50,
+                "fear_greed_history": list(macro.fear_greed_history) if macro else [],
+                "etf_daily_net_inflow": macro.etf_daily_net_inflow if macro else 0,
+                "etf_total_net_assets": macro.etf_total_net_assets if macro else 0,
+                "etf_cum_net_inflow": macro.etf_cum_net_inflow if macro else 0,
+                "etf_top_flows": list(macro.etf_top_flows) if macro else [],
+                "vix": macro.vix if macro else 0,
+                "sp500": macro.sp500 if macro else 0,
+                "yield_curve": macro.yield_curve if macro else 0,
+                "m2_supply": macro.m2_supply if macro else 0,
+                "cpi": macro.cpi if macro else 0,
+                "btc_hashrate": macro.btc_hashrate if macro else 0,
+                "stablecoin_total_supply": macro.stablecoin_total_supply if macro else 0,
             },
         }
 

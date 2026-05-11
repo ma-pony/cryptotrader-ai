@@ -127,15 +127,88 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
         warnings.append("News sentiment unavailable. Do NOT assume neutral sentiment from missing data.")
 
     macro_raw = snapshot.get("macro", {})
-    fed_rate_val = snapshot.get("fed_rate")
-    dxy_val = snapshot.get("dxy")
-    if isinstance(macro_raw, dict):
-        if fed_rate_val is None:
-            fed_rate_val = macro_raw.get("fed_rate", 0)
-        if dxy_val is None:
-            dxy_val = macro_raw.get("dxy", 0)
-    if fed_rate_val is not None and dxy_val is not None and float(fed_rate_val) == 0 and float(dxy_val) == 0:
-        warnings.append("Macro data unavailable (FRED/DXY). Do NOT infer from zero values — they are missing.")
+    if not isinstance(macro_raw, dict):
+        macro_raw = {}
+
+    def _macro(name: str, default: float = 0.0) -> float:
+        """Read a macro field, preferring top-level snapshot key, falling back to macro_raw."""
+        v = snapshot.get(name)
+        if v is None:
+            v = macro_raw.get(name, default)
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return default
+
+    fed_rate_val = _macro("fed_rate")
+    dxy_val = _macro("dxy")
+    btc_dom = _macro("btc_dominance")
+    fg_idx = int(_macro("fear_greed_index", 50))
+    etf_in = _macro("etf_daily_net_inflow")
+    etf_aum = _macro("etf_total_net_assets")
+    vix = _macro("vix")
+    sp500 = _macro("sp500")
+    yc = _macro("yield_curve")
+    m2 = _macro("m2_supply")
+    cpi = _macro("cpi")
+    hashrate = _macro("btc_hashrate")
+
+    # Only render the macro block when at least one field is populated, so the
+    # prompt stays clean if macro pipeline is fully offline.
+    macro_lines: list[str] = []
+    if fed_rate_val > 0 or dxy_val > 0:
+        macro_lines.append(f"Fed funds rate: {fed_rate_val:.2f}%" + (f" | DXY: {dxy_val:.2f}" if dxy_val > 0 else ""))
+    if vix > 0 or sp500 > 0:
+        bits = []
+        if vix > 0:
+            tag = " (HIGH FEAR)" if vix > 25 else " (LOW FEAR)" if vix < 15 else ""
+            bits.append(f"VIX: {vix:.2f}{tag}")
+        if sp500 > 0:
+            bits.append(f"S&P500: {sp500:,.2f}")
+        macro_lines.append(" | ".join(bits))
+    if yc != 0 or m2 > 0 or cpi > 0:
+        bits = []
+        if yc != 0:
+            tag = " (INVERTED)" if yc < 0 else ""
+            bits.append(f"10y-2y yield curve: {yc:.2f}%{tag}")
+        if m2 > 0:
+            bits.append(f"M2: ${m2:,.1f}B")
+        if cpi > 0:
+            bits.append(f"CPI: {cpi:.2f}")
+        macro_lines.append(" | ".join(bits))
+    if btc_dom > 0 or fg_idx != 50:
+        fg_tag = (
+            " (EXTREME FEAR)"
+            if fg_idx <= 24
+            else " (FEAR)"
+            if fg_idx <= 44
+            else " (NEUTRAL)"
+            if fg_idx <= 54
+            else " (GREED)"
+            if fg_idx <= 74
+            else " (EXTREME GREED)"
+        )
+        bits = []
+        if btc_dom > 0:
+            bits.append(f"BTC dominance: {btc_dom:.2f}%")
+        bits.append(f"Fear & Greed: {fg_idx}{fg_tag}")
+        macro_lines.append(" | ".join(bits))
+    if etf_in != 0 or etf_aum > 0:
+        bits = []
+        if etf_in != 0:
+            sign = "+" if etf_in > 0 else ""
+            bits.append(f"ETF 24h net flow: {sign}${etf_in / 1e6:,.1f}M")
+        if etf_aum > 0:
+            bits.append(f"ETF AUM: ${etf_aum / 1e9:,.1f}B")
+        macro_lines.append(" | ".join(bits))
+    if hashrate > 0:
+        macro_lines.append(f"BTC hashrate: {hashrate / 1e9:.1f} GH/s")
+
+    if macro_lines:
+        parts.append("Macro context:\n  " + "\n  ".join(macro_lines))
+
+    if fed_rate_val == 0 and dxy_val == 0 and vix == 0:
+        warnings.append("Macro data unavailable (FRED/DXY/VIX). Do NOT infer from zero values — they are missing.")
 
     if warnings:
         parts.append("⚠ DATA QUALITY WARNINGS:\n" + "\n".join(f"  - {w}" for w in warnings))
