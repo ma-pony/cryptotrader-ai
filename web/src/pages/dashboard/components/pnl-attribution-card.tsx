@@ -14,6 +14,8 @@
  * fallback display crediting the residual to "未实现 / 资金费 / 手续费 合计".
  */
 
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -82,20 +84,61 @@ const Row = ({
 
 export const PnlAttributionCard = ({ data, isLoading }: Props) => {
   const { t } = useTranslation('dashboard');
+  const [open, setOpen] = useState(false);
   const breakdowns = data?.pnl_breakdowns ?? [];
+
+  // Compact 1-line summary that's always visible — gives the headline number
+  // for the most relevant window (24h) without forcing the user to expand.
+  const summary24h = breakdowns.find((b) => b.window === '24h');
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium">
+      <CardHeader
+        className="cursor-pointer pb-2 transition-colors hover:bg-muted/30"
+        onClick={() => setOpen((v) => !v)}
+        role="button"
+        aria-expanded={open}
+      >
+        <CardTitle className="flex items-center gap-2 text-sm font-medium">
+          {open ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
           {t('pnl_attribution.title', { defaultValue: '收益归因' })}
-          <span className="ml-2 text-[10px] font-normal text-muted-foreground">
-            {t('pnl_attribution.subtitle', {
-              defaultValue: '总权益变化 = 平仓 PnL + 资金费 + 手续费 + 浮盈变化',
-            })}
-          </span>
+          {summary24h ? (
+            <span className="ml-1 text-[11px] font-normal text-muted-foreground">
+              24h{' '}
+              <span
+                className={cn(
+                  'tabular-nums',
+                  summary24h.delta > 0
+                    ? 'text-trade-long'
+                    : summary24h.delta < 0
+                      ? 'text-trade-short'
+                      : '',
+                )}
+              >
+                {summary24h.delta > 0 ? '+' : ''}
+                {formatCurrency(summary24h.delta)}
+              </span>
+              {' = 平仓 '}
+              <SignedCurrency value={summary24h.realized} />
+              {' + 资金费 '}
+              <SignedCurrency value={summary24h.funding} />
+              {' + 其他 '}
+              <SignedCurrency value={summary24h.fees + summary24h.unrealized_delta} />
+            </span>
+          ) : (
+            <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+              {t('pnl_attribution.subtitle', {
+                defaultValue: '总权益变化 = 平仓 PnL + 资金费 + 手续费 + 浮盈变化',
+              })}
+            </span>
+          )}
         </CardTitle>
       </CardHeader>
+      {!open ? null : (
       <CardContent className="space-y-4">
         {isLoading ? (
           <Skeleton className="h-32 w-full" />
@@ -149,6 +192,7 @@ export const PnlAttributionCard = ({ data, isLoading }: Props) => {
           })}
         </p>
       </CardContent>
+      )}
     </Card>
   );
 };
