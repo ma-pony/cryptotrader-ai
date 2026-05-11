@@ -35,19 +35,29 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-    // Limit fs watcher scope. The project root contains a large Python tree
-    // (`src/`, `agent_memory/`, `.venv/`, `tests/`, log files in `/tmp`) that
-    // produces tens of thousands of fsevents per minute, occasionally
-    // overflowing macOS's kqueue/fsevents buffer and freezing Vite's module
-    // graph mid-transform — surfacing as recurring "Failed to resolve import
-    // @/stores/use-xxx-store" errors on otherwise healthy files. Restricting
-    // chokidar to the web subtree eliminates that pressure.
+    // Switch to polling mode. We tried scope-limiting chokidar fsevents
+    // first (ignored: ['../src/**', '../.venv/**', ...]), which reduced the
+    // fsevents-overflow blast radius but didn't fix the underlying issue —
+    // after a long-running dev session (~75 min, 10+ commits, restored
+    // working-tree files, etc.) Vite's in-memory module resolver gradually
+    // degrades and `@/stores/use-*` aliases start failing on healthy files.
+    //
+    // Polling sidesteps the fsevents path entirely:
+    //   - chokidar stats files at fixed intervals instead of waiting for
+    //     OS notifications, so the resolver state doesn't drift on weird
+    //     event bursts (git checkout, pytest cache writes, etc.).
+    //   - ~1s HMR latency vs ~100ms for fsevents — fine for a single dev.
+    //   - CPU cost ~1-2% with `interval: 1500`, scoped to web/src.
     watch: {
+      usePolling: true,
+      interval: 1500,
+      binaryInterval: 3000,
       ignored: [
         '**/node_modules/**',
         '**/.git/**',
         '**/dist/**',
         '**/coverage/**',
+        '**/.pytest_cache/**',
         // Everything outside web/ — Python source, venv, agent memory, logs.
         path.resolve(__dirname, '..', 'src') + '/**',
         path.resolve(__dirname, '..', 'tests') + '/**',
@@ -59,7 +69,6 @@ export default defineConfig({
         path.resolve(__dirname, '..', '.specify') + '/**',
         path.resolve(__dirname, '..', '.claude') + '/**',
       ],
-      usePolling: false,
     },
     fs: {
       // Confine module resolution to the web subtree so a stray import that
