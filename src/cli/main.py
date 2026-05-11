@@ -889,6 +889,41 @@ def mcp_call(
         raise typer.Exit(code=1) from e
 
 
+# ── Experience subcommands (spec 021) ──
+
+experience_app = typer.Typer(help="Experience memory commands")
+app.add_typer(experience_app, name="experience")
+
+
+@experience_app.command("distill")
+def experience_distill(
+    memory_dir: str = typer.Option("agent_memory", "--memory-dir", help="Path to agent_memory directory"),
+    cycles_window: int = typer.Option(0, "--cycles-window", help="Number of recent cycles to scan (0 = use config default)"),
+) -> None:
+    """从 cases 蒸馏 patterns（spec 021 cold-start 入口）。"""
+    from pathlib import Path
+
+    from cryptotrader.config import load_config
+    from cryptotrader.learning.memory import distill_patterns
+
+    cfg = load_config()
+    window = cycles_window if cycles_window > 0 else cfg.experience.lookback_commits
+    try:
+        run = distill_patterns(memory_dir=Path(memory_dir), cycles_window=window)
+        console.print(f"cases_processed: {run.cases_processed}")
+        console.print(f"patterns_created: {run.patterns_created}")
+        console.print(f"patterns_updated: {run.patterns_updated}")
+        console.print(f"patterns_archived: {run.patterns_archived}")
+        if run.error:
+            console.print(f"error: {run.error}", err=True)
+            raise typer.Exit(1)
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"ERROR: {e}", err=True)
+        raise typer.Exit(1) from e
+
+
 # ── Evolution Daemon (spec 022) ──
 
 

@@ -284,6 +284,6 @@ tools = ["news_rss", "news_sosovalue"]
 # spec 022 FR-D4: Evolution reflect daemon configuration
 enabled = true
 cron = "0 0 * * *"
-actions = ["pareto", "regime", "skill_proposal"]
+actions = ["pareto", "regime", "skill_proposal", "pattern_extraction"]
 llm_model = ""
 propose_threshold = 10

@@ -34,10 +34,10 @@
 
 **Independent Test**：`arena evolution-daemon --once` 4 actions 全 PASS。
 
-- [ ] T009 [US2] 修改 `src/cryptotrader/ops/daemon.py`：加 `async def _action_pattern_extraction(self) -> ActionResult` 方法（按 research.md Decision 4）
-- [ ] T010 [US2] 在 daemon `_run_action()` dispatch 加 `elif name == "pattern_extraction": return await self._action_pattern_extraction()`
-- [ ] T011 [US2] 修改 `config/default.toml`：`[evolution_daemon].actions` 默认列表加 `"pattern_extraction"`（4 个 actions）
-- [ ] T012 [P] [US2] 创建 `tests/test_daemon_pattern_extraction.py`：3 用例（action runs PASS / details 含 new_count/updated_count/archived_count/cases_processed / distill_patterns 异常时 SKIP soft degrade）
+- [x] T009 [US2] 修改 `src/cryptotrader/ops/daemon.py`：加 `async def _action_pattern_extraction(self) -> ActionResult` 方法（按 research.md Decision 4）
+- [x] T010 [US2] 在 daemon `_run_action()` dispatch 加 `elif name == "pattern_extraction": return await self._action_pattern_extraction()`
+- [x] T011 [US2] 修改 `config/default.toml`：`[evolution_daemon].actions` 默认列表加 `"pattern_extraction"`（4 个 actions）
+- [x] T012 [P] [US2] 创建 `tests/test_daemon_pattern_extraction.py`：3 用例（action runs PASS / details 含 new_count/updated_count/archived_count/cases_processed / distill_patterns 异常时 SKIP soft degrade）
 
 ---
 
@@ -47,9 +47,9 @@
 
 **Independent Test**：CLI 跑完输出 ReflectionRun summary + exit 0。
 
-- [ ] T013 [US3] 修改 `src/cli/main.py`：加 `experience_app = typer.Typer()` + `@experience_app.command("distill")` function（按 research.md Decision 5）
-- [ ] T014 [US3] 在 cli/main.py 加 `app.add_typer(experience_app, name="experience")` 注册子命令
-- [ ] T015 [P] [US3] 创建 `tests/test_cli_experience_distill.py`：3 用例（默认参数 PASS / `--memory-dir custom` 路径生效 / `--cycles-window N` 限制生效）
+- [x] T013 [US3] 修改 `src/cli/main.py`：加 `experience_app = typer.Typer()` + `@experience_app.command("distill")` function（按 research.md Decision 5）
+- [x] T014 [US3] 在 cli/main.py 加 `app.add_typer(experience_app, name="experience")` 注册子命令
+- [x] T015 [P] [US3] 创建 `tests/test_cli_experience_distill.py`：3 用例（默认参数 PASS / `--memory-dir custom` 路径生效 / `--cycles-window N` 限制生效）
 
 ---
 
