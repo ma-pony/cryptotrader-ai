@@ -414,7 +414,6 @@ class EvolutionDaemon:
             details={"drafts_created": drafts_created, "agents_checked": agents_checked},
         )
 
-
     # ------------------------------------------------------------------
     # spec 021: Pattern extraction action
     # ------------------------------------------------------------------
@@ -429,28 +428,38 @@ class EvolutionDaemon:
         from cryptotrader.learning.memory import distill_patterns
 
         t0 = time.monotonic()
-        cfg = load_config()
-        run = distill_patterns(cycles_window=cfg.experience.lookback_commits)
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        logger.info(
-            "[pattern_extraction] PASS — new=%d updated=%d archived=%d cases=%d duration_ms=%d",
-            run.patterns_created,
-            run.patterns_updated,
-            run.patterns_archived,
-            run.cases_processed,
-            duration_ms,
-        )
-        return ActionResult(
-            name="pattern_extraction",
-            status="PASS",
-            duration_ms=duration_ms,
-            details={
-                "new_count": run.patterns_created,
-                "updated_count": run.patterns_updated,
-                "archived_count": run.patterns_archived,
-                "cases_processed": run.cases_processed,
-            },
-        )
+        try:
+            cfg = load_config()
+            run = distill_patterns(cycles_window=cfg.experience.lookback_commits)
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            logger.info(
+                "[pattern_extraction] PASS — new=%d updated=%d archived=%d cases=%d duration_ms=%d",
+                run.patterns_created,
+                run.patterns_updated,
+                run.patterns_archived,
+                run.cases_processed,
+                duration_ms,
+            )
+            return ActionResult(
+                name="pattern_extraction",
+                status="PASS",
+                duration_ms=duration_ms,
+                details={
+                    "new_count": run.patterns_created,
+                    "updated_count": run.patterns_updated,
+                    "archived_count": run.patterns_archived,
+                    "cases_processed": run.cases_processed,
+                },
+            )
+        except Exception as exc:
+            duration_ms = int((time.monotonic() - t0) * 1000)
+            logger.warning("[pattern_extraction] SKIP due to exception: %s", exc, exc_info=True)
+            return ActionResult(
+                name="pattern_extraction",
+                status="SKIP",
+                duration_ms=duration_ms,
+                details={"reason": "exception", "error": str(exc)},
+            )
 
 
 # ---------------------------------------------------------------------------

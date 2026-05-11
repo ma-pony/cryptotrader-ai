@@ -63,8 +63,10 @@ async def test_action_pattern_extraction_details_fields():
     mock_run.patterns_archived = 1
     mock_run.cases_processed = 100
 
-    with patch("cryptotrader.learning.memory.distill_patterns", return_value=mock_run), \
-         patch("cryptotrader.config.load_config") as mock_cfg:
+    with (
+        patch("cryptotrader.learning.memory.distill_patterns", return_value=mock_run),
+        patch("cryptotrader.config.load_config") as mock_cfg,
+    ):
         mock_cfg.return_value.experience.lookback_commits = 30
         result = await daemon._action_pattern_extraction()
 
@@ -85,12 +87,14 @@ async def test_action_pattern_extraction_soft_degrade_on_exception():
     """
     daemon = _make_daemon()
 
-    with patch("cryptotrader.learning.memory.distill_patterns", side_effect=OSError("disk error")), \
-         patch("cryptotrader.config.load_config") as mock_cfg:
+    with (
+        patch("cryptotrader.learning.memory.distill_patterns", side_effect=OSError("disk error")),
+        patch("cryptotrader.config.load_config") as mock_cfg,
+    ):
         mock_cfg.return_value.experience.lookback_commits = 30
         # _run_action wraps _action_pattern_extraction；IOError → FAIL
         result = await daemon._run_action("pattern_extraction")
 
-    # IOError 不是 soft-degrade，结果为 FAIL，但 daemon 不 crash
-    assert result.status in ("FAIL", "SKIP")
+    # spec 021 FR-P11: _action_pattern_extraction 内部 try/except 保证所有异常 → SKIP
+    assert result.status == "SKIP"
     assert result.name == "pattern_extraction"
