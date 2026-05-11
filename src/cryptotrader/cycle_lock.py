@@ -19,6 +19,7 @@ do not (matches existing risk/state.py degraded-mode behavior).
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
@@ -31,11 +32,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# Default TTL: the launchd scheduler enforces graph_timeout_s (default 300),
-# arena run does not but typically completes in <120s. 600s leaves headroom
-# without leaving a stale lock on the floor for too long if a process crashes
-# mid-cycle without running its release.
-DEFAULT_CYCLE_LOCK_TTL = 600
+# TTL: graph_timeout_s caps a real cycle at 300s (then +60s margin for fee /
+# OKX retry tail). 200s would be too aggressive; 360s leaves 1× headroom and
+# bounds worst-case stale-lock wait to 6 minutes when the PID-alive check
+# misses (e.g. permission-denied path).  Combined with stale-PID stealing
+# (spec 021 E1) this is now belt-and-suspenders.
+DEFAULT_CYCLE_LOCK_TTL = 360
 
 
 @asynccontextmanager
@@ -52,9 +54,13 @@ async def cycle_lock(
     log). Always releases on exit, even on exception, but only if we still
     own the key — protects against the prior-holder-expired-then-re-acquired
     race.
+
+    spec 021 E1: owner_id is ``"{pid}:{uuid}"`` so ``try_acquire_lock`` can
+    steal stale locks whose process has been SIGKILLed (otherwise we'd
+    wait the full TTL).
     """
     key = f"cycle_lock:{pair}"
-    owner_id = uuid.uuid4().hex
+    owner_id = f"{os.getpid()}:{uuid.uuid4().hex}"
 
     acquired = await redis_state.try_acquire_lock(key, owner_id, ttl)
     try:

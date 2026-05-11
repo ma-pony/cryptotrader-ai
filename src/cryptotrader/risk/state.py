@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
@@ -112,6 +113,39 @@ class _MemoryStore:
 
     def list_delete(self, key: str) -> None:
         self._lists.pop(key, None)
+
+
+def _is_owner_dead(owner_raw: object) -> bool:
+    """Return True when ``owner_id`` encodes a PID that no longer exists.
+
+    spec 021 E1 stale-lock recovery. Treats ``"{pid}:{uuid}"`` strings as
+    PID-tagged. Legacy bare-uuid strings (pre-fix callers) return False so
+    we never auto-steal a lock whose holder is unknown.
+
+    Uses ``os.kill(pid, 0)`` which signals nothing but raises ProcessLookupError
+    when the PID is gone — cheap O(1) syscall, no fork/exec.
+    """
+    if isinstance(owner_raw, bytes):
+        owner_raw = owner_raw.decode(errors="ignore")
+    if not isinstance(owner_raw, str) or ":" not in owner_raw:
+        return False  # legacy format → safe default
+    pid_str = owner_raw.split(":", 1)[0]
+    try:
+        pid = int(pid_str)
+    except ValueError:
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    except PermissionError:
+        # Other user / sandbox — assume alive (don't risk stealing).
+        return False
+    except OSError:
+        return False
+    return False
 
 
 class RedisStateManager:
@@ -241,17 +275,48 @@ class RedisStateManager:
     # exposure).
 
     async def try_acquire_lock(self, key: str, owner_id: str, ttl: int) -> bool:
-        """Atomic SET NX EX. Returns True if we now own the lock."""
+        """Atomic SET NX EX. Returns True if we now own the lock.
+
+        Stale-owner recovery (2026-05-11 spec 021 E1): when a previous holder
+        leaves a stale lock — typically because the OS killed it with SIGKILL
+        before its release ran (cf. the ``pkill -9`` API restart pattern that
+        broke 4 production cycle ticks today) — extract its PID from the
+        owner_id and free the lock if that PID is no longer alive. This is a
+        single fast ``os.kill(pid, 0)`` check guarded with ownership-aware
+        delete to avoid stealing live locks.
+
+        owner_id format: ``"{pid}:{uuid_hex}"``. Legacy bare-uuid format is
+        treated as having an unknown PID and is never auto-stolen (safe
+        default — pre-fix callers won't be silently dispossessed).
+        """
         if self._redis is not None:
             try:
-                # set(nx=True) returns True only when the key was created.
                 acquired = await self._redis.set(key, owner_id, nx=True, ex=ttl)
-                return bool(acquired)
+                if acquired:
+                    return True
+                # NX failed → check if the existing holder is dead.
+                current = await self._redis.get(key)
+                if current and _is_owner_dead(current):
+                    deleted = await self._redis.delete(key)
+                    if deleted:
+                        logger.info(
+                            "stale-lock recovered: %s (prev owner=%s)",
+                            key,
+                            current.decode() if isinstance(current, bytes) else current,
+                        )
+                        # Retry once — race-safe because we only steal a dead PID.
+                        acquired = await self._redis.set(key, owner_id, nx=True, ex=ttl)
+                        return bool(acquired)
+                return False
             except RedisError:
                 logger.debug("Redis SET NX failed for %s, using memory fallback", key)
-        # Memory path: emulate NX semantics.
-        if self._mem.get(key) is not None:
-            return False
+        # Memory path: emulate NX semantics + same stale-owner check.
+        existing = self._mem.get(key)
+        if existing is not None:
+            if _is_owner_dead(existing):
+                self._mem.delete(key)
+            else:
+                return False
         self._mem.set(key, owner_id, ex=ttl)
         return True
 
