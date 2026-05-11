@@ -29,7 +29,11 @@ chain_agent = "glm-5"
 news_agent = "glm-5"
 macro_agent = "glm-5"
 fallback = "glm-5"
-timeout_seconds = 60    # 单次 LLM 调用超时上限（秒），超时后以空结果降级
+# spec 021 D2/D3: 60→90s. chain_agent + news_agent 因多轮 tool-calling
+# (4-6 round) 在 deepseek-v4-flash 上经常逼近 60s 上限，触发 27/cycle
+# degraded path; debate_round_2 也撞 60s（4 agent 一起重新分析）。升到
+# 90s 给所有 LLM 调用 +50% 余量，仍远低于 graph_timeout_s=600。
+timeout_seconds = 90
 
 [debate]
 max_rounds = 3
