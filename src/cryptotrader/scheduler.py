@@ -60,15 +60,22 @@ class Scheduler:
         # Startup reconciliation for live mode
         await self._startup_reconcile()
 
-        # Register trading cycle job -- runs immediately, then every interval_minutes
+        # Register trading cycle job. Delay the first run by 15s so that:
+        #   (a) async HTTP clients (OKX / data providers) finish their TLS
+        #       handshakes and prime connection pools — without this, the very
+        #       first batch of 5 parallel snapshot calls regularly races with
+        #       API startup and a few pairs die with asyncio.CancelledError;
+        #   (b) APScheduler / aiohttp internals have a moment to bind signal
+        #       handlers and event loop before being pelted with traffic.
         # max_instances=1: prevents overlap when previous cycle is still running
         # misfire_grace_time=1: discard missed triggers after 1s instead of catching up
+        _startup_delay_s = 15
         self._scheduler.add_job(
             self._run_cycle,
             IntervalTrigger(minutes=self.interval_minutes),
             id="trading_cycle",
             name="Trading cycle",
-            next_run_time=datetime.now(UTC),
+            next_run_time=datetime.now(UTC) + timedelta(seconds=_startup_delay_s),
             max_instances=1,
             misfire_grace_time=1,
         )
