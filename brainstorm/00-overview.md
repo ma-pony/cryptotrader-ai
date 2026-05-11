@@ -16,6 +16,7 @@ Last updated: 2026-05-09
 | 06  | 2026-05-09 | Spec 020a — Trilogy Ops（cache 观测 + advisory + 部署 + monitoring） | [specs/021-trilogy-ops/](../specs/021-trilogy-ops/)                       | ✅ Spec Ready + Implementation 合并 main |
 | 07  | 2026-05-09 | Spec 020b — Evolution Daemon（reflect daemon 算法运维） | [specs/022-evolution-daemon/](../specs/022-evolution-daemon/)             | ✅ Spec Ready + Implementation 合并 main |
 | 08  | 2026-05-09 | Spec 020c — Git Lineage（trilogy 终段） | [specs/023-git-lineage/](../specs/023-git-lineage/)                       | ✅ Spec Ready + Implementation 合并 main |
+| 09  | 2026-05-11 | Spec 021 — Pattern Cold-Start（trilogy 数据链补完） | （待 `/speckit-specify` 创建）                                            | Active brainstorm；5 决策已敲定 + 5 项 spot-check 完成，待 ship |
 
 ## 进行中的依赖链
 
