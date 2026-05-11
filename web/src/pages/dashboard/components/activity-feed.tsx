@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useDecisions } from '@/hooks/use-decisions';
 import { useRiskStatus } from '@/hooks/use-risk-status';
 import { cn } from '@/lib/cn';
-import { formatDateTime } from '@/lib/format';
+import { formatCurrency, formatDateTime } from '@/lib/format';
 
 interface FeedItem {
   id: string;
@@ -46,7 +46,7 @@ const ActionBadge = ({
         {Number.isFinite(pnl ?? NaN) ? (
           <span className="ml-1 text-[10px] tabular-nums">
             {(pnl ?? 0) >= 0 ? '+' : ''}
-            {((pnl ?? 0) * 100).toFixed(2)}%
+            {formatCurrency(pnl ?? 0)}
           </span>
         ) : null}
       </span>
@@ -60,7 +60,7 @@ const ActionBadge = ({
         {Number.isFinite(pnl ?? NaN) ? (
           <span className="ml-1 text-[10px] tabular-nums">
             {(pnl ?? 0) >= 0 ? '+' : ''}
-            {((pnl ?? 0) * 100).toFixed(2)}%
+            {formatCurrency(pnl ?? 0)}
           </span>
         ) : null}
       </span>
@@ -74,7 +74,7 @@ const ActionBadge = ({
         {Number.isFinite(pnl ?? NaN) ? (
           <span className="ml-1 text-[10px] tabular-nums">
             {(pnl ?? 0) >= 0 ? '+' : ''}
-            {((pnl ?? 0) * 100).toFixed(2)}%
+            {formatCurrency(pnl ?? 0)}
           </span>
         ) : null}
       </span>
