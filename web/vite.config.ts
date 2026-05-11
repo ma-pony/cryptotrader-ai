@@ -1,5 +1,9 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
+// spec 021: switched from @vitejs/plugin-react (Babel) → -swc (Rust SWC).
+// Same API, different transform engine. Eliminates Babel-side per-file cache
+// state that historically corrupted Vite's module-graph alias resolution
+// after long dev sessions (10× reproduction of "Failed to resolve @/stores/...").
+import react from '@vitejs/plugin-react-swc';
 import path from 'node:path';
 
 // SEC-I3: Reject `VITE_API_KEY` at production build time.
@@ -83,7 +87,9 @@ export default defineConfig({
     // Use 'hidden' so we still emit .map files for upload to a private error
     // tracker but they are not referenced from the JS files served publicly.
     sourcemap: 'hidden',
-    rollupOptions: {
+    // Vite 8 renamed rollupOptions → rolldownOptions for the new rolldown
+    // bundler. Same shape inside.
+    rolldownOptions: {
       output: {
         // FE-m5: split vendor further to avoid a 187 KB gzipped monochunk on first
         // load. Pages that don't use i18next / lucide / react-query can skip those
