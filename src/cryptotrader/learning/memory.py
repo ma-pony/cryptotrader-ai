@@ -452,10 +452,21 @@ def distill_patterns(
             pnl = case.get("final_pnl")
             cycle_id = case.get("cycle_id", "")
             regime_tags = case.get("regime_tags") or []
+            # spec 021: 携带 agent_analyses 原文片段（pattern_summary_inference 用）。
+            # 既有 case 文件把 agent_analyses 写在 body Markdown 里（不是
+            # frontmatter），所以两路兼并读。
+            raw_analyses = case.get("agent_analyses") or {}
+            body_analyses = _parse_agent_analyses_from_body(body)
             applied = _parse_applied_from_body(body)
             for agent, patterns in applied.items():
                 if agent not in VALID_AGENT_IDS:
                     continue
+                snippet = (
+                    raw_analyses.get(agent)
+                    or raw_analyses.get(f"{agent}_agent")
+                    or body_analyses.get(agent)
+                    or ""
+                )
                 agent_pattern_counts.setdefault(agent, {})
                 agent_pattern_cases.setdefault(agent, {})
                 for p in patterns:
@@ -464,7 +475,12 @@ def distill_patterns(
                     if pnl is not None:
                         agent_pattern_counts[agent][p].append(float(pnl))
                     agent_pattern_cases[agent][p].append(
-                        {"cycle_id": cycle_id, "pnl": pnl, "regime_tags": regime_tags}
+                        {
+                            "cycle_id": cycle_id,
+                            "pnl": pnl,
+                            "regime_tags": regime_tags,
+                            "agent_analyses_snippet": snippet,
+                        }
                     )
 
         # spec 021: cold-start — 从高频 applied_patterns 创建新 PatternRecord
@@ -540,6 +556,28 @@ def distill_patterns(
     return run
 
 
+def _parse_agent_analyses_from_body(body: str) -> dict[str, str]:
+    """从 case 文件 body 解析 `### <Agent>_agent` 章节为 {agent_id: text}。
+
+    既有 case 文件用 Markdown sub-heading（如 ``### Tech_agent``）写每个
+    agent 的自然语言分析。该 helper 把它们恢复为 dict，方便 cold-start LLM
+    浓缩用。
+    """
+    result: dict[str, str] = {}
+    # 匹配 "### Tech_agent" / "### Chain_agent" 等 heading，捕获后续直到下一
+    # 个 "### " 或 "## " 为止的内容。
+    section_pat = re.compile(
+        r"^###\s+([A-Za-z]+)_agent\s*\n(.*?)(?=^###\s+|^##\s+|\Z)",
+        re.MULTILINE | re.DOTALL,
+    )
+    for m in section_pat.finditer(body):
+        agent_id = m.group(1).strip().lower()
+        text = m.group(2).strip()
+        if agent_id in VALID_AGENT_IDS and text:
+            result[agent_id] = text
+    return result
+
+
 def _parse_applied_from_body(body: str) -> dict[str, list[str]]:
     """从 body 文本中解析 applied: 引用，返回 {agent: [pattern_name]}。
 
@@ -589,7 +627,8 @@ def _create_pattern_from_cases(
 ) -> PatternRecord:
     """从 case_data_list 创建新 PatternRecord（maturity="observed"）。
 
-    case_data_list 每项含 cycle_id / pnl / regime_tags 字段。
+    case_data_list 每项含 cycle_id / pnl / regime_tags / agent_analyses_snippet 字段。
+    若 snippet 可用，LLM 浓缩为人类可读 description + 结构化 body；否则回退模板。
     """
     pnls = [float(c["pnl"]) for c in case_data_list if c.get("pnl") is not None]
     source_cycles = [c["cycle_id"] for c in case_data_list if c.get("cycle_id")][:5]
@@ -599,21 +638,24 @@ def _create_pattern_from_cases(
             tag_counter[t] += 1
     sorted_tags = sorted(tag_counter.items(), key=lambda x: (-x[1], x[0]))
     regime_tags = [t for t, _ in sorted_tags[:3]]
-    # 计算 pnl_track 统计字段
     n = len(pnls)
     wins = sum(1 for p in pnls if p > 0)
     win_rate = wins / n if n > 0 else 0.0
     avg_pnl = sum(pnls) / n if n > 0 else 0.0
     pnl_track = PnLTrack(cases=n, wins=wins, win_rate=round(win_rate, 4), avg_pnl=round(avg_pnl, 4))
-    body = (
-        f"# {applied_text}\n\n"
-        f"Auto-distilled from {len(case_data_list)} cases.\n\n"
-        f"Source cycles (first 5): {source_cycles}\n"
+
+    # spec 021 enrichment: LLM-distill agent excerpts → description + body.
+    # Soft-fail to template when LLM unavailable.
+    from cryptotrader.learning.evolution.pattern_summary_inference import (
+        infer_pattern_summary,
     )
+
+    description, body = infer_pattern_summary(agent, applied_text, case_data_list)
+
     return PatternRecord(
         name=slug,
         agent=agent,
-        description=f"Auto-distilled pattern: {applied_text} (from {len(case_data_list)} cases)",
+        description=description,
         body=body,
         pnl_track=pnl_track,
         regime_tags=regime_tags,

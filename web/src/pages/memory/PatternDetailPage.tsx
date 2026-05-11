@@ -239,9 +239,12 @@ const PatternDetailContent = () => {
             />
           ) : (
             <ul className="space-y-2">
-              {data.source_cycles.map((cycleId) => (
+              {data.source_cycles.map((cycleId, idx) => (
                 <li key={cycleId}>
-                  <CaseChainCard cycleId={cycleId} />
+                  {/* Default-expand the first cycle so the reader immediately
+                      sees what the agent actually said — avoiding the
+                      "all I see is a slug" UX problem. */}
+                  <CaseChainCard cycleId={cycleId} defaultOpen={idx === 0} />
                 </li>
               ))}
             </ul>

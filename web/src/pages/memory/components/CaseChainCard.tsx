@@ -222,8 +222,15 @@ const Body = ({ data }: { data: CaseDetail }) => {
   );
 };
 
-export const CaseChainCard = ({ cycleId }: { cycleId: string }) => {
-  const [open, setOpen] = useState(false);
+export const CaseChainCard = ({
+  cycleId,
+  defaultOpen = false,
+}: {
+  cycleId: string;
+  /** Auto-expand on mount (used to surface the most representative cycle for a pattern). */
+  defaultOpen?: boolean;
+}) => {
+  const [open, setOpen] = useState(defaultOpen);
   const { data, isLoading, isError } = useCaseDetail(open ? cycleId : null);
 
   return (
