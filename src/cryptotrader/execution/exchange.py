@@ -223,6 +223,14 @@ class LiveExchange:
         # condition.
         _slow_backoff = (ccxt.ExchangeNotAvailable, ccxt.RateLimitExceeded, ccxt.DDoSProtection)
         for i in range(attempts):
+            # Intra-retry cooldown check: a sibling pair in this cycle may
+            # have already exhausted its retries and stamped the venue as
+            # unavailable. Abort early instead of burning another wait
+            # cycle against a known-down endpoint. Only applies after the
+            # first attempt (so we don't break callers that need to probe
+            # before any mark exists).
+            if i > 0 and trade_unavailable_remaining_s(self._exchange_id) > 0:
+                raise ccxt.ExchangeNotAvailable(f"{self._exchange_id} venue cooldown active — short-circuiting retry")
             try:
                 return await coro_fn(*args)
             except _fatal:
