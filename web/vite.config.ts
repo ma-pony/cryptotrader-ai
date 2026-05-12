@@ -1,9 +1,11 @@
 import { defineConfig } from 'vite';
-// spec 021: switched from @vitejs/plugin-react (Babel) → -swc (Rust SWC).
-// Same API, different transform engine. Eliminates Babel-side per-file cache
-// state that historically corrupted Vite's module-graph alias resolution
-// after long dev sessions (10× reproduction of "Failed to resolve @/stores/...").
-import react from '@vitejs/plugin-react-swc';
+// 2026-05-12: swapped @vitejs/plugin-react-swc → @vitejs/plugin-react (Babel).
+// The SWC variant chronically degraded `@/` alias resolution after 4h+ of dev
+// uptime (12+ reproductions; chflags uchg on tsconfig.json + Vite 7→8 upgrade
+// did not help). SWC plugin's own startup banner recommends @vitejs/plugin-react
+// when no SWC plugins are configured — that's our case. Same React Fast Refresh
+// behaviour, slower transform but cache stays sane.
+import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
 // SEC-I3: Reject `VITE_API_KEY` at production build time.
