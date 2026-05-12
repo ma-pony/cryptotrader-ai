@@ -35,6 +35,34 @@ _MARKET_TO_LIMIT_SLIPPAGE = 0.003
 # process so a brief reconnection does not lose the learning.
 _oversized_market_failures: dict[tuple[str, str, str], float] = {}
 
+# spec 021 H3 (option 2): exchange trade-endpoint unavailability cooldown.
+# When _retry exhausts attempts against OKX sCode=50013 / ExchangeNotAvailable,
+# stamp a `wall-clock` deadline. The next risk-gate evaluation in the same
+# cycle string consults this map and short-circuits actionable verdicts to
+# hold, sparing each downstream pair the ~24s slow-backoff round-trip.
+# 5-minute TTL is comfortably longer than one 5-pair cycle (~3 min) while
+# short enough that the next hourly cycle will re-probe instead of stalling.
+_trade_unavailable_until: dict[str, float] = {}
+_TRADE_UNAVAIL_TTL_S = 300
+
+
+def _mark_trade_unavailable(exchange_id: str) -> None:
+    """Record that the venue's trade endpoint is currently rejecting orders."""
+    _trade_unavailable_until[exchange_id] = time.time() + _TRADE_UNAVAIL_TTL_S
+
+
+def trade_unavailable_remaining_s(exchange_id: str) -> float:
+    """Seconds remaining on the trade-endpoint cooldown, 0 if available."""
+    deadline = _trade_unavailable_until.get(exchange_id, 0.0)
+    remaining = deadline - time.time()
+    return remaining if remaining > 0 else 0.0
+
+
+def _is_okx_50013(exc: BaseException) -> bool:
+    """OKX-specific 50013 'Systems are busy' marker (covers ccxt wrapping)."""
+    msg = str(exc)
+    return '"50013"' in msg or "sCode=50013" in msg or "Systems are busy" in msg
+
 
 @runtime_checkable
 class ExchangeAdapter(Protocol):
@@ -86,6 +114,7 @@ class LiveExchange:
         if passphrase:
             config["password"] = passphrase
         self._exchange = exchange_cls(config)
+        self._exchange_id = exchange_id
         self._markets_loaded = False
         self._leverage = leverage
         self._margin_mode = margin_mode
@@ -181,6 +210,14 @@ class LiveExchange:
                 raise  # Fatal errors — don't retry
             except _slow_backoff as e:
                 if i == attempts - 1:
+                    # Final raise — record the venue cooldown so the next
+                    # risk gate in this cycle string short-circuits actionables.
+                    if _is_okx_50013(e):
+                        _mark_trade_unavailable(self._exchange_id)
+                        logger.warning(
+                            "trade endpoint marked unavailable for %ds (50013)",
+                            _TRADE_UNAVAIL_TTL_S,
+                        )
                     raise
                 wait = min(60, 5 * (3**i))
                 logger.warning("Slow-retry %d/%d after %ss (throttle): %s", i + 1, attempts, wait, e)

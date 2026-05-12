@@ -588,6 +588,16 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
         positions = {}
 
     api_latency_ms = await _measure_api_latency(state)
+    # spec 021 H3 (option 2): expose the exchange trade-endpoint cooldown
+    # so ExchangeHealthCheck can short-circuit actionable verdicts when an
+    # earlier pair in this cycle already hit OKX 50013 / ExchangeNotAvailable.
+    exchange_id = state["metadata"].get("exchange_id", "okx")
+    try:
+        from cryptotrader.execution.exchange import trade_unavailable_remaining_s
+
+        trade_unavail_s = trade_unavailable_remaining_s(exchange_id)
+    except Exception:
+        trade_unavail_s = 0.0
     return {
         "total_value": total_value,
         "positions": positions,
@@ -598,6 +608,7 @@ async def _build_risk_portfolio(state: ArenaState, config) -> dict | None:
         "recent_prices": recent_prices,
         "funding_rate": state["data"].get("snapshot_summary", {}).get("funding_rate", 0),
         "api_latency_ms": api_latency_ms,
+        "trade_unavailable_remaining_s": trade_unavail_s,
         "pair": get_pair(state).canonical(),
     }
 
