@@ -115,22 +115,10 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
             tag = " (crowded long)" if ls > 1.5 else " (crowded short)" if ls < 0.7 else ""
             onchain_lines.append(f"Long/short account ratio: {ls:.2f}{tag}")
         if top_t > 0:
-            tag = (
-                " (top traders net long)"
-                if top_t > 1.5
-                else " (top traders net short)"
-                if top_t < 0.7
-                else ""
-            )
+            tag = " (top traders net long)" if top_t > 1.5 else " (top traders net short)" if top_t < 0.7 else ""
             onchain_lines.append(f"Top trader L/S ratio: {top_t:.2f}{tag}")
         if taker > 0:
-            tag = (
-                " (aggressive buying)"
-                if taker > 1.1
-                else " (aggressive selling)"
-                if taker < 0.9
-                else ""
-            )
+            tag = " (aggressive buying)" if taker > 1.1 else " (aggressive selling)" if taker < 0.9 else ""
             onchain_lines.append(f"Taker buy/sell ratio: {taker:.2f}{tag}")
 
         liq_long = float(liq_dict.get("long_24h", 0) or 0)
@@ -138,7 +126,7 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
         if liq_long + liq_short > 0:
             bigger = "long" if liq_long > liq_short else "short"
             onchain_lines.append(
-                f"24h liquidations: long ${liq_long/1e6:.1f}M, short ${liq_short/1e6:.1f}M ({bigger}-heavy)"
+                f"24h liquidations: long ${liq_long / 1e6:.1f}M, short ${liq_short / 1e6:.1f}M ({bigger}-heavy)"
             )
 
         whales = onchain_raw.get("whale_transfers", []) or []
@@ -149,7 +137,7 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
         defi_chg = float(onchain_raw.get("defi_tvl_change_7d", 0) or 0)
         if defi_tvl > 0:
             chg_tag = f" ({defi_chg:+.1%} 7d)" if abs(defi_chg) > 0.001 else ""
-            onchain_lines.append(f"DeFi TVL: ${defi_tvl/1e9:.2f}B{chg_tag}")
+            onchain_lines.append(f"DeFi TVL: ${defi_tvl / 1e9:.2f}B{chg_tag}")
 
         btc_addr = float(onchain_raw.get("btc_active_addresses", 0) or 0)
         btc_fee = float(onchain_raw.get("btc_avg_fee_usd", 0) or 0)
@@ -227,7 +215,14 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
     # prompt stays clean if macro pipeline is fully offline.
     macro_lines: list[str] = []
     if fed_rate_val > 0 or dxy_val > 0:
-        macro_lines.append(f"Fed funds rate: {fed_rate_val:.2f}%" + (f" | DXY: {dxy_val:.2f}" if dxy_val > 0 else ""))
+        # 2026-05-12: the FRED series we consume is DTWEXBGS (Trade-Weighted
+        # USD Broad, base 2006=100), NOT ICE DXY (~100-110 range). Calling
+        # it just "DXY" caused agents to read 118 as crisis-level USD spike
+        # and turn permanently bearish on alts. Render the full series name +
+        # base year + recent 5y envelope so the LLM doesn't anchor on the
+        # wrong reference scale. PROD-2026-05-07 incident root cause.
+        dxy_part = f" | USD Index (DTWEXBGS broad, 2006=100, 5y range 110-125): {dxy_val:.2f}" if dxy_val > 0 else ""
+        macro_lines.append(f"Fed funds rate: {fed_rate_val:.2f}%" + dxy_part)
     if vix > 0 or sp500 > 0:
         bits = []
         if vix > 0:
@@ -278,7 +273,9 @@ def render_crypto_snapshot(snapshot: dict, experience: str = "") -> str:
         parts.append("Macro context:\n  " + "\n  ".join(macro_lines))
 
     if fed_rate_val == 0 and dxy_val == 0 and vix == 0:
-        warnings.append("Macro data unavailable (FRED/DXY/VIX). Do NOT infer from zero values — they are missing.")
+        warnings.append(
+            "Macro data unavailable (FRED/USD index/VIX). Do NOT infer from zero values — they are missing."
+        )
 
     if warnings:
         parts.append("⚠ DATA QUALITY WARNINGS:\n" + "\n".join(f"  - {w}" for w in warnings))
