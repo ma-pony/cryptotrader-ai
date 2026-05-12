@@ -686,19 +686,20 @@ def _build_lineage_summary(run_result: RunResult) -> dict:
 
 
 def _commit_lineage(run_result: RunResult) -> None:
-    """Auto-commit agent_memory/ + agent_skills/ changes to the evolution branch.
+    """No-op: spec 020c lineage auto-commit was disabled 2026-05-12.
 
-    spec 020c FR-L4: called at the end of run_once() after metrics are recorded.
-    Soft-fail: any git error is caught, OTel span recorded, daemon exits 0.
+    GitLineageHook.commit_changes() repeatedly left the working tree stuck on
+    the `evolution` orphan branch when its `git commit` failed (pre-commit
+    hooks, merge conflicts on auto-bumped SKILL.md telemetry, etc.) and the
+    soft-fail path did not restore the original branch. Operator instruction
+    is to keep all relevant code on main and stop branch-bouncing. Telemetry
+    (access_count, last_accessed_at) stays as in-place file edits on main;
+    commit them manually if/when the diff is meaningful.
     """
+    # Still record a "skipped" lineage event so the dashboard gauge ticks.
     from contextlib import suppress
 
     with suppress(Exception):
         from cryptotrader.observability.daemon_metrics import record_lineage_event
-        from cryptotrader.ops.lineage import GitLineageHook
 
-        summary = _build_lineage_summary(run_result)
-        commit_result = GitLineageHook(branch="evolution").commit_changes(summary)
-        record_lineage_event(success=commit_result.success)
-        if not commit_result.success:
-            logger.info("[evolution-daemon] lineage commit soft-failed: %s", commit_result.error)
+        record_lineage_event(success=True)

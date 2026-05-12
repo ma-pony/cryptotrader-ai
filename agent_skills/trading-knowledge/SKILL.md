@@ -5,8 +5,8 @@ description: Shared trading knowledge including market microstructure definition
 scope: shared
 version: '1.0'
 manually_edited: false
-access_count: 450
-last_accessed_at: '2026-05-09T13:24:28.152193+00:00'
+access_count: 476
+last_accessed_at: '2026-05-12T01:28:22.165120+00:00'
 ---
 # Shared Trading Knowledge Skill
 
