@@ -209,11 +209,15 @@ class LiveExchange:
             except _fatal:
                 raise  # Fatal errors — don't retry
             except _slow_backoff as e:
+                # Mark cooldown on EVERY 50013 (not just final raise) so
+                # concurrent pairs in the same cycle string short-circuit
+                # as soon as the first one starts failing. The cycle runs
+                # pairs' place_order in parallel, so a final-raise-only
+                # mark misses pairs that already entered _retry.
+                if _is_okx_50013(e):
+                    _mark_trade_unavailable(self._exchange_id)
                 if i == attempts - 1:
-                    # Final raise — record the venue cooldown so the next
-                    # risk gate in this cycle string short-circuits actionables.
                     if _is_okx_50013(e):
-                        _mark_trade_unavailable(self._exchange_id)
                         logger.warning(
                             "trade endpoint marked unavailable for %ds (50013)",
                             _TRADE_UNAVAIL_TTL_S,
@@ -231,6 +235,19 @@ class LiveExchange:
         return None
 
     async def place_order(self, order: Order) -> dict[str, Any]:
+        # spec 021 H3 (option 2): venue trade-endpoint cooldown short-circuit.
+        # If a sibling pair in this cycle string already exhausted retries
+        # on 50013 (or one of its retries marked the cooldown mid-flight),
+        # raise immediately so we don't spend another ~24s walking the
+        # slow-retry ladder against a known-down endpoint.
+        cooldown = trade_unavailable_remaining_s(self._exchange_id)
+        if cooldown > 0:
+            import ccxt
+
+            raise ccxt.ExchangeNotAvailable(
+                f"{self._exchange_id} trade endpoint in cooldown ({cooldown:.0f}s remaining) — 50013 fail-fast"
+            )
+
         await self._ensure_markets()
         await self._ensure_leverage(order.pair)
 
