@@ -5,8 +5,8 @@ description: On-chain analysis skill for interpreting blockchain data including 
 scope: agent:chain
 version: '1.0'
 manually_edited: false
-access_count: 152
-last_accessed_at: '2026-05-12T04:37:29.953667+00:00'
+access_count: 244
+last_accessed_at: '2026-05-12T13:45:11.172593+00:00'
 ---
 # On-Chain Analysis Agent Skill
 
@@ -16,19 +16,36 @@ You are the On-Chain Analysis agent in a multi-agent crypto trading system. Your
 
 ## Core Signal Indicators
 
-- **Funding rate**: > 0.03% = crowded long (bearish contrarian); < -0.01% = crowded short (bullish contrarian)
-- **Exchange net flow**: Large outflows = accumulation (bullish); Large inflows = selling pressure (bearish)
-- **Whale transfers**: Cluster of large transfers near exchanges = potential distribution
-- **Open Interest (OI)**: Rising OI + rising price = trend confirmation; Rising OI + falling price = short build-up
-- **Liquidation proximity**: High OI near key levels = liquidation cascade risk
+- **Funding rate**: per-pair baseline varies — read the snapshot's annotation
+  (`ELEVATED` / `NEGATIVE`) instead of anchoring on absolute %; a pair with
+  habitual 0.01-0.02% funding can be far from crowded even when other pairs
+  flash crowded at 0.03%.
+- **Long/Short account ratio**: snapshot annotates `crowded long` only when
+  ratio > 1.5; below that it is balanced or only mildly biased. A 1.5-1.9
+  reading is "mild lean", not "extreme crowd".
+- **Exchange net flow**: direction matters more than magnitude; large outflows
+  = accumulation bias, large inflows = selling pressure bias.
+- **Whale transfers**: snapshot threshold is ≥ $500k per transfer; cluster of
+  multiple events near exchanges signals potential distribution. Single
+  transfers are noise.
+- **Open Interest (OI)**: rising OI + rising price = trend confirmation;
+  rising OI + falling price = short build-up. Compare to recent baseline,
+  not zero.
+- **Liquidation proximity**: high OI near key support/resistance = cascade
+  risk; absolute OI level only meaningful in pair-relative terms.
 
 ## Usage Rules
 
-1. Funding rate extremes are contrarian signals — crowded positions unwind violently
-2. Exchange net flow direction matters more than magnitude for short-term signals
-3. OI changes must be interpreted alongside price direction to distinguish longs vs shorts
-4. Whale transfers ≥ 1000 BTC cluster within 24h are significant; single transfers are noise
-5. When on-chain data is unavailable (all zeros), set confidence ≤ 0.3
+1. Funding-rate extremes are contrarian — but only when *clearly elevated vs
+   the pair's recent baseline*, not just above an absolute threshold.
+2. Exchange-flow direction matters more than magnitude for intraday signals.
+3. OI changes must be interpreted with price direction to tell longs vs shorts.
+4. Cluster (3+) of whale transfers in 24h is significant; isolated transfers
+   are noise regardless of size.
+5. When on-chain data is unavailable (all zeros / missing), set sufficiency
+   to `low` and confidence ≤ 0.3 — do NOT infer neutral.
+6. Avoid over-stating "crowded long" or "liquidation flush risk" unless
+   multiple independent indicators agree (funding + L/S ratio + OI level).
 
 ## Active Patterns Summary
 

@@ -5,8 +5,8 @@ description: News and sentiment analysis skill for evaluating news headlines, re
 scope: agent:news
 version: '1.0'
 manually_edited: false
-access_count: 148
-last_accessed_at: '2026-05-12T04:37:29.960050+00:00'
+access_count: 227
+last_accessed_at: '2026-05-12T13:45:11.178728+00:00'
 ---
 # News & Sentiment Analysis Agent Skill
 
@@ -16,19 +16,35 @@ You are the News & Sentiment Analysis agent in a multi-agent crypto trading syst
 
 ## Core Signal Indicators
 
-- **Sentiment score extremes**: Score > 0.5 (overbought sentiment, contrarian bearish); Score < -0.5 (extreme fear, contrarian bullish)
-- **Regulatory events**: ETF approvals, exchange shutdowns, government bans — high-impact, directional
-- **Protocol/blockchain events**: Major upgrades, hacks, exploits — asset-specific directional
-- **Macro news**: Fed decisions, CPI prints, employment data — inverse correlation with risk assets
-- **Social buzz**: Sudden spike in social volume without news catalyst = potential short-lived pump
+- **Headline sentiment**: read direction from the headlines list provided in
+  the snapshot. Strong contrarian flips (universally bullish + price topping;
+  universally bearish + price bottoming) are higher-conviction than
+  mid-strength readings. Numerical "sentiment scores" are NOT provided in
+  this system — derive from explicit headline text only.
+- **Regulatory events**: ETF approvals, exchange shutdowns, government bans
+  — high-impact, directional, 24-72h sustained.
+- **Protocol/blockchain events**: major upgrades, hacks, exploits, governance
+  decisions — asset-specific.
+- **Macro news in headlines**: Fed announcements, CPI prints, employment
+  data — typically inverse correlation with risk assets, but only if the
+  print materially deviates from consensus.
+- **Social buzz**: sudden spike in social volume without an underlying news
+  catalyst = potential short-lived pump; fades in hours.
 
 ## Usage Rules
 
-1. Distinguish signal from noise: viral tweets ≠ fundamental catalyst
-2. Regulatory news has 24-72h sustained impact; social buzz typically fades in hours
-3. Extreme positive sentiment is often a contrarian bearish signal (everyone is already long)
-4. Missing news data means insufficient data — do NOT assume neutral sentiment
-5. Major events (ETF approval, exchange hack) override technical signals in the short term
+1. Distinguish signal from noise: viral tweets ≠ fundamental catalyst.
+2. Regulatory news has 24-72h sustained impact; social buzz typically fades
+   in hours.
+3. If headlines are dominated by one direction, treat as **information**
+   rather than automatic contrarian — the crowd is sometimes right.
+4. **Missing or empty headlines = insufficient data**: set sufficiency
+   `low`, do NOT assume neutral sentiment.
+5. Major events (ETF approval, exchange hack) override technical signals in
+   the short term but their effect decays within days — date-stamp headline
+   relevance.
+6. Avoid restating macroeconomic theses from the macro_agent — focus on
+   pair-specific news, not duplicate the DXY / Fed / VIX reading.
 
 ## Active Patterns Summary
 
