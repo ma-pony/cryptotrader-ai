@@ -5,137 +5,100 @@ description: Shared trading knowledge including market microstructure definition
 scope: shared
 version: '1.0'
 manually_edited: false
-access_count: 1028
-last_accessed_at: '2026-05-12T14:40:27.475965+00:00'
+access_count: 1078
+last_accessed_at: '2026-05-12T14:52:29.903437+00:00'
 ---
 # Shared Trading Knowledge Skill
 
 ## Purpose
 
-This skill provides shared foundational knowledge injected into ALL trading agents. It defines common terminology, regime labels, market microstructure concepts, and attribution rules that ensure consistent interpretation across the four specialized agents.
+Shared framework injected into all four trading agents. Defines common
+output contract, reasoning hygiene, and meta-rules that keep agents from
+talking past each other or absorbing the same bias. The skill is a
+framework, not a rulebook of thresholds — agents are expected to reason
+from the data they actually receive.
 
-## Funding Rate Semantics
+## Output Contract (apply to ALL agents)
 
-- **Positive funding rate** (> 0): longs pay shorts. The snapshot annotates
-  `ELEVATED — crowded long` based on a configured threshold; in absence of
-  that tag, treat as normal directional bias, not a crowd signal.
-- **Negative funding rate** (< 0): shorts pay longs. Snapshot annotates
-  `NEGATIVE — crowded short` only when clearly past the negative threshold.
-- **Funding rate neutral** (small magnitude either side): balanced
-  positioning; do not derive directional signal from funding alone.
-- Anchor on the **snapshot's annotation**, not on a memorized % threshold.
-  Pair-specific baselines vary materially across BTC/ETH/SOL/DOGE/etc.
+Each agent returns:
 
-## Regime Taxonomy
+- `direction`: bullish / bearish / neutral
+- `confidence`: 0–1, calibrated subjective probability your direction is
+  correct over the next cycle (or the appropriate horizon for your
+  agent type)
+- `sufficiency`: high / medium / low — about the data quality, not the
+  conviction of your call
+- `reasoning`: concise text citing only what the snapshot actually shows
 
-The system tags each trading cycle with one or more regime labels. Tag
-thresholds are coarse defaults — pair-specific normalization happens
-downstream:
+Agents do **not** output `scale`, `action`, stop levels, or position
+sizing — those are the verdict / risk / execution layer's job.
 
-| Tag | Condition (default) |
-|-----|---------------------|
-| `high_funding` | funding_rate > configured high threshold (annotated) |
-| `negative_funding` | funding_rate < configured low threshold (annotated) |
-| `high_vol` | volatility > configured threshold |
-| `low_vol` | volatility < configured threshold |
-| `trending_up` | 7d price change clearly positive (~+5% baseline; crypto pairs vary) |
-| `trending_down` | 7d price change clearly negative (~-5% baseline; crypto pairs vary) |
-| `extreme_fear` | Fear & Greed Index ≤ 25 |
-| `extreme_greed` | Fear & Greed Index ≥ 75 |
+## Reasoning Hygiene (apply to ALL agents)
 
-The 5%/7d trend threshold is loose for crypto — DOGE / SOL routinely move
-10-20% per week even in chop. Use this only as a coarse regime label, not
-as a directional trigger.
+1. **Read the snapshot, not your priors.** The same number means different
+   things across pairs, regimes, and timeframes. Anchor on direction of
+   change and on the snapshot's own annotations rather than on numeric
+   thresholds remembered from training.
+2. **Acknowledge contradictions before overriding them.** Never bury
+   counter-evidence inside a one-directional thesis.
+3. **Default to `neutral` when evidence is mixed or amplitude small.**
+   Forcing a lean without conviction makes the verdict layer noisier.
+4. **Require multi-signal corroboration for regime claims.** Single
+   indicators above their threshold are observations, not theses.
+5. **State an invalidation condition.** For any directional call, name
+   what observable event would falsify it — this lets the verdict layer
+   size around risk distance and gives the reflection cycle ground truth.
 
-## Spot vs Perpetual Contract Semantics
+## Cross-Agent Discipline (apply to ALL agents)
 
-- **Spot markets**: Actual asset delivery; no funding; basis = 0
-- **Perpetual futures (perps)**: No expiry; funding mechanism anchors price to spot; high OI indicates leveraged exposure
-- **Basis**: Perp price - Spot price. Positive basis + high funding = leveraged longs dominant
+1. **Do not chain other agents' framings.** If one agent flags a macro
+   read, the others should not parrot it as if it were independent
+   evidence — that creates false consensus.
+2. **Stay in your lane.** Tech reads price action and indicators; chain
+   reads positioning and flow; news reads catalysts; macro reads backdrop.
+   Borrowing each other's framings dilutes signal independence.
+3. **Position state is verdict-layer's job.** Agents do not see current
+   portfolio. Never write thesis sentences like "we are already short"
+   — that is leakage from a layer above.
 
-## Pattern Attribution Rules
+## Data Provenance (apply to ALL agents)
 
-When referencing patterns in your reasoning:
+1. Only cite fields actually present in the snapshot. Never invent
+   values for fields that are missing.
+2. Treat `0` or absent as **missing**, not as a neutral reading.
+3. Note staleness when the snapshot timestamp lags real-time in a
+   fast-moving market — downgrade conviction accordingly.
 
-- **Self-agent context**: Use bare name: `applied: pattern_name`
-- **Cross-agent / verdict context**: Use prefix: `applied: agent_id::pattern_name` (e.g., `applied: tech::rsi_oversold_bounce`)
-- Patterns are defined in each agent's SKILL.md under "Active Patterns Summary"
+## Time Horizon Awareness
 
-## Confidence Calibration Reference
+The system runs hourly cycles. Different signal classes have very
+different information cadences: price-action data refreshes intra-cycle,
+positioning and flow refresh per-trade, news refreshes per-event, and
+macro / sentiment indices typically refresh once per day or slower. Slow-
+cadence signals carry backdrop bias, not fresh evidence every cycle.
 
-| Range | Meaning |
-|-------|---------|
-| 0.9-1.0 | Multiple strong converging signals, no contradictions |
-| 0.7-0.8 | Clear directional signal, minor contradictions |
-| 0.5-0.6 | Mixed signals, slight lean |
-| 0.3-0.4 | Weak/conflicting signals |
-| 0.1-0.2 | Insufficient data or strong contradictions |
+## Pair-Level Independence
 
-## Data Sufficiency Rules
+The system trades multiple pairs in parallel each cycle. When several
+pairs share an underlying driver (a macro shift, a sector rotation), the
+verdict layer can mistake that for independent confirmations. Flag
+shared-driver observations as shared, not multiplicative.
 
-- **high**: Core data sources present and complete — directional call warranted
-- **medium**: Some data missing but key signals present — moderate confidence at best
-- **low**: Most core data missing — set confidence ≤ 0.3, direction = neutral, state "insufficient data"
+## Attribution
 
-## Anti-Anchor Rules (apply to ALL agents)
+When you cite a pattern in `applied:`:
 
-These rules exist because absolute-level anchoring has historically caused
-permanent directional biases (PROD-2026-05-07 / 2026-05-12 DXY incident
-being the canonical example).
+- Self-agent context uses the bare name: `applied: pattern_name`
+- Cross-agent / verdict context uses the prefixed name:
+  `applied: agent_id::pattern_name`
 
-1. **Read direction of change, not absolute level.** A printed value that
-   looks "high" may be the normal range for its scale; the snapshot's own
-   annotations (`ELEVATED`, `crowded long`, etc.) are the calibrated signal.
-2. **Trust the snapshot's annotation over a remembered threshold.** Renderer
-   thresholds are coarse defaults that may not match the LLM's prior
-   knowledge of similar metrics.
-3. **Pair-specific baselines vary.** Funding 0.02% may be elevated on BTC
-   but normal on DOGE. Long/short ratio 1.8 may be crowded on ETH but
-   chronically biased on smaller alts.
-4. **One indicator above its threshold is not a thesis.** Require 2+
-   independent indicators in the same direction before claiming a regime
-   (crowded long, distribution, breakdown, etc.).
-5. **Do NOT chain other agents' framings.** If macro_agent flags USD-rising
-   risk-off, news_agent should not parrot the same conclusion as if it were
-   independent evidence — that creates false consensus.
-6. **State your scale.** When citing a number ("RSI 38", "VIX 23.75"),
-   include the band/interpretation ("RSI 38 = lower-neutral", "VIX 23.75 =
-   normal range") so verdict layer does not mis-weight it.
+Pattern names are short, descriptive labels of what the data showed.
+The catalog evolves over time as the system distills patterns from
+outcomes; agents do not need to memorize a fixed taxonomy.
 
-## Symmetric Coverage Rules (apply to ALL agents)
+## Confidence Calibration
 
-Past audits found agents reflexively framing bearish theses while ignoring
-parallel bullish setups. To rebalance:
-
-1. **Both directions must be examined per cycle.** Briefly state what would
-   make the OPPOSITE direction valid; only then commit to your direction.
-2. **Use symmetric pattern language.** If you have a "crowded long → short"
-   trigger, you must equally honour "crowded short → long" when applicable.
-3. **Default neutral, not default short.** When evidence is mixed or
-   amplitude small, `direction = neutral` is the correct answer — not "lean
-   bearish because nothing's pushing up".
-4. **Counter-evidence weighting.** Acknowledge contradictory signals
-   explicitly BEFORE overriding them. Never bury contradictions inside a
-   directional thesis.
-
-## Position-State Separation (apply to ALL agents)
-
-Agents see market state and (optionally) an `experience` text from prior
-cycles. Agents do NOT see current portfolio positions. Therefore:
-
-1. Do NOT write thesis sentences like "we are already short" — that is the
-   verdict layer's job. Agents only opine on market direction.
-2. If the `experience` text mentions prior positions or outcomes, use it
-   for pattern learning only — do not anchor your current call on whether
-   the system would or would not need to act on it.
-3. Output `direction`, `confidence`, `sufficiency`, `reasoning` — never a
-   `scale` or `action` (those are verdict-layer fields).
-
-## Data Provenance Rules (apply to ALL agents)
-
-1. Only cite fields actually present in the snapshot you were given.
-   Never invent values for fields that are missing.
-2. If a field is `0` or absent, treat as **missing**, not as a neutral
-   reading (see Data Sufficiency Rules above).
-3. Note staleness when the snapshot timestamp lags real-time by hours
-   in a fast-moving market — downgrade conviction accordingly.
+Confidence is a probability, not a vibe. A 0.7 should mean you would
+take this trade 7 times out of 10. A 0.5 means you would be indifferent.
+Above 0.8 should be rare and reserved for cases with strong, mutually
+reinforcing, unambiguous evidence.
