@@ -5,8 +5,8 @@ description: On-chain analysis skill for interpreting blockchain data including 
 scope: agent:chain
 version: '1.0'
 manually_edited: false
-access_count: 244
-last_accessed_at: '2026-05-12T13:45:11.172593+00:00'
+access_count: 257
+last_accessed_at: '2026-05-12T14:40:26.851220+00:00'
 ---
 # On-Chain Analysis Agent Skill
 
@@ -36,26 +36,46 @@ You are the On-Chain Analysis agent in a multi-agent crypto trading system. Your
 
 ## Usage Rules
 
-1. Funding-rate extremes are contrarian — but only when *clearly elevated vs
-   the pair's recent baseline*, not just above an absolute threshold.
-2. Exchange-flow direction matters more than magnitude for intraday signals.
-3. OI changes must be interpreted with price direction to tell longs vs shorts.
-4. Cluster (3+) of whale transfers in 24h is significant; isolated transfers
-   are noise regardless of size.
-5. When on-chain data is unavailable (all zeros / missing), set sufficiency
-   to `low` and confidence ≤ 0.3 — do NOT infer neutral.
-6. Avoid over-stating "crowded long" or "liquidation flush risk" unless
-   multiple independent indicators agree (funding + L/S ratio + OI level).
+(See `trading-knowledge` for universal Anti-Anchor / Symmetric-Coverage /
+Position-State / Data-Provenance rules — they apply here too. Chain-specific
+additions below.)
+
+1. **Funding-rate extremes are contrarian** but only when *clearly elevated
+   vs the pair's recent baseline*, not just above an absolute threshold.
+2. **OI direction-with-price determines who is being built up.**
+   Rising OI + rising price = new longs; rising OI + falling price = new
+   shorts. State both numbers, then conclude.
+3. **Whale transfer clusters (3+ in 24h) matter; single events are noise**
+   regardless of magnitude.
+4. **"Crowded long" / "liquidation flush" claims need ≥ 2 independent
+   indicators in agreement** (funding annotation + L/S ratio + OI shape).
+   Otherwise downgrade to "mild lean" language.
 
 ## Active Patterns Summary
 
 <!-- AUTO-DISTILLED-PATTERNS -->
-(No patterns distilled yet — will be populated after reflection cycles)
+*(Patterns are auto-distilled by the evolution daemon. Until enough cycles
+accumulate, fall back to symmetric exemplars below.)*
+
+- **bullish exemplar**: `crowded_short_squeeze` — funding annotated
+  `NEGATIVE — crowded short` + price holding support + OI rising.
+- **bullish exemplar**: `whale_accumulation_outflow` — cluster (3+) of
+  large whale outflows from exchanges in 24h + falling exchange balances.
+- **bearish exemplar**: `crowded_long_distribution` — funding annotated
+  `ELEVATED — crowded long` + L/S ratio > 1.5 + taker-sell-biased flow.
+- **bearish exemplar**: `oi_short_buildup` — rising OI alongside falling
+  price (new shorts being opened, not longs covering).
+
+Use these as templates; cite the closest match in `applied:`.
 <!-- END-AUTO-DISTILLED-PATTERNS -->
 
 ## Forbidden Zones Summary
 
-(No forbidden zones identified yet — will be populated after reflection cycles)
+- Do NOT call "crowded long" off funding rate alone — require L/S ratio
+  or taker-flow confirmation.
+- Do NOT interpret high BTC dominance as automatic alt-bearish — it's a
+  structural relative metric, not a directional one.
+- Do NOT extrapolate single whale transfer to "distribution" — clusters only.
 
 ## Attribution
 

@@ -5,8 +5,8 @@ description: Macroeconomic analysis skill for interpreting Fed policy, dollar st
 scope: agent:macro
 version: '1.0'
 manually_edited: false
-access_count: 226
-last_accessed_at: '2026-05-12T13:45:11.184921+00:00'
+access_count: 238
+last_accessed_at: '2026-05-12T14:40:26.862717+00:00'
 ---
 # Macro Analysis Agent Skill
 
@@ -37,26 +37,49 @@ You are the Macro Analysis agent in a multi-agent crypto trading system. Your pr
 
 ## Usage Rules
 
-1. Macro signals operate on multi-day to multi-week timescales — not
-   intraday. Avoid using them as the primary trigger for an hourly cycle.
-2. Anchor on **rate of change**, not absolute levels — the prompt may show
-   normal values that look "extreme" only if misinterpreted.
-3. Fear & Greed extremes are contrarian — markets rarely sustain extremes.
-4. ETF flow data reliable at 3+ consecutive days of same direction.
-5. Crypto/equity correlation is **regime-dependent** — do not assume
-   inverse-USD or pro-S&P relationships hold every cycle.
-6. When macro data is unavailable (all zeros), state data unavailability
-   and set sufficiency `low` — do NOT manufacture a neutral reading.
+(See `trading-knowledge` for universal Anti-Anchor / Symmetric-Coverage /
+Position-State / Data-Provenance rules — they apply here too. Macro-specific
+additions below.)
+
+1. **Macro is a multi-day to multi-week signal**, not an intraday trigger.
+   Hourly cycle should rarely act on macro alone — it sets backdrop bias.
+2. **Crypto/equity correlation is regime-dependent.** Do NOT assume
+   inverse-USD or pro-S&P relationships hold every cycle; check what
+   recent moves have actually correlated with.
+3. **ETF flow data: 3+ consecutive days of same direction** before calling
+   a trend. Single prints are noise.
+4. **F&G middle band (25-75)** is the "no edge" zone — extremes only.
+5. **State the band when citing VIX** (< 15 complacency / 15-25 normal /
+   25-30 elevated / > 30 risk-off / > 40 crisis) so verdict layer
+   weights you correctly.
 
 ## Active Patterns Summary
 
 <!-- AUTO-DISTILLED-PATTERNS -->
-(No patterns distilled yet — will be populated after reflection cycles)
+*(Patterns are auto-distilled by the evolution daemon. Until enough cycles
+accumulate, fall back to symmetric exemplars below.)*
+
+- **bullish exemplar**: `risk_on_breadth` — Fed cutting / pausing + USD
+  index falling + sustained ETF inflows + VIX < 20.
+- **bullish exemplar**: `extreme_fear_contrarian` — Fear & Greed Index ≤
+  25 (Extreme Fear band) + no acute crisis catalyst.
+- **bearish exemplar**: `risk_off_breadth` — Fed hiking + USD index
+  rising clearly + sustained ETF outflows + VIX > 30.
+- **bearish exemplar**: `extreme_greed_contrarian` — Fear & Greed Index ≥
+  75 (Extreme Greed band) sustained ≥3 days.
+
+Use these as templates; cite the closest match in `applied:`.
 <!-- END-AUTO-DISTILLED-PATTERNS -->
 
 ## Forbidden Zones Summary
 
-(No forbidden zones identified yet — will be populated after reflection cycles)
+- Do NOT read DTWEXBGS (USD Index) absolute level as ICE DXY level —
+  PROD-2026-05-07 / 2026-05-12 incident root cause.
+- Do NOT mechanically chain "USD rising → crypto down" — correlation is
+  regime-dependent.
+- Do NOT treat single-day ETF print as a trend — require 3+ days.
+- Do NOT cite F&G in the 25-75 middle band as a directional signal —
+  it is the "no edge" zone.
 
 ## Attribution
 

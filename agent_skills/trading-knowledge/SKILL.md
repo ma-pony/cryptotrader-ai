@@ -5,8 +5,8 @@ description: Shared trading knowledge including market microstructure definition
 scope: shared
 version: '1.0'
 manually_edited: false
-access_count: 976
-last_accessed_at: '2026-05-12T13:45:11.809971+00:00'
+access_count: 1028
+last_accessed_at: '2026-05-12T14:40:27.475965+00:00'
 ---
 # Shared Trading Knowledge Skill
 
@@ -101,3 +101,41 @@ being the canonical example).
 6. **State your scale.** When citing a number ("RSI 38", "VIX 23.75"),
    include the band/interpretation ("RSI 38 = lower-neutral", "VIX 23.75 =
    normal range") so verdict layer does not mis-weight it.
+
+## Symmetric Coverage Rules (apply to ALL agents)
+
+Past audits found agents reflexively framing bearish theses while ignoring
+parallel bullish setups. To rebalance:
+
+1. **Both directions must be examined per cycle.** Briefly state what would
+   make the OPPOSITE direction valid; only then commit to your direction.
+2. **Use symmetric pattern language.** If you have a "crowded long → short"
+   trigger, you must equally honour "crowded short → long" when applicable.
+3. **Default neutral, not default short.** When evidence is mixed or
+   amplitude small, `direction = neutral` is the correct answer — not "lean
+   bearish because nothing's pushing up".
+4. **Counter-evidence weighting.** Acknowledge contradictory signals
+   explicitly BEFORE overriding them. Never bury contradictions inside a
+   directional thesis.
+
+## Position-State Separation (apply to ALL agents)
+
+Agents see market state and (optionally) an `experience` text from prior
+cycles. Agents do NOT see current portfolio positions. Therefore:
+
+1. Do NOT write thesis sentences like "we are already short" — that is the
+   verdict layer's job. Agents only opine on market direction.
+2. If the `experience` text mentions prior positions or outcomes, use it
+   for pattern learning only — do not anchor your current call on whether
+   the system would or would not need to act on it.
+3. Output `direction`, `confidence`, `sufficiency`, `reasoning` — never a
+   `scale` or `action` (those are verdict-layer fields).
+
+## Data Provenance Rules (apply to ALL agents)
+
+1. Only cite fields actually present in the snapshot you were given.
+   Never invent values for fields that are missing.
+2. If a field is `0` or absent, treat as **missing**, not as a neutral
+   reading (see Data Sufficiency Rules above).
+3. Note staleness when the snapshot timestamp lags real-time by hours
+   in a fast-moving market — downgrade conviction accordingly.
