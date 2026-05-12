@@ -68,7 +68,12 @@ class Scheduler:
         #   (b) APScheduler / aiohttp internals have a moment to bind signal
         #       handlers and event loop before being pelted with traffic.
         # max_instances=1: prevents overlap when previous cycle is still running
-        # misfire_grace_time=1: discard missed triggers after 1s instead of catching up
+        # misfire_grace_time=300 (5 min): tolerate brief event-loop blockage
+        # (frontend polling burst, OKX slow round-trips, GC pause) without
+        # silently dropping the trigger. 1s was too strict — 2026-05-12 11:21
+        # UTC cycle missed fire silently because an unidentified blip
+        # delayed the trigger by >1s; cycle came back only after API restart.
+        # 5-min grace ≪ 60-min interval so no risk of doubling up.
         _startup_delay_s = 15
         self._scheduler.add_job(
             self._run_cycle,
@@ -77,7 +82,7 @@ class Scheduler:
             name="Trading cycle",
             next_run_time=datetime.now(UTC) + timedelta(seconds=_startup_delay_s),
             max_instances=1,
-            misfire_grace_time=1,
+            misfire_grace_time=300,
         )
 
         # Register daily summary job — cron at configured hour UTC
@@ -87,7 +92,7 @@ class Scheduler:
             id="daily_summary",
             name="Daily summary",
             max_instances=1,
-            misfire_grace_time=1,
+            misfire_grace_time=300,
         )
 
         # Start price trigger engine if configured
@@ -102,7 +107,7 @@ class Scheduler:
                 id="funding_rate_poll",
                 name="Funding rate poll",
                 max_instances=1,
-                misfire_grace_time=1,
+                misfire_grace_time=300,
             )
             self._scheduler.add_job(
                 self._cleanup_expired_rules,
@@ -110,7 +115,7 @@ class Scheduler:
                 id="cleanup_expired_rules",
                 name="Cleanup expired trigger rules",
                 max_instances=1,
-                misfire_grace_time=1,
+                misfire_grace_time=300,
             )
 
         # Signal handlers for graceful shutdown

@@ -176,7 +176,10 @@ max_acceptable_risk = "MEDIUM"
 token_tax_threshold = 10
 
 [execution]
-order_wait_seconds = 30
+# spec 021 H3 ops: 沙箱撮合偶尔延迟到 30-60s 才 fill，30s 太短导致
+# 我们误以为单挂掉 + 自动 cancel 失败 + 累积 ghost positions 同 OKX
+# 状态发散。提到 120s 兜底沙箱慢撮合，对真实交易所影响很小（成交常 <5s）。
+order_wait_seconds = 120
 retry_attempts = 3
 # graph_timeout_s 600s 留 margin：5-pair 并发 + evaluate_node 慢调用（180-267s
 # in prod，与 spec 018 IVE classify_case 串行 LLM 有关）。300s 时观察到大量
