@@ -58,10 +58,29 @@ def trade_unavailable_remaining_s(exchange_id: str) -> float:
     return remaining if remaining > 0 else 0.0
 
 
-def _is_okx_50013(exc: BaseException) -> bool:
-    """OKX-specific 50013 'Systems are busy' marker (covers ccxt wrapping)."""
+def _is_venue_unavailable(exc: BaseException) -> bool:
+    """Whether the exception looks like a persistent venue unavailability
+    (50013 throttle, 50001/50002/50026 maintenance, ccxt OnMaintenance /
+    ExchangeNotAvailable). Any of these justify the cooldown mark — we
+    want to back off all retries and let downstream pairs short-circuit
+    instead of hammering an already-broken endpoint.
+
+    String-based codes cover the cases where ccxt wraps the OKX response
+    in a generic ExchangeError instead of OnMaintenance. The isinstance
+    branch covers the cases where ccxt classified it correctly.
+    """
     msg = str(exc)
-    return '"50013"' in msg or "sCode=50013" in msg or "Systems are busy" in msg
+    for code in ('"50013"', '"50001"', '"50002"', '"50026"'):
+        if code in msg:
+            return True
+    if "Systems are busy" in msg or "Service temporarily unavailable" in msg:
+        return True
+    try:
+        import ccxt
+
+        return isinstance(exc, (ccxt.OnMaintenance, ccxt.ExchangeNotAvailable, ccxt.DDoSProtection))
+    except ImportError:
+        return False
 
 
 @runtime_checkable
@@ -209,18 +228,20 @@ class LiveExchange:
             except _fatal:
                 raise  # Fatal errors — don't retry
             except _slow_backoff as e:
-                # Mark cooldown on EVERY 50013 (not just final raise) so
-                # concurrent pairs in the same cycle string short-circuit
-                # as soon as the first one starts failing. The cycle runs
-                # pairs' place_order in parallel, so a final-raise-only
-                # mark misses pairs that already entered _retry.
-                if _is_okx_50013(e):
+                # Mark cooldown on EVERY persistent-unavailability error
+                # (50013 throttle, 50001/50002/50026 maintenance, etc.),
+                # not only the final raise. Concurrent pairs in the same
+                # cycle string short-circuit as soon as the first one
+                # starts failing — both read (get_positions) and write
+                # (place_order) paths consult the same marker.
+                if _is_venue_unavailable(e):
                     _mark_trade_unavailable(self._exchange_id)
                 if i == attempts - 1:
-                    if _is_okx_50013(e):
+                    if _is_venue_unavailable(e):
                         logger.warning(
-                            "trade endpoint marked unavailable for %ds (50013)",
+                            "venue marked unavailable for %ds (%s)",
                             _TRADE_UNAVAIL_TTL_S,
+                            type(e).__name__,
                         )
                     raise
                 wait = min(60, 5 * (3**i))
@@ -594,6 +615,20 @@ class LiveExchange:
         Returns: {pair: {"amount": float, "side": str, "avg_price": float,
                          "unrealized_pnl": float, "liquidation_price": float | None}}
         """
+        # spec 021 H3 (option 2 extension): when the venue read endpoint is
+        # in cooldown (set by a prior get_positions / place_order that hit
+        # 50001 OnMaintenance / 50013 / RateLimitExceeded), bail immediately.
+        # The existing portfolio_unknown risk check converts this to a
+        # conservative REJECT, sparing 4 trailing pairs ~20s slow-retry
+        # each (~80s/cycle when sandbox is fully down).
+        cooldown = trade_unavailable_remaining_s(self._exchange_id)
+        if cooldown > 0:
+            import ccxt
+
+            raise ccxt.ExchangeNotAvailable(
+                f"{self._exchange_id} venue in cooldown ({cooldown:.0f}s remaining) — fetch_positions fail-fast"
+            )
+
         await self._ensure_markets()
         positions: dict[str, dict[str, Any]] = {}
         try:
