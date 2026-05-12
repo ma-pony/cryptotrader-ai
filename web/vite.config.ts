@@ -41,23 +41,14 @@ export default defineConfig({
         changeOrigin: true,
       },
     },
-    // Switch to polling mode. We tried scope-limiting chokidar fsevents
-    // first (ignored: ['../src/**', '../.venv/**', ...]), which reduced the
-    // fsevents-overflow blast radius but didn't fix the underlying issue —
-    // after a long-running dev session (~75 min, 10+ commits, restored
-    // working-tree files, etc.) Vite's in-memory module resolver gradually
-    // degrades and `@/stores/use-*` aliases start failing on healthy files.
-    //
-    // Polling sidesteps the fsevents path entirely:
-    //   - chokidar stats files at fixed intervals instead of waiting for
-    //     OS notifications, so the resolver state doesn't drift on weird
-    //     event bursts (git checkout, pytest cache writes, etc.).
-    //   - ~1s HMR latency vs ~100ms for fsevents — fine for a single dev.
-    //   - CPU cost ~1-2% with `interval: 1500`, scoped to web/src.
+    // 2026-05-12: switched back to fsevents (usePolling=false).
+    // Operator observation: "@/" alias resolution only fails *after a code
+    // edit triggers HMR*, never on idle uptime. Polling + 1.5s interval was
+    // generating duplicate change events that raced the import-analysis
+    // resolver during invalidate-and-retransform. fsevents fires once per
+    // real change, eliminating the race. The `ignored` list still scopes
+    // the watcher to web/ so we never crawl Python source / .venv / etc.
     watch: {
-      usePolling: true,
-      interval: 1500,
-      binaryInterval: 3000,
       ignored: [
         '**/node_modules/**',
         '**/.git/**',

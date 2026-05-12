@@ -461,6 +461,48 @@ async def _build_close_order(pair: str, price: float, state: ArenaState):
     return Order(pair=pair, side="sell" if pos_amount > 0 else "buy", amount=abs(pos_amount), price=price)
 
 
+def _is_reversal(side: str, existing_amount: float) -> bool:
+    """True when entry signal direction opposes the held position."""
+    return (side == "buy" and existing_amount < 0) or (side == "sell" and existing_amount > 0)
+
+
+def _build_reversal_close_order(
+    pair: str,
+    side: str,
+    price: float,
+    pos: dict,
+    existing_amount: float,
+    state: ArenaState,
+):
+    """Close-all-existing path for spec 021 H3 (B2) reversal.
+
+    Why: OKX in long_short_mode rejects (51169) a same-direction
+    operation when the existing position is on the opposite side. We
+    close this cycle and let next cycle reopen — observable as two
+    discrete decision_commits, no multi-order-per-cycle plumbing.
+    """
+    from cryptotrader.models import Order
+
+    close_side = "sell" if existing_amount > 0 else "buy"
+    close_amount = abs(existing_amount)
+    logger.info(
+        "Reversal detected: signal=%s but holding %g %s — closing existing first (next cycle opens new)",
+        side,
+        existing_amount,
+        pair,
+    )
+    state["data"]["execution_error"] = (
+        f"reversal_close: closing {existing_amount:g} {pair} before reopening on next cycle"
+    )
+    try:
+        avg_entry = float(pos.get("avg_price", 0.0) or 0.0)
+        if avg_entry > 0:
+            state["data"]["realized_pnl"] = float((price - avg_entry) * existing_amount)
+    except (TypeError, ValueError):
+        pass
+    return Order(pair=pair, side=close_side, amount=close_amount, price=price)
+
+
 async def _build_entry_order(verdict: dict, pair: str, price: float, state: ArenaState):
     """Build an order for new entry or add-to-position (加仓).
 
@@ -489,8 +531,9 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
 
     # Check existing position from exchange — if already holding same direction, only order the delta
     existing_amount = 0.0
+    pos: dict = {}
     try:
-        pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {})
+        pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {}) or {}
         existing_amount = pos.get("amount", 0.0)
     except Exception:
         logger.warning("Position sizing from exchange failed", exc_info=True)
@@ -511,6 +554,11 @@ async def _build_entry_order(verdict: dict, pair: str, price: float, state: Aren
             f"spot_short_no_inventory: cannot sell {pair} on spot — current holdings={existing_amount:g}"
         )
         return None
+
+    # spec 021 H3 (B2): reversal goes through a dedicated helper so the
+    # main builder stays inside the C901 complexity budget.
+    if market_type != "spot" and _is_reversal(side, existing_amount):
+        return _build_reversal_close_order(pair, side, price, pos, existing_amount, state)
 
     if side == "buy" and existing_amount > 0:
         amount = max(0.0, target_amount - existing_amount)

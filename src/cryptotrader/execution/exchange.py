@@ -166,11 +166,25 @@ class LiveExchange:
             attempts = load_config().execution.retry_attempts
 
         _fatal = (ccxt.AuthenticationError, ccxt.PermissionDenied, ccxt.BadSymbol, ccxt.InsufficientFunds)
+        # spec 021 H3: OKX sandbox throttles burst swap orders with
+        # sCode=50013 "Systems are busy" → ExchangeNotAvailable. Default
+        # 2^i backoff (max 16s) was too aggressive — every retry hit the
+        # same throttle window. Scale these classes with 5·3^i (5/15/45/60s)
+        # so the throttle has time to clear. RateLimitExceeded gets the
+        # same treatment since OKX uses both interchangeably for the same
+        # condition.
+        _slow_backoff = (ccxt.ExchangeNotAvailable, ccxt.RateLimitExceeded, ccxt.DDoSProtection)
         for i in range(attempts):
             try:
                 return await coro_fn(*args)
             except _fatal:
                 raise  # Fatal errors — don't retry
+            except _slow_backoff as e:
+                if i == attempts - 1:
+                    raise
+                wait = min(60, 5 * (3**i))
+                logger.warning("Slow-retry %d/%d after %ss (throttle): %s", i + 1, attempts, wait, e)
+                await asyncio.sleep(wait)
             except Exception as e:
                 if i == attempts - 1:
                     raise
@@ -555,13 +569,41 @@ class LiveExchange:
                 base_amount = contracts * contract_size
                 side = p.get("side", "long")
                 amount = base_amount if side == "long" else -base_amount
-                positions[symbol] = {
-                    "amount": amount,
-                    "side": side,
-                    "avg_price": float(p.get("entryPrice", 0) or 0),
-                    "unrealized_pnl": float(p.get("unrealizedPnl", 0) or 0),
-                    "liquidation_price": float(p["liquidationPrice"]) if p.get("liquidationPrice") else None,
-                }
+                entry_px = float(p.get("entryPrice", 0) or 0)
+                upnl = float(p.get("unrealizedPnl", 0) or 0)
+                liq = float(p["liquidationPrice"]) if p.get("liquidationPrice") else None
+                # spec 021 H3 (B1): same symbol may appear multiple times when
+                # OKX has parallel isolated + cross positions on the same
+                # contract (long_short_mode allows it). Aggregate by signed
+                # amount and weight avg_price by |size| so the downstream
+                # model sees the true net exposure instead of just the last
+                # row that won the dict overwrite.
+                if symbol in positions:
+                    prev = positions[symbol]
+                    new_amount = prev["amount"] + amount
+                    prev_abs, cur_abs = abs(prev["amount"]), abs(amount)
+                    total_abs = prev_abs + cur_abs
+                    if total_abs > 0:
+                        avg_px = (prev["avg_price"] * prev_abs + entry_px * cur_abs) / total_abs
+                    else:
+                        avg_px = entry_px
+                    positions[symbol] = {
+                        "amount": new_amount,
+                        "side": "long" if new_amount > 0 else ("short" if new_amount < 0 else prev["side"]),
+                        "avg_price": avg_px,
+                        "unrealized_pnl": prev["unrealized_pnl"] + upnl,
+                        # liquidation_price is per-position; aggregated number
+                        # is meaningless — drop to None when ambiguous.
+                        "liquidation_price": None if prev["liquidation_price"] != liq else liq,
+                    }
+                else:
+                    positions[symbol] = {
+                        "amount": amount,
+                        "side": side,
+                        "avg_price": entry_px,
+                        "unrealized_pnl": upnl,
+                        "liquidation_price": liq,
+                    }
         except Exception as exc:
             # Spec 013 deep-review production FINDING-2: narrow the catch.
             # Transient ccxt errors (network blip / rate limit) MUST propagate so
