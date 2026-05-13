@@ -70,7 +70,7 @@
 | MacroAgent | agents/macro.py | ✅ | 使用真实宏观数据 |
 | Verbal Reinforcement | learning/verbal.py | ✅ | 检索相似历史 → 格式化经验 → 注入 prompt |
 | Journal 搜索 | journal/search.py | ✅ | 按 funding_rate/volatility 范围检索 |
-| 权重校准 | journal/calibrate.py | ✅ | 按历史准确率计算 Agent 权重 |
+| 经验闭环 | ops/daemon.py（spec 020b）| ✅ | Evolution Daemon pattern_extraction → SKILL.md AUTO-DISTILLED-PATTERNS（取代已删的 journal/calibrate.py 路径）|
 | API /analyze | api/routes/analyze.py | ✅ | 完整 graph 调用 |
 | API /health | api/routes/health.py | ✅ | 系统状态检查 |
 | API /journal | api/routes/journal.py | ✅ | log + show |
@@ -419,7 +419,7 @@ Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 
 | LiveExchange 未验证 | Phase 1 | ✅ 已解决 | 生产级加固：重试、熔断、凭证系统 |
 | 无定时调度 | Phase 2 | ✅ 已解决 | APScheduler 3.x（IntervalTrigger + CronTrigger） |
 | 无通知机制 | Phase 2 | ✅ 已解决 | Webhook 通知（交易/拒绝/熔断/对账/每日摘要） |
-| Agent 等权 | Phase 2 | 部分解决 | 校准系统已存在（calibrate.py），依赖历史数据积累 |
+| Agent 等权 | Phase 2 | 已废弃 | 原校准系统（calibrate.py）于 2026-05-13 删除——与 round-3 minimal-skill 反锚定冲突。Verdict 现以 LLM 综合 4 agent 输出，无固定权重；Evolution Daemon 通过 pattern_extraction 间接强化 high-quality agent 信号 |
 
 ---
 

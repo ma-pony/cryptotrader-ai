@@ -483,7 +483,7 @@ src/cryptotrader/
 ├── journal/
 │   ├── store.py       # JournalStore（PostgreSQL + 内存降级）
 │   ├── search.py      # 相似搜索（资金费率、波动率、趋势）
-│   └── calibrate.py   # 逐智能体准确率追踪 + 偏差检测
+│   └── commit.py      # DecisionCommit 不可变哈希链 schema
 ├── learning/
 │   ├── verbal.py      # 语言强化（regime 感知历史案例检索）
 │   ├── reflect.py     # 结构化经验记忆生成（ExperienceMemory JSON）

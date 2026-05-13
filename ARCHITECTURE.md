@@ -852,22 +852,16 @@ class DecisionJournal:
 
     async def update_pnl(self, hash: str, pnl: float, retrospective: str):
         """异步更新盈亏和复盘（交易结束后）"""
-
-    async def accuracy_report(self, days=30) -> dict:
-        """统计各 Agent 的预测准确率，用于权重校准"""
 ```
 
-### 8.4 Agent 权重校准
+### 8.4 经验反馈闭环（spec 020b Evolution Daemon）
 
-```python
-async def calibrate_weights(journal: DecisionJournal, days=30):
-    """基于历史准确率调整 Agent 在 Verdict 中的权重"""
-    report = await journal.accuracy_report(days)
-    # report: {"tech_agent": 0.62, "chain_agent": 0.71, ...}
-    # 准确率高的 Agent 在 verdict 中权重更大
-    total = sum(report.values())
-    return {agent: acc / total for agent, acc in report.items()}
-```
+历史决策 + PnL 不再通过"统计校准"反推 Agent 权重——2026-05-13 删除该路径（与
+round-3 minimal-skill 反锚定理念冲突，且 23 样本量级在 crypto 噪声中无统计意义）。
+取而代之：**Evolution Daemon 每日运行 pattern_extraction**，把成功 case 抽成
+patterns 写入对应 `agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS`
+段；Pareto rerank 把低质量 rule archive 掉。Agent 通过 skill 加载自然受益于
+正向积累，不再读"你过去 70% 做多倾向"这类警示文本。
 
 ---
 
@@ -1042,10 +1036,9 @@ cryptotrader-ai/
 │       │
 │       ├── journal/           # Decision Journal
 │       │   ├── __init__.py
-│       │   ├── commit.py      # DecisionCommit 模型
+│       │   ├── commit.py      # DecisionCommit 模型（不可变哈希链）
 │       │   ├── store.py       # 存储（PostgreSQL）
-│       │   ├── search.py      # 相似条件检索
-│       │   └── calibrate.py   # Agent 权重校准
+│       │   └── search.py      # 相似条件检索
 │       │
 │       ├── learning/          # 经验学习
 │       │   ├── __init__.py

@@ -19,7 +19,7 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 - **Multi-agent debate** — 4 agents analyze independently, then cross-challenge each other over 2-3 rounds; debate gate skips debate on consensus or confusion for progressive filtering
 - **Three graph modes** — Full debate pipeline with debate gate, lite (backtest), bull/bear adversarial with judge
 - **11-check risk gate** — Pure rules, no LLM: position limits, CVaR, correlation, circuit breakers
-- **Decision journal** — Git-like immutable commit chain with similarity search and calibration
+- **Decision journal** — Git-like immutable commit chain with similarity search; outcomes feed the evolution daemon's pattern distillation
 - **Verbal reinforcement** — Past decisions injected into agent prompts for experience-based learning
 - **Structured experience memory** — GSSC pipeline (gather → select → structure) with regime-aware retrieval, ExperienceRule/ExperienceMemory JSON, and 5-layer anti-overfitting defense
 - **Backtesting engine** — Historical simulation with realistic cost modeling and no look-ahead bias
@@ -74,7 +74,7 @@ Every agent's system prompt includes a **5-point pre-signal checklist**: contrad
 - **GSSC pipeline**: `context.py` implements gather → select → structure: collects regime-matched cases and structured rules, scores by relevance, fits within token budget, and injects as structured context into agent prompts
 - **Structured experience memory**: `reflect.py` generates `ExperienceMemory` JSON (success_patterns, forbidden_zones, strategic_insights) with `ExperienceRule` entries per pattern. Rules carry maturity levels (observation → hypothesis → rule) and empirical win rates
 - **Anti-overfitting 5-layer defense**: minimum sample thresholds, maturity gating, regime-aware verification (win rates computed only within matching regime), LLM constraint prompts, code-verified win rates
-- **Calibration**: Per-agent accuracy tracking with bias detection (overconfidence, directional lean, neutral-defaulting). Corrections injected into verdict prompt
+- **Evolution daemon**: A standalone process runs daily Pareto re-ranking + regime re-clustering + skill-proposal triggers + pattern extraction. Distilled patterns are written into each `agent_skills/<id>/SKILL.md` under the `AUTO-DISTILLED-PATTERNS` section, replacing the legacy bias-correction injection path (removed 2026-05-13: was contradicting the round-3 minimal-skill anti-anchor philosophy)
 
 ## Quickstart
 
@@ -461,7 +461,7 @@ src/cryptotrader/
 ├── journal/
 │   ├── store.py       # JournalStore (PostgreSQL + in-memory fallback)
 │   ├── search.py      # Similarity search (funding rate, volatility, trend)
-│   └── calibrate.py   # Per-agent accuracy tracking + bias detection
+│   └── commit.py      # DecisionCommit + immutable hash-chained schema
 ├── learning/
 │   ├── verbal.py      # Verbal reinforcement (regime-aware historical case retrieval)
 │   ├── reflect.py     # Structured experience memory (ExperienceRule JSON generation)

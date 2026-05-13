@@ -231,13 +231,9 @@ format_experience()                  # "Historical similar conditions:
     │                                #     Lesson: strong trend continuation was correct"
     ▼
 注入每个 Agent 的 prompt           # agent 获得"前车之鉴"
-    │
-    ▼
-detect_biases(store, days=30)       # 检测过去 30 天的认知偏差
-    │
-    ▼
-generate_verdict_calibration()      # "你过去 30 天有 70% 做多倾向，注意确认偏差"
-    │
-    ▼
-注入 Verdict prompt                 # verdict AI 获得"偏差校正"
+
+注：legacy "偏差校正注入" 路径（detect_biases / generate_verdict_calibration）
+于 2026-05-13 删除——与 round-3 minimal-skill 反锚定理念冲突。经验闭环现由
+Evolution Daemon（spec 020b）的 pattern_extraction 接管：把成功 case 抽成
+patterns 写入 `agent_skills/<agent>/SKILL.md` 的 AUTO-DISTILLED-PATTERNS 段。
 ```

@@ -80,7 +80,7 @@ cryptotrader-ai/
 │   │   ├── journal/
 │   │   │   ├── store.py       # JournalStore（决策链）
 │   │   │   ├── search.py      # 相似条件搜索
-│   │   │   └── calibrate.py   # 偏差检测 + 校正生成
+│   │   │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 │   │   ├── learning/
 │   │   │   ├── verbal.py      # 语言强化（Regime-aware 历史案例检索）
 │   │   │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
@@ -297,7 +297,6 @@ class ArenaState(TypedDict):
 | `snapshot` | `DataSnapshot` | collect_data | 市场快照 |
 | `snapshot_summary` | `dict` | collect_data | 精简摘要 |
 | `experience` | `str` | verbal_reinforcement | 历史经验文本 |
-| `verdict_calibration` | `str` | verbal_reinforcement | 偏差校正文本 |
 | `agent_reflections` | `dict[str, str]` | verbal_reinforcement | 各 Agent 策略备忘录 |
 | `analyses` | `dict[str, dict]` | agent nodes | 4 个 Agent 分析结果 |
 | `verdict` | `dict` | verdict node | 最终决策 |

@@ -2,7 +2,9 @@
 
 > 每个 Agent 定期回顾自己的历史分析 + 实际结果，通过 LLM 生成策略备忘录，实现自我优化。
 
-> **注意**：本文档描述的是原始反思系统设计（reflect.py）。系统已在此基础上大幅增强，新增了 GSSC pipeline（gather → select → structure）、Regime-aware 搜索，以及结构化经验记忆（ExperienceRule / ExperienceMemory）。最新架构请参阅 CLAUDE.md。
+> **注意**：本文档描述的是原始反思系统设计（reflect.py）。系统已在此基础上大幅增强，新增了 GSSC pipeline（gather → select → structure）、Regime-aware 搜索、结构化经验记忆（ExperienceRule / ExperienceMemory），以及 spec 020b 引入的 Evolution Daemon（pattern_extraction）。最新架构请参阅 CLAUDE.md。
+>
+> **2026-05-13 更新**：legacy "统计校准 / 偏差校正注入" 路径（`journal/calibrate.py`、`detect_biases` 等）已完整删除（commit ccfc7d3）。原因：与 round-3 minimal-skill 反锚定理念冲突，且 23-50 样本量级在 crypto fat-tail 噪声中无统计意义。经验闭环现由 Evolution Daemon 的 pattern_extraction 接管——正向写入 SKILL.md 的 AUTO-DISTILLED-PATTERNS 段，不再向 prompt 注入"你有 bullish bias"类警示文本。
 
 ---
 
@@ -10,14 +12,14 @@
 
 ### 1.1 现有学习机制
 
-系统已有四个学习层：
+系统当前的学习层（删除 calibrate.py 后）：
 
 | 机制 | 文件 | 作用 | 局限 |
 |------|------|------|------|
 | 言语强化 | `learning/verbal.py` | 搜索相似历史条件（Regime-aware），共享经验注入 | 所有 Agent 共享相同经验，无法个性化 |
-| 统计校准 | `journal/calibrate.py` | 检测过度自信、方向偏好、准确率，生成校准警告 | 只能告诉 Agent "你有 bullish bias"，无法告诉它"你在低波动时期持续误判 RSI 超卖信号" |
 | 自我反思 | `learning/reflect.py` | LLM 深度分析：哪些信号有效/误导，生成结构化 ExperienceMemory | 每 20 个周期运行一次，非实时 |
 | GSSC Pipeline | `learning/context.py` | Gather → Select → Structure：Regime-aware 条件化检索，CJK-aware Token 预算控制，结构化注入 Agent Prompt | 需积累足够历史数据后效果最佳 |
+| Evolution Daemon | `ops/daemon.py` (spec 020b) | 每日 Pareto rerank + regime refilter + pattern_extraction 写入 SKILL.md 的 AUTO-DISTILLED-PATTERNS 段 | 日级粒度；reflection 周期内不响应 |
 
 ### 1.2 能力增强（当前状态）
 
@@ -49,18 +51,19 @@
 ### 2.2 数据流
 
 ```
-verbal_reinforcement 节点:
-  1. get_experience()                    -- 共享历史经验（不变）
-  2. detect_biases() -> corrections      -- 统计校准（不变）
-  3. load_reflections()                  -- [新增] 从 SQLite 读取策略备忘录
-  4. asyncio.ensure_future(              -- [新增] 后台触发 LLM 反思
+verbal_reinforcement 节点（2026-05-13 后）:
+  1. get_experience()                    -- 共享历史经验
+  2. tag_regime()                        -- 标记 regime tags
+  3. load_reflections()                  -- 从 SQLite 读取策略备忘录
+  4. asyncio.ensure_future(              -- 后台触发 LLM 反思
        maybe_reflect(cycle_count)          （fire-and-forget，不阻塞交易周期）
      )
+   注：旧的 detect_biases() / 注入 corrections 已删除（commit ccfc7d3）。
 
 _run_agent() 注入（在 agents.py 中）:
   experience = verbal_experience
-  + "\n\n" + bias_correction            -- 统计校准（不变）
-  + "\n\n" + reflection_memo            -- [新增] 策略备忘录
+  + "\n\n" + reflection_memo            -- 策略备忘录
+   注：旧的 bias_correction 拼接已删除（commit ccfc7d3）。
 ```
 
 ### 2.3 在完整 pipeline 中的位置
@@ -279,24 +282,23 @@ initial = build_initial_state(
   ├── 频率：每个周期
   └── 内容："在相似市场条件下，过去我们做多赚了 $320"
 
-层次 2: 统计校准 (calibrate.py)
-  ├── 类型：定量统计偏差检测
-  ├── 粒度：按 Agent
-  ├── 频率：每个周期
-  └── 内容："你有 70% 做多倾向，过度自信（错误时平均 0.72 置信度）"
-
-层次 3: 自我反思 (reflect.py) [新增]
+层次 2: 自我反思 (reflect.py)
   ├── 类型：定性 LLM 深度分析
   ├── 粒度：按 Agent + 按领域
   ├── 频率：每 20 个周期
   └── 内容："低波动时 RSI 超卖信号不可靠（3 次中 2 次误判），
             funding rate 反转才是更可靠的指标"
+
+层次 3: 模式蒸馏 (Evolution Daemon, spec 020b)
+  ├── 类型：日频离线 pattern_extraction
+  ├── 粒度：按 Agent / 按 regime
+  ├── 频率：每日
+  └── 内容：成功 case 抽成 patterns 写入 SKILL.md AUTO-DISTILLED-PATTERNS
 ```
 
-三层互补，不冲突：
-- 层次 1 提供"发生了什么"
-- 层次 2 提供"统计上你偏了多少"
-- 层次 3 提供"为什么你会判断错，下次该怎么做"
+注：旧"统计校准"层（calibrate.py）已删除（commit ccfc7d3）——其负向警示与
+round-3 minimal-skill 反锚定理念冲突；正向 pattern_extraction 在 SKILL.md 沉
+淀后效果更强且不会引入偏见标签。
 
 ### 7.2 注入顺序
 
@@ -307,15 +309,16 @@ Historical similar conditions:           <-- verbal.py (层次 1)
   - BTC @ 2024-11-15: verdict=long, pnl=+$320
     Lesson: strong trend continuation was correct
 
-Calibration warnings (YOUR track record): <-- calibrate.py (层次 2)
-  OVERCONFIDENT -- avg confidence on wrong calls is 72%. Lower your confidence...
-
-Strategy memo (your own prior self-reflection):  <-- reflect.py (层次 3)
+Strategy memo (your own prior self-reflection):  <-- reflect.py (层次 2)
   1. RSI oversold + 低波动 = 经常误导，3 次中 2 次判断错误
   2. MACD 交叉在日线级别最可靠，1h 级别噪音太多
   3. 我有在高波动时过度看空的倾向，应关注支撑位反弹
   4. 规则：波动率 < 0.02 时，RSI 超卖权重降低 50%
 ```
+
+Agent 的 SKILL.md 同时由 Evolution Daemon 在后台不断 distill patterns
+（层次 3），通过 SkillProvider 在 prompt 构建时一并加载——不在每周期文本
+拼接里出现。
 
 ---
 
@@ -335,7 +338,7 @@ Strategy memo (your own prior self-reflection):  <-- reflect.py (层次 3)
 | `src/cryptotrader/config.py` | 新增 `ReflectionConfig` 数据类，注册到 `AppConfig` 和 `_build_config()` |
 | `config/default.toml` | 新增 `[reflection]` 配置段 |
 | `src/cryptotrader/nodes/data.py` | `verbal_reinforcement()` 集成反思加载 + 后台触发 |
-| `src/cryptotrader/nodes/agents.py` | `_run_agent()` 在 bias correction 后追加反思备忘录注入 |
+| `src/cryptotrader/nodes/agents.py` | `_build_experience()` 在历史经验后追加反思备忘录注入（2026-05-13 后不再含 bias correction 拼接）|
 | `src/cryptotrader/scheduler.py` | `_run_pair()` 通过 `extra_metadata` 传递 `cycle_count` |
 | `pyproject.toml` | RUF001 per-file-ignore（reflect.py 中的中文 LLM prompt） |
 
@@ -375,8 +378,8 @@ async def run_agent_reflection(
 | **后台执行反思（fire-and-forget）** | 4 个 Agent x LLM 调用可能需要 1-2 分钟，不能阻塞交易周期。下一周期自动加载结果，一个周期的延迟可接受 |
 | **SQLite 而非 PostgreSQL** | 复用 `~/.cryptotrader/` 模式（同 llm_cache.db, market_data.db）。零迁移成本，重启保活。并发安全（REPLACE INTO 原子操作） |
 | **滚动覆盖而非累积** | 每次反思覆盖上一次备忘录。避免 prompt 膨胀，保持备忘录始终基于最新数据 |
-| **保留 calibrate.py 不变** | calibrate 做定量统计（准确率、偏差率），reflect 做定性分析（为什么错、什么信号有效）。两者互补 |
-| **agent_type 键一致** | 反思结果用 `"tech_agent"` 等键存储，与 calibrate.py 和 nodes/agents.py 键名一致 |
+| **calibrate.py 已删除（2026-05-13）** | 原本"calibrate 做定量统计 / reflect 做定性分析"的互补设计被废止：calibrate 输出的负向警示（"你有 bullish bias"）与 round-3 minimal-skill 反锚定冲突；且 crypto 噪声下 23-50 样本无统计意义。reflect.py 与 Evolution Daemon 的 pattern_extraction 现在共同覆盖原 calibrate 的职能 |
+| **agent_type 键一致** | 反思结果用 `"tech_agent"` 等键存储，与 nodes/agents.py 键名一致 |
 | **asyncio.to_thread 包装 sqlite3** | 不引入新依赖（aiosqlite），SQLite 操作极快（<1ms），`to_thread` 足够 |
 | **反思不在 backtest 中运行** | CLI `arena run` 的 cycle_count 为 0，不触发反思。反思只在 Scheduler 长期运行时有意义 |
 
