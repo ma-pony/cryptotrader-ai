@@ -122,7 +122,6 @@ SKILL_MIGRATION_DEFAULTS: dict[str, dict] = {
             "perpetual",
             "basis",
             "confidence",
-            "calibration",
             "attribution",
             "data sufficiency",
             "microstructure",

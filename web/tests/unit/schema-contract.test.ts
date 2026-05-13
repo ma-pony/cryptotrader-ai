@@ -190,32 +190,12 @@ describe('Decision list + detail schemas', () => {
       pnl: 1831.2,
       retrospective: null,
       debate_skip_reason: 'consensus',
-      bias: {
-        agents: [
-          {
-            agent_id: 'tech_agent',
-            accuracy: 0.65,
-            neutral_rate: 0.1,
-            bullish_rate: 0.7,
-            bearish_rate: 0.2,
-            avg_conf_when_right: 0.75,
-            avg_conf_when_wrong: 0.55,
-            sample_size: 45,
-            warnings: ['overconfidence on wrong calls'],
-          },
-        ],
-        summary: '过去 30 天 tech_agent 70% 做多倾向',
-        severity: 'medium',
-        window_days: 30,
-      },
     };
     const parsed = DecisionDetailSchema.parse(detail);
     expect(parsed.debate_turns).toHaveLength(1);
     expect(parsed.debate_gate?.decision).toBe('skipped-consensus');
     expect(parsed.latency_breakdown.total_ms).toBe(6647);
     expect(parsed.token_usage.cost_usd).toBe(0.168);
-    expect(parsed.bias?.severity).toBe('medium');
-    expect(parsed.bias?.agents[0]!.sample_size).toBe(45);
   });
 
   it('tolerates missing optional groups (old commits before Phase 1)', () => {
@@ -235,7 +215,6 @@ describe('Decision list + detail schemas', () => {
     expect(parsed.debate_turns).toEqual([]);
     expect(parsed.latency_breakdown.total_ms).toBe(0);
     expect(parsed.token_usage.calls).toBe(0);
-    expect(parsed.bias).toBeUndefined();
   });
 });
 

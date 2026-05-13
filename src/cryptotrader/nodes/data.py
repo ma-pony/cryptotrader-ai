@@ -189,7 +189,10 @@ async def update_past_pnl(state: ArenaState) -> dict:
 
     Runs at the start of each cycle: looks up recent journal entries
     with orders but no PnL, compares entry price with current price.
-    This closes the feedback loop so calibration has data to work with.
+    Realised PnL on settled trades is what the evolution daemon's
+    pattern_extraction step consumes when distilling AUTO-DISTILLED-
+    PATTERNS — without this back-fill those rows would stay
+    unevaluated and the daemon would skip them.
     """
     from cryptotrader.journal.store import JournalStore
 
@@ -242,15 +245,20 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)
 
     # Skip experience injection in backtest mode to prevent look-ahead bias
-    # (live journal contains future data relative to backtest candle)
+    # (live journal contains future data relative to backtest candle).
+    # Failure here is non-fatal — a journal blip should not block the cycle;
+    # parity with update_past_pnl's defensive try/except above.
     historical_cases: list = []
     if not is_backtest:
-        historical_cases = await get_experience(
-            store,
-            summary,
-            regime_tags=regime_tags,
-            thresholds=config.experience.regime_thresholds,
-        )
+        try:
+            historical_cases = await get_experience(
+                store,
+                summary,
+                regime_tags=regime_tags,
+                thresholds=config.experience.regime_thresholds,
+            )
+        except Exception:
+            logger.warning("get_experience failed, proceeding without historical cases", exc_info=True)
         # Skills injection is handled by PromptBuilder (spec 017b) in agent.analyze().
         # Background distillation is triggered by run_reflection() node (nodes/reflection.py).
 

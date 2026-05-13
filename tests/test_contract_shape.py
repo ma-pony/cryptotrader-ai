@@ -84,7 +84,6 @@ _DECISION_DETAIL_REQUIRED = {
     "pnl",
     "retrospective",
     "debate_skip_reason",
-    "bias",
 }
 
 _LATENCY_BREAKDOWN_REQUIRED = {
@@ -239,7 +238,7 @@ class TestDecisionDetailContract:
         commit = _make_full_commit()
         with patch("cryptotrader.journal.store.JournalStore") as js_cls:
             js_cls.return_value.show = AsyncMock(return_value=commit)
-            js_cls.return_value.log = AsyncMock(return_value=[])  # bias helper
+            js_cls.return_value.log = AsyncMock(return_value=[])
             resp = client.get(f"/api/decisions/{commit.hash}")
 
         assert resp.status_code == 200, resp.text
