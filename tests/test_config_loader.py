@@ -28,14 +28,12 @@ VALID_CONTENT = textwrap.dedent("""\
       - system_prompt
       - user_tail
       - available_skills
-      - recent_memory
       - output_schema
     budget: 8000
     priority:
       system_prompt: 1
       output_schema: 1
       user_tail: 4
-      recent_memory: 5
       available_skills: 6
     ---
 
@@ -48,10 +46,6 @@ VALID_CONTENT = textwrap.dedent("""\
     请输出 JSON。
 
     ## available_skills
-
-    （运行时注入）
-
-    ## recent_memory
 
     （运行时注入）
 
@@ -112,7 +106,7 @@ class TestConfigLoaderMissingFields:
         fm: dict = {
             "agent_id": "myagent",
             "description": "test",
-            "sections": ["system_prompt", "user_tail", "available_skills", "recent_memory", "output_schema"],
+            "sections": ["system_prompt", "user_tail", "available_skills", "output_schema"],
             "budget": 8000,
             "priority": {"system_prompt": 1, "output_schema": 1},
         }
@@ -120,7 +114,7 @@ class TestConfigLoaderMissingFields:
         fm_str = yaml.dump(fm)
         body = (
             "\n## system_prompt\n\nrole\n\n## user_tail\n\ntail\n\n"
-            "## available_skills\n\nskills\n\n## recent_memory\n\nmemory\n\n## output_schema\n\nschema\n"
+            "## available_skills\n\nskills\n\n## output_schema\n\nschema\n"
         )
         content = f"---\n{fm_str}---\n{body}"
         path = _write_config(tmp_path, "myagent", content)
@@ -184,7 +178,7 @@ class TestConfigLoaderPriority:
 
     def test_priority_references_unknown_section(self, tmp_path: Path) -> None:
         content = VALID_CONTENT.replace(
-            "priority:\n  system_prompt: 1\n  output_schema: 1\n  user_tail: 4\n  recent_memory: 5\n  available_skills: 6",
+            "priority:\n  system_prompt: 1\n  output_schema: 1\n  user_tail: 4\n  available_skills: 6",
             "priority:\n  system_prompt: 1\n  output_schema: 1\n  nonexistent_section: 9",
         )
         path = _write_config(tmp_path, "myagent", content)
@@ -202,7 +196,7 @@ class TestConfigLoaderSlotOverrides:
         fm: dict = {
             "agent_id": "myagent",
             "description": "test",
-            "sections": ["system_prompt", "user_tail", "available_skills", "recent_memory", "output_schema"],
+            "sections": ["system_prompt", "user_tail", "available_skills", "output_schema"],
             "budget": 8000,
             "priority": {"system_prompt": 1, "output_schema": 1},
             "slot_overrides": {
@@ -213,7 +207,7 @@ class TestConfigLoaderSlotOverrides:
         fm_str = yaml.dump(fm)
         body = (
             "\n## system_prompt\n\nrole\n\n## user_tail\n\ntail\n\n"
-            "## available_skills\n\nskills\n\n## recent_memory\n\nmemory\n\n## output_schema\n\nschema\n"
+            "## available_skills\n\nskills\n\n## output_schema\n\nschema\n"
         )
         content = f"---\n{fm_str}---\n{body}"
         path = _write_config(tmp_path, "myagent", content)
@@ -227,7 +221,7 @@ class TestConfigLoaderSlotOverrides:
         fm: dict = {
             "agent_id": "myagent",
             "description": "test",
-            "sections": ["system_prompt", "user_tail", "available_skills", "recent_memory", "output_schema"],
+            "sections": ["system_prompt", "user_tail", "available_skills", "output_schema"],
             "budget": 8000,
             "priority": {"system_prompt": 1, "output_schema": 1},
             "slot_overrides": {
@@ -238,7 +232,7 @@ class TestConfigLoaderSlotOverrides:
         fm_str = yaml.dump(fm)
         body = (
             "\n## system_prompt\n\nrole\n\n## user_tail\n\ntail\n\n"
-            "## available_skills\n\nskills\n\n## recent_memory\n\nmemory\n\n## output_schema\n\nschema\n"
+            "## available_skills\n\nskills\n\n## output_schema\n\nschema\n"
         )
         content = f"---\n{fm_str}---\n{body}"
         path = _write_config(tmp_path, "myagent", content)

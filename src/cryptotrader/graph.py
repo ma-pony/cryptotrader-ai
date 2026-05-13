@@ -37,7 +37,6 @@ from cryptotrader.nodes.debate import (
     debate_round,
     judge_verdict,
 )
-from cryptotrader.nodes.evolution import evaluate_node
 from cryptotrader.nodes.execution import check_stop_loss, place_order
 from cryptotrader.nodes.journal import journal_rejection, journal_trade
 from cryptotrader.nodes.verdict import _risk_gate_cache, make_verdict, risk_check, risk_router
@@ -60,7 +59,6 @@ __all__ = [
     "debate_gate_router",
     "debate_round",
     "enrich_verdict_context",
-    "evaluate_node",
     "hitl_gate",
     "hitl_router",
     "journal_rejection",
@@ -206,14 +204,6 @@ def build_debate_graph(config: dict | None = None) -> Any:
     return graph.compile()
 
 
-def _evaluate_router(state: ArenaState) -> str:
-    """Route after evaluate node: approved → execute, rejected → record_rejection."""
-    risk_gate = state.get("data", {}).get("risk_gate", {})
-    if isinstance(risk_gate, dict) and risk_gate.get("passed", True):
-        return "execute"
-    return "record_rejection"
-
-
 def _stop_loss_router(state: ArenaState) -> str:
     """Route to exit if stop-loss was triggered, otherwise continue normal flow."""
     if state.get("data", {}).get("stop_loss_triggered"):
@@ -246,7 +236,6 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("hitl_gate", hitl_gate)
     graph.add_node("risk_gate", risk_check)
     graph.add_node("execute", place_order)
-    graph.add_node("evaluate", evaluate_node)
     graph.add_node("record_trade", journal_trade)
     graph.add_node("record_rejection", journal_rejection)
 
@@ -295,17 +284,8 @@ def _build_full_graph(config: dict | None = None) -> Any:
         "risk_gate",
         risk_router,
         {
-            "approved": "evaluate",
-            "rejected": "evaluate",
-        },
-    )
-    # evaluate runs after risk_gate decision (approved or rejected) before journaling
-    graph.add_conditional_edges(
-        "evaluate",
-        _evaluate_router,
-        {
-            "execute": "execute",
-            "record_rejection": "record_rejection",
+            "approved": "execute",
+            "rejected": "record_rejection",
         },
     )
     graph.add_edge("execute", "record_trade")

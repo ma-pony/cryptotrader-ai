@@ -4,7 +4,7 @@ Coverage:
 - T051: PromptBuilder telemetry 8 fields on each of 4 agents
 - T052: fixture skills — _test_shared loaded by all 4 agents; _test_tech only by tech
 - SC-Y13: scope filter correctness via DefaultSkillProvider
-- SC-Y15: experience parameter bypasses MemoryProvider
+- live_steering parameter renders into prompt user-tail
 - SC-Y17: PromptBuilder.build() returns (SystemMessage, HumanMessage) for all 4 agents
 """
 
@@ -31,12 +31,10 @@ def _build_pb(agent_id: str, skills_root: Path | None = None):
         DefaultSkillProvider,
         PromptBuilder,
     )
-    from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
     return PromptBuilder(
         agent_id=agent_id,
         config_dir=CONFIG_DIR,
-        memory_provider=EvolvingMemoryProvider(memory_root=REPO_ROOT / "agent_memory"),
         skill_provider=DefaultSkillProvider(skills_root=skills_root or REPO_ROOT / "agent_skills"),
     )
 
@@ -201,36 +199,23 @@ class TestFixtureSkillScopeFilter:
             assert "TEST TECH SKILL" not in full, f"{agent_id}: tech-skill body should NOT appear in {agent_id} prompt"
 
 
-# ── SC-Y15: experience parameter bypasses MemoryProvider ─────────────────────
+# ── live_steering parameter renders into prompt ───────────────────────────────
 
 
-class TestExperienceBypassesMemory:
-    """SC-Y15: build(experience=...) skips MemoryProvider; experience appears in prompt."""
+class TestSteeringInPrompt:
+    """build(steering=...) injects live steering text into the user message."""
 
     @pytest.mark.parametrize("agent_id", ["tech", "chain", "news", "macro"])
-    def test_experience_in_prompt_when_provided(self, agent_id):
-        """Non-empty experience string appears in the assembled prompt."""
+    def test_steering_in_prompt_when_provided(self, agent_id):
         pb = _build_pb(agent_id)
-        exp_text = "HISTORICAL_EXPERIENCE: BTC bull run context from prior cycles."
-        sys_msg, usr_msg = pb.build(snapshot=_snapshot_dict(), portfolio={}, experience=exp_text)
+        steer = "Focus on funding-rate divergence in the next call."
+        sys_msg, usr_msg = pb.build(snapshot=_snapshot_dict(), portfolio={}, steering=steer)
         full = sys_msg.content + usr_msg.content
-        assert exp_text in full, f"{agent_id}: experience text missing from prompt"
+        assert steer in full, f"{agent_id}: steering text missing from prompt"
 
     @pytest.mark.parametrize("agent_id", ["tech", "chain", "news", "macro"])
-    def test_memory_provider_not_called_when_experience_provided(self, agent_id):
-        """When experience is non-empty, MemoryProvider.get_recent_memory() is never called."""
-        from cryptotrader.agents.prompt_builder import (
-            DefaultSkillProvider,
-            PromptBuilder,
-        )
-
-        mock_mem = MagicMock()
-        mock_mem.get_recent_memory = MagicMock(return_value="should not appear")
-        pb = PromptBuilder(
-            agent_id=agent_id,
-            config_dir=CONFIG_DIR,
-            memory_provider=mock_mem,
-            skill_provider=DefaultSkillProvider(skills_root=REPO_ROOT / "agent_skills"),
-        )
-        pb.build(snapshot=_snapshot_dict(), portfolio={}, experience="SOME_EXPERIENCE")
-        mock_mem.get_recent_memory.assert_not_called()
+    def test_no_steering_section_when_empty(self, agent_id):
+        pb = _build_pb(agent_id)
+        sys_msg, usr_msg = pb.build(snapshot=_snapshot_dict(), portfolio={})
+        full = sys_msg.content + usr_msg.content
+        assert "[用户实时引导]" not in full

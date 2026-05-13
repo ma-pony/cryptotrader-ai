@@ -29,13 +29,11 @@ def _real_pb(agent_id: str) -> PromptBuilder:  # type: ignore[name-defined]  # n
         DefaultSkillProvider,
         PromptBuilder,
     )
-    from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
     repo_root = Path(__file__).parent.parent
     return PromptBuilder(
         agent_id=agent_id,
         config_dir=repo_root / "config" / "agents",
-        memory_provider=EvolvingMemoryProvider(memory_root=repo_root / "agent_memory"),
         skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
     )
 
@@ -111,7 +109,6 @@ class TestSC004SkillInjection:
             DefaultSkillProvider,
             PromptBuilder,
         )
-        from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
         # Create a shared SKILL.md in a temp skills dir (name must be kebab-case)
         shared_dir = tmp_path / "_shared"
@@ -126,7 +123,6 @@ class TestSC004SkillInjection:
         pb = PromptBuilder(
             agent_id="tech",
             config_dir=repo_root / "config" / "agents",
-            memory_provider=EvolvingMemoryProvider(memory_root=repo_root / "agent_memory"),
             skill_provider=DefaultSkillProvider(skills_root=tmp_path),
         )
         sys_msg, usr_msg = pb.build(snapshot={}, portfolio={})

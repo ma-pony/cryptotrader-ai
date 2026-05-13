@@ -46,33 +46,6 @@ def _disable_scheduler_autostart_for_tests():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_agent_memory_dir(tmp_path_factory, monkeypatch):
-    """Redirect spec 014 agent_memory writes to tmp during tests.
-
-    Prevents production code paths (nodes/journal.py:journal_trade) from
-    leaking case files into the real ``agent_memory/cases/`` when invoked
-    from unit tests via test_nodes.py / test_llm_timeout.py / etc. Tests
-    that explicitly pass ``memory_dir=tmp_path`` are unaffected.
-
-    Each test session gets one shared tmp dir; per-test isolation is the
-    test's responsibility (most tests use their own tmp_path anyway).
-    """
-    isolated = tmp_path_factory.mktemp("agent_memory_isolated")
-    # Point production default at tmp so any leaking call writes into the
-    # ephemeral session dir instead of repo-relative ``agent_memory/``.
-    monkeypatch.setattr(
-        "cryptotrader.agents.skills._constants.DEFAULT_AGENT_MEMORY_DIR",
-        isolated,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        "cryptotrader.learning.memory.DEFAULT_AGENT_MEMORY_DIR",
-        isolated,
-        raising=False,
-    )
-
-
-@pytest.fixture(autouse=True)
 def _reset_okx_portfolio_cache() -> None:
     """Reset the per-process OKX live-portfolio cache between tests.
 

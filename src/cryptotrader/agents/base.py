@@ -20,7 +20,6 @@ from langchain_openai import ChatOpenAI
 # Apply DeepSeek / GLM-4 thinking-mode reasoning_content round-trip patch before
 # any ChatOpenAI is constructed.  Importing this module is the only side effect.
 import cryptotrader.llm.reasoning_compat  # noqa: F401
-
 from cryptotrader.models import AgentAnalysis, DataSnapshot
 from cryptotrader.security import sanitize_input
 
@@ -435,12 +434,12 @@ class BaseAgent:
             },
         }
 
-    async def analyze(self, snapshot: DataSnapshot, experience: str = "") -> AgentAnalysis:
+    async def analyze(self, snapshot: DataSnapshot, steering: str = "") -> AgentAnalysis:
         try:
             sys_msg, usr_msg = self._prompt_builder.build(
                 snapshot=self._snapshot_to_dict(snapshot),
                 portfolio={},
-                experience=experience,
+                steering=steering,
             )
             model = self._resolve_model()
             llm = create_llm(model=model)
@@ -596,10 +595,10 @@ class ToolAgent(BaseAgent):
         self.tools = list(tools)
         self.backtest_mode = backtest_mode
 
-    async def analyze(self, snapshot: DataSnapshot, experience: str = "") -> AgentAnalysis:
+    async def analyze(self, snapshot: DataSnapshot, steering: str = "") -> AgentAnalysis:
         # In backtest mode, skip tool-calling to avoid forward-looking bias
         if self.backtest_mode:
-            return await super().analyze(snapshot, experience)
+            return await super().analyze(snapshot, steering)
 
         try:
             from langchain.agents import create_agent
@@ -607,7 +606,7 @@ class ToolAgent(BaseAgent):
             sys_msg, usr_msg = self._prompt_builder.build(
                 snapshot=self._snapshot_to_dict(snapshot),
                 portfolio={},
-                experience=experience,
+                steering=steering,
             )
 
             llm = _create_chat_model(self.model)
@@ -625,4 +624,4 @@ class ToolAgent(BaseAgent):
         except Exception:
             logger.exception("ToolAgent call failed for %s, falling back to single-call", self.agent_id)
             # Fallback to single LLM call (same as BaseAgent)
-            return await super().analyze(snapshot, experience)
+            return await super().analyze(snapshot, steering)

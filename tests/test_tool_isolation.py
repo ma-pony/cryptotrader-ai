@@ -23,13 +23,11 @@ def _real_pb(agent_id: str) -> MagicMock:
         DefaultSkillProvider,
         PromptBuilder,
     )
-    from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
 
     repo_root = Path(__file__).parent.parent
     return PromptBuilder(
         agent_id=agent_id,
         config_dir=repo_root / "config" / "agents",
-        memory_provider=EvolvingMemoryProvider(memory_root=repo_root / "agent_memory"),
         skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
     )
 

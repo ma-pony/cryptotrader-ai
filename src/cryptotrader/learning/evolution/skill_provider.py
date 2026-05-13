@@ -1,7 +1,6 @@
-"""EvolvingSkillProvider — spec 019 D-RT-01 两层检索算法（FR-W7..W10）。
+"""EvolvingSkillProvider — 两层检索算法。
 
-实现 spec 017a SkillProvider Protocol。
-与 EvolvingMemoryProvider 并存于 nodes/agents.py module-level singleton。
+实现 SkillProvider Protocol；单实例由 nodes/agents.py module-level 缓存。
 """
 
 from __future__ import annotations

@@ -16,23 +16,17 @@ from typing import Protocol
 import yaml
 from langchain_core.messages import HumanMessage, SystemMessage
 
-# spec 019 FR-W11: DefaultSkillProvider class deleted; EvolvingSkillProvider replaces it.
-# Backward-compat alias so existing test imports do not break (TID251 suppressed below).
 from cryptotrader.learning.evolution.skill_provider import (  # noqa: F401
     EvolvingSkillProvider as DefaultSkillProvider,
 )
 
 logger = logging.getLogger(__name__)
 
-# ── Token 估算（CJK-aware，与 spec 014 算法一致）───────────────────────────────
+# ── Token 估算（CJK-aware）───────────────────────────────
 
 
 def _estimate_tokens(text: str) -> int:
-    """CJK-aware token 估算：ASCII÷4 + CJK÷1.5（误差 < 10% vs tiktoken）。
-
-    复用 spec 014 的既有算法，本模块自带实现以避免循环依赖。
-    如 cryptotrader.learning.context 后续落地同名函数，可替换此处 import。
-    """
+    """CJK-aware token 估算：ASCII÷4 + CJK÷1.5（误差 < 10% vs tiktoken）。"""
     ascii_chars = 0
     cjk_chars = 0
     for ch in text:
@@ -59,12 +53,12 @@ class ConfigValidationError(Exception):
 
 # ── AgentConfig dataclass ───────────────────────────────────────────────────────
 
-# 5 个核心必填 section
-_REQUIRED_SECTIONS = frozenset({"system_prompt", "user_tail", "available_skills", "recent_memory", "output_schema"})
+# 核心必填 section（运行时 prompt 只保留 skill + snapshot + output_schema + user_tail）
+_REQUIRED_SECTIONS = frozenset({"system_prompt", "user_tail", "available_skills", "output_schema"})
 
-# 默认 slot 分配
+# 默认 slot 分配；live_steering / snapshot / portfolio / agent_analyses 为动态注入
 _DEFAULT_SYSTEM_SLOT = ["system_prompt", "available_skills", "output_schema"]
-_DEFAULT_USER_SLOT = ["recent_memory", "snapshot", "portfolio", "agent_analyses", "user_tail"]
+_DEFAULT_USER_SLOT = ["live_steering", "snapshot", "portfolio", "agent_analyses", "user_tail"]
 
 
 @dataclass
@@ -158,7 +152,7 @@ class ConfigLoader:
                 raise ConfigValidationError(path, f"section {sec_name!r} 在 body 中未找到")
 
         # 规则 8：priority 中每个 key 都在 sections 中（动态 section 例外）
-        _dynamic_sections = {"snapshot", "portfolio", "agent_analyses"}
+        _dynamic_sections = {"snapshot", "portfolio", "agent_analyses", "live_steering"}
         for pkey in priority:
             if pkey not in sections and pkey not in _dynamic_sections:
                 raise ConfigValidationError(path, f"priority 引用了未声明的 section: {pkey!r}")
@@ -168,9 +162,7 @@ class ConfigLoader:
             all_slot_sections: list[str] = []
             for slot_name, slot_secs in slot_overrides.items():
                 for sec in slot_secs:
-                    # 动态 section（snapshot/portfolio/agent_analyses）允许不在 sections 声明中
-                    _dynamic = {"snapshot", "portfolio", "agent_analyses"}
-                    if sec not in sections and sec not in _dynamic:
+                    if sec not in sections and sec not in _dynamic_sections:
                         raise ConfigValidationError(
                             path, f"slot_overrides[{slot_name!r}] 引用了未声明的 section: {sec!r}"
                         )
@@ -226,22 +218,6 @@ class Skill:
     name: str = ""  # FR-Y30: skill 显示名；缺失时 fallback 到 skill_id
 
 
-# ── MemoryProvider Protocol ─────────────────────────────────────────────────────
-
-
-class MemoryProvider(Protocol):
-    """记忆数据源协议接口；本 spec 提供 DefaultMemoryProvider，spec 018 提供进化版实现。"""
-
-    def get_recent_memory(
-        self,
-        agent_id: str,
-        snapshot: dict,
-        k: int = 5,
-    ) -> str:
-        """返回已格式化的 markdown 记忆文本；空记忆返回固定占位"暂无历史记忆"。"""
-        ...
-
-
 # ── SkillProvider Protocol ──────────────────────────────────────────────────────
 
 
@@ -257,11 +233,6 @@ class SkillProvider(Protocol):
         """返回 ranked skill 列表，长度 ≤ k；空返回 []。"""
         ...
 
-
-# ── DefaultSkillProvider deleted (spec 019 FR-W11) ─────────────────────────────
-# spec 017a/b DefaultSkillProvider retired. EvolvingSkillProvider in
-# src/cryptotrader/learning/evolution/skill_provider.py replaces it.
-# Backward-compat alias so existing test imports do not break.
 
 # ── EnforceResult + TokenBudgetEnforcer ────────────────────────────────────────
 
@@ -326,11 +297,11 @@ class TokenBudgetEnforcer:
             working.pop(name)
             dropped.append(name)
 
-        # 仍超 budget → 截断 recent_memory / available_skills
+        # 仍超 budget → 截断 available_skills
         if sum(_estimate_tokens(v) for v in working.values()) > budget:
-            for name in ["recent_memory", "available_skills"]:
+            for name in ["available_skills"]:
                 if name in working:
-                    target_chars = int(budget * 0.3 * 4)  # 粗估：1 token ≈ 4 ASCII char
+                    target_chars = int(budget * 0.3 * 4)
                     if len(working[name]) > target_chars:
                         working[name] = working[name][:target_chars] + "\n...(截断)"
                         degraded.append(name)
@@ -360,12 +331,10 @@ class PromptBuilder:
         self,
         agent_id: str,
         config_dir: Path,
-        memory_provider: MemoryProvider,
         skill_provider: SkillProvider,
         model: str = "",
     ) -> None:
         self._agent_id = agent_id
-        self._memory_provider = memory_provider
         self._skill_provider = skill_provider
         self._model = model
         self._enforcer = TokenBudgetEnforcer()
@@ -378,71 +347,50 @@ class PromptBuilder:
         snapshot: dict,
         portfolio: dict,
         agent_analyses: dict | None = None,
-        experience: str = "",
+        steering: str = "",
     ) -> tuple[SystemMessage, HumanMessage]:
-        """组装 LLM messages — 唯一对外入口（spec 017 FR-X6）。
-
-        返回 (SystemMessage, HumanMessage) tuple 供 agent 直接传给 LLM。
-        telemetry 8 字段挂当前 active span 或 structured log（FR-X18/X19）。
+        """组装 LLM messages — 唯一对外入口。
 
         Args:
-            experience: 调用方提供的历史经验文本（FR-Y6b）。
-                非空时直接作为 recent_memory section 内容，跳过 MemoryProvider。
-                空时走 MemoryProvider fallback（017a 默认行为）。
+            steering: 用户实时引导文本（来自前端 chat -> Redis 队列）。
+                非空时作为 live_steering section 注入；空时该 section 不出现在 prompt。
         """
         t0 = time.monotonic()
 
-        # 1. 获取记忆（experience 非空时直接用，跳过 MemoryProvider）
-        experience_source: str
-        if experience:
-            recent_memory = experience
-            experience_source = "caller"
-        else:
-            try:
-                recent_memory = self._memory_provider.get_recent_memory(self._agent_id, snapshot)
-                experience_source = "provider" if recent_memory else "empty"
-            except Exception:
-                logger.warning("MemoryProvider 异常，降级为占位", exc_info=True)
-                recent_memory = "暂无历史记忆"
-                experience_source = "empty"
-
-        # 2. 获取 skills（异常 → 空列表）
+        # 1. 获取 skills
         try:
             skills = self._skill_provider.get_available_skills(self._agent_id, snapshot)
         except Exception:
             logger.warning("SkillProvider 异常，降级为空列表", exc_info=True)
             skills = []
 
-        # 3. 渲染 skills → markdown
         available_skills_text = self._render_skills(skills)
 
-        # 4. 渲染 snapshot / portfolio / agent_analyses → str
+        # 2. 动态渲染
         snapshot_text = self._render_snapshot(snapshot)
         portfolio_text = self._render_portfolio(portfolio)
         agent_analyses_text = self._render_agent_analyses(agent_analyses)
 
-        # 5. 组装 sections dict（运行时注入覆盖 config body 中的占位内容）
+        # 3. 组装 sections
         sections: dict[str, str] = {}
         for sec_name, sec_body in self.config.body_sections.items():
             sections[sec_name] = sec_body
-        # 运行时 Provider 注入（覆盖 config 中的占位段）
         sections["available_skills"] = available_skills_text
-        sections["recent_memory"] = recent_memory
-        # 动态 section（不在 body，直接注入）
         sections["snapshot"] = snapshot_text
         sections["portfolio"] = portfolio_text
         if agent_analyses_text:
             sections["agent_analyses"] = agent_analyses_text
+        if steering:
+            sections["live_steering"] = f"[用户实时引导]\n{steering}"
 
-        # 6. Token budget 检查
+        # 4. Token budget
         result = self._enforcer.enforce(sections, self.config.budget, self.config.priority)
 
-        # 7. 按 slot 分配组装 SystemMessage + HumanMessage
+        # 5. 组装 messages
         sys_msg, usr_msg = self._assemble_messages(result.final_sections)
 
-        # 8. Telemetry（8 字段 + experience_source 辅助字段）
         duration_ms = (time.monotonic() - t0) * 1000
-        self._emit_telemetry(result, duration_ms, experience_source=experience_source)
+        self._emit_telemetry(result, duration_ms)
 
         return sys_msg, usr_msg
 
@@ -508,9 +456,8 @@ class PromptBuilder:
         self,
         result: EnforceResult,
         duration_ms: float,
-        experience_source: str = "empty",
     ) -> None:
-        """写入 8 个 telemetry 字段到当前 active OpenTelemetry span 或 structured log。"""
+        """写入 telemetry 字段到当前 active OpenTelemetry span 或 structured log。"""
         attrs = {
             "prompt.builder.agent_id": self._agent_id,
             "prompt.builder.sections_included": list(result.final_sections.keys()),
@@ -520,8 +467,6 @@ class PromptBuilder:
             "prompt.builder.prompt_size_post": result.prompt_size_post,
             "prompt.builder.budget": result.budget,
             "prompt.builder.duration_ms": round(duration_ms, 2),
-            # 辅助字段（FR-Y19 contract）：experience 来源标识
-            "prompt.builder.experience_source": experience_source,
         }
 
         # 尝试挂到 OpenTelemetry active span（spec 010 基础设施）

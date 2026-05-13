@@ -1,1 +1,1 @@
-"""spec 018 evolution package — FSM + Pareto + IVE + EvolvingMemoryProvider."""
+"""evolution package — EvolvingSkillProvider + IDF retrieval (skill side only)."""

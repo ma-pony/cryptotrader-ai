@@ -12,7 +12,6 @@ PRIORITY = {
     "snapshot": 2,
     "portfolio": 3,
     "user_tail": 4,
-    "recent_memory": 5,
     "available_skills": 6,
 }
 
@@ -29,7 +28,7 @@ class TestTokenBudgetNoExceed:
         sections = {
             "system_prompt": "You are a helpful agent.",
             "output_schema": '{"direction": "bullish"}',
-            "recent_memory": "暂无历史记忆",
+            "available_skills": "暂无历史记忆",
         }
         budget = 10000  # 远超实际大小
         result = enforcer.enforce(sections, budget, PRIORITY)
@@ -51,12 +50,11 @@ class TestTokenBudgetDropByPriority:
     """(b) 超 budget 按优先级从高数字到低数字依次丢。"""
 
     def test_drop_lowest_priority_first(self, enforcer: TokenBudgetEnforcer) -> None:
-        # available_skills(6) > recent_memory(5) > user_tail(4) 数字大先丢
+        # available_skills(6) > user_tail(4) 数字大先丢
         sections = {
             "system_prompt": "Role description. " * 10,
             "output_schema": '{"direction": "neutral"}',
-            "recent_memory": "Memory data. " * 20,
-            "available_skills": "Skill list. " * 20,
+            "available_skills": "Skill list. " * 40,
             "user_tail": "Tail instructions. " * 5,
         }
         # 设置一个刚好需要丢 available_skills 的 budget
@@ -74,8 +72,7 @@ class TestTokenBudgetDropByPriority:
         sections = {
             "system_prompt": "Critical system prompt. " * 5,
             "output_schema": '{"required": "schema"}',
-            "recent_memory": "Memory. " * 50,
-            "available_skills": "Skills. " * 50,
+            "available_skills": "Skills. " * 100,
         }
         result = enforcer.enforce(sections, budget=10, priority=PRIORITY)
         assert "system_prompt" in result.final_sections
@@ -88,21 +85,21 @@ class TestTokenBudgetDegradation:
     """(c) 远超 budget 且丢完可丢 section 后触发截断降级。"""
 
     def test_degradation_triggered_when_drop_insufficient(self, enforcer: TokenBudgetEnforcer) -> None:
-        # 只有 system_prompt + output_schema + recent_memory（无法丢前两个）
-        # budget 极小，丢完 recent_memory 仍超 → 触发截断
+        # 只有 system_prompt + output_schema + available_skills（无法丢前两个）
+        # budget 极小，丢完 available_skills 仍超 → 触发截断
         long_text = "A very long memory entry with lots of detail. " * 100
         sections = {
             "system_prompt": "Role prompt here.",
             "output_schema": '{"direction": "bullish"}',
-            "recent_memory": long_text,
+            "available_skills": long_text,
         }
-        # 先丢 recent_memory（available_skills 不在），若仍超则截断
+        # 先丢 available_skills（available_skills 不在），若仍超则截断
         sum(_estimate_tokens(v) for v in sections.values())
         # 设 budget 只够 system_prompt + output_schema
         minimal = _estimate_tokens(sections["system_prompt"]) + _estimate_tokens(sections["output_schema"]) - 1
         result = enforcer.enforce(sections, budget=max(1, minimal), priority=PRIORITY)
-        # recent_memory 要么被丢要么被截断
-        all_handled = "recent_memory" in result.dropped_sections or "recent_memory" in result.degraded_sections
+        # available_skills 要么被丢要么被截断
+        all_handled = "available_skills" in result.dropped_sections or "available_skills" in result.degraded_sections
         assert all_handled
 
 
@@ -113,8 +110,7 @@ class TestTokenBudgetProtected:
         sections = {
             "system_prompt": "Must keep this. " * 20,
             "output_schema": "Must keep schema. " * 10,
-            "recent_memory": "Drop me. " * 100,
-            "available_skills": "Drop me too. " * 100,
+            "available_skills": "Drop me. " * 200,
             "user_tail": "Also droppable. " * 50,
         }
         result = enforcer.enforce(sections, budget=1, priority=PRIORITY)

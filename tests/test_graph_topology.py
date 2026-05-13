@@ -89,16 +89,11 @@ class TestBuildTradingGraph:
         assert ("debate_gate", "debate_round_1") in cond
         assert cond[("debate_gate", "debate_round_1")] == "debate"
 
-    def test_risk_gate_routes_to_evaluate(self, graph):
-        """risk_gate must connect to evaluate node (spec 018 — evaluate sits between risk and journal)."""
+    def test_risk_gate_routes_to_execute_or_record_rejection(self, graph):
+        """risk_gate routes directly to execute (approved) or record_rejection (rejected)."""
         cond = _conditional_edges(graph)
-        assert ("risk_gate", "evaluate") in cond
-
-    def test_evaluate_routes_to_execute_or_record_rejection(self, graph):
-        """evaluate node routes to execute (approved) or record_rejection (rejected)."""
-        cond = _conditional_edges(graph)
-        assert ("evaluate", "execute") in cond
-        assert ("evaluate", "record_rejection") in cond
+        assert ("risk_gate", "execute") in cond
+        assert ("risk_gate", "record_rejection") in cond
 
     def test_stop_loss_check_continue_routes_to_tag_regime(self, graph):
         cond = _conditional_edges(graph)

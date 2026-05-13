@@ -113,16 +113,6 @@ high_confidence_pct = 0.35    # ceiling for position_scale mapping
 medium_confidence_pct = 0.12  # legacy fallback (confidence >= 0.6)
 low_confidence_pct = 0.06     # floor for position_scale mapping
 
-[experience]
-enabled = true
-every_n_cycles = 20
-min_commits_required = 10
-lookback_commits = 30
-model = ""
-token_budget_pct = 0.30
-verify_win_rate_tolerance = 0.15
-min_cases_per_pattern = 5
-
 [experience.regime_thresholds]
 high_funding = 0.0003
 negative_funding = -0.0001
@@ -286,11 +276,3 @@ name = "cryptotrader-news"
 transport = "stdio"
 enabled = true
 tools = ["news_rss", "news_sosovalue"]
-
-[evolution_daemon]
-# spec 022 FR-D4: Evolution reflect daemon configuration
-enabled = true
-cron = "0 0 * * *"
-actions = ["pareto", "regime", "skill_proposal", "pattern_extraction"]
-llm_model = ""
-propose_threshold = 10

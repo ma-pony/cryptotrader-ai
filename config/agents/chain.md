@@ -5,7 +5,6 @@ sections:
   - system_prompt
   - user_tail
   - available_skills
-  - recent_memory
   - output_schema
 budget: 8000
 priority:
@@ -14,7 +13,6 @@ priority:
   snapshot: 2
   portfolio: 3
   user_tail: 4
-  recent_memory: 5
   available_skills: 6
 ---
 
@@ -68,10 +66,6 @@ Data sufficiency self-assessment:
 ## available_skills
 
 （运行时由 SkillProvider 注入）
-
-## recent_memory
-
-（运行时由 MemoryProvider 或 experience 参数注入）
 
 ## output_schema
 

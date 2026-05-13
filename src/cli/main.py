@@ -591,55 +591,6 @@ skills_app = typer.Typer(help="Agent Skills commands")
 app.add_typer(skills_app, name="skills")
 
 
-@skills_app.command("curate")
-def skills_curate(
-    name: str = typer.Argument(..., help="Skill name (directory name under agent_skills/)"),
-    llm: bool = typer.Option(False, "--llm", help="Use LLM to generate pattern summaries"),
-):
-    """Curate a skill file by injecting distilled patterns into its AUTO-DISTILLED-PATTERNS section."""
-    from pathlib import Path
-
-    from cryptotrader.learning.curation import curate_skill
-
-    skills_dir = Path("agent_skills")
-    skill_path = skills_dir / name / "SKILL.md"
-    if not skill_path.exists():
-        console.print(f"[red]Skill not found: {skill_path}[/red]")
-        raise typer.Exit(1)
-
-    try:
-        draft_path = curate_skill(name, skills_dir=skills_dir, use_llm=llm)
-        console.print(f"[green]Draft written to:[/green] {draft_path}")
-        console.print("[dim]Review the draft and rename to SKILL.md when ready.[/dim]")
-    except Exception as exc:
-        console.print(f"[red]Curation failed:[/red] {exc}")
-        raise typer.Exit(1) from exc
-
-
-@skills_app.command("propose-new")
-def skills_propose_new(
-    scope: str = typer.Option("shared", "--scope", help="Scope: 'shared' or 'agent:<id>'"),
-):
-    """Propose a new skill file based on active patterns not yet covered by existing skills."""
-    from pathlib import Path
-
-    from cryptotrader.learning.skill_proposal import propose_new_skill
-
-    skills_dir = Path("agent_skills")
-    memory_dir = Path.home() / ".cryptotrader" / "agent_memory"
-
-    try:
-        draft_path = propose_new_skill(scope=scope, skills_dir=skills_dir, memory_dir=memory_dir)
-        if draft_path is None:
-            console.print("[dim]No new patterns found to propose a skill for.[/dim]")
-        else:
-            console.print(f"[green]Proposal draft written to:[/green] {draft_path}")
-            console.print("[dim]Review and rename to SKILL.md when ready.[/dim]")
-    except Exception as exc:
-        console.print(f"[red]Proposal failed:[/red] {exc}")
-        raise typer.Exit(1) from exc
-
-
 @skills_app.command("list")
 def skills_list():
     """List all known skills and their scopes."""
@@ -887,80 +838,6 @@ def mcp_call(
     except Exception as e:
         console.print(f"[red]Error calling tool: {e}[/red]")
         raise typer.Exit(code=1) from e
-
-
-# ── Experience subcommands (spec 021) ──
-
-experience_app = typer.Typer(help="Experience memory commands")
-app.add_typer(experience_app, name="experience")
-
-
-@experience_app.command("distill")
-def experience_distill(
-    memory_dir: str = typer.Option("agent_memory", "--memory-dir", help="Path to agent_memory directory"),
-    cycles_window: int = typer.Option(0, "--cycles-window", help="Number of recent cycles to scan (0 = use config default)"),
-) -> None:
-    """从 cases 蒸馏 patterns（spec 021 cold-start 入口）。"""
-    from pathlib import Path
-
-    from cryptotrader.config import load_config
-    from cryptotrader.learning.memory import distill_patterns
-
-    cfg = load_config()
-    window = cycles_window if cycles_window > 0 else cfg.experience.lookback_commits
-    try:
-        run = distill_patterns(memory_dir=Path(memory_dir), cycles_window=window)
-        console.print(f"cases_processed: {run.cases_processed}")
-        console.print(f"patterns_created: {run.patterns_created}")
-        console.print(f"patterns_updated: {run.patterns_updated}")
-        console.print(f"patterns_archived: {run.patterns_archived}")
-        if run.error:
-            console.print(f"error: {run.error}", err=True)
-            raise typer.Exit(1)
-    except typer.Exit:
-        raise
-    except Exception as e:
-        console.print(f"ERROR: {e}", err=True)
-        raise typer.Exit(1) from e
-
-
-# ── Evolution Daemon (spec 022) ──
-
-
-@app.command("evolution-daemon")
-def evolution_daemon(
-    once: bool = typer.Option(False, "--once", help="Run once (dry-run) and exit"),
-    config_path: str = typer.Option("config/default.toml", "--config", help="Path to TOML config"),
-) -> None:
-    """Run the evolution reflect daemon (Pareto / regime / skill proposal).
-
-    spec 022 FR-D2: arena evolution-daemon [--once] [--config PATH]
-    """
-    import os
-
-    if os.getenv("EVOLUTION_DAEMON_ENABLED", "true").lower() not in ("true", "1", "yes"):
-        console.print("[evolution-daemon] disabled by EVOLUTION_DAEMON_ENABLED env var; exiting.")
-        raise typer.Exit(0)
-
-    from cryptotrader.config import load_config
-    from cryptotrader.ops.daemon import EvolutionDaemon
-
-    cfg = load_config(config_path)
-
-    # FR-D5: toml-level enabled check
-    if not cfg.evolution_daemon.enabled:
-        console.print("[evolution-daemon] disabled by config (evolution_daemon.enabled=false); exiting.")
-        raise typer.Exit(0)
-
-    daemon = EvolutionDaemon(config=cfg.evolution_daemon)
-
-    if once:
-        result = asyncio.run(daemon.run_once())
-        console.print(f"[evolution-daemon] run_once exit_code={result.exit_code}")
-        for action in result.actions_run:
-            console.print(f"  [{action.name}] {action.status} {action.duration_ms}ms")
-        raise typer.Exit(result.exit_code)
-    asyncio.run(daemon.run_forever())
 
 
 if __name__ == "__main__":

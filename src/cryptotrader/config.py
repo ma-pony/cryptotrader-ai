@@ -227,19 +227,11 @@ class RegimeThresholdsConfig:
     extreme_greed_fng: int = 75
 
 
-# ── Experience (replaces Reflection) ──
+# ── Experience (regime tagging only — historical anchoring removed 2026-05-13) ──
 
 
 @dataclass
 class ExperienceConfig:
-    enabled: bool = True
-    every_n_cycles: int = 20
-    min_commits_required: int = 10
-    lookback_commits: int = 30
-    model: str = ""  # empty = use models.analysis
-    token_budget_pct: float = 0.30
-    verify_win_rate_tolerance: float = 0.15
-    min_cases_per_pattern: int = 5
     regime_thresholds: RegimeThresholdsConfig = field(default_factory=RegimeThresholdsConfig)
 
 
@@ -251,20 +243,6 @@ class ExecutionConfig:
     order_wait_seconds: int = 30
     retry_attempts: int = 3
     graph_timeout_s: int = 300
-
-
-# ── Evolution Daemon ──
-
-
-@dataclass
-class EvolutionDaemonConfig:
-    """spec 022 FR-D4: Evolution reflect daemon configuration."""
-
-    enabled: bool = True
-    cron: str = "0 0 * * *"
-    actions: list = field(default_factory=lambda: ["pareto", "regime", "skill_proposal"])
-    llm_model: str = ""
-    propose_threshold: int = 10
 
 
 # ── Scheduler ──
@@ -582,12 +560,6 @@ class AppConfig:
     hitl: HitlConfig = field(default_factory=HitlConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
-    evolution_daemon: EvolutionDaemonConfig = field(default_factory=EvolutionDaemonConfig)
-
-    @property
-    def reflection(self) -> ExperienceConfig:
-        """Deprecated alias for experience config."""
-        return self.experience
 
 
 # ── Configuration validation ──
@@ -780,17 +752,10 @@ def _merge(target: dict, source: dict) -> dict:
 
 
 def _build_experience_config(toml_data: dict) -> ExperienceConfig:
-    """Build ExperienceConfig from the TOML ``[experience]`` section.
-
-    (Legacy ``[reflection]`` fallback removed 2026-05-13 — the reflection
-    subsystem itself is gone and no current toml carries that section.)
-    """
+    """Build ExperienceConfig from the TOML ``[experience.regime_thresholds]`` section."""
     raw = dict(toml_data.get("experience", {}))
     regime_raw = raw.pop("regime_thresholds", {})
-    return ExperienceConfig(
-        **raw,
-        regime_thresholds=RegimeThresholdsConfig(**regime_raw),
-    )
+    return ExperienceConfig(regime_thresholds=RegimeThresholdsConfig(**regime_raw))
 
 
 def _build_notifications_config(toml_data: dict) -> NotificationsConfig:
@@ -980,7 +945,6 @@ def _build_config(toml_data: dict) -> AppConfig:
         hitl=_build_hitl_config(toml_data),
         agents=_build_agents_config(toml_data),
         mcp=_build_mcp_config(toml_data),
-        evolution_daemon=EvolutionDaemonConfig(**toml_data.get("evolution_daemon", {})),
     )
 
 

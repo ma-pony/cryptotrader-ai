@@ -7,49 +7,31 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from cryptotrader.agents.prompt_builder import (
-    PromptBuilder,
-)
-from cryptotrader.learning.evolution.provider import EvolvingMemoryProvider
+from cryptotrader.agents.prompt_builder import PromptBuilder
 from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
 from cryptotrader.state import ArenaState
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
 
-# Module-level singletons: one PromptBuilder per agent_id, shared across cycles.
-_memory_provider: EvolvingMemoryProvider | None = None
-_skill_provider: EvolvingSkillProvider | None = None  # spec 019: replaced DefaultSkillProvider
+_skill_provider: EvolvingSkillProvider | None = None
 _prompt_builders: dict[str, PromptBuilder] = {}
 
 
 def _get_or_build_pb(agent_id: str, model: str) -> PromptBuilder:
-    """Return cached PromptBuilder for agent_id, building it on first access.
-
-    agent_id follows the full registry name (e.g. "tech_agent"); the config file
-    uses the short name without the "_agent" suffix (e.g. "config/agents/tech.md").
-    Paths are resolved relative to the repo root (parent of src/), so the function
-    works correctly regardless of the process cwd.
-    """
-    global _memory_provider, _skill_provider
-    # Resolve repo root as the directory three levels above this file:
-    # nodes/agents.py → nodes/ → cryptotrader/ → src/ → <repo_root>/
+    """Return cached PromptBuilder for agent_id."""
+    global _skill_provider
     _repo_root = Path(__file__).parent.parent.parent.parent
-    if _memory_provider is None:
-        _memory_provider = EvolvingMemoryProvider(memory_root=_repo_root / "agent_memory")
-        # spec 019: EvolvingSkillProvider replaces DefaultSkillProvider (FR-W12)
+    if _skill_provider is None:
         _skill_provider = EvolvingSkillProvider(skill_root=_repo_root / "agent_skills")
-        # spec 019: wire load_skill_tool to use EvolvingSkillProvider (FR-W14)
         import cryptotrader.agents.skills.tool as _skill_tool_mod
 
         _skill_tool_mod.load_skill_tool = _skill_tool_mod._make_load_skill_tool(provider=_skill_provider)
     if agent_id not in _prompt_builders:
-        # Strip "_agent" suffix: "tech_agent" → "tech", "chain_agent" → "chain"
         short_id = agent_id.removesuffix("_agent")
         _prompt_builders[agent_id] = PromptBuilder(
             agent_id=short_id,
             config_dir=_repo_root / "config" / "agents",
-            memory_provider=_memory_provider,
             skill_provider=_skill_provider,
             model=model,
         )
@@ -120,12 +102,8 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
         agent = agents_fallback[agent_type](model)
     snapshot = state["data"]["snapshot"]
 
-    # Build experience context from legacy state fields (steering/corrections only)
-    # Skills are now injected via PromptBuilder (spec 017b) inside agent.analyze()
-    experience = _build_experience(state, agent_type)
-
-    # Inject live steering instructions (T024)
-    experience = await _inject_steering(state, agent_type, experience)
+    # Collect live steering instructions from Redis (if any)
+    steering = await _collect_steering(state, agent_type)
 
     # Publish agent_thinking event
     from cryptotrader.chat.runtime_registry import get_event_bus
@@ -140,7 +118,7 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
     steered = (state.get("metadata") or {}).get(f"_steered_{agent_type}", False)
     try:
         analysis = await asyncio.wait_for(
-            agent.analyze(snapshot, experience),
+            agent.analyze(snapshot, steering),
             timeout=timeout_seconds,
         )
     except TimeoutError:
@@ -212,31 +190,24 @@ async def _run_agent(agent_type: str, state: ArenaState) -> dict:
     return {"data": output}
 
 
-async def _inject_steering(
-    state: ArenaState,
-    agent_type: str,
-    experience: str,
-) -> str:
-    """Read and apply live steering instructions from Redis queue."""
+async def _collect_steering(state: ArenaState, agent_type: str) -> str:
+    """Read live steering instructions from Redis queue; return raw text or ''."""
     metadata = state.get("metadata") or {}
     session_id = metadata.get("session_id")
     state_mgr = metadata.get("redis_state_manager")
     if not session_id or state_mgr is None:
-        return experience
+        return ""
 
     steer_key = f"steering:{session_id}:{agent_type}"
     try:
         instructions = await state_mgr.buffer_range(steer_key, 0, -1)
         if instructions:
             await state_mgr.buffer_delete(steer_key)
-            joined = "\n".join(instructions)
-            if metadata is not None:
-                metadata[f"_steered_{agent_type}"] = True
-            suffix = f"\n\n[用户实时引导]\n{joined}"
-            return f"{experience}{suffix}" if experience else suffix
+            metadata[f"_steered_{agent_type}"] = True
+            return "\n".join(instructions)
     except Exception:
         logger.warning("Failed to read steering queue for %s", agent_type, exc_info=True)
-    return experience
+    return ""
 
 
 async def _publish_agent_done(
@@ -270,30 +241,6 @@ async def _publish_agent_done(
                 task.completed_agents.append(agent_type)
         except Exception:
             pass
-
-
-def _build_experience(state: ArenaState, agent_type: str) -> str:
-    """Build experience string from state fields.
-
-    2026-05-13 final state: returns "" unconditionally. All legacy
-    injection paths have been removed:
-      - bias-correction (`agent_corrections`)
-      - verbal-reinforcement (`historical_cases` / `experience`)
-      - self-reflection memo (`agent_reflections`)
-    Each shared the same flaw — feeding small-sample LLM-generated
-    priors back into prompts re-introduces the directional anchoring
-    the round-3 minimal skills were designed to eliminate.
-
-    Skills injection (the proper feedback channel) is handled by
-    PromptBuilder (spec 017b) inside agent.analyze(); the evolution
-    daemon writes distilled patterns into the SKILL.md
-    `AUTO-DISTILLED-PATTERNS` section, which PromptBuilder loads.
-    """
-    # state and agent_type kept in signature because spec 017b's
-    # PromptBuilder.build(...) currently takes an `experience` kwarg.
-    # Once that surface is collapsed too, this helper can disappear.
-    del state, agent_type  # explicitly unused
-    return ""
 
 
 @node_logger()

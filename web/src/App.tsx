@@ -15,8 +15,6 @@ const ChatPage = lazy(() => import('@/pages/chat'));
 const MarketPage = lazy(() => import('@/pages/market'));
 const SchedulerPage = lazy(() => import('@/pages/scheduler'));
 const MemoryPage = lazy(() => import('@/pages/memory/MemoryPage'));
-const RulesDetailPage = lazy(() => import('@/pages/memory/RulesDetailPage'));
-const PatternDetailPage = lazy(() => import('@/pages/memory/PatternDetailPage'));
 const NotFoundPage = lazy(() => import('@/pages/not-found'));
 
 export const App = () => (
@@ -37,8 +35,6 @@ export const App = () => (
           <Route path="market" element={<MarketPage />} />
           <Route path="scheduler" element={<SchedulerPage />} />
           <Route path="memory" element={<MemoryPage />} />
-          <Route path="memory/rules" element={<RulesDetailPage />} />
-          <Route path="memory/patterns/:agent/:name" element={<PatternDetailPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>
