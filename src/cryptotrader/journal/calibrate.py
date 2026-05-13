@@ -1,17 +1,61 @@
 """Calibration, accuracy reporting, and bias detection for agent predictions.
 
 Phase 4D: Generate meta-prompt corrections based on historical accuracy patterns.
+
+Calibration epoch (2026-05-13): when the agent skill prompts are rewritten
+materially, historical accuracy is computed on stale assumptions and should
+be discarded. `_load_epoch()` reads an optional cutoff from
+``agent_memory/calibration_epoch.txt`` (single ISO-8601 line, UTC).
+When present, only commits with ``timestamp >= epoch`` are counted —
+overriding the 30-day default window if the epoch is more recent.
+Bump the epoch any time skill prompts change: ``date -u +%FT%TZ >
+agent_memory/calibration_epoch.txt``.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from cryptotrader._compat import UTC
 
 if TYPE_CHECKING:
     from cryptotrader.journal.store import JournalStore
+
+logger = logging.getLogger(__name__)
+
+_EPOCH_FILE = Path("agent_memory/calibration_epoch.txt")
+
+
+def _load_epoch() -> datetime | None:
+    """Read calibration epoch from disk; None if file missing or malformed."""
+    try:
+        if not _EPOCH_FILE.exists():
+            return None
+        raw = _EPOCH_FILE.read_text(encoding="utf-8").strip()
+        if not raw:
+            return None
+        # Accept "2026-05-13T01:30:00Z" or "2026-05-13T01:30:00+00:00"
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        dt = datetime.fromisoformat(raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt
+    except Exception as exc:
+        logger.warning("calibration epoch parse failed (%s); falling back to no override", exc)
+        return None
+
+
+def _effective_cutoff(days: int) -> datetime:
+    """Returns max(days-based-cutoff, epoch-override)."""
+    default = datetime.now(UTC) - timedelta(days=days)
+    epoch = _load_epoch()
+    if epoch is None:
+        return default
+    return max(default, epoch)
 
 
 async def accuracy_report(store: JournalStore, days: int = 30) -> dict[str, float]:
@@ -21,7 +65,7 @@ async def accuracy_report(store: JournalStore, days: int = 30) -> dict[str, floa
     from both numerator and denominator to avoid diluting accuracy.
     """
     commits = await store.log(limit=1000)
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    cutoff = _effective_cutoff(days)
     correct: dict[str, int] = {}
     directional: dict[str, int] = {}
     for dc in commits:
@@ -59,7 +103,7 @@ async def detect_biases(store: JournalStore, days: int = 30) -> dict[str, dict]:
     - accuracy: overall accuracy rate
     """
     commits = await store.log(limit=1000)
-    cutoff = datetime.now(UTC) - timedelta(days=days)
+    cutoff = _effective_cutoff(days)
 
     # Per-agent tracking
     stats: dict[str, dict] = {}
