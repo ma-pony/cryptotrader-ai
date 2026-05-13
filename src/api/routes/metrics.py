@@ -301,8 +301,6 @@ class MetricsSummaryV2Response(BaseModel):
     decisions_per_day: float = 0.0
     latency_histogram: list[LatencyHistogramBucketOut] = []
     cost_14d: list[DailyCostPointOut] = []
-    # spec 020a FR-Z19: IVE classify_case failure rate (1h sliding window)
-    ive_failure_rate: float = 0.0
 
 
 def _pipeline_histogram_buckets() -> list[LatencyHistogramBucketOut]:
@@ -434,8 +432,6 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
     )
     latency_hist = _pipeline_histogram_buckets()
 
-    ive_failure_rate = 0.0  # legacy field retained in response schema; aggregator removed 2026-05-13
-
     return MetricsSummaryV2Response(
         counters=MetricsCounters(
             trades_total=trades_total,
@@ -457,5 +453,4 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
         decisions_per_day=decisions_per_day,
         latency_histogram=latency_hist,
         cost_14d=cost_14d,
-        ive_failure_rate=ive_failure_rate,
     )

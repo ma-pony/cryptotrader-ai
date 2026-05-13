@@ -189,10 +189,9 @@ async def update_past_pnl(state: ArenaState) -> dict:
 
     Runs at the start of each cycle: looks up recent journal entries
     with orders but no PnL, compares entry price with current price.
-    Realised PnL on settled trades is what the evolution daemon's
-    pattern_extraction step consumes when distilling AUTO-DISTILLED-
-    PATTERNS — without this back-fill those rows would stay
-    unevaluated and the daemon would skip them.
+    The realised PnL feeds dashboard stats (avg_trade_pnl / win_rate /
+    realized_pnl_30d) and is the only path that closes the loop on
+    open commits — without it those rows would stay pnl=None forever.
     """
     from cryptotrader.journal.store import JournalStore
 
@@ -225,22 +224,12 @@ async def update_past_pnl(state: ArenaState) -> dict:
 async def tag_regime_node(state: ArenaState) -> dict:
     """Compute regime tags for the current snapshot.
 
-    Replaces the previous ``verbal_reinforcement`` node (2026-05-13). The
-    old node also fetched "similar historical cases" and dumped them into
-    the agent prompt as raw context — that path was deleted along with
-    bias-correction because it re-introduced exactly the kind of prior
-    anchoring the round-3 minimal skills were designed to remove.
+    Replaces the previous ``verbal_reinforcement`` node (deleted 2026-05-13
+    together with bias-correction / reflect / memory-evolution because all
+    of them re-introduced prior anchoring into the agent prompt).
 
-    Regime tags are kept because:
-      - the evolution daemon's regime-cluster step uses them
-      - DecisionCommit persists them for downstream regime-aware retrieval
-
-    Skills injection (the proper feedback path) is handled by
-    PromptBuilder (spec 017b) inside agent.analyze(). Pattern
-    distillation runs daily inside the evolution daemon
-    (ops/daemon.py); the in-cycle `run_reflection` node was removed
-    2026-05-13 because it duplicated the daemon's work at a higher
-    cadence with worse statistical grounding.
+    Regime tags survive because DecisionCommit persists them and the
+    journal store uses them for regime-aware analytics.
     """
     from cryptotrader.config import load_config
     from cryptotrader.learning.regime import tag_regime

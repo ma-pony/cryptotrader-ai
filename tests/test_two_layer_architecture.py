@@ -89,20 +89,3 @@ class TestAgentSkillsDirectory:
         )
         # exit code 0 = IS ignored (我们期望 agent_memory/ 被忽略)
         assert result.returncode == 0, "agent_memory/ 应该被 .gitignore 排除"
-
-
-class TestAgentMemoryDirectoryStructure:
-    """测试 agent_memory/ 目录骨架（FR-003）。"""
-
-    def test_memory_cases_dir_exists(self):
-        """agent_memory/cases/ 目录应存在。"""
-        cases_dir = REPO_ROOT / "agent_memory" / "cases"
-        assert cases_dir.exists(), "agent_memory/cases/ 不存在"
-
-    def test_memory_agent_dirs_exist(self):
-        """4 个 agent 子目录（patterns/ + archive/）应存在（FR-003 + FR-004c）。"""
-        for agent_id in ["tech", "chain", "news", "macro"]:
-            patterns = REPO_ROOT / "agent_memory" / agent_id / "patterns"
-            archive = REPO_ROOT / "agent_memory" / agent_id / "archive"
-            assert patterns.exists(), f"agent_memory/{agent_id}/patterns/ 不存在"
-            assert archive.exists(), f"agent_memory/{agent_id}/archive/ 不存在"

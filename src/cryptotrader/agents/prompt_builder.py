@@ -222,7 +222,7 @@ class Skill:
 
 
 class SkillProvider(Protocol):
-    """技能数据源协议接口；本 spec 提供 DefaultSkillProvider，spec 018 提供进化版实现。"""
+    """技能数据源协议接口；由 EvolvingSkillProvider 实现。"""
 
     def get_available_skills(
         self,

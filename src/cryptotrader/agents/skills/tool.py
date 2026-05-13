@@ -117,11 +117,10 @@ def _record_metric(name: str, result: str) -> None:
 
 
 def _make_load_skill_tool(provider: Any | None = None, skill_dir: Path | None = None):
-    """创建 LangChain BaseTool 实例（FR-021 + FR-022）。
+    """创建 LangChain BaseTool 实例。
 
-    spec 019 FR-W13: 接受 provider 参数（EvolvingSkillProvider）。
-    provider 非空 -> 走 provider.get_skill_by_name(name)（access_count 累计）。
-    provider 为 None -> 走 spec 014 兜底（直接读文件，兼容旧路径）。
+    provider 非空 → 走 provider.get_skill_by_name(name)（access_count 累计）。
+    provider 为 None → 直接读文件兜底。
     """
     try:
         from langchain_core.tools import tool
@@ -136,7 +135,7 @@ def _make_load_skill_tool(provider: Any | None = None, skill_dir: Path | None = 
             Returns:
                 The skill body as a string, or an error message.
             """
-            # spec 019: provider path (access_count accumulated via provider)
+            # provider path (access_count accumulated via provider)
             if provider is not None:
                 try:
                     skill = provider.get_skill_by_name(name)

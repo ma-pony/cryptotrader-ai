@@ -36,22 +36,6 @@ def atomic_write(path: Path, content: str) -> None:
             raise
 
 
-def ensure_memory_dirs(base: Path | None = None) -> None:
-    """自动创建 agent_memory/ 目录骨架。
-
-    FR-003: cases/ + 4 个 agent 子目录（patterns/ + archive/）。
-    """
-    from cryptotrader.agents.skills._constants import DEFAULT_AGENT_MEMORY_DIR, VALID_AGENT_IDS
-
-    memory_dir = base or DEFAULT_AGENT_MEMORY_DIR
-    # 顶级 cases 目录
-    (memory_dir / "cases").mkdir(parents=True, exist_ok=True)
-    # 4 个 agent 子目录
-    for agent_id in VALID_AGENT_IDS:
-        (memory_dir / agent_id / "patterns").mkdir(parents=True, exist_ok=True)
-        (memory_dir / agent_id / "archive").mkdir(parents=True, exist_ok=True)
-
-
 def ensure_skill_dirs(base: Path | None = None) -> None:
     """自动创建 agent_skills/ 目录骨架（initial 5 个 skill 目录）。"""
     from cryptotrader.agents.skills._constants import _INITIAL_SKILL_DIRS, DEFAULT_AGENT_SKILLS_DIR

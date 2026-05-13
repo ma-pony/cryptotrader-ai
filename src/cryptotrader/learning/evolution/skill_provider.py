@@ -72,7 +72,7 @@ def _extract_regime(snapshot: dict) -> str | None:
 
 
 def _load_skill_from_path(path: Path) -> Any | None:
-    """从 SKILL.md 文件加载 Skill 对象（含 spec 019 新字段）。"""
+    """从 SKILL.md 文件加载 Skill 对象。"""
     try:
         from cryptotrader.agents.skills._frontmatter import parse_frontmatter
         from cryptotrader.agents.skills.schema import Skill
@@ -105,7 +105,6 @@ def _load_skill_from_path(path: Path) -> Any | None:
             manually_edited=bool(fm.get("manually_edited", False)),
             version=str(fm.get("version", "1.0")),
             mtime=path.stat().st_mtime,
-            # spec 019 新字段
             regime_tags=list(fm.get("regime_tags") or []),
             triggers_keywords=list(fm.get("triggers_keywords") or []),
             importance=float(fm.get("importance", 0.5)),
@@ -180,9 +179,9 @@ def _emit_telemetry(
 
 
 class EvolvingSkillProvider:
-    """EvolvingSkillProvider — 实现 spec 017a SkillProvider Protocol。
+    """EvolvingSkillProvider — 实现 SkillProvider Protocol。
 
-    D-RT-01 两层检索算法：
+    两层检索算法：
       第一层：scope + regime_tags 预过滤
       第二层：score = (idf_score + importance + recency_bonus) x confidence
     """
@@ -191,7 +190,6 @@ class EvolvingSkillProvider:
         self,
         skill_root: Path = Path("agent_skills"),
         top_k: int = 5,
-        # spec 019 backward-compat alias: old DefaultSkillProvider used skills_root=
         skills_root: Path | None = None,
     ) -> None:
         self._skill_root = skills_root if skills_root is not None else skill_root
@@ -230,10 +228,10 @@ class EvolvingSkillProvider:
         t0 = time.monotonic()
         effective_k = k if k > 0 else self._top_k
 
-        # 第一层：scope filter（reuse spec 014）
+        # 第一层：scope filter
         scope_candidates = discover_skills_for_agent(agent_id, skill_dir=self._skill_root)
 
-        # 用新字段重新加载（discover_skills_for_agent 返回的 Skill 可能缺 spec 019 字段）
+        # 用 _load_skill_from_path 重新加载以获取完整 frontmatter 字段
         candidates = []
         filtered_out = []
         for s in scope_candidates:
