@@ -135,14 +135,45 @@ class Scheduler:
 
         # Block until stop() is called
         self._stop_event = asyncio.Event()
+
+        # Defensive heartbeat against APScheduler timer-state staleness.
+        # Observed twice (2026-05-12 11:21 / 2026-05-13 00:53 UTC):
+        # AsyncIOScheduler stops firing after ~10h uptime, with
+        # next_run_time still showing a past timestamp. Increasing
+        # misfire_grace_time alone (1s → 300s) did not prevent recurrence.
+        # The heartbeat calls scheduler.wakeup() periodically, forcing the
+        # scheduler to re-evaluate triggers and re-schedule its internal
+        # asyncio timer — even when the timer would otherwise stay stale.
+        self._heartbeat_task = asyncio.create_task(self._scheduler_heartbeat())
+
         await self._stop_event.wait()
 
         # Cleanup
+        self._heartbeat_task.cancel()
         if self._trigger_engine is not None:
             await self._trigger_engine.stop()
         self._scheduler.shutdown(wait=False)
         await self._close_live_exchanges()
         logger.info("Scheduler stopped gracefully")
+
+    async def _scheduler_heartbeat(self) -> None:
+        """Periodic wakeup nudge — defends against the long-uptime stuck bug.
+
+        5-min cadence keeps the apscheduler internal timer fresh without
+        meaningful overhead (wakeup() is a no-op when state is healthy).
+        Errors here are non-fatal; we log and keep looping.
+        """
+        while self._stop_event is not None and not self._stop_event.is_set():
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=300)
+                return  # stop_event set; heartbeat exits cleanly
+            except TimeoutError:
+                pass  # 5 min elapsed; nudge the scheduler
+            try:
+                self._scheduler.wakeup()
+                logger.debug("scheduler heartbeat: wakeup() nudged")
+            except Exception as exc:
+                logger.warning("scheduler heartbeat wakeup failed: %s", exc)
 
     def stop(self) -> None:
         if self._stop_event:
