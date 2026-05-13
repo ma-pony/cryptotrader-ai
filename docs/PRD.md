@@ -175,9 +175,8 @@
 
 Verdict AI 收到的完整上下文：
 - **持仓状态**：FLAT / LONG(entry=$X, unrealized +Y%) / SHORT
-- **价格趋势**：7d/14d/30d 变化、30d 价格区间、当前位置
+- **价格趋势**：7d/14d/30d 变化、30d 价格区间、当前位置 + 当前 ATR
 - **风控约束**：最大仓位、剩余敞口、每日亏损预算、波动率、资金费率
-- **偏差校正**：从历史日志检测到的认知偏差（如过度做多、时间段偏差）
 - **4 个 Agent 的完整 JSON 报告**
 - **上次决策上下文**（回测模式：防止关仓-开仓循环）
 
@@ -187,11 +186,21 @@ Verdict AI 收到的完整上下文：
   "action": "long|short|hold|close",
   "confidence": 0.0-1.0,
   "position_scale": 0.0-1.0,
-  "reasoning": "2-3句",
+  "reasoning": "2-3句，含 'applied: <agent>::<pattern>'",
   "thesis": "一句话交易论点",
-  "invalidation": "论点失效的具体条件"
+  "stop_loss": 80100.0,          // plain number, MANDATORY for long/short
+  "take_profit": 82500.0,         // plain number, MANDATORY for long/short
+  "invalidation": "可选 narrative 解释",
+  "target_price": "可选 narrative 解释"
 }
 ```
+
+**SL/TP hard-reject gate**（替代旧版"减半 confidence"软惩罚）：以下任一情形
+会强制 `action=hold`：
+- `stop_loss` 或 `take_profit` 缺失/非数字
+- 方向反（long 但 `stop_loss ≥ entry` / short 但 `stop_loss ≤ entry`）
+- Stop 距离 < `max(1.5×ATR, 1.0% × entry)`
+- R:R = `|take_profit − entry| / |entry − stop_loss| < 1.5`
 
 `position_scale` 直接控制仓位大小：`size = max(floor, scale × ceiling)`
 
@@ -217,23 +226,30 @@ Verdict AI 收到的完整上下文：
 
 ---
 
-## 7. 言语强化学习
+## 7. Skill 检索与反馈通道
 
 ```
-JournalStore
+agent_skills/<id>/SKILL.md（人工维护，git-tracked）
     │
     ▼
-search_similar(fr, vol, limit=3)    # 搜索相似市场条件的历史决策
+EvolvingSkillProvider.get_available_skills(agent_id, snapshot)
+    │  1. scope 过滤（agent:<id> / shared）+ regime_tags 交集
+    │  2. score = idf + importance × predictive_value + recency
+    │  3. 取 top-5
+    ▼
+PromptBuilder 把 skill body 拼入 `available_skills` section
     │
     ▼
-format_experience()                  # "Historical similar conditions:
-    │                                #   - BTC @ 2024-11-15: verdict=long, pnl=+$320
-    │                                #     Lesson: strong trend continuation was correct"
-    ▼
-注入每个 Agent 的 prompt           # agent 获得"前车之鉴"
-
-注：legacy "偏差校正注入" 路径（detect_biases / generate_verdict_calibration）
-于 2026-05-13 删除——与 round-3 minimal-skill 反锚定理念冲突。经验闭环现由
-Evolution Daemon（spec 020b）的 pattern_extraction 接管：把成功 case 抽成
-patterns 写入 `agent_skills/<agent>/SKILL.md` 的 AUTO-DISTILLED-PATTERNS 段。
+Agent LLM 调用（system + skill + snapshot + optional live_steering）
+    │
+    │  ↓ 反馈通道（read-only，不改 prompt 内容）
+    │
+    └── access_count++ / last_accessed_at = now —— 影响下次检索打分
 ```
+
+**人工反馈环**：用户读 `decision_commits` 表的 PnL / direction-accuracy
+统计 → 决定改 SKILL.md frontmatter（如 `predictive_value`）或 body（加 checklist
+/ 反例）→ git commit。**LLM 不直接改 prompt 内容**。
+
+**Live steering**：前端 chat 输入 → Redis 队列 `steering:<session>:<agent_id>`
+→ cycle 启动时 drain → `live_steering` section 一次性注入；cycle 结束失效。

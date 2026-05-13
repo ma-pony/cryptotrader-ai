@@ -10,7 +10,7 @@ AI-powered crypto trading system using LangGraph multi-agent debate.
 
 ## Overview
 
-4 specialized AI agents (Technical, On-chain, News, Macro) independently analyze market data, then debate through cross-challenge rounds to reach consensus. A hard-coded risk gate (11 rule-based checks, no LLM) enforces position limits, loss limits, and circuit breakers. Every decision is recorded in a Git-like Decision Journal for auditability and experience-based learning.
+4 specialized AI agents (Technical, On-chain, News, Macro) independently analyze market data, then debate through cross-challenge rounds to reach consensus. A hard-coded risk gate (11 rule-based checks, no LLM) enforces position limits, loss limits, and circuit breakers. Every decision is recorded in a Git-like Decision Journal for auditability.
 
 Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's think-before-act pattern) to reduce overconfidence and hallucination before outputting signals.
 
@@ -19,16 +19,16 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 - **Multi-agent debate** — 4 agents analyze independently, then cross-challenge each other over 2-3 rounds; debate gate skips debate on consensus or confusion for progressive filtering
 - **Three graph modes** — Full debate pipeline with debate gate, lite (backtest), bull/bear adversarial with judge
 - **11-check risk gate** — Pure rules, no LLM: position limits, CVaR, correlation, circuit breakers
-- **Decision journal** — Git-like immutable commit chain with similarity search; outcomes feed the evolution daemon's pattern distillation
-- **Experience feedback loop** — Reflection + Evolution Daemon distill successful patterns into per-agent SKILL.md (verbal-reinforcement historical-case injection removed 2026-05-13)
-- **Structured experience memory** — GSSC pipeline (gather → select → structure) with regime-aware retrieval, ExperienceRule/ExperienceMemory JSON, and 5-layer anti-overfitting defense
+- **Decision journal** — Git-like immutable commit chain stored in PostgreSQL `decision_commits`
+- **Config-driven prompts** — Each agent's system_prompt / output_schema / token budget lives in `config/agents/<name>.md`; PromptBuilder assembles at runtime
+- **EvolvingSkillProvider** — Two-stage retrieval (scope + regime_tags filter → idf + importance + recency score) picks top-k skills from `agent_skills/<id>/SKILL.md` into the prompt
+- **Mandatory numeric SL/TP** — Verdict must output `stop_loss` + `take_profit` as plain numbers; missing / direction-inverted / too-tight / R:R < 1.5 → action forced to hold
 - **Backtesting engine** — Historical simulation with realistic cost modeling and no look-ahead bias
 - **Live trading ready** — ccxt-based exchange adapters with retry, precision, and timeout handling
 - **APScheduler automation** — Periodic trading cycles with daily portfolio summaries
 - **61+ data sources** — Unified SQLite store across 7 categories with rate limiting per source
-- **Trilogy Evolution System** (spec 016→020c, 2026-05-09) — config-driven prompts (`config/agents/<name>.md`) + Memory Evolution (5-signal Maturity FSM + Pareto + IVE failure classification) + Skill Evolution (D-RT-01 retrieval + LLM-inferred metadata) + standalone `evolution-daemon` docker service (daily Pareto rerank + Regime recluster + Skill proposal auto-trigger, soft degrade) + Git Lineage (auto-commit to `evolution` branch with `Auto-Generated-By: spec-020c` trailer)
 - **Anthropic prompt cache observability** — `apply_cache_control()` in production; OTel span attrs `llm.cache.{read,creation,hit_rate}`; Prometheus `llm_cache_hit_rate_24h_avg` gauge
-- **11 Prometheus gauges** — cache hit rate / IVE failure / daemon run / lineage commit / etc.; dashboard-only (no alertmanager) to avoid alert fatigue
+- **Live steering** — User real-time instructions flow through Redis queue into `live_steering` section, consumed once per cycle (no feedback loop)
 
 ## Architecture
 
@@ -66,15 +66,15 @@ Every agent's system prompt includes a **5-point pre-signal checklist**: contrad
 2. **Debate Gate**: Evaluates divergence; skips debate if agents already show consensus (divergence < `consensus_skip_threshold`) or confusion (divergence < `confusion_max_dispersion` with low confidence); otherwise proceeds to debate
 3. **Round 2-3**: Each agent sees all others' analyses and must justify holding or revising their position with specific data points (parallel per round)
 4. **Convergence check**: Divergence score (population stdev of `confidence × direction`) tracked per round; stops when relative change < 10% or max rounds reached
-5. **Verdict**: Single LLM at temperature 0.1 sees all agent outputs, position context (FLAT/LONG/SHORT, entry price, unrealized PnL), price trend, and risk constraints → outputs `{action, confidence, position_scale, reasoning, thesis, invalidation}`
+5. **Verdict**: Single LLM at temperature 0.1 sees all agent outputs, position context (FLAT/LONG/SHORT, entry price, unrealized PnL), price trend, and risk constraints → outputs `{action, confidence, position_scale, reasoning, thesis, stop_loss, take_profit}`
 
-### Learning System
+### Prompt & Skill System
 
-- **Regime tagging**: `tag_regime()` computes regime labels (high_funding, high_vol, trending_up, extreme_fear, etc.) from the data snapshot — used downstream by the evolution daemon's regime-cluster step and by DecisionCommit for retrieval. Verbal-reinforcement historical-case dump into agent prompts was removed 2026-05-13 (re-introduced the kind of prior anchoring round-3 minimal skills had just removed)
-- **GSSC pipeline**: `context.py` implements gather → select → structure: collects regime-matched cases and structured rules, scores by relevance, fits within token budget, and injects as structured context into agent prompts
-- **Structured experience memory**: `learning/memory.py` defines `ExperienceRule` / `ExperienceMemory` with maturity levels (observation → hypothesis → rule) and empirical win rates. The evolution daemon's `distill_patterns()` populates these from settled trades and writes them into the `AUTO-DISTILLED-PATTERNS` section of each agent's `SKILL.md`. The legacy per-cycle `reflect.py` injection path (LLM "strategy memo" into prompt) was removed 2026-05-13 — same anti-anchoring rationale as bias-correction and verbal-reinforcement
-- **Anti-overfitting 5-layer defense**: minimum sample thresholds, maturity gating, regime-aware verification (win rates computed only within matching regime), LLM constraint prompts, code-verified win rates
-- **Evolution daemon**: A standalone process runs daily Pareto re-ranking + regime re-clustering + skill-proposal triggers + pattern extraction. Distilled patterns are written into each `agent_skills/<id>/SKILL.md` under the `AUTO-DISTILLED-PATTERNS` section, replacing the legacy bias-correction injection path (removed 2026-05-13: was contradicting the round-3 minimal-skill anti-anchor philosophy)
+- **Skill retrieval**: `EvolvingSkillProvider` loads `agent_skills/<id>/SKILL.md`, filters by scope + regime_tags, scores by `idf + importance + recency`, and injects top-5 into each agent prompt's `available_skills` section
+- **Skill content**: human-maintained git-tracked Markdown — role + reasoning approach + checklists only; no historical case dumps, no directional predictions, no numeric thresholds
+- **Regime tagging**: `tag_regime()` classifies the snapshot into discrete labels (high_funding / high_vol / trending_up / extreme_fear / …) used for skill retrieval filtering
+- **SL/TP hard reject**: Verdict's `stop_loss` + `take_profit` must be plain numbers and pass four checks: present / direction-correct (long: stop < entry < take_profit) / stop-distance ≥ max(1.5×ATR, 1.0% of entry) / R:R ≥ 1.5 — failure forces `action=hold`
+- **Live steering**: Frontend chat writes real-time instructions to a Redis queue; the next cycle drains and injects them into `live_steering` (single-cycle lifetime, no feedback loop)
 
 ## Quickstart
 
@@ -173,10 +173,6 @@ arena serve --port 8003
 | `arena migrate` | Create PostgreSQL tables |
 | `arena risk reset-breaker` | Reset circuit breaker |
 | `arena live-check --exchange binance` | Pre-flight check for live trading |
-| `arena experience distill --session {id}` | Distill experience from backtest |
-| `arena experience show --session {id}` | Show distilled experience |
-| `arena experience merge --session {id}` | Merge backtest experience into live |
-| `arena experience sessions` | List backtest sessions |
 
 ## Data Sources
 
@@ -270,10 +266,6 @@ pairs = ["BTC/USDT", "ETH/USDT"]
 interval_minutes = 240
 exchange_id = "binance"
 daily_summary_hour = 0    # UTC hour (0-23)
-
-[experience]
-enabled = true
-every_n_cycles = 20
 ```
 
 ### Environment Variables
@@ -462,13 +454,13 @@ src/cryptotrader/
 │   ├── store.py       # JournalStore (PostgreSQL + in-memory fallback)
 │   └── commit.py      # DecisionCommit + immutable hash-chained schema
 ├── learning/
-│   ├── regime.py     # tag_regime (market regime labels)
-│   ├── memory.py     # ExperienceRule / ExperienceMemory + maturity FSM + Pareto rank
-│   ├── context.py     # GSSC engine (gather → select → structure → inject)
-│   └── regime.py      # Regime tagging (tag_regime) + Jaccard overlap matching
+│   ├── regime.py             # tag_regime (market regime labels)
+│   └── evolution/
+│       ├── skill_provider.py # EvolvingSkillProvider (scope + regime + idf retrieval)
+│       └── idf.py            # IDF scoring + keyword extraction
 └── backtest/
     ├── engine.py      # BacktestEngine (LLM + SMA modes)
-    ├── session.py     # Backtest session storage (commits, results, experience)
+    ├── session.py     # Backtest session storage (commits, results)
     ├── cache.py       # OHLCV SQLite cache
     ├── historical_data.py  # FnG, funding rate, FRED, futures volume
     └── result.py      # BacktestResult metrics
@@ -490,7 +482,7 @@ web/                   # React 19 + Vite 7 frontend (dashboard, decisions, backt
 | Scheduling | APScheduler 3.x |
 | Database | PostgreSQL 16 + SQLAlchemy 2.0 async |
 | Cache / State | Redis 7 |
-| Local Storage | SQLite (data store + LLM cache + experience memory) |
+| Local Storage | SQLite (market data store + LLM response cache) |
 | API Server | FastAPI + Uvicorn |
 | Dashboard | React 19 + Vite 7 + TypeScript |
 | CLI | Typer + Rich |

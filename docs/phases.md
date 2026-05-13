@@ -68,9 +68,8 @@
 | 宏观数据 | data/macro.py | ✅ | FRED(利率/DXY) + CoinGecko(BTC dominance) + Fear&Greed |
 | NewsAgent | agents/news.py | ✅ | 使用真实新闻数据 |
 | MacroAgent | agents/macro.py | ✅ | 使用真实宏观数据 |
-| Regime Tagging | learning/regime.py | ✅ | tag_regime() 计算 regime 标签（取代 2026-05-13 删除的 verbal.py 历史 case 注入路径）|
-| Journal 搜索 | journal/search.py | ✅ | 按 funding_rate/volatility 范围检索 |
-| 经验闭环 | ops/daemon.py（spec 020b）| ✅ | Evolution Daemon pattern_extraction → SKILL.md AUTO-DISTILLED-PATTERNS（取代已删的 journal/calibrate.py 路径）|
+| Regime Tagging | learning/regime.py | ✅ | tag_regime() 计算 regime 标签，供 SkillProvider 第一层过滤 |
+| Skill 检索 | learning/evolution/skill_provider.py | ✅ | EvolvingSkillProvider：scope + regime + idf 两层检索，top-k 注入 prompt |
 | API /analyze | api/routes/analyze.py | ✅ | 完整 graph 调用 |
 | API /health | api/routes/health.py | ✅ | 系统状态检查 |
 | API /journal | api/routes/journal.py | ✅ | log + show |
@@ -403,7 +402,7 @@ model = "gpt-4o-mini"
 ```
 Phase 1 ✅  最小闭环        52 files, 11 tests   → 能跑通一次完整流程
 Phase 2 ✅  完整智能层      57 files, 51 tests   → 真实数据源 + API 服务
-Phase 3 ✅  实盘就绪        ~90 files, 347 tests → 持久化 + 回测 + 实盘 + 调度 + 经验记忆
+Phase 3 ✅  实盘就绪        ~90 files, 347 tests → 持久化 + 回测 + 实盘 + 调度 + Skill 检索
 Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 + 社区
 ```
 
@@ -415,11 +414,12 @@ Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 
 | Portfolio 硬编码 | Phase 1 | ✅ 已解决 | PortfolioManager 完整持仓追踪 |
 | Redis 未实际连接 | Phase 1 | ✅ 已解决 | RedisStateManager 含保守降级 fallback |
 | 新闻情绪关键词匹配 | Phase 2 | 已更新 | FinBERT 已移除，情绪分析委托给 NewsAgent LLM；关键词匹配作为数据层 fallback 保留 |
-| 无回测验证 | Phase 2 | ✅ 已解决 | BacktestEngine 含完整回测 + 经验蒸馏 |
+| 无回测验证 | Phase 2 | ✅ 已解决 | BacktestEngine 含完整回测引擎 |
 | LiveExchange 未验证 | Phase 1 | ✅ 已解决 | 生产级加固：重试、熔断、凭证系统 |
 | 无定时调度 | Phase 2 | ✅ 已解决 | APScheduler 3.x（IntervalTrigger + CronTrigger） |
 | 无通知机制 | Phase 2 | ✅ 已解决 | Webhook 通知（交易/拒绝/熔断/对账/每日摘要） |
-| Agent 等权 | Phase 2 | 已废弃 | 原校准系统（calibrate.py）于 2026-05-13 删除——与 round-3 minimal-skill 反锚定冲突。Verdict 现以 LLM 综合 4 agent 输出，无固定权重；Evolution Daemon 通过 pattern_extraction 间接强化 high-quality agent 信号 |
+| Agent 等权 | Phase 2 | 已解决 | Verdict LLM 综合 4 agent 输出（无固定权重）；SkillProvider 通过 importance × predictive_value 间接影响哪些 skill 进 prompt |
+| SL/TP 未传 OKX | Phase 3 | 部分解决 | Phase 1（commit `ee52c2c`）：verdict 必须输出 numeric stop_loss + take_profit，4 道 hard-reject 护栏；Phase 2 OKX algo OCO 下单待跟进 |
 
 ---
 

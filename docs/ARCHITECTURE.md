@@ -42,13 +42,13 @@ cryptotrader-ai/
 │   │   │   ├── news.py        # NewsAgent（ToolAgent）
 │   │   │   ├── macro.py       # MacroAgent（BaseAgent）
 │   │   │   ├── data_tools.py  # LangChain @tool 定义（6 Chain + 3 News）
-│   │   │   ├── prompt_builder.py     # 配置驱动 prompt 组装（spec 017a）
-│   │   │   ├── snapshot_renderer.py  # snapshot 渲染（spec 017b 解耦后单文件）
-│   │   │   ├── skills/               # SKILL.md 协议 + 加载（spec 014）
+│   │   │   ├── prompt_builder.py     # 配置驱动 prompt 组装（system + skill + snapshot + live_steering）
+│   │   │   ├── snapshot_renderer.py  # snapshot 渲染
+│   │   │   ├── skills/               # SKILL.md 协议 + 加载
 │   │   │   └── _indicators.py # 纯 pandas/numpy 技术指标（替代 pandas_ta）
 │   │   ├── backtest/
 │   │   │   ├── engine.py      # BacktestEngine（LLM + SMA 模式）
-│   │   │   ├── session.py     # 回测 Session 存储（commits/results/experience）
+│   │   │   ├── session.py     # 回测 Session 存储（commits / results）
 │   │   │   ├── cache.py       # OHLCV SQLite 缓存
 │   │   │   ├── historical_data.py  # FnG/资金费率/BTC 主导率/FRED/期货量
 │   │   │   └── result.py      # BacktestResult 数据类
@@ -81,27 +81,12 @@ cryptotrader-ai/
 │   │   │   ├── store.py       # JournalStore（决策链）
 │   │   │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 │   │   ├── learning/
-│   │   │   ├── regime.py     # tag_regime（市场 regime 标签）
-│   │   │   ├── memory.py     # ExperienceRule / ExperienceMemory + Pareto + FSM
-│   │   │   ├── context.py     # GSSC 引擎（gather → select → structure）
-│   │   │   ├── regime.py      # Regime 标签 + Jaccard 匹配
-│   │   │   ├── memory.py      # MemoryProvider Protocol + refilter_records_by_regime
-│   │   │   ├── skill_proposal.py     # propose_new_skill + LLM 自动 metadata（spec 019）
-│   │   │   └── evolution/             # Memory + Skill Evolution（spec 018/019）
-│   │   │       ├── fsm.py             # 5-signal Maturity FSM transitions
-│   │   │       ├── pareto.py          # Pareto frontier rank_rules
-│   │   │       ├── ive.py             # IVE failure classification（async）
-│   │   │       ├── idf.py             # IDF + D-RT-01 retrieval（spec 019）
-│   │   │       ├── provider.py        # EvolvingMemoryProvider
-│   │   │       ├── skill_provider.py  # EvolvingSkillProvider
-│   │   │       └── skill_metadata_inference.py  # LLM metadata 推断
-│   │   ├── observability/             # spec 020a/b/c sliding window aggregator
-│   │   │   ├── cache_metrics.py       # spec 020a LLM cache hit rate（24h）
-│   │   │   ├── ive_metrics.py         # spec 020a IVE failure rate（1h）
-│   │   │   └── daemon_metrics.py      # spec 020b/c daemon + lineage（redis sorted set）
-│   │   ├── ops/                       # 运维 ops（spec 020b/c）
-│   │   │   ├── daemon.py              # EvolutionDaemon（daily reflect daemon）
-│   │   │   └── lineage.py             # GitLineageHook（spec 020c auto-commit）
+│   │   │   ├── regime.py             # tag_regime（市场 regime 标签）
+│   │   │   └── evolution/
+│   │   │       ├── skill_provider.py # EvolvingSkillProvider（scope + regime + idf 两层检索）
+│   │   │       └── idf.py            # IDF + keyword 提取
+│   │   ├── observability/
+│   │   │   └── cache_metrics.py       # LLM cache hit rate（24h 滑动窗口）
 │   │   ├── nodes/             # LangGraph 节点
 │   │   │   ├── agents.py      # 4 Agent fan-out
 │   │   │   ├── data.py        # 数据收集 + PnL 更新 + 趋势上下文
@@ -133,10 +118,10 @@ cryptotrader-ai/
 │   ├── cli/
 │   │   └── main.py            # Typer CLI（arena 命令）
 ├── web/                       # React 19 + Vite 7 前端
-├── tests/                     # 2458 个测试，70%+ 覆盖率
+├── tests/                     # 2100+ 个测试
 ├── pyproject.toml             # 项目配置 + 依赖
 ├── Makefile                   # 快捷命令
-├── docker-compose.yml         # 8 service：postgres / redis / api / web / scheduler / caddy / evolution-daemon
+├── docker-compose.yml         # 6 service：postgres / redis / api / web / scheduler / caddy
 └── CLAUDE.md                  # AI 编码指南
 ```
 
@@ -226,7 +211,13 @@ class TradeVerdict:
     divergence: float = 0.0
     reasoning: str = ""
     thesis: str = ""                                   # 一句话交易论点
-    invalidation: str = ""                             # 论点失效条件
+    # Numeric SL/TP — canonical fields，必填于 long/short，hold/close 为 None。
+    # 缺失 / 方向反 / 距离 < max(1.5×ATR, 1%) / R:R < 1.5 → action 强制 hold。
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    # 可选 narrative 字段（仅人类可读说明，不参与下游决策）
+    invalidation: str = ""
+    target_price: str = ""
 ```
 
 ### 3.6 执行和风控模型
@@ -296,7 +287,6 @@ class ArenaState(TypedDict):
 | `snapshot` | `DataSnapshot` | collect_data | 市场快照 |
 | `snapshot_summary` | `dict` | collect_data | 精简摘要 |
 | `regime_tags` | `list[str]` | tag_regime_node | 当前 regime 标签 |
-| (移除) `agent_reflections` | – | – | 2026-05-13 删——reflect 子系统已废 |
 | `analyses` | `dict[str, dict]` | agent nodes | 4 个 Agent 分析结果 |
 | `verdict` | `dict` | verdict node | 最终决策 |
 | `risk_gate` | `dict` | risk_check | 风控结果（仅风控层）|
@@ -319,7 +309,7 @@ class ArenaState(TypedDict):
 | `llm_verdict` | `True` = AI 决策，`False` = 规则决策 |
 | `backtest_mode` | `True` = ToolAgent 跳过实时 API |
 | `debate_rounds` | 辩论轮数 |
-| `cycle_count` | Scheduler 当前周期数（用于反思触发） |
+| `cycle_count` | Scheduler 当前周期数 |
 
 `build_initial_state()` 工厂函数统一构造初始状态，确保 CLI/API/回测 三条路径一致。
 
@@ -351,9 +341,6 @@ create_llm(model, temperature, timeout, json_mode)
 | `run_debate()` Bear | debate 模型 | 0.3 | 熊方论证 |
 | `judge_debate()` | debate 模型 | 0.1 | 法官裁决 |
 | `debate_round()` | debate 模型 | 0.3 | 交叉辩论（4 个 Agent 经 asyncio.gather 并行执行） |
-| (移除) reflection 模型 | – | – | 2026-05-13 删——LLM 自反 memo 注入 prompt 与 minimal-skill 反锚定冲突 |
-
-> 历史备注：早期实验性 supervisor 架构 (`graph_supervisor.py` + `langchain_agents.py` + `agents/skills.py` + `agents/tools.py`) 已于 2026-04-28 删除。当前主路径仅保留 `build_trading_graph()` / `build_lite_graph()` / `build_debate_graph()`。
 
 **辩论门控**：`debate_gate` 节点在进入辩论轮次前评估共识强度与混沌程度。当所有 Agent 已达高度共识（`consensus_skip_threshold`）或市场信号过于混乱无法辩论（`confusion_skip_threshold` + `confusion_max_dispersion`），辩论轮次将被完全跳过，直接进入 Verdict 阶段，节省 LLM 调用开销。
 
@@ -622,18 +609,16 @@ consensus_skip_threshold = 0.5       # 共识强度阈值
 confusion_skip_threshold = 0.05      # 迷茫阈值
 confusion_max_dispersion = 0.2       # 迷茫最大离散度
 
-[experience]
-reflection_cycle = 5                 # 每 N 轮触发一次反思
-token_budget = 2000                  # 经验注入 token 上限
-win_rate_tolerance = 0.10            # 验证容忍误差
-
 [experience.regime_thresholds]
-high_funding = 0.001
-high_vol = 0.05
-trending_up = 0.03
-trending_down = -0.03
-extreme_fear = 25
-extreme_greed = 75
+# 仅供 tag_regime() 计算 regime 标签；regime 标签喂给 SkillProvider 第一层过滤。
+high_funding = 0.0003
+negative_funding = -0.0001
+high_vol = 0.025
+low_vol = 0.010
+trending_up = 0.05
+trending_down = -0.05
+extreme_fear_fng = 25
+extreme_greed_fng = 75
 
 [risk]
 max_stop_loss_pct = 0.05
@@ -678,50 +663,22 @@ daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 
 ---
 
-## 14. 双层 Agent 记忆架构（Spec 014）
+## 14. Agent Skills 系统
 
 ### 14.1 概述
 
-替代原有 DB 驱动的 `ExperienceMemory`/`ExperienceRule` + GSSC 管线，引入：
+每个 agent 加载 prompt 时由 `EvolvingSkillProvider` 从 `agent_skills/` 中
+检索 top-k SKILL.md 注入到 `available_skills` section。SKILL.md 是 **人工维护
+的 git-tracked Markdown**，不依赖 LLM 自动生成。
 
-| 层 | 路径 | git 追踪 | 说明 |
-|----|------|----------|------|
-| **Memory 层** | `agent_memory/` | ❌ gitignored | 永久原始记录：case 文件 + pattern 文件 |
-| **Skills 层** | `agent_skills/` | ✅ 版本追踪 | 经人工策展的 SKILL.md，遵循 Anthropic Skills 协议 |
-
-### 14.2 Memory 层
-
-```
-agent_memory/
-├── cases/
-│   └── <cycle_id>.md      # 每个 cycle 写入一个 frontmatter + 正文文件
-└── <agent_id>/
-    ├── patterns/
-    │   └── <pattern>.md   # 经蒸馏后的 PatternRecord（含 PnL track）
-    └── archive/           # deprecated patterns 归档
-```
-
-**写入流程**：
-- `nodes/journal.py` → `learning/memory.write_case()` — 原子写，失败不阻塞
-- frontmatter: `cycle_id`, `pair`, `verdict_action`, `applied`, `final_pnl`, `risk_gate_passed`
-- body: 各 agent reasoning 摘要
-
-**蒸馏流程**（`ops/daemon.py` + `learning/memory.py:distill_patterns`，2026-05-13
-后 in-cycle `nodes/reflection.py` 节点已删除，蒸馏迁出到独立 daemon 进程，
-日级触发）：
-- 读取 cases，统计 `applied:` 引用的 pattern 胜率
-- 4 层防过拟合（L1 regime 过滤、L2 最小样本、L3 段 vs 全局 delta、L4 对抗验证）
-- maturity FSM：`observed` → `probationary` → `active` → `deprecated`（deprecated 归档到 `archive/`）
-- daemon 把 `active` patterns 渲染进对应 agent `SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段，PromptBuilder 加载时自然读到
-
-### 14.3 Skills 层
+### 14.2 Skills 目录布局
 
 ```
 agent_skills/
-├── tech-analysis/SKILL.md    # scope: agent:tech
-├── chain-analysis/SKILL.md   # scope: agent:chain
-├── news-analysis/SKILL.md    # scope: agent:news
-├── macro-analysis/SKILL.md   # scope: agent:macro
+├── tech-analysis/SKILL.md     # scope: agent:tech
+├── chain-analysis/SKILL.md    # scope: agent:chain
+├── news-analysis/SKILL.md     # scope: agent:news
+├── macro-analysis/SKILL.md    # scope: agent:macro
 └── trading-knowledge/SKILL.md # scope: shared
 ```
 
@@ -729,16 +686,38 @@ agent_skills/
 ```markdown
 ---
 name: tech-analysis
-description: 技术分析 agent 的角色定义与历史蒸馏规律
+description: 技术分析 agent 的角色定义与思路框架
 scope: agent:tech
+regime_tags: [high_vol, trending_up, trending_down]
+triggers_keywords: [breakout, divergence, oversold]
+importance: 0.7
+predictive_value: 0.5     # 检索打分用；可由离线 evaluator 建议，人工同步
+access_count: 0           # SkillProvider 选中时累加
+last_accessed_at: ...
+manually_edited: false
 ---
 
 ## Role
-...
+你是 ...
 
-## AUTO-DISTILLED-PATTERNS
-<!-- 由 arena skills curate 自动替换 -->
+## Checklist
+1. Trend alignment
+2. Divergence scan
+3. Volatility regime
+4. Support/resistance proximity
 ```
+
+### 14.3 检索流程
+
+`EvolvingSkillProvider.get_available_skills(agent_id, snapshot, k=5)`：
+
+1. **第一层过滤** — scope 匹配（`agent:<id>` 或 `shared`）+ `regime_tags` 与
+   当前 snapshot regime 标签交集非空
+2. **第二层打分** — `score = idf_score + importance × predictive_value + recency_bonus`
+3. **返回 top-k**；选中的 skill `access_count += 1`、`last_accessed_at = now`
+
+被选中的 SKILL.md 整段 body 渲染到 agent prompt 的 `available_skills` section
+（PromptBuilder 通过 `_render_skills` 拼接），不抽取摘要、不二次加工。
 
 ### 14.4 注入机制
 

@@ -1,21 +1,9 @@
 # CryptoTrader AI — 系统架构设计文档
 
-> 版本：v5 Professional Edition
-> 日期：2026-02-20
-> 基于：4 轮深度调研（12+ 开源项目源码分析、25 篇学术论文、6 个 API 文档）
->
-> **2026-05-13 更新**：本文档保留原始设计意图（v5 视角），但**实现层已演化**：
->   - "Verbal Reinforcement"（FinCon 启发的历史 case 注入）已删除——与
->     round-3 minimal-skill 反锚定理念冲突；小样本 selection bias 显著。
->   - "统计校准"（calibrate.py / bias-correction）也已删除（同样原因）。
->   - **reflect.py / nodes/reflection.py 也已删除（2026-05-13）**——与
->     verbal/bias 删除同一逻辑：每 N 周期把 LLM 自反 memo 注入 agent prompt，
->     与 minimal-skill 反锚定冲突，且 20 样本是噪声。
->   - 经验闭环现仅由 **Evolution Daemon (spec 020b, daily
->     `pattern_extraction` → SKILL.md AUTO-DISTILLED-PATTERNS)** 接管。
->   - `tag_regime()` 函数保留，由轻量 `tag_regime_node` 调用，供 Evolution
->     Daemon 的 regime-cluster 步骤使用。
->   详见 §4.6（更新后）和 `docs/REFLECTION.md`。
+> 版本：v6（2026-05-13）
+> 设计原则：agent prompt 只含 `skill (role + thinking)` + `snapshot (current data)`。
+> 所有把 LLM 自生成内容反馈回下一次 prompt 的闭环都已移除（自指循环 → 噪声放大）。
+> 反馈通道仅限：人工编辑 `agent_skills/<id>/SKILL.md` + 实时 `live_steering`（一次性，cycle 结束失效）。
 
 ---
 
@@ -244,8 +232,7 @@ def build_trading_graph(config: dict) -> StateGraph:
     graph.add_edge(START, "collect_data")
     graph.add_edge("collect_data", "tag_regime")
 
-    # fan-out: regime 标签后并行分析（旧 "inject_experience"/verbal_reinforcement
-    # 节点于 2026-05-13 删除，相关历史 case 注入路径同步移除）
+    # fan-out: regime 标签后并行分析
     graph.add_edge("tag_regime", "tech_agent")
     graph.add_edge("tag_regime", "chain_agent")
     graph.add_edge("tag_regime", "news_agent")
@@ -375,18 +362,19 @@ class AgentAnalysis:
 
 辩论 prompt 分两层（参考 NOFX 源码）：
 
-**Round 1 prompt（独立分析）：**
+**Round 1 prompt（独立分析，由 PromptBuilder 拼装）：**
 ```
-你是 {agent_role}，基于以下数据分析 {pair} 的交易机会。
-{data_snapshot}
+你是 {agent_role}（system_prompt + available_skills，来自 config/agents/<id>.md 和 EvolvingSkillProvider）。
+基于以下数据分析 {pair} 的交易机会：
+{snapshot}    # 当前 cycle 数据
+{portfolio}   # 当前持仓
+[用户实时引导]  # 仅在 Redis 队列非空时出现，cycle 结束失效
 
 输出你的判断，包括方向、置信度、关键因素和风险。
 ```
 
-注：原 `{historical_experience}` (Verbal Reinforcement) 和 `{reflection_memo}`
-(reflect.py 自反备忘录) 两个 prompt 注入占位都已于 2026-05-13 删除——
-两者都通过往 prompt 注入 LLM 生成文本来锚定 agent 决策，与 round-3 minimal
-skill 反锚定理念冲突。详见顶部 §1 更新说明。
+Prompt **只含静态 skill + 当前 snapshot + 可选实时 steering**——不含任何
+LLM 自生成的历史 dump 或 prior，保留 round-3 minimal-skill 反锚定属性。
 
 **Round 2+ prompt（交叉质询）：**
 ```
@@ -432,46 +420,54 @@ def make_verdict(state: ArenaState) -> TradeVerdict:
     )
 ```
 
-### 4.6 经验闭环（2026-05-13 后简化版）
+### 4.6 Prompt 与技能系统
 
-**历史**：原 §4.6 描述 Verbal Reinforcement + GSSC 经验管道（FinCon NeurIPS 2024
-启发，三阶段 Gather → Select → Structure），把历史 case 注入 agent prompt。该路径
-和稍后引入的 bias-correction 注入都于 2026-05-13 删除——它们再次引入 round-3
-minimal-skill 刚去掉的 prior anchoring，且小样本（n≈3 case / n≈23 commits）在
-crypto 噪声中无统计意义。
+Agent prompt 的内容只由两类来源拼装：
 
-**当前（2026-05-13 后）**：经验闭环只剩一层：
+1. **静态 Skill 文件**（`agent_skills/<id>/SKILL.md`）—— 人工维护、git tracked。
+   每个 SKILL.md 由 frontmatter（name / scope / regime_tags / triggers_keywords /
+   importance / predictive_value 等数字字段）+ Markdown body（角色 + 思路 +
+   checklist）组成。**不含历史 case dump、不含方向预测、不含具体数字阈值**。
 
-**Evolution Daemon (`ops/daemon.py`, spec 020b)** — 每日离线运行
-`pattern_extraction`（封装在 `learning/memory.py:distill_patterns`），从过
-去 N 个周期的成功 case 蒸馏 patterns，写入对应
-`agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段。Agent 通过
-PromptBuilder 加载 skill 时自然受益。
+2. **当前 Cycle Snapshot**（`snapshot_summary` + `trend_context`）—— OHLCV、
+   indicator、funding、news、macro，纯数据。
 
-旧 in-cycle `run_reflection` 节点和 `reflect.py` 模块都已删除——daemon
-做的是同一件事，cadence 不同但样本更大（滚动窗口 vs 每 20 cycle），且
-不直接污染 agent prompt（走 SKILL.md 结构化通道）。
-
-`tag_regime()` 函数保留——Evolution Daemon 的 regime-cluster 步骤依赖它给
-cases 打 regime 标签。`nodes/data.py` 的 `tag_regime_node` 只做这件事，
-不再做历史 case 检索。
+EvolvingSkillProvider 在每个 agent 调用前做两层检索：
 
 ```python
-# nodes/data.py — 精简版 regime 标签节点
+# learning/evolution/skill_provider.py — get_available_skills 简化版
+def get_available_skills(agent_id: str, snapshot: dict, k: int = 5) -> list[Skill]:
+    # 第一层：scope 过滤（agent:<id> 或 shared）+ regime_tags 交集
+    candidates = scope_filter(load_all_skills(), agent_id, snapshot.regime_tags)
+    # 第二层：idf + importance × predictive_value + recency
+    for s in candidates:
+        s._score = (
+            idf_score(s, query_keywords)
+            + s.importance * s.predictive_value
+            + recency_bonus(s.last_accessed_at)
+        )
+    return sorted(candidates, key=lambda s: -s._score)[:k]
+```
+
+被选中的 skill 写回 frontmatter `access_count++` / `last_accessed_at=now`——
+这是唯一的自动反馈，**只影响下次检索排序，不改 prompt 内容**。
+
+`tag_regime()` 把 snapshot 分类为 `high_funding / high_vol / trending_up / ...`
+等离散标签，给 SkillProvider 做第一层过滤。
+
+```python
+# nodes/data.py — regime 标签节点（无历史 case 检索）
 async def tag_regime_node(state: ArenaState) -> dict:
     config = load_config()
     summary = state["data"].get("snapshot_summary", {})
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)
     return {"data": {"regime_tags": regime_tags}}
-
 ```
 
-**模式蒸馏**（`learning/memory.py:distill_patterns`，由 Evolution Daemon 每
-日触发）：LLM 从 Journal 提炼 `ExperienceRule`（pattern / conditions / rate /
-maturity），存入 `experience_json` 列并写到 SKILL.md AUTO-DISTILLED-PATTERNS。
-支持增量演化和五层防过拟合机制（最小样本、成熟度、Regime 过滤、LLM 约束、
-代码校验胜率）。In-cycle 的 `reflect.py` 和 GSSC `context.py` 注入路径均
-已删除（2026-05-13）。
+**Live Steering**：用户从前端 chat 实时给 agent 加引导，通过 Redis 队列
+（`steering:<session>:<agent_id>`）传递。`_collect_steering()` 在 agent 调用前
+drain 队列，PromptBuilder 在非空时把内容作为 `live_steering` section 注入
+HumanMessage。一次性消费，cycle 结束自动失效——不形成 LLM-自动写回闭环。
 
 ### 4.7 模型分级策略
 
@@ -864,20 +860,21 @@ class DecisionJournal:
         """对比两次决策的差异"""
 
     async def search_similar(self, **market_conditions) -> list[DecisionCommit]:
-        """检索相似市场条件下的历史决策（Verbal Reinforcement 用）"""
+        """检索相似市场条件下的历史决策（供 dashboard / 离线分析使用）"""
 
     async def update_pnl(self, hash: str, pnl: float, retrospective: str):
         """异步更新盈亏和复盘（交易结束后）"""
 ```
 
-### 8.4 经验反馈闭环（spec 020b Evolution Daemon）
+### 8.4 反馈通道
 
-历史决策 + PnL 不再通过"统计校准"反推 Agent 权重——2026-05-13 删除该路径（与
-round-3 minimal-skill 反锚定理念冲突，且 23 样本量级在 crypto 噪声中无统计意义）。
-取而代之：**Evolution Daemon 每日运行 pattern_extraction**，把成功 case 抽成
-patterns 写入对应 `agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS`
-段；Pareto rerank 把低质量 rule archive 掉。Agent 通过 skill 加载自然受益于
-正向积累，不再读"你过去 70% 做多倾向"这类警示文本。
+系统**不**自动把任何 LLM 生成的内容写回 prompt。反馈通道仅限：
+
+- **Skill 检索热度**：每次 EvolvingSkillProvider 选中的 skill 累加
+  `access_count` 并刷新 `last_accessed_at`，影响下次检索打分（不改 prompt 内容）
+- **人工编辑 SKILL.md**：用户读 `decision_commits` 分析后手动改 git-tracked
+  Markdown，提交后下个 cycle 即可生效
+- **Live steering**：用户在前端 chat 给 agent 实时指令，本 cycle 即用即丢
 
 ---
 
@@ -1053,15 +1050,14 @@ cryptotrader-ai/
 │       ├── journal/           # Decision Journal
 │       │   ├── __init__.py
 │       │   ├── commit.py      # DecisionCommit 模型（不可变哈希链）
-│       │   ├── store.py       # 存储（PostgreSQL）
-│       │   └── (search.py 已删除 2026-05-13 — 仅服务于已删的 verbal.py)
+│       │   └── store.py       # 存储（PostgreSQL）
 │       │
-│       ├── learning/          # 经验学习
+│       ├── learning/          # 检索层（skill 检索）
 │       │   ├── __init__.py
 │       │   ├── regime.py     # tag_regime（regime 标签计算）
-│       │   ├── memory.py     # ExperienceRule / ExperienceMemory + Pareto + FSM
-│       │   ├── context.py     # GSSC 引擎（gather → select → structure）
-│       │   └── regime.py      # Regime 标签（tag_regime + Jaccard 匹配）
+│       │   └── evolution/
+│       │       ├── skill_provider.py # EvolvingSkillProvider（scope + regime + idf）
+│       │       └── idf.py            # IDF + keyword 提取
 │       │
 │       ├── graph.py           # LangGraph 主编排
 │       ├── models.py          # 全局数据模型
