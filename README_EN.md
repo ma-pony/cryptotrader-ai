@@ -460,7 +460,6 @@ src/cryptotrader/
 │   └── manager.py     # PortfolioManager (DB + in-memory)
 ├── journal/
 │   ├── store.py       # JournalStore (PostgreSQL + in-memory fallback)
-│   ├── search.py      # Similarity search (funding rate, volatility, trend)
 │   └── commit.py      # DecisionCommit + immutable hash-chained schema
 ├── learning/
 │   ├── regime.py     # tag_regime (market regime labels)

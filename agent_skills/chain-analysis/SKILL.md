@@ -5,8 +5,8 @@ description: On-chain analysis skill for interpreting blockchain data including 
 scope: agent:chain
 version: '1.0'
 manually_edited: false
-access_count: 369
-last_accessed_at: '2026-05-13T02:23:23.317185+00:00'
+access_count: 377
+last_accessed_at: '2026-05-13T02:33:14.817686+00:00'
 ---
 # On-Chain Analysis Agent Skill
 

@@ -79,7 +79,6 @@ cryptotrader-ai/
 │   │   │   └── order.py       # OrderManager（状态机）
 │   │   ├── journal/
 │   │   │   ├── store.py       # JournalStore（决策链）
-│   │   │   ├── search.py      # 相似条件搜索
 │   │   │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 │   │   ├── learning/
 │   │   │   ├── regime.py     # tag_regime（市场 regime 标签）

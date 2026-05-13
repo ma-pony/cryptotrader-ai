@@ -239,13 +239,14 @@ def build_trading_graph(config: dict) -> StateGraph:
 
     # ── 边连接 ──
     graph.add_edge(START, "collect_data")
-    graph.add_edge("collect_data", "inject_experience")
+    graph.add_edge("collect_data", "tag_regime")
 
-    # fan-out: 经验注入后并行分析
-    graph.add_edge("inject_experience", "tech_agent")
-    graph.add_edge("inject_experience", "chain_agent")
-    graph.add_edge("inject_experience", "news_agent")
-    graph.add_edge("inject_experience", "macro_agent")
+    # fan-out: regime 标签后并行分析（旧 "inject_experience"/verbal_reinforcement
+    # 节点于 2026-05-13 删除，相关历史 case 注入路径同步移除）
+    graph.add_edge("tag_regime", "tech_agent")
+    graph.add_edge("tag_regime", "chain_agent")
+    graph.add_edge("tag_regime", "news_agent")
+    graph.add_edge("tag_regime", "macro_agent")
 
     # fan-in: 所有分析完成后进入 debate_gate（渐进式过滤）
     graph.add_edge("tech_agent", "debate_gate")
@@ -375,10 +376,13 @@ class AgentAnalysis:
 ```
 你是 {agent_role}，基于以下数据分析 {pair} 的交易机会。
 {data_snapshot}
-{historical_experience}  ← Verbal Reinforcement 注入
+{reflection_memo}  ← agent 自身的 prior self-reflection (来自 reflect.py)
 
 输出你的判断，包括方向、置信度、关键因素和风险。
 ```
+
+注：原"{historical_experience}  ← Verbal Reinforcement 注入"占位已于
+2026-05-13 移除——historical case dump 路径删除（详见顶部 §1 更新说明）。
 
 **Round 2+ prompt（交叉质询）：**
 ```
@@ -1044,7 +1048,7 @@ cryptotrader-ai/
 │       │   ├── __init__.py
 │       │   ├── commit.py      # DecisionCommit 模型（不可变哈希链）
 │       │   ├── store.py       # 存储（PostgreSQL）
-│       │   └── search.py      # 相似条件检索
+│       │   └── (search.py 已删除 2026-05-13 — 仅服务于已删的 verbal.py)
 │       │
 │       ├── learning/          # 经验学习
 │       │   ├── __init__.py

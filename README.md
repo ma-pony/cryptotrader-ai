@@ -482,7 +482,6 @@ src/cryptotrader/
 │   └── manager.py     # PortfolioManager（DB + 内存）
 ├── journal/
 │   ├── store.py       # JournalStore（PostgreSQL + 内存降级）
-│   ├── search.py      # 相似搜索（资金费率、波动率、趋势）
 │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 ├── learning/
 │   ├── regime.py     # tag_regime（市场 regime 标签）
