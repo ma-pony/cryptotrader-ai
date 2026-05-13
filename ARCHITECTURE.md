@@ -3,6 +3,16 @@
 > 版本：v5 Professional Edition
 > 日期：2026-02-20
 > 基于：4 轮深度调研（12+ 开源项目源码分析、25 篇学术论文、6 个 API 文档）
+>
+> **2026-05-13 更新**：本文档保留原始设计意图（v5 视角），但**实现层已演化**：
+>   - "Verbal Reinforcement"（FinCon 启发的历史 case 注入）已删除——与
+>     round-3 minimal-skill 反锚定理念冲突；小样本 selection bias 显著。
+>   - "统计校准"（calibrate.py / bias-correction）也已删除（同样原因）。
+>   - 经验闭环现由 **`reflect.py` (LLM 反思备忘录) + Evolution Daemon
+>     (spec 020b, daily `pattern_extraction` → SKILL.md AUTO-DISTILLED-PATTERNS)** 接管。
+>   - `tag_regime()` 函数保留，由轻量 `tag_regime_node` 调用，供 Evolution
+>     Daemon 的 regime-cluster 步骤使用。
+>   详见 §4.6（更新后）和 `docs/REFLECTION.md`。
 
 ---
 
@@ -207,7 +217,7 @@ def build_trading_graph(config: dict) -> StateGraph:
 
     # ── 数据采集 ──
     graph.add_node("collect_data", collect_snapshot)
-    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tag_regime", tag_regime_node)
 
     # ── 并行分析（fan-out）──
     graph.add_node("tech_agent", tech_analyze)
@@ -414,39 +424,35 @@ def make_verdict(state: ArenaState) -> TradeVerdict:
     )
 ```
 
-### 4.6 Verbal Reinforcement + GSSC 经验管道（来自 FinCon NeurIPS 2024）
+### 4.6 经验闭环（2026-05-13 后简化版）
 
-Decision Journal 不只是被动记录——每次决策前，通过 GSSC 管道（Gather → Select → Structure）将历史经验注入 Agent prompt。
+**历史**：原 §4.6 描述 Verbal Reinforcement + GSSC 经验管道（FinCon NeurIPS 2024
+启发，三阶段 Gather → Select → Structure），把历史 case 注入 agent prompt。该路径
+和稍后引入的 bias-correction 注入都于 2026-05-13 删除——它们再次引入 round-3
+minimal-skill 刚去掉的 prior anchoring，且小样本（n≈3 case / n≈23 commits）在
+crypto 噪声中无统计意义。
 
-**管道三阶段**：
-1. **Gather**（`verbal.py`）：对当前市场快照做 Regime 标签（`tag_regime()`），通过 `search_by_regime()` 检索语义相似的历史决策案例（Jaccard 重叠匹配）
-2. **Select**（`context.py`）：按 regime 相关度打分，在 token 预算内选出最优 case 包；同时加载 `reflect.py` 生成的结构化 `ExperienceMemory`（success_patterns / forbidden_zones / strategic_insights）
-3. **Structure**（`context.py`）：将 cases + rules 格式化为 Markdown，注入各 Agent prompt
+**当前**：经验闭环由两层组成：
+
+1. **Reflection (`reflect.py`)** — 每 N 周期触发 LLM 深度反思，输出结构化
+   `ExperienceMemory` JSON（success_patterns / forbidden_zones / strategic_insights），
+   保存到 SQLite。下个周期 `_build_experience` 把对应 agent 的备忘录拼到 prompt。
+2. **Evolution Daemon (`ops/daemon.py`, spec 020b)** — 每日离线运行
+   `pattern_extraction`，从过去 N 个周期的成功 case 蒸馏 patterns，写入对应
+   `agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段。Agent 通过
+   PromptBuilder 加载 skill 时自然受益。
+
+`tag_regime()` 函数保留——Evolution Daemon 的 regime-cluster 步骤依赖它给
+cases 打 regime 标签。`nodes/data.py` 的 `tag_regime_node` 只做这件事，
+不再做历史 case 检索。
 
 ```python
-# learning/verbal.py — Regime-aware 历史案例检索
-def verbal_reinforcement(state: ArenaState) -> dict:
-    snapshot = state["data"]["snapshot"]
-
-    # 1. Regime 标签（tag_regime 返回离散标签集合）
-    regime_tags = tag_regime(snapshot)
-
-    # 2. Regime-aware 历史案例检索（Jaccard 重叠 > 阈值）
-    historical_cases = journal.search_by_regime(
-        regime_tags=regime_tags,
-        limit=config.experience.verbal_cases,
-    )
-
-    # 3. 加载结构化经验记忆（ExperienceMemory JSON）
-    experience_memory = load_experience_memory()
-
-    return {
-        "data": {
-            "regime_tags": regime_tags,
-            "historical_cases": historical_cases,
-            "experience_memory": experience_memory,
-        }
-    }
+# nodes/data.py — 精简版 regime 标签节点
+async def tag_regime_node(state: ArenaState) -> dict:
+    config = load_config()
+    summary = state["data"].get("snapshot_summary", {})
+    regime_tags = tag_regime(summary, config.experience.regime_thresholds)
+    return {"data": {"regime_tags": regime_tags}}
 
 # learning/context.py — GSSC 引擎（注入 Agent prompt）
 def structure_experience(cases, memory, regime_tags, token_budget) -> str:
@@ -1042,7 +1048,7 @@ cryptotrader-ai/
 │       │
 │       ├── learning/          # 经验学习
 │       │   ├── __init__.py
-│       │   ├── verbal.py      # 语言强化（Regime-aware 历史案例检索）
+│       │   ├── regime.py     # tag_regime（regime 标签计算）
 │       │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
 │       │   ├── context.py     # GSSC 引擎（gather → select → structure）
 │       │   └── regime.py      # Regime 标签（tag_regime + Jaccard 匹配）

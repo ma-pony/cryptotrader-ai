@@ -75,7 +75,7 @@
 │                      loss < 5%             loss >= 5%            │
 │                           │                     │                │
 │                           ▼                     │                │
-│                  verbal_reinforcement           │                │
+│                      tag_regime                 │                │
 │                           │                     │                │
 │                           ▼                     │                │
 │              ┌────────────┼────────────┐        │                │

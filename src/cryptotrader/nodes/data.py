@@ -1,4 +1,4 @@
-"""Data collection and verbal reinforcement nodes."""
+"""Data collection and regime tagging nodes."""
 
 from __future__ import annotations
 
@@ -222,52 +222,31 @@ async def update_past_pnl(state: ArenaState) -> dict:
 
 
 @node_logger()
-async def verbal_reinforcement(state: ArenaState) -> dict:
-    """Inject past experience + structured experience memory.
+async def tag_regime_node(state: ArenaState) -> dict:
+    """Compute regime tags for the current snapshot.
 
-    2026-05-13: bias-correction injection removed entirely (was contradicting
-    the round-3 minimal-skill anti-anchor philosophy by re-introducing
-    prescriptive directional language to agent prompts). Pattern learning
-    is now exclusively the evolution daemon's job.
+    Replaces the previous ``verbal_reinforcement`` node (2026-05-13). The
+    old node also fetched "similar historical cases" and dumped them into
+    the agent prompt as raw context — that path was deleted along with
+    bias-correction because it re-introduced exactly the kind of prior
+    anchoring the round-3 minimal skills were designed to remove.
+
+    Regime tags are kept because:
+      - the evolution daemon's regime-cluster step uses them
+      - DecisionCommit persists them for downstream regime-aware retrieval
+
+    Skills injection (the proper feedback path) is handled by
+    PromptBuilder (spec 017b) inside agent.analyze().
+    Background pattern distillation runs in run_reflection() (nodes/reflection.py).
     """
     from cryptotrader.config import load_config
-    from cryptotrader.journal.store import JournalStore
     from cryptotrader.learning.regime import tag_regime
-    from cryptotrader.learning.verbal import get_experience
 
     config = load_config()
-    db_url = state["metadata"].get("database_url")
-    is_backtest = state["metadata"].get("backtest_mode", False)
-    store = JournalStore(db_url, backtest_mode=is_backtest)
     summary = state["data"].get("snapshot_summary", {})
-
-    # Tag current regime
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)
 
-    # Skip experience injection in backtest mode to prevent look-ahead bias
-    # (live journal contains future data relative to backtest candle).
-    # Failure here is non-fatal — a journal blip should not block the cycle;
-    # parity with update_past_pnl's defensive try/except above.
-    historical_cases: list = []
-    if not is_backtest:
-        try:
-            historical_cases = await get_experience(
-                store,
-                summary,
-                regime_tags=regime_tags,
-                thresholds=config.experience.regime_thresholds,
-            )
-        except Exception:
-            logger.warning("get_experience failed, proceeding without historical cases", exc_info=True)
-        # Skills injection is handled by PromptBuilder (spec 017b) in agent.analyze().
-        # Background distillation is triggered by run_reflection() node (nodes/reflection.py).
-
-    return {
-        "data": {
-            "regime_tags": regime_tags,
-            "historical_cases": historical_cases,
-        }
-    }
+    return {"data": {"regime_tags": regime_tags}}
 
 
 def _build_trend_from_ohlcv(snapshot) -> dict | None:

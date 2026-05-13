@@ -183,20 +183,22 @@ async def test_collect_snapshot_reuses_existing():
 
 
 @pytest.mark.asyncio
-async def test_verbal_reinforcement():
-    """verbal_reinforcement injects experience + regime tags only.
+async def test_tag_regime_node():
+    """tag_regime_node emits regime_tags only.
 
-    Bias-correction injection was removed 2026-05-13; see commit history.
+    Replaces test_verbal_reinforcement (2026-05-13). bias-correction
+    injection AND verbal-reinforcement historical-case dump were both
+    removed because they re-introduced directional priors the round-3
+    minimal skills had just deleted.
     """
-    from cryptotrader.nodes.data import verbal_reinforcement
+    from cryptotrader.nodes.data import tag_regime_node
 
     state = _base_state()
+    result = await tag_regime_node(state)
 
-    with patch("cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock, return_value=[]):
-        result = await verbal_reinforcement(state)
-
-    assert "historical_cases" in result["data"]
     assert "regime_tags" in result["data"]
+    assert "historical_cases" not in result["data"]
+    assert "experience" not in result["data"]
     assert "agent_corrections" not in result["data"]
     assert "verdict_calibration" not in result["data"]
 

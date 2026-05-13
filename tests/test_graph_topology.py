@@ -60,7 +60,7 @@ class TestBuildTradingGraph:
             "collect_data",
             "update_pnl",
             "stop_loss_check",
-            "inject_experience",
+            "tag_regime",
             "tech_agent",
             "chain_agent",
             "news_agent",
@@ -100,10 +100,10 @@ class TestBuildTradingGraph:
         assert ("evaluate", "execute") in cond
         assert ("evaluate", "record_rejection") in cond
 
-    def test_stop_loss_check_continue_routes_to_inject_experience(self, graph):
+    def test_stop_loss_check_continue_routes_to_tag_regime(self, graph):
         cond = _conditional_edges(graph)
-        assert ("stop_loss_check", "inject_experience") in cond
-        assert cond[("stop_loss_check", "inject_experience")] == "continue"
+        assert ("stop_loss_check", "tag_regime") in cond
+        assert cond[("stop_loss_check", "tag_regime")] == "continue"
 
     def test_stop_loss_check_exit_routes_to_risk_gate(self, graph):
         cond = _conditional_edges(graph)
@@ -154,7 +154,7 @@ class TestBuildLiteGraph:
         required = {
             "collect_data",
             "update_pnl",
-            "inject_experience",
+            "tag_regime",
             "tech_agent",
             "chain_agent",
             "news_agent",
@@ -190,10 +190,10 @@ class TestBuildLiteGraph:
         uncond = _unconditional_edges(graph)
         assert ("collect_data", "update_pnl") in uncond
 
-    def test_inject_experience_fans_out_to_agents(self, graph):
+    def test_tag_regime_fans_out_to_agents(self, graph):
         uncond = _unconditional_edges(graph)
         for agent in ("tech_agent", "chain_agent", "news_agent", "macro_agent"):
-            assert ("inject_experience", agent) in uncond
+            assert ("tag_regime", agent) in uncond
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ class TestBuildDebateGraph:
         required = {
             "collect_data",
             "update_pnl",
-            "inject_experience",
+            "tag_regime",
             "tech_agent",
             "chain_agent",
             "news_agent",

@@ -68,7 +68,7 @@
 | 宏观数据 | data/macro.py | ✅ | FRED(利率/DXY) + CoinGecko(BTC dominance) + Fear&Greed |
 | NewsAgent | agents/news.py | ✅ | 使用真实新闻数据 |
 | MacroAgent | agents/macro.py | ✅ | 使用真实宏观数据 |
-| Verbal Reinforcement | learning/verbal.py | ✅ | 检索相似历史 → 格式化经验 → 注入 prompt |
+| Regime Tagging | learning/regime.py | ✅ | tag_regime() 计算 regime 标签（取代 2026-05-13 删除的 verbal.py 历史 case 注入路径）|
 | Journal 搜索 | journal/search.py | ✅ | 按 funding_rate/volatility 范围检索 |
 | 经验闭环 | ops/daemon.py（spec 020b）| ✅ | Evolution Daemon pattern_extraction → SKILL.md AUTO-DISTILLED-PATTERNS（取代已删的 journal/calibrate.py 路径）|
 | API /analyze | api/routes/analyze.py | ✅ | 完整 graph 调用 |

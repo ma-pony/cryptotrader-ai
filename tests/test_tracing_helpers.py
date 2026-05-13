@@ -120,7 +120,7 @@ class TestSummarizeNodeOutput:
 
     def test_regime_tags_uses_regime_handler(self) -> None:
         update = {"data": {"regime_tags": ["bull_trend", "low_volatility"]}}
-        result = _summarize_node_output("verbal_reinforcement", update)
+        result = _summarize_node_output("tag_regime_node", update)
         assert "regime" in result
 
     def test_empty_data_returns_empty(self) -> None:

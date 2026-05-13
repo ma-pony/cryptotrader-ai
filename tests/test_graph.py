@@ -23,7 +23,7 @@ def test_graph_has_nodes():
     node_names = set(graph.get_graph().nodes.keys())
     expected = {
         "collect_data",
-        "inject_experience",
+        "tag_regime",
         "tech_agent",
         "chain_agent",
         "news_agent",

@@ -220,25 +220,30 @@ async def test_multiple_tasks_held_simultaneously() -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_verbal_reinforcement_uses_add_background_task() -> None:
-    """verbal_reinforcement() no longer calls maybe_reflect — background distillation
-    was migrated to the run_reflection node (Spec 014 two-layer architecture).
-    The old GSSC/maybe_reflect path is fully removed."""
+async def test_tag_regime_node_no_background_tasks() -> None:
+    """tag_regime_node (replaces verbal_reinforcement, 2026-05-13) does not
+    spawn any background work. The previous GSSC / maybe_reflect /
+    get_experience paths were fully removed along with verbal-reinforcement
+    historical-case injection. Background pattern distillation lives in
+    nodes/reflection.py (run_reflection) — separate node."""
     import inspect
 
     import cryptotrader.nodes.data as data_module
 
-    source = inspect.getsource(data_module.verbal_reinforcement)
+    source = inspect.getsource(data_module.tag_regime_node)
 
-    # GSSC / maybe_reflect path must be gone (Spec 014 migration)
+    # All legacy background / experience-injection paths must be absent
     assert "maybe_reflect" not in source
-    assert "loop.create_task(maybe_reflect" not in source
+    assert "loop.create_task" not in source
+    assert "get_experience" not in source
     assert "gather_packets" not in source
     assert "structure_experience" not in source
+    assert "add_background_task" not in source
 
 
-async def test_verbal_reinforcement_integration_with_registry(caplog) -> None:
-    """verbal_reinforcement in backtest mode skips add_background_task."""
+async def test_tag_regime_node_integration(caplog) -> None:
+    """tag_regime_node emits regime_tags only — no DB / network / registry
+    interaction. Confirms the node is the minimal stub it advertises to be."""
     from unittest.mock import MagicMock, patch
 
     state = {
@@ -259,25 +264,17 @@ async def test_verbal_reinforcement_integration_with_registry(caplog) -> None:
     }
 
     mock_config = MagicMock()
-    mock_config.experience.enabled = True
     mock_config.experience.regime_thresholds = MagicMock()
 
-    # verbal_reinforcement uses delayed imports; patch the actual source modules
     with (
         patch("cryptotrader.config.load_config", return_value=mock_config),
-        patch("cryptotrader.journal.store.JournalStore"),
         patch("cryptotrader.learning.regime.tag_regime", return_value=["neutral"]),
         patch("cryptotrader.task_registry.add_background_task") as mock_add,
     ):
-        # Reload to pick up patched state
-        import importlib
-
         import cryptotrader.nodes.data as data_mod
 
-        importlib.reload(data_mod)
+        result = await data_mod.tag_regime_node(state)
 
-        result = await data_mod.verbal_reinforcement(state)
-
-    # backtest mode should not trigger background tasks
     mock_add.assert_not_called()
     assert result is not None
+    assert "regime_tags" in result["data"]

@@ -82,7 +82,7 @@ cryptotrader-ai/
 │   │   │   ├── search.py      # 相似条件搜索
 │   │   │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 │   │   ├── learning/
-│   │   │   ├── verbal.py      # 语言强化（Regime-aware 历史案例检索）
+│   │   │   ├── regime.py     # tag_regime（市场 regime 标签）
 │   │   │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
 │   │   │   ├── context.py     # GSSC 引擎（gather → select → structure）
 │   │   │   ├── regime.py      # Regime 标签 + Jaccard 匹配
@@ -296,8 +296,8 @@ class ArenaState(TypedDict):
 |-----|------|----------|------|
 | `snapshot` | `DataSnapshot` | collect_data | 市场快照 |
 | `snapshot_summary` | `dict` | collect_data | 精简摘要 |
-| `experience` | `str` | verbal_reinforcement | 历史经验文本 |
-| `agent_reflections` | `dict[str, str]` | verbal_reinforcement | 各 Agent 策略备忘录 |
+| `regime_tags` | `list[str]` | tag_regime_node | 当前 regime 标签 |
+| `agent_reflections` | `dict[str, str]` | run_reflection | 各 Agent 策略备忘录 |
 | `analyses` | `dict[str, dict]` | agent nodes | 4 个 Agent 分析结果 |
 | `verdict` | `dict` | verdict node | 最终决策 |
 | `risk_gate` | `dict` | risk_check | 风控结果（仅风控层）|

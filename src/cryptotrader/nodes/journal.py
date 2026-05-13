@@ -16,8 +16,8 @@ _LATENCY_STAGE_MAP: dict[str, str] = {
     "collect_data": "data",
     "update_pnl": "data",
     "stop_loss_check": "data",
-    "verbal_reinforcement": "data",
-    "inject_experience": "data",
+    "tag_regime_node": "data",
+    "tag_regime": "data",
     "init_decision": "data",
     "tech_agent": "agents",
     "chain_agent": "agents",
@@ -155,10 +155,12 @@ def _build_causal_chain(state: ArenaState) -> dict | None:
         data = state.get("data", {})
         chain: dict = {}
 
-        # verbal_reinforcement_input: 记忆注入摘要
+        # experience_memory_input: reflection 节点产出的 ExperienceMemory 摘要
+        # (字段从 2026-05-13 前的 `verbal_reinforcement_input` 改名，命名实
+        # 际指向 reflect.py 的输出，不再涉及已删除的 verbal_reinforcement 节点)
         experience_memory = data.get("experience_memory")
         if experience_memory:
-            chain["verbal_reinforcement_input"] = str(experience_memory)[:500]
+            chain["experience_memory_input"] = str(experience_memory)[:500]
 
         # per-agent tool_calls 摘要（从 analyses 提取 key_factors + data_points）
         analyses = data.get("analyses", {})
@@ -224,7 +226,7 @@ def _write_memory_case(state: ArenaState, commit: Any, pair_str: str, raw_verdic
         # spec 018 新增字段：trade_execution + causal_chain
         trade_execution: dict | None = state["data"].get("trade_execution")
 
-        # causal_chain: 从 state 提取各 agent tool_calls 摘要 + verbal_reinforcement_input + debate_intermediate
+        # causal_chain: 从 state 提取各 agent tool_calls 摘要 + experience_memory_input + debate_intermediate
         causal_chain: dict | None = _build_causal_chain(state)
 
         write_case(

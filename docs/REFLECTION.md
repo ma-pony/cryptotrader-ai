@@ -16,7 +16,7 @@
 
 | 机制 | 文件 | 作用 | 局限 |
 |------|------|------|------|
-| 言语强化 | `learning/verbal.py` | 搜索相似历史条件（Regime-aware），共享经验注入 | 所有 Agent 共享相同经验，无法个性化 |
+| 言语强化（已删除）| 原 `learning/verbal.py`（删除于 2026-05-13）| 历史相似 case 注入到 agent prompt | 与 round-3 minimal-skill 反锚定理念冲突；Jaccard 选 3 条 case 是噪声驱动的 selection bias |
 | 自我反思 | `learning/reflect.py` | LLM 深度分析：哪些信号有效/误导，生成结构化 ExperienceMemory | 每 20 个周期运行一次，非实时 |
 | GSSC Pipeline | `learning/context.py` | Gather → Select → Structure：Regime-aware 条件化检索，CJK-aware Token 预算控制，结构化注入 Agent Prompt | 需积累足够历史数据后效果最佳 |
 | Evolution Daemon | `ops/daemon.py` (spec 020b) | 每日 Pareto rerank + regime refilter + pattern_extraction 写入 SKILL.md 的 AUTO-DISTILLED-PATTERNS 段 | 日级粒度；reflection 周期内不响应 |
@@ -48,23 +48,24 @@
 - **注入**：通过 GSSC Pipeline（`context.py`）按 Regime 条件化检索，注入 Agent Prompt
 - **防过拟合五层防线**：最小样本阈值 → maturity 等级（observation/hypothesis/rule）→ Regime-aware 验证 → LLM 约束 Prompt → 代码验证胜率
 
-### 2.2 数据流
+### 2.2 数据流（2026-05-13 后简化版）
 
 ```
-verbal_reinforcement 节点（2026-05-13 后）:
-  1. get_experience()                    -- 共享历史经验
-  2. tag_regime()                        -- 标记 regime tags
-  3. load_reflections()                  -- 从 SQLite 读取策略备忘录
-  4. asyncio.ensure_future(              -- 后台触发 LLM 反思
-       maybe_reflect(cycle_count)          （fire-and-forget，不阻塞交易周期）
+tag_regime_node (替代 verbal_reinforcement):
+  1. tag_regime()  -- 仅计算 regime 标签
+
+run_reflection（独立 node）:
+  1. load_reflections()             -- 从 SQLite 读取策略备忘录
+  2. asyncio.ensure_future(         -- 后台触发 LLM 反思
+       maybe_reflect(cycle_count)     fire-and-forget，不阻塞交易周期
      )
-   注：旧的 detect_biases() / 注入 corrections 已删除（commit ccfc7d3）。
 
-_run_agent() 注入（在 agents.py 中）:
-  experience = verbal_experience
-  + "\n\n" + reflection_memo            -- 策略备忘录
-   注：旧的 bias_correction 拼接已删除（commit ccfc7d3）。
+_build_experience()（在 agents.py 中）:
+  experience = reflection_memo only  -- 反思备忘录（如果存在）
 ```
+
+历史 case 注入路径（`get_experience` + `format_experience_text` + `experience`
+state 字段）和 bias-correction 拼接都已删除（commit `ccfc7d3` + 本次 verbal 删除）。
 
 ### 2.3 在完整 pipeline 中的位置
 
@@ -78,23 +79,17 @@ _run_agent() 注入（在 agents.py 中）:
                        update_pnl
                             |
                             v
-                    verbal_reinforcement
-                      |            |
-           [不变]     |            |  [新增]
-         experience   |            |  load_reflections()  <-- 快速 SQLite 读取
-         corrections  |            |  maybe_reflect()     <-- 后台 LLM (不阻塞)
-                      |            |
-                      v            v
-              +------ 注入到 Agent prompt ------+
-              |                                  |
-              v                                  v
-      "Historical similar..."          "Strategy memo (your own
-       + 校准警告                        prior self-reflection):
-                                         1. RSI oversold + 低波动 = 误导..."
-              |                                  |
-              +----------------------------------+
+                        tag_regime
                             |
                             v
+              +------ Agent prompt 注入 ------+
+              |  (仅 reflection_memo 来自     |
+              |   run_reflection 节点)        |
+              v                                v
+      "Strategy memo (your own prior self-reflection):
+       1. RSI oversold + 低波动 = 误导..."
+              |
+              v
                     4 Agent 并行分析
                             |
                             v
@@ -232,7 +227,9 @@ ReflectionConfig = ExperienceConfig
 
 ### 6.1 触发条件
 
-`maybe_reflect()` 在每个交易周期的 `verbal_reinforcement` 节点中被调用，但只在满足以下条件时真正执行：
+`maybe_reflect()` 由 `run_reflection` 节点在每个交易周期触发（2026-05-13 前由
+`verbal_reinforcement` 节点触发；该节点已被精简的 `tag_regime_node` 替代）。
+只在满足以下条件时真正执行：
 
 1. `config.reflection.enabled == True`
 2. `cycle_count > 0`（跳过首次运行）
@@ -273,43 +270,34 @@ initial = build_initial_state(
 
 ## 7. 与现有系统的关系
 
-### 7.1 三层学习机制对比
+### 7.1 二层学习机制对比
 
 ```
-层次 1: 言语强化 (verbal.py)
-  ├── 类型：定量相似性匹配
-  ├── 粒度：全局共享
-  ├── 频率：每个周期
-  └── 内容："在相似市场条件下，过去我们做多赚了 $320"
-
-层次 2: 自我反思 (reflect.py)
+层次 1: 自我反思 (reflect.py)
   ├── 类型：定性 LLM 深度分析
   ├── 粒度：按 Agent + 按领域
   ├── 频率：每 20 个周期
   └── 内容："低波动时 RSI 超卖信号不可靠（3 次中 2 次误判），
             funding rate 反转才是更可靠的指标"
 
-层次 3: 模式蒸馏 (Evolution Daemon, spec 020b)
+层次 2: 模式蒸馏 (Evolution Daemon, spec 020b)
   ├── 类型：日频离线 pattern_extraction
   ├── 粒度：按 Agent / 按 regime
   ├── 频率：每日
   └── 内容：成功 case 抽成 patterns 写入 SKILL.md AUTO-DISTILLED-PATTERNS
 ```
 
-注：旧"统计校准"层（calibrate.py）已删除（commit ccfc7d3）——其负向警示与
-round-3 minimal-skill 反锚定理念冲突；正向 pattern_extraction 在 SKILL.md 沉
-淀后效果更强且不会引入偏见标签。
+注：原"言语强化"（verbal.py）和"统计校准"（calibrate.py）两层都已删除
+（2026-05-13）——它们都通过往 agent prompt 注入文本来影响 LLM 输出，与
+round-3 minimal-skill 反锚定理念冲突。正向 pattern_extraction 走 SKILL.md
+通道（通过 PromptBuilder 加载），不会引入偏见或选择偏差标签。
 
 ### 7.2 注入顺序
 
 Agent 最终收到的 experience 文本结构：
 
 ```
-Historical similar conditions:           <-- verbal.py (层次 1)
-  - BTC @ 2024-11-15: verdict=long, pnl=+$320
-    Lesson: strong trend continuation was correct
-
-Strategy memo (your own prior self-reflection):  <-- reflect.py (层次 2)
+Strategy memo (your own prior self-reflection):  <-- reflect.py (层次 1)
   1. RSI oversold + 低波动 = 经常误导，3 次中 2 次判断错误
   2. MACD 交叉在日线级别最可靠，1h 级别噪音太多
   3. 我有在高波动时过度看空的倾向，应关注支撑位反弹
@@ -337,8 +325,8 @@ Agent 的 SKILL.md 同时由 Evolution Daemon 在后台不断 distill patterns
 |------|------|
 | `src/cryptotrader/config.py` | 新增 `ReflectionConfig` 数据类，注册到 `AppConfig` 和 `_build_config()` |
 | `config/default.toml` | 新增 `[reflection]` 配置段 |
-| `src/cryptotrader/nodes/data.py` | `verbal_reinforcement()` 集成反思加载 + 后台触发 |
-| `src/cryptotrader/nodes/agents.py` | `_build_experience()` 在历史经验后追加反思备忘录注入（2026-05-13 后不再含 bias correction 拼接）|
+| `src/cryptotrader/nodes/data.py` | 2026-05-13 后只剩 `tag_regime_node`（轻量 regime 标签计算）；反思加载和后台触发迁出到独立 `nodes/reflection.py` 节点 |
+| `src/cryptotrader/nodes/agents.py` | `_build_experience()` 只注入反思备忘录（2026-05-13 后不再含 bias correction 和 verbal experience 拼接） |
 | `src/cryptotrader/scheduler.py` | `_run_pair()` 通过 `extra_metadata` 传递 `cycle_count` |
 | `pyproject.toml` | RUF001 per-file-ignore（reflect.py 中的中文 LLM prompt） |
 

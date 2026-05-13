@@ -275,8 +275,8 @@ def test_public_nodes_are_decorated():
     from cryptotrader.nodes.data import (
         collect_snapshot,
         enrich_verdict_context,
+        tag_regime_node,
         update_past_pnl,
-        verbal_reinforcement,
     )
     from cryptotrader.nodes.debate import (
         bull_bear_debate,
@@ -292,7 +292,7 @@ def test_public_nodes_are_decorated():
     public_nodes = [
         collect_snapshot,
         update_past_pnl,
-        verbal_reinforcement,
+        tag_regime_node,
         enrich_verdict_context,
         tech_analyze,
         chain_analyze,

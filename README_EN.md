@@ -20,7 +20,7 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 - **Three graph modes** — Full debate pipeline with debate gate, lite (backtest), bull/bear adversarial with judge
 - **11-check risk gate** — Pure rules, no LLM: position limits, CVaR, correlation, circuit breakers
 - **Decision journal** — Git-like immutable commit chain with similarity search; outcomes feed the evolution daemon's pattern distillation
-- **Verbal reinforcement** — Past decisions injected into agent prompts for experience-based learning
+- **Experience feedback loop** — Reflection + Evolution Daemon distill successful patterns into per-agent SKILL.md (verbal-reinforcement historical-case injection removed 2026-05-13)
 - **Structured experience memory** — GSSC pipeline (gather → select → structure) with regime-aware retrieval, ExperienceRule/ExperienceMemory JSON, and 5-layer anti-overfitting defense
 - **Backtesting engine** — Historical simulation with realistic cost modeling and no look-ahead bias
 - **Live trading ready** — ccxt-based exchange adapters with retry, precision, and timeout handling
@@ -33,7 +33,7 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 ## Architecture
 
 ```
-Data Collection → Verbal Reinforcement → 4 Agents (fan-out, parallel)
+Data Collection → Regime Tagging → 4 Agents (fan-out, parallel)
   → Debate Gate → [skip] → Enrich Context → Verdict
                 → [debate] → 2 Debate Rounds (parallel per round)
   → Verdict → Risk Gate (11 checks) → Execute / Reject → Journal
@@ -70,7 +70,7 @@ Every agent's system prompt includes a **5-point pre-signal checklist**: contrad
 
 ### Learning System
 
-- **Verbal reinforcement**: `search_by_regime()` retrieves past decisions matching current regime tags via Jaccard overlap. Regime labels (high_funding, high_vol, trending_up, extreme_fear, etc.) are computed by `tag_regime()` from the data snapshot
+- **Regime tagging**: `tag_regime()` computes regime labels (high_funding, high_vol, trending_up, extreme_fear, etc.) from the data snapshot — used downstream by the evolution daemon's regime-cluster step and by DecisionCommit for retrieval. Verbal-reinforcement historical-case dump into agent prompts was removed 2026-05-13 (re-introduced the kind of prior anchoring round-3 minimal skills had just removed)
 - **GSSC pipeline**: `context.py` implements gather → select → structure: collects regime-matched cases and structured rules, scores by relevance, fits within token budget, and injects as structured context into agent prompts
 - **Structured experience memory**: `reflect.py` generates `ExperienceMemory` JSON (success_patterns, forbidden_zones, strategic_insights) with `ExperienceRule` entries per pattern. Rules carry maturity levels (observation → hypothesis → rule) and empirical win rates
 - **Anti-overfitting 5-layer defense**: minimum sample thresholds, maturity gating, regime-aware verification (win rates computed only within matching regime), LLM constraint prompts, code-verified win rates
@@ -463,7 +463,7 @@ src/cryptotrader/
 │   ├── search.py      # Similarity search (funding rate, volatility, trend)
 │   └── commit.py      # DecisionCommit + immutable hash-chained schema
 ├── learning/
-│   ├── verbal.py      # Verbal reinforcement (regime-aware historical case retrieval)
+│   ├── regime.py     # tag_regime (market regime labels)
 │   ├── reflect.py     # Structured experience memory (ExperienceRule JSON generation)
 │   ├── context.py     # GSSC engine (gather → select → structure → inject)
 │   └── regime.py      # Regime tagging (tag_regime) + Jaccard overlap matching

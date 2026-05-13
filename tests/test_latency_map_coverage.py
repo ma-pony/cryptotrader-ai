@@ -25,7 +25,7 @@ _EXCLUDED_NODES = frozenset(
     {
         "init_decision",  # pure observability bootstrap — near-zero ms
         "hitl_wait",  # human-in-the-loop blocker
-        "inject_experience",  # covered under "data" bucket conceptually
+        "tag_regime",  # covered under "data" bucket conceptually
         "execute",  # aliased to "execute_trade" in map
     }
 )

@@ -276,16 +276,22 @@ def _build_experience(state: ArenaState, agent_type: str) -> str:
     """Build experience string from state fields (reflection memo only).
 
     Skills injection is handled by PromptBuilder (spec 017b) inside agent.analyze().
-    Bias-correction injection removed 2026-05-13 — contradicted the round-3
-    minimal-skill anti-anchor philosophy.
+    Removed 2026-05-13:
+      - bias-correction injection (`agent_corrections`) — re-introduced
+        the kind of directional priors the round-3 minimal skills had
+        just removed.
+      - verbal-reinforcement "experience" text dump (similar-case
+        retrieval via Jaccard over regime tags) — same anchoring
+        problem, plus selection bias on a tiny sample (n ≈ 3 past
+        cases) is statistically meaningless.
+    Pattern learning is now exclusively the evolution daemon's job;
+    self-reflection memos remain as the only legacy injection.
     """
-    experience = state["data"].get("experience", "")
     agent_reflections = state["data"].get("agent_reflections", {})
     reflection = agent_reflections.get(agent_type, "")
     if reflection:
-        block = f"Strategy memo (your own prior self-reflection):\n{reflection}"
-        experience = f"{experience}\n\n{block}" if experience else block
-    return experience
+        return f"Strategy memo (your own prior self-reflection):\n{reflection}"
+    return ""
 
 
 @node_logger()

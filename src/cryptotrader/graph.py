@@ -25,8 +25,8 @@ from cryptotrader.nodes.data import (
     collect_snapshot,
     enrich_verdict_context,
     init_decision,
+    tag_regime_node,
     update_past_pnl,
-    verbal_reinforcement,
 )
 from cryptotrader.nodes.debate import (
     bull_bear_debate,
@@ -73,9 +73,9 @@ __all__ = [
     "place_order",
     "risk_check",
     "risk_router",
+    "tag_regime_node",
     "tech_analyze",
     "update_past_pnl",
-    "verbal_reinforcement",
 ]
 
 
@@ -93,7 +93,7 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
-    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tag_regime", tag_regime_node)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
     graph.add_node("news_agent", news_analyze)
@@ -104,11 +104,11 @@ def build_lite_graph(config: dict | None = None) -> Any:
     graph.add_edge(START, "init_decision")
     graph.add_edge("init_decision", "collect_data")
     graph.add_edge("collect_data", "update_pnl")
-    graph.add_edge("update_pnl", "inject_experience")
-    graph.add_edge("inject_experience", "tech_agent")
-    graph.add_edge("inject_experience", "chain_agent")
-    graph.add_edge("inject_experience", "news_agent")
-    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("update_pnl", "tag_regime")
+    graph.add_edge("tag_regime", "tech_agent")
+    graph.add_edge("tag_regime", "chain_agent")
+    graph.add_edge("tag_regime", "news_agent")
+    graph.add_edge("tag_regime", "macro_agent")
     graph.add_edge("tech_agent", "enrich_context")
     graph.add_edge("chain_agent", "enrich_context")
     graph.add_edge("news_agent", "enrich_context")
@@ -122,7 +122,7 @@ def build_lite_graph(config: dict | None = None) -> Any:
 def build_backtest_graph(config: dict | None = None) -> Any:
     """Backtest graph: mirrors full pipeline (debate gate + risk gate) but no execution/journal.
 
-    Pipeline: collect_data → update_pnl → inject_experience → 4 agents (parallel)
+    Pipeline: collect_data → update_pnl → tag_regime → 4 agents (parallel)
       → debate_gate → [debate] 2 rounds / [skip] → enrich_context → verdict → risk_gate → END
 
     The backtest engine handles stop-loss, execution, and journaling internally.
@@ -133,7 +133,7 @@ def build_backtest_graph(config: dict | None = None) -> Any:
     graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
-    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tag_regime", tag_regime_node)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
     graph.add_node("news_agent", news_analyze)
@@ -148,11 +148,11 @@ def build_backtest_graph(config: dict | None = None) -> Any:
     graph.add_edge(START, "init_decision")
     graph.add_edge("init_decision", "collect_data")
     graph.add_edge("collect_data", "update_pnl")
-    graph.add_edge("update_pnl", "inject_experience")
-    graph.add_edge("inject_experience", "tech_agent")
-    graph.add_edge("inject_experience", "chain_agent")
-    graph.add_edge("inject_experience", "news_agent")
-    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("update_pnl", "tag_regime")
+    graph.add_edge("tag_regime", "tech_agent")
+    graph.add_edge("tag_regime", "chain_agent")
+    graph.add_edge("tag_regime", "news_agent")
+    graph.add_edge("tag_regime", "macro_agent")
     graph.add_edge("tech_agent", "debate_gate")
     graph.add_edge("chain_agent", "debate_gate")
     graph.add_edge("news_agent", "debate_gate")
@@ -178,7 +178,7 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph.add_node("init_decision", init_decision)
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
-    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tag_regime", tag_regime_node)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
     graph.add_node("news_agent", news_analyze)
@@ -190,11 +190,11 @@ def build_debate_graph(config: dict | None = None) -> Any:
     graph.add_edge(START, "init_decision")
     graph.add_edge("init_decision", "collect_data")
     graph.add_edge("collect_data", "update_pnl")
-    graph.add_edge("update_pnl", "inject_experience")
-    graph.add_edge("inject_experience", "tech_agent")
-    graph.add_edge("inject_experience", "chain_agent")
-    graph.add_edge("inject_experience", "news_agent")
-    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("update_pnl", "tag_regime")
+    graph.add_edge("tag_regime", "tech_agent")
+    graph.add_edge("tag_regime", "chain_agent")
+    graph.add_edge("tag_regime", "news_agent")
+    graph.add_edge("tag_regime", "macro_agent")
     graph.add_edge("tech_agent", "debate")
     graph.add_edge("chain_agent", "debate")
     graph.add_edge("news_agent", "debate")
@@ -233,7 +233,7 @@ def _build_full_graph(config: dict | None = None) -> Any:
     graph.add_node("collect_data", collect_snapshot)
     graph.add_node("update_pnl", update_past_pnl)
     graph.add_node("stop_loss_check", check_stop_loss)
-    graph.add_node("inject_experience", verbal_reinforcement)
+    graph.add_node("tag_regime", tag_regime_node)
     graph.add_node("tech_agent", tech_analyze)
     graph.add_node("chain_agent", chain_analyze)
     graph.add_node("news_agent", news_analyze)
@@ -260,14 +260,14 @@ def _build_full_graph(config: dict | None = None) -> Any:
         "stop_loss_check",
         _stop_loss_router,
         {
-            "continue": "inject_experience",
+            "continue": "tag_regime",
             "exit_position": "risk_gate",
         },
     )
-    graph.add_edge("inject_experience", "tech_agent")
-    graph.add_edge("inject_experience", "chain_agent")
-    graph.add_edge("inject_experience", "news_agent")
-    graph.add_edge("inject_experience", "macro_agent")
+    graph.add_edge("tag_regime", "tech_agent")
+    graph.add_edge("tag_regime", "chain_agent")
+    graph.add_edge("tag_regime", "news_agent")
+    graph.add_edge("tag_regime", "macro_agent")
     # Fan-in to debate gate — decides whether to skip debate
     graph.add_edge("tech_agent", "debate_gate")
     graph.add_edge("chain_agent", "debate_gate")

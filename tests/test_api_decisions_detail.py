@@ -114,7 +114,7 @@ def _full_commit(commit_hash: str = "a1b2c3d"):
         ),
         verdict_source="ai",
         node_trace=[
-            NodeTraceEntry(node="verbal_reinforcement", duration_ms=120, summary="ok"),
+            NodeTraceEntry(node="tag_regime_node", duration_ms=120, summary="ok"),
             NodeTraceEntry(node="agents_parallel", duration_ms=850, summary="4 agents"),
             NodeTraceEntry(node="debate_gate", duration_ms=20, summary="proceed"),
             NodeTraceEntry(node="verdict", duration_ms=300, summary="long 0.5"),

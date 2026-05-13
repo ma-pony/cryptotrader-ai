@@ -364,7 +364,7 @@ class TestExperienceParameterBypass:
             memory_provider=mock_mem,
             skill_provider=noop_skills,
         )
-        exp_text = "HISTORICAL_EXPERIENCE: 来自上游 verbal_reinforcement 节点的字符串"
+        exp_text = "HISTORICAL_EXPERIENCE: 来自上游节点的字符串"
         _, usr_msg = b.build(SAMPLE_SNAPSHOT, SAMPLE_PORTFOLIO, experience=exp_text)
         # experience 应注入到 recent_memory section
         assert exp_text in usr_msg.content

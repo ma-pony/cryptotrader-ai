@@ -584,49 +584,9 @@ class TestJournalInMemory:
         assert found.retrospective == "Good entry timing"
 
 
-# ── Verbal Learning Tests ──
-
-
-class TestVerbalLearning:
-    @pytest.mark.asyncio
-    async def test_no_history_returns_empty(self):
-        from cryptotrader.journal.store import JournalStore
-        from cryptotrader.learning.verbal import get_experience
-
-        store = JournalStore(None)
-        result = await get_experience(store, {"funding_rate": 0.0001, "volatility": 0.02})
-        assert result == []
-
-    @pytest.mark.asyncio
-    async def test_with_history_returns_cases(self):
-        from cryptotrader.journal.commit import build_commit
-        from cryptotrader.journal.store import JournalStore
-        from cryptotrader.learning.verbal import format_experience_text, get_experience
-        from cryptotrader.models import TradeVerdict
-
-        store = JournalStore(None)
-        commit = build_commit(
-            pair="BTC/USDT",
-            snapshot_summary={"funding_rate": 0.0001, "volatility": 0.02},
-            analyses={},
-            debate_rounds=0,
-            divergence=0.0,
-            verdict=TradeVerdict(action="long", confidence=0.7, position_scale=0.5),
-            risk_gate=None,
-            order=None,
-            parent_hash=None,
-        )
-        await store.commit(commit)
-        await store.update_pnl(commit.hash, 200.0, "Caught the trend early")
-
-        cases = await get_experience(store, {"funding_rate": 0.0001, "volatility": 0.02})
-        assert len(cases) > 0
-        text = await format_experience_text(cases)
-        assert "BTC/USDT" in text
-        assert "Caught the trend early" in text
-
-
 # ── Full Pipeline Integration Test ──
+# Verbal-learning tests removed 2026-05-13 alongside learning/verbal.py;
+# see commit history for rationale (anti-anchor / minimal-skill alignment).
 
 
 class TestFullPipeline:
