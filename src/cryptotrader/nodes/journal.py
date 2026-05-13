@@ -218,13 +218,18 @@ async def journal_trade(state: ArenaState) -> dict:
             latency_breakdown=_aggregate_latency(node_trace),
             token_usage=_snapshot_token_usage(),
             execution_status=state["data"].get("execution_status"),
+            # Phase 2B/2C: server-side SL/TP audit trail.
+            stop_loss_price=state["data"].get("stop_loss_price"),
+            take_profit_price=state["data"].get("take_profit_price"),
+            algo_id=state["data"].get("algo_id"),
         )
         await store.commit(commit)
         logger.info(
-            "Journal trade committed: hash=%s pair=%s action=%s",
+            "Journal trade committed: hash=%s pair=%s action=%s algo_id=%s",
             commit.hash,
             pair_str,
             raw_verdict.get("action") if raw_verdict else "unknown",
+            state["data"].get("algo_id"),
         )
 
         return {"data": {"journal_hash": commit.hash}}

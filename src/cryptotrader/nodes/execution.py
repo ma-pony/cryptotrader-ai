@@ -683,4 +683,121 @@ async def place_order(state: ArenaState) -> dict:
     except Exception:
         logger.info("Notification send failed", exc_info=True)
 
-    return {"data": {"order": order_data}}
+    # Phase 2B: OKX server-side SL/TP via algo OCO. Best-effort — algo
+    # submission failure does NOT roll back the entry (position is already
+    # open). Global 5% check_stop_loss tail-end + next-cycle re-evaluation
+    # remain as safety nets.
+    algo_info = await _attach_okx_algo_protect(
+        exchange=exchange,
+        pair=pair,
+        verdict=verdict,
+        filled_amount=filled_amount,
+    )
+
+    return {"data": {"order": order_data, **algo_info}}
+
+
+async def _cancel_pending_algos_for_pair(exchange: Any, pair: str) -> bool:
+    """Best-effort cancel of all pending algos for a pair.
+
+    Returns True if list+cancel proceeded (algo flow can continue),
+    False if listing raised NotImplementedError (non-OKX live exchange,
+    caller should silent-skip).
+    """
+    try:
+        pending = await exchange.list_pending_algos(pair=pair)
+    except NotImplementedError:
+        return False
+    except Exception:
+        logger.warning("list_pending_algos failed for %s — proceeding without cancel", pair, exc_info=True)
+        return True
+
+    for entry in pending:
+        old_id = entry.get("algoId")
+        if not old_id:
+            continue
+        try:
+            await exchange.cancel_algo(str(old_id), pair)
+            logger.info("Cancelled stale algo %s for %s", old_id, pair)
+        except Exception:
+            logger.warning("cancel_algo %s failed for %s (continuing)", old_id, pair, exc_info=True)
+    return True
+
+
+def _algo_contract_size(exchange: Any, pair: str) -> float:
+    """Resolve perp contract_size from cached market metadata (default 1.0)."""
+    try:
+        market = exchange._exchange.markets.get(pair, {})
+    except AttributeError:
+        return 1.0
+    cs_raw = market.get("contractSize")
+    if cs_raw is None:
+        return 1.0
+    try:
+        cs_f = float(cs_raw)
+        if cs_f > 0:
+            return cs_f
+    except (TypeError, ValueError):
+        pass
+    return 1.0
+
+
+async def _attach_okx_algo_protect(
+    *,
+    exchange: Any,
+    pair: str,
+    verdict: dict,
+    filled_amount: float,
+) -> dict[str, Any]:
+    """Cancel stale algos + submit fresh OCO SL/TP for this pair (OKX only).
+
+    Returns a dict with ``algo_id`` / ``stop_loss_price`` / ``take_profit_price``
+    when a fresh algo was submitted, or an empty dict when nothing was placed
+    (paper exchange / non-OKX / missing SL+TP / close action / algo failed).
+
+    Soft-fail by design: any exception is caught and logged as WARN — the
+    spot/perp entry is already on-chain and global 5% stop catches a
+    runaway position even if no algo guards it.
+    """
+    if not hasattr(exchange, "place_algo_oco"):
+        return {}  # paper exchange / non-LiveExchange — algos don't apply
+
+    if not await _cancel_pending_algos_for_pair(exchange, pair):
+        return {}  # non-OKX live exchange — silent skip
+
+    action = verdict.get("action", "hold")
+    if action not in ("long", "short"):
+        return {}  # close / hold: nothing new to protect
+
+    sl = verdict.get("stop_loss")
+    tp = verdict.get("take_profit")
+    if sl is None or tp is None:
+        return {}
+
+    contract_size = _algo_contract_size(exchange, pair)
+    algo_sz = filled_amount / contract_size if contract_size != 1.0 else filled_amount
+    close_side = "sell" if action == "long" else "buy"
+
+    try:
+        algo_id = await exchange.place_algo_oco(
+            pair,
+            side=close_side,
+            amount=float(algo_sz),
+            sl_trigger_px=float(sl),
+            tp_trigger_px=float(tp),
+            pos_side=action,  # long-position → posSide=long; same for short
+        )
+    except NotImplementedError:
+        return {}
+    except Exception:
+        logger.warning(
+            "OKX algo OCO placement failed (soft fail) — position protected only by global stop_loss check",
+            exc_info=True,
+        )
+        return {}
+
+    return {
+        "algo_id": algo_id,
+        "stop_loss_price": float(sl),
+        "take_profit_price": float(tp),
+    }

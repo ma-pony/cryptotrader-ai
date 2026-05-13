@@ -90,6 +90,11 @@ def _sa_models():
         # ``risk_gate`` so analytics on gate-pass rate are not skewed by
         # post-gate execution failures (e.g. spot_short_no_inventory).
         execution_status = Column(JSONB, nullable=True, default=None)
+        # Phase 2C: server-side SL/TP audit trail (LLM's numeric stop_loss /
+        # take_profit + the OKX algo OCO id that was actually placed).
+        stop_loss_price = Column(Float, nullable=True)
+        take_profit_price = Column(Float, nullable=True)
+        algo_id = Column(String(64), nullable=True, index=True)
 
     _sa_cache = (Base, DecisionCommitRow)
     return _sa_cache
@@ -108,6 +113,10 @@ _OBSERVABILITY_COLUMNS = [
     # 2026-05-06: separate execution-layer status from risk_gate so
     # post-gate failures don't pollute gate-pass-rate analytics.
     ("execution_status", "JSONB", "DEFAULT NULL"),
+    # Phase 2C (2026-05-13): server-side SL/TP audit trail.
+    ("stop_loss_price", "DOUBLE PRECISION", "DEFAULT NULL"),
+    ("take_profit_price", "DOUBLE PRECISION", "DEFAULT NULL"),
+    ("algo_id", "VARCHAR(64)", "DEFAULT NULL"),
 ]
 
 # Columns to DROP from existing databases (FR-031: experience_json/experience_memory removal).
@@ -262,6 +271,9 @@ class JournalStore:
             latency_breakdown=d.get("latency_breakdown") or {},
             token_usage=d.get("token_usage") or {},
             execution_status=d.get("execution_status"),
+            stop_loss_price=d.get("stop_loss_price"),
+            take_profit_price=d.get("take_profit_price"),
+            algo_id=d.get("algo_id"),
         )
 
     def _dc_to_row_dict(self, dc: DecisionCommit) -> dict[str, Any]:
@@ -296,6 +308,10 @@ class JournalStore:
             # 'spot' on parse failure so legacy / malformed pairs don't reject.
             "market_type": _market_type_for(dc.pair),
             "execution_status": dc.execution_status,
+            # Phase 2C: server-side SL/TP audit trail
+            "stop_loss_price": dc.stop_loss_price,
+            "take_profit_price": dc.take_profit_price,
+            "algo_id": dc.algo_id,
         }
 
     def _row_to_dc(self, row) -> DecisionCommit:
@@ -351,6 +367,9 @@ class JournalStore:
             latency_breakdown=getattr(row, "latency_breakdown", None) or {},
             token_usage=getattr(row, "token_usage", None) or {},
             execution_status=getattr(row, "execution_status", None),
+            stop_loss_price=getattr(row, "stop_loss_price", None),
+            take_profit_price=getattr(row, "take_profit_price", None),
+            algo_id=getattr(row, "algo_id", None),
         )
 
     async def commit(self, dc: DecisionCommit) -> None:

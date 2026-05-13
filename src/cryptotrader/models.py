@@ -374,3 +374,13 @@ class DecisionCommit:
     #         "reason": str}. Distinct from ``risk_gate`` so gate-pass-rate
     # analytics are not skewed by exchange-side failures.
     execution_status: dict[str, Any] | None = None
+    # Phase 2C — Server-side SL/TP audit trail.
+    # ``stop_loss_price`` / ``take_profit_price`` mirror the verdict's
+    # numeric SL/TP at the moment of execution (so we can reconstruct what
+    # was sent to OKX even if the verdict snapshot drifts). ``algo_id`` is
+    # the OKX OCO algoId returned by ``LiveExchange.place_algo_oco`` —
+    # used downstream to cancel the algo on flip / close.
+    # All three are None for verdict=hold / verdict=close / pre-Phase-2 commits.
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
+    algo_id: str | None = None

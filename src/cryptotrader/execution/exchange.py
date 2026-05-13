@@ -739,6 +739,145 @@ class LiveExchange:
         await self._ensure_markets()
         return await self._retry(self._exchange.fetch_open_orders)
 
+    # ── OKX algo OCO (Phase 2A) ──────────────────────────────────────────
+    #
+    # Server-side stop-loss + take-profit via OKX algo orders. ccxt's unified
+    # ``create_order`` doesn't model OCO algos, so we hit the raw OKX endpoint
+    # directly. Other venues (Binance / Bybit) are not supported here — the
+    # methods raise NotImplementedError for non-OKX exchange_ids so callers
+    # don't silently send malformed params elsewhere.
+
+    def _require_okx(self, op: str) -> None:
+        if self._exchange_id != "okx":
+            raise NotImplementedError(f"{op} is OKX-only; current exchange_id={self._exchange_id!r}")
+
+    def _to_okx_inst_id(self, pair: str) -> str:
+        """Convert ccxt unified symbol → OKX instId (e.g. 'BTC/USDT:USDT' → 'BTC-USDT-SWAP')."""
+        market = self._exchange.markets.get(pair, {})
+        inst_id = market.get("id")
+        if not inst_id:
+            raise ValueError(f"Cannot resolve OKX instId for pair={pair!r} (market not loaded)")
+        return str(inst_id)
+
+    async def place_algo_oco(
+        self,
+        pair: str,
+        *,
+        side: str,
+        amount: float,
+        sl_trigger_px: float,
+        tp_trigger_px: float,
+        pos_side: str,
+    ) -> str:
+        """Submit an OCO algo (stop-loss + take-profit) with reduceOnly.
+
+        Args:
+            pair: ccxt unified symbol (e.g. ``"BTC/USDT:USDT"``).
+            side: Closing direction: ``"buy"`` to close a short, ``"sell"`` to
+                close a long. Caller is responsible for picking the inverse of
+                the open position.
+            amount: Size in **contracts** (already converted from base units;
+                same convention as ``place_order``).
+            sl_trigger_px: Stop-loss trigger price (last-price reference).
+            tp_trigger_px: Take-profit trigger price (last-price reference).
+            pos_side: ``"long"`` or ``"short"`` — the position being protected.
+
+        Returns:
+            ``algoId`` string, or raises on rejection.
+
+        OKX behaviour: the two child orders sit pending until either triggers,
+        then the other is auto-cancelled (OCO semantics). Both legs execute at
+        market on trigger (``slOrdPx="-1"`` / ``tpOrdPx="-1"``).
+        """
+        self._require_okx("place_algo_oco")
+        await self._ensure_markets()
+
+        inst_id = self._to_okx_inst_id(pair)
+        params = {
+            "instId": inst_id,
+            "tdMode": self._margin_mode,
+            "side": side,
+            "posSide": pos_side,
+            "ordType": "oco",
+            "sz": str(amount),
+            "reduceOnly": "true",
+            "slTriggerPx": str(sl_trigger_px),
+            "slTriggerPxType": "last",
+            "slOrdPx": "-1",
+            "tpTriggerPx": str(tp_trigger_px),
+            "tpTriggerPxType": "last",
+            "tpOrdPx": "-1",
+        }
+
+        resp = await self._retry(self._exchange.private_post_trade_order_algo, params)
+        # OKX response shape: {"code": "0", "data": [{"algoId": "...", "sCode": "0", "sMsg": "..."}], ...}
+        if str(resp.get("code", "")) != "0":
+            raise RuntimeError(f"OKX algo OCO rejected: code={resp.get('code')} msg={resp.get('msg')}")
+        data = resp.get("data") or []
+        if not data:
+            raise RuntimeError(f"OKX algo OCO returned no data: {resp!r}")
+        leg = data[0]
+        if str(leg.get("sCode", "")) != "0":
+            raise RuntimeError(f"OKX algo OCO leg rejected: sCode={leg.get('sCode')} sMsg={leg.get('sMsg')}")
+        algo_id = leg.get("algoId")
+        if not algo_id:
+            raise RuntimeError(f"OKX algo OCO succeeded but no algoId: {leg!r}")
+        logger.info(
+            "place_algo_oco %s side=%s posSide=%s sl=%s tp=%s sz=%s → algoId=%s",
+            inst_id,
+            side,
+            pos_side,
+            sl_trigger_px,
+            tp_trigger_px,
+            amount,
+            algo_id,
+        )
+        return str(algo_id)
+
+    async def cancel_algo(self, algo_id: str, pair: str) -> None:
+        """Cancel a pending algo by ``algoId``. Swallows "not found" errors."""
+        self._require_okx("cancel_algo")
+        await self._ensure_markets()
+
+        inst_id = self._to_okx_inst_id(pair)
+        params = [{"algoId": algo_id, "instId": inst_id}]
+        try:
+            resp = await self._retry(self._exchange.private_post_trade_cancel_algos, params)
+        except Exception as exc:
+            # OKX returns 51400 / 51401 for already-triggered or unknown algos.
+            # Treat as success — caller's intent is "ensure it's gone".
+            msg = str(exc)
+            if "51400" in msg or "51401" in msg or "not exist" in msg.lower():
+                logger.info("cancel_algo %s: already gone (%s)", algo_id, msg[:120])
+                return
+            raise
+
+        # OKX returns code=0 even when individual leg failed; check sCode per leg.
+        for leg in resp.get("data", []) or []:
+            sc = str(leg.get("sCode", ""))
+            if sc not in ("0", "51400", "51401"):
+                logger.warning(
+                    "cancel_algo %s leg returned sCode=%s sMsg=%s",
+                    algo_id,
+                    sc,
+                    leg.get("sMsg"),
+                )
+        logger.info("cancel_algo %s ok (instId=%s)", algo_id, inst_id)
+
+    async def list_pending_algos(self, pair: str | None = None) -> list[dict[str, Any]]:
+        """List currently pending algos. ``pair`` filters by instId when given."""
+        self._require_okx("list_pending_algos")
+        await self._ensure_markets()
+
+        params: dict[str, Any] = {"ordType": "oco"}
+        if pair is not None:
+            params["instId"] = self._to_okx_inst_id(pair)
+
+        resp = await self._retry(self._exchange.private_get_trade_orders_algo_pending, params)
+        if str(resp.get("code", "")) != "0":
+            raise RuntimeError(f"OKX list algos failed: code={resp.get('code')} msg={resp.get('msg')}")
+        return list(resp.get("data") or [])
+
     async def close(self) -> None:
         try:
             await self._exchange.close()

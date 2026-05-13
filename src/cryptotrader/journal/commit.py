@@ -51,6 +51,11 @@ def build_commit(
     latency_breakdown: dict[str, Any] | None = None,
     token_usage: dict[str, Any] | None = None,
     execution_status: dict[str, Any] | None = None,
+    # Phase 2C: server-side SL/TP audit trail (populated by execute node
+    # once OKX algo OCO is submitted). All None for hold / close / failed-algo.
+    stop_loss_price: float | None = None,
+    take_profit_price: float | None = None,
+    algo_id: str | None = None,
 ) -> DecisionCommit:
     """Build a DecisionCommit with a generated hash.
 
@@ -119,4 +124,7 @@ def build_commit(
         token_usage=token_usage or {},
         execution_status=execution_status,
         pnl=pnl,
+        stop_loss_price=stop_loss_price,
+        take_profit_price=take_profit_price,
+        algo_id=algo_id,
     )
