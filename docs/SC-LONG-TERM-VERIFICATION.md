@@ -42,7 +42,9 @@ done
 ```
 
 **告警阈值**：14 天后所有 agent 均为 0 → 检查：
-1. reflection 节点是否被 graph 触发（搜 `agent_memory/cases/` 是否在增长）
+1. Evolution daemon 是否每日运行（`pattern_extraction` step；搜 `agent_memory/cases/`
+   是否在增长）。in-cycle `nodes/reflection.py` 触发路径已于 2026-05-13 删除——
+   蒸馏现在只走 daemon 通道。
 2. PnL 数据是否正常回填（FR-027 `update_pattern_pnl`）
 3. 4 层防过拟合是否过严（L2 默认 N=5；L3 默认 min_delta=0.1）
 
@@ -74,43 +76,31 @@ uv run psql "$DATABASE_URL" -c "
 
 ---
 
-## SC-010 — reflection 失败不阻塞 cycle
+## SC-010 — distill_patterns 失败不阻塞 daily daemon（2026-05-13 后）
 
-**Spec 要求**：reflection job 失败注入测试中 trading cycle 完成率 100%。
+**历史**：原 SC-010 验证 in-cycle `nodes/reflection.py` 失败不阻塞 trading
+cycle。该节点 2026-05-13 删除——蒸馏迁出到独立 Evolution Daemon 进程
+（`ops/daemon.py`），与 trading-cycle hot path 隔离，不再有"reflection 失败
+阻塞 cycle"风险。
+
+**当前等价问题**：`distill_patterns` 在 daemon 内失败是否触发 next-day
+fallback / soft-degrade？
 
 **观察方法**：
 
-### A. 单元测试 fault-injection（在 PR 合并时验证）
-
-`tests/test_reflection_pattern_distill.py` 中含一项测试：
-
-```python
-def test_distill_failure_does_not_block_cycle(monkeypatch):
-    """FR-012 + SC-010: reflection 内部异常不能阻塞下一个 cycle。"""
-    monkeypatch.setattr(
-        "cryptotrader.learning.memory.distill_patterns",
-        Mock(side_effect=RuntimeError("simulated reflection failure")),
-    )
-    # 触发 reflection 节点
-    state = run_reflection_node(initial_state)
-    # 关键：state 仍可继续被下个 cycle 消费
-    assert state["next_action"] is not None  # cycle 主流程未中断
-```
-
-> 该测试已包含在 spec 014 PR 中，由 Phase 6 review-code 阶段验收。
-
-### B. 线上观察（合并后 14 天）
-
 ```bash
-# 查 reflection 节点日志（应见 ERROR 但 cycle 继续完成）
-grep -E "reflection.*failed|distill_patterns.*Exception" logs/cryptotrader.log | wc -l   # 失败次数
-grep -E "trading cycle complete" logs/cryptotrader.log | wc -l                          # 完整 cycle 数
+# Evolution daemon 日志（spec 020b）
+grep -E "distill_patterns.*FAIL|reflect daemon.*Exception|pattern_extraction.*SKIP" \
+     /tmp/evolution-daemon.log | tail -20
 
-# 期望：failure_count > 0 时，cycle_count 仍按预期递增（每 5min 一个）
+# Prometheus daemon 指标
+curl -s http://localhost:8003/metrics | grep -E \
+     "evolution_daemon_(run_count|llm_failure_rate)"
 ```
 
-**告警阈值**：reflection 失败后下一 cycle 缺失 → 检查 `nodes/reflection.py` 是否捕
-获了所有异常并返回 unchanged state（FR-012）。
+**告警阈值**：daemon `pattern_extraction` 连续 2 天 SKIP / FAIL → 检查
+`learning/memory.py:distill_patterns` 异常路径和 daemon `soft_degrade` 处理
+（spec 020b FR-D10）。
 
 ---
 

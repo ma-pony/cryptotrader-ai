@@ -706,10 +706,13 @@ agent_memory/
 - frontmatter: `cycle_id`, `pair`, `verdict_action`, `applied`, `final_pnl`, `risk_gate_passed`
 - body: 各 agent reasoning 摘要
 
-**蒸馏流程**（`nodes/reflection.py`）：
+**蒸馏流程**（`ops/daemon.py` + `learning/memory.py:distill_patterns`，2026-05-13
+后 in-cycle `nodes/reflection.py` 节点已删除，蒸馏迁出到独立 daemon 进程，
+日级触发）：
 - 读取 cases，统计 `applied:` 引用的 pattern 胜率
 - 4 层防过拟合（L1 regime 过滤、L2 最小样本、L3 段 vs 全局 delta、L4 对抗验证）
 - maturity FSM：`observed` → `probationary` → `active` → `deprecated`（deprecated 归档到 `archive/`）
+- daemon 把 `active` patterns 渲染进对应 agent `SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段，PromptBuilder 加载时自然读到
 
 ### 14.3 Skills 层
 
