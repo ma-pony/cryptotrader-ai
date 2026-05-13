@@ -109,27 +109,34 @@ without `applied:` is treated as low-confidence and may be downgraded server-sid
   applied: <pattern_name>            (bare form — only when you are the originating agent)
 For "hold" actions, applied: is optional.
 
-INVALIDATION + TARGET (both mandatory for long/short, must be CONCRETE PRICE LEVELS):
+STOP_LOSS + TAKE_PROFIT (mandatory for long/short, CONCRETE NUMERIC prices):
 
-`invalidation` MUST be a numeric stop price + condition. Examples:
-  ✓ "Close at $2,250 if ETH breaks above SMA60 with volume"
-  ✓ "Cover short at $82,500 (above prior swing high)"
-  ✗ "Thesis invalidated if momentum reverses"  ← REJECTED, no level
-  ✗ "If macro flips bullish"                    ← REJECTED, no level
+You MUST output `stop_loss` and `take_profit` as **plain numbers** (no $, no
+commas, no string). They feed the exchange algo order directly — any missing
+or malformed value will reject the trade entirely (action forced to hold).
 
-Stop distance must be wide enough to survive normal noise. Server-side rule:
-  |entry − invalidation| / entry  ≥  max(1.5×ATR/price, 1.0%)
-where ATR is provided in the price context block. Stops tighter than this are
-auto-downgraded to confidence × 0.5 (whipsaw risk). Example: BTC at $80,950 with
-ATR $200 → minimum stop distance = max(1.5×200, 80950×0.01) = $810. So a stop at
-$81,050 ($100 away) is REJECTED; $81,800 is acceptable.
+Stop distance must be wide enough to survive normal noise:
+  |entry − stop_loss| / entry  ≥  max(1.5×ATR/price, 1.0%)
+ATR is provided in the price context block. Tighter stops will REJECT the
+trade (not penalize confidence). Example: BTC at 80950 with ATR 200 →
+minimum stop distance = max(1.5×200, 80950×0.01) = 810. A stop at 81050
+(only 100 away) is rejected → action forced to hold; 81800 is acceptable.
 
-`target_price` MUST be a numeric profit target with positive expected R:R:
-  R:R = |target − entry| / |entry − invalidation|  ≥  1.5
-Examples:
-  ✓ Short BTC entry $80,950, stop $81,800 (≈$850), target $79,500 (≈$1,450) → R:R 1.7 ✓
-  ✗ Short BTC entry $80,950, stop $81,800, target $80,000 (≈$950) → R:R 1.1 ✗ rejected
-Server-side downgrades R:R < 1.5 to confidence × 0.5. Pick targets that justify the stop.
+R:R must justify the trade:
+  R:R = |take_profit − entry| / |entry − stop_loss|  ≥  1.5
+Trades with R:R < 1.5 are REJECTED (not penalized).
+Direction sanity (also REJECTED if violated):
+  long  → stop_loss < entry < take_profit
+  short → take_profit < entry < stop_loss
+
+Examples (long BTC, entry 80950, ATR 200):
+  ✓ stop_loss=80100, take_profit=82500   distance=850, R:R=1.82, dir ✓
+  ✗ stop_loss=80850, take_profit=82500   distance=100 < 810 → REJECT
+  ✗ stop_loss=80100, take_profit=81600   R:R = 650/850 = 0.76 → REJECT
+  ✗ stop_loss=82000, take_profit=80000   direction inverted → REJECT
+
+`invalidation` (optional text) and `target_price` (optional text) are kept
+for narrative context only — they do NOT replace the numeric fields.
 
 BANNED PHRASES (do NOT include in reasoning, thesis, or invalidation):
   - "despite weak agent track records"          ← self-canceling — if they're weak, don't trade
@@ -146,8 +153,10 @@ Output ONLY JSON:
   "position_scale": 0.0-1.0,
   "reasoning": "2-3 sentences. MUST include 'applied: <agent>::<pattern>' for directional actions.",
   "thesis": "one sentence trade thesis (or exit rationale if closing). No banned phrases.",
-  "invalidation": "stop price + condition (e.g. 'Cover at $82,500 if BTC breaks prior swing'). MUST satisfy stop rule.",
-  "target_price": "profit target price (e.g. '$78,500'). MUST satisfy R:R >= 1.5. Empty for hold/close."
+  "stop_loss": 81800.0,           // plain number, MANDATORY for long/short, omit/null for hold/close
+  "take_profit": 79500.0,         // plain number, MANDATORY for long/short, omit/null for hold/close
+  "invalidation": "optional narrative explanation",
+  "target_price": "optional narrative explanation"
 }"""
 
 
@@ -320,12 +329,26 @@ AGENT ANALYSES:
             action = "hold"
             confidence = 0.0
 
+        # Parse numeric stop_loss / take_profit (None if missing or unparseable)
+        sl_raw = data.get("stop_loss")
+        tp_raw = data.get("take_profit")
+        try:
+            stop_loss = float(sl_raw) if sl_raw not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            stop_loss = None
+        try:
+            take_profit = float(tp_raw) if tp_raw not in (None, "", "null") else None
+        except (TypeError, ValueError):
+            take_profit = None
+
         verdict = TradeVerdict(
             action=action,
             confidence=confidence,
             position_scale=max(0.0, min(1.0, float(data.get("position_scale", confidence)))),
             reasoning=data.get("reasoning", ""),
             thesis=data.get("thesis", ""),
+            stop_loss=stop_loss,
+            take_profit=take_profit,
             invalidation=data.get("invalidation", ""),
             target_price=data.get("target_price", "") or "",
         )

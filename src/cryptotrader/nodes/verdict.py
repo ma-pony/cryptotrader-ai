@@ -20,23 +20,21 @@ _structlog = structlog.get_logger(__name__)
 # their own bare skill or another agent's namespaced skill.
 _APPLIED_RE = re.compile(r"applied:\s*([A-Za-z0-9_:]+)")
 
-# Pulls the FIRST USD-denominated price out of a free-text invalidation /
-# target_price string. Tolerates "$80,950", "$80950.50", "80,950" (no $).
-# Stops at non-numeric / non-comma / non-dot.
-_PRICE_RE = re.compile(r"\$?\s*([0-9][0-9,]*(?:\.[0-9]+)?)")
 
+def _force_hold(vd_dict: dict, reason: str) -> None:
+    """Force the verdict to hold, log the rejection, record the reason as a guardrail.
 
-def _extract_price(text: str | None) -> float | None:
-    """Best-effort numeric extraction from a free-text price level string."""
-    if not text or not isinstance(text, str):
-        return None
-    m = _PRICE_RE.search(text)
-    if not m:
-        return None
-    try:
-        return float(m.group(1).replace(",", ""))
-    except (ValueError, TypeError):
-        return None
+    Used when SL/TP is missing / malformed / out of bounds — we cannot place
+    a protected algo order, so we must refuse the trade entirely rather than
+    silently downgrade confidence and proceed with a naked position.
+    """
+    logger.warning("Verdict REJECTED → hold; reason=%s", reason)
+    vd_dict["action"] = "hold"
+    vd_dict["confidence"] = 0.0
+    vd_dict["position_scale"] = 0.0
+    vd_dict["stop_loss"] = None
+    vd_dict["take_profit"] = None
+    vd_dict.setdefault("guardrails", []).append(f"rejected:{reason}")
 
 
 def _post_process_verdict(
@@ -125,79 +123,69 @@ def _post_process_verdict(
             if scale > ramp:
                 vd_dict["position_scale"] = ramp
 
-    # Guardrail 4 (N2): invalidation stop too tight → halve confidence.
-    # Stop must be at least max(1.5×ATR, 1.0% of entry). Prevents the LLM from
-    # placing 0.06%-distance stops that get whipsawed by routine 5min noise
-    # (observed pattern in 02:23 cycle: BTC stop $100 from entry $80,950).
+    # SL/TP HARD-REJECT GATE (replaces former Guardrails 4/5 confidence penalties).
+    # Any of the following → force action=hold (cannot place protected algo order):
+    #   • stop_loss / take_profit missing or non-numeric
+    #   • stop too tight   (< max(1.5×ATR, 1.0% of entry))
+    #   • R:R < 1.5
+    #   • direction inverted (long but stop ≥ entry, or short but stop ≤ entry)
     if action in ("long", "short") and entry_price and entry_price > 0:
-        stop_price = _extract_price(vd_dict.get("invalidation", ""))
-        if stop_price is not None:
-            stop_distance = abs(stop_price - entry_price)
-            atr_floor = 1.5 * atr if (atr and atr > 0) else 0.0
-            pct_floor = entry_price * 0.01
-            min_distance = max(atr_floor, pct_floor)
-            if stop_distance < min_distance:
-                new_cf = round(cf * 0.5, 4)
-                logger.info(
-                    "Verdict stop too tight: distance=$%.4f < min=$%.4f (1.5×ATR=$%.4f, 1%%=$%.4f); cf %.2f -> %.2f",
-                    stop_distance,
-                    min_distance,
-                    atr_floor,
-                    pct_floor,
-                    cf,
-                    new_cf,
-                )
-                cf = new_cf
-                vd_dict["confidence"] = cf
-                vd_dict.setdefault("guardrails", []).append("stop_too_tight")
-                # Re-apply ramp.
-                ramp = max(0.0, min(1.0, (cf - 0.5) * 2))
-                if vd_dict.get("position_scale", 0) > ramp:
-                    vd_dict["position_scale"] = ramp
+        sl = vd_dict.get("stop_loss")
+        tp = vd_dict.get("take_profit")
 
-    # Guardrail 5 (N7): R:R < 1.5 → halve confidence.
-    # R:R = |target − entry| / |entry − stop|. A trade with stop $1 risk and
-    # target $1 reward is statistically unprofitable after fees+slippage; we
-    # require a 1.5× edge minimum.
-    if action in ("long", "short") and entry_price and entry_price > 0:
-        stop_price = _extract_price(vd_dict.get("invalidation", ""))
-        target_price = _extract_price(vd_dict.get("target_price", ""))
-        if stop_price is not None and target_price is not None:
-            stop_distance = abs(stop_price - entry_price)
-            target_distance = abs(target_price - entry_price)
-            if stop_distance > 0:
-                rr = target_distance / stop_distance
-                if rr < 1.5:
-                    new_cf = round(cf * 0.5, 4)
-                    logger.info(
-                        "Verdict R:R %.2f < 1.5 (entry=$%.4f stop=$%.4f target=$%.4f); cf %.2f -> %.2f",
-                        rr,
-                        entry_price,
-                        stop_price,
-                        target_price,
-                        cf,
-                        new_cf,
-                    )
-                    cf = new_cf
-                    vd_dict["confidence"] = cf
-                    vd_dict.setdefault("guardrails", []).append(f"low_rr:{rr:.2f}")
-                    ramp = max(0.0, min(1.0, (cf - 0.5) * 2))
-                    if vd_dict.get("position_scale", 0) > ramp:
-                        vd_dict["position_scale"] = ramp
-                else:
-                    vd_dict["risk_reward_ratio"] = round(rr, 3)
-        elif target_price is None:
-            # Missing target on a directional verdict — same penalty as missing applied:
-            new_cf = round(cf * 0.5, 4)
+        # Coerce to float; non-numeric → None
+        try:
+            sl_f = float(sl) if sl is not None else None
+        except (TypeError, ValueError):
+            sl_f = None
+        try:
+            tp_f = float(tp) if tp is not None else None
+        except (TypeError, ValueError):
+            tp_f = None
+
+        if sl_f is None or tp_f is None:
+            _force_hold(vd_dict, "missing_sl_tp")
+            return vd_dict
+
+        # Direction sanity
+        if action == "long" and not (sl_f < entry_price < tp_f):
+            _force_hold(vd_dict, "direction_inverted_long")
+            return vd_dict
+        if action == "short" and not (tp_f < entry_price < sl_f):
+            _force_hold(vd_dict, "direction_inverted_short")
+            return vd_dict
+
+        # Stop-distance floor
+        stop_distance = abs(sl_f - entry_price)
+        atr_floor = 1.5 * atr if (atr and atr > 0) else 0.0
+        pct_floor = entry_price * 0.01
+        min_distance = max(atr_floor, pct_floor)
+        if stop_distance < min_distance:
             logger.info(
-                "Verdict missing target_price for %s — cf %.2f -> %.2f",
-                action,
-                cf,
-                new_cf,
+                "stop_too_tight: distance=%.6f < min=%.6f (1.5×ATR=%.6f, 1%%=%.6f)",
+                stop_distance,
+                min_distance,
+                atr_floor,
+                pct_floor,
             )
-            cf = new_cf
-            vd_dict["confidence"] = cf
-            vd_dict.setdefault("guardrails", []).append("missing_target_price")
+            _force_hold(vd_dict, "stop_too_tight")
+            return vd_dict
+
+        # R:R minimum
+        target_distance = abs(tp_f - entry_price)
+        rr = target_distance / stop_distance
+        if rr < 1.5:
+            logger.info(
+                "low_rr: %.2f < 1.5 (entry=%.6f stop=%.6f target=%.6f)",
+                rr,
+                entry_price,
+                sl_f,
+                tp_f,
+            )
+            _force_hold(vd_dict, f"low_rr_{rr:.2f}")
+            return vd_dict
+
+        vd_dict["risk_reward_ratio"] = round(rr, 3)
 
     return vd_dict
 
@@ -392,6 +380,8 @@ async def make_verdict(state: ArenaState) -> dict:
         "divergence": verdict.divergence,
         "reasoning": verdict.reasoning,
         "thesis": verdict.thesis,
+        "stop_loss": getattr(verdict, "stop_loss", None),
+        "take_profit": getattr(verdict, "take_profit", None),
         "invalidation": verdict.invalidation,
         "target_price": getattr(verdict, "target_price", "") or "",
         "verdict_source": verdict_source,

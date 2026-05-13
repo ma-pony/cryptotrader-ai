@@ -663,8 +663,10 @@ async def test_make_verdict_llm():
     # guardrails accept the verdict.
     mock_verdict.reasoning = "Strong bullish consensus. applied: tech::breakout_long"
     mock_verdict.thesis = "Breakout confirmed"
-    mock_verdict.invalidation = "Below $48,000"  # entry $50k, stop ~4% away
-    mock_verdict.target_price = "$56,000"  # 12% target → R:R 3.0
+    mock_verdict.stop_loss = 48000.0  # entry $50k, stop $2k below (4%)
+    mock_verdict.take_profit = 56000.0  # $6k target → R:R 3.0
+    mock_verdict.invalidation = "Below $48,000"
+    mock_verdict.target_price = "$56,000"
     mock_verdict.verdict_source = "ai"
 
     with (

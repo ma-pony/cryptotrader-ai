@@ -232,12 +232,13 @@ class TradeVerdict:
     divergence: float = 0.0
     reasoning: str = ""
     thesis: str = ""
+    # Numeric SL/TP — canonical fields consumed by execute / OKX algo OCO.
+    # Mandatory for long/short verdicts (missing → hold). Empty for hold/close.
+    stop_loss: float | None = None
+    take_profit: float | None = None
+    # Narrative text — optional, for human-readable explanation only.
+    # Not parsed by guardrails or execute path.
     invalidation: str = ""
-    # N7 (2026-05-08): explicit profit target so server can compute R:R and
-    # reject low-edge trades. Long/short verdicts must populate; hold/close
-    # leave it empty. String form (e.g. "$87.50") so the LLM can keep the same
-    # format it uses for ``invalidation`` — server-side parses both with
-    # the same regex.
     target_price: str = ""
     verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
 
