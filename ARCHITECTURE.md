@@ -8,8 +8,11 @@
 >   - "Verbal Reinforcement"（FinCon 启发的历史 case 注入）已删除——与
 >     round-3 minimal-skill 反锚定理念冲突；小样本 selection bias 显著。
 >   - "统计校准"（calibrate.py / bias-correction）也已删除（同样原因）。
->   - 经验闭环现由 **`reflect.py` (LLM 反思备忘录) + Evolution Daemon
->     (spec 020b, daily `pattern_extraction` → SKILL.md AUTO-DISTILLED-PATTERNS)** 接管。
+>   - **reflect.py / nodes/reflection.py 也已删除（2026-05-13）**——与
+>     verbal/bias 删除同一逻辑：每 N 周期把 LLM 自反 memo 注入 agent prompt，
+>     与 minimal-skill 反锚定冲突，且 20 样本是噪声。
+>   - 经验闭环现仅由 **Evolution Daemon (spec 020b, daily
+>     `pattern_extraction` → SKILL.md AUTO-DISTILLED-PATTERNS)** 接管。
 >   - `tag_regime()` 函数保留，由轻量 `tag_regime_node` 调用，供 Evolution
 >     Daemon 的 regime-cluster 步骤使用。
 >   详见 §4.6（更新后）和 `docs/REFLECTION.md`。
@@ -376,13 +379,14 @@ class AgentAnalysis:
 ```
 你是 {agent_role}，基于以下数据分析 {pair} 的交易机会。
 {data_snapshot}
-{reflection_memo}  ← agent 自身的 prior self-reflection (来自 reflect.py)
 
 输出你的判断，包括方向、置信度、关键因素和风险。
 ```
 
-注：原"{historical_experience}  ← Verbal Reinforcement 注入"占位已于
-2026-05-13 移除——historical case dump 路径删除（详见顶部 §1 更新说明）。
+注：原 `{historical_experience}` (Verbal Reinforcement) 和 `{reflection_memo}`
+(reflect.py 自反备忘录) 两个 prompt 注入占位都已于 2026-05-13 删除——
+两者都通过往 prompt 注入 LLM 生成文本来锚定 agent 决策，与 round-3 minimal
+skill 反锚定理念冲突。详见顶部 §1 更新说明。
 
 **Round 2+ prompt（交叉质询）：**
 ```
@@ -436,15 +440,17 @@ def make_verdict(state: ArenaState) -> TradeVerdict:
 minimal-skill 刚去掉的 prior anchoring，且小样本（n≈3 case / n≈23 commits）在
 crypto 噪声中无统计意义。
 
-**当前**：经验闭环由两层组成：
+**当前（2026-05-13 后）**：经验闭环只剩一层：
 
-1. **Reflection (`reflect.py`)** — 每 N 周期触发 LLM 深度反思，输出结构化
-   `ExperienceMemory` JSON（success_patterns / forbidden_zones / strategic_insights），
-   保存到 SQLite。下个周期 `_build_experience` 把对应 agent 的备忘录拼到 prompt。
-2. **Evolution Daemon (`ops/daemon.py`, spec 020b)** — 每日离线运行
-   `pattern_extraction`，从过去 N 个周期的成功 case 蒸馏 patterns，写入对应
-   `agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段。Agent 通过
-   PromptBuilder 加载 skill 时自然受益。
+**Evolution Daemon (`ops/daemon.py`, spec 020b)** — 每日离线运行
+`pattern_extraction`（封装在 `learning/memory.py:distill_patterns`），从过
+去 N 个周期的成功 case 蒸馏 patterns，写入对应
+`agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段。Agent 通过
+PromptBuilder 加载 skill 时自然受益。
+
+旧 in-cycle `run_reflection` 节点和 `reflect.py` 模块都已删除——daemon
+做的是同一件事，cadence 不同但样本更大（滚动窗口 vs 每 20 cycle），且
+不直接污染 agent prompt（走 SKILL.md 结构化通道）。
 
 `tag_regime()` 函数保留——Evolution Daemon 的 regime-cluster 步骤依赖它给
 cases 打 regime 标签。`nodes/data.py` 的 `tag_regime_node` 只做这件事，
@@ -458,14 +464,14 @@ async def tag_regime_node(state: ArenaState) -> dict:
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)
     return {"data": {"regime_tags": regime_tags}}
 
-# learning/context.py — GSSC 引擎（注入 Agent prompt）
-def structure_experience(cases, memory, regime_tags, token_budget) -> str:
-    packets = gather_packets(cases, memory)           # Gather
-    selected = select_packets(packets, regime_tags, token_budget)  # Select
-    return format_for_prompt(selected)                # Structure
 ```
 
-**反思与记忆生成**（`reflect.py`）：每 N 次决策后，LLM 从 Journal 提炼 `ExperienceRule`（pattern / conditions / rate / maturity），存入 `experience_json` 列。支持增量演化和五层防过拟合机制（最小样本、成熟度、Regime 过滤、LLM 约束、代码校验胜率）。
+**模式蒸馏**（`learning/memory.py:distill_patterns`，由 Evolution Daemon 每
+日触发）：LLM 从 Journal 提炼 `ExperienceRule`（pattern / conditions / rate /
+maturity），存入 `experience_json` 列并写到 SKILL.md AUTO-DISTILLED-PATTERNS。
+支持增量演化和五层防过拟合机制（最小样本、成熟度、Regime 过滤、LLM 约束、
+代码校验胜率）。In-cycle 的 `reflect.py` 和 GSSC `context.py` 注入路径均
+已删除（2026-05-13）。
 
 ### 4.7 模型分级策略
 
@@ -1053,7 +1059,7 @@ cryptotrader-ai/
 │       ├── learning/          # 经验学习
 │       │   ├── __init__.py
 │       │   ├── regime.py     # tag_regime（regime 标签计算）
-│       │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
+│       │   ├── memory.py     # ExperienceRule / ExperienceMemory + Pareto + FSM
 │       │   ├── context.py     # GSSC 引擎（gather → select → structure）
 │       │   └── regime.py      # Regime 标签（tag_regime + Jaccard 匹配）
 │       │

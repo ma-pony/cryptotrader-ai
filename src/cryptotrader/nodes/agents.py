@@ -273,24 +273,26 @@ async def _publish_agent_done(
 
 
 def _build_experience(state: ArenaState, agent_type: str) -> str:
-    """Build experience string from state fields (reflection memo only).
+    """Build experience string from state fields.
 
-    Skills injection is handled by PromptBuilder (spec 017b) inside agent.analyze().
-    Removed 2026-05-13:
-      - bias-correction injection (`agent_corrections`) — re-introduced
-        the kind of directional priors the round-3 minimal skills had
-        just removed.
-      - verbal-reinforcement "experience" text dump (similar-case
-        retrieval via Jaccard over regime tags) — same anchoring
-        problem, plus selection bias on a tiny sample (n ≈ 3 past
-        cases) is statistically meaningless.
-    Pattern learning is now exclusively the evolution daemon's job;
-    self-reflection memos remain as the only legacy injection.
+    2026-05-13 final state: returns "" unconditionally. All legacy
+    injection paths have been removed:
+      - bias-correction (`agent_corrections`)
+      - verbal-reinforcement (`historical_cases` / `experience`)
+      - self-reflection memo (`agent_reflections`)
+    Each shared the same flaw — feeding small-sample LLM-generated
+    priors back into prompts re-introduces the directional anchoring
+    the round-3 minimal skills were designed to eliminate.
+
+    Skills injection (the proper feedback channel) is handled by
+    PromptBuilder (spec 017b) inside agent.analyze(); the evolution
+    daemon writes distilled patterns into the SKILL.md
+    `AUTO-DISTILLED-PATTERNS` section, which PromptBuilder loads.
     """
-    agent_reflections = state["data"].get("agent_reflections", {})
-    reflection = agent_reflections.get(agent_type, "")
-    if reflection:
-        return f"Strategy memo (your own prior self-reflection):\n{reflection}"
+    # state and agent_type kept in signature because spec 017b's
+    # PromptBuilder.build(...) currently takes an `experience` kwarg.
+    # Once that surface is collapsed too, this helper can disappear.
+    del state, agent_type  # explicitly unused
     return ""
 
 

@@ -71,7 +71,7 @@
 
 ### 学习系统
 
-- **经验闭环**：`reflect.py`（自我反思 + 结构化规则）→ Evolution Daemon `pattern_extraction`（spec 020b 守护进程 distill 成功 case 到 SKILL.md `AUTO-DISTILLED-PATTERNS` 段）→ PromptBuilder 加载 skill 时注入。原 `verbal.py` 历史相似 case dump 路径于 2026-05-13 删除（与 round-3 minimal-skill 反锚定理念冲突）
+- **经验闭环**：Evolution Daemon `pattern_extraction`（spec 020b 守护进程 distill 成功 case 到 `agent_skills/<agent>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段）→ PromptBuilder 加载 skill 时一并注入。2026-05-13 删除三个 prompt-anchor 路径（`bias-correction` / `verbal-reinforcement` / `reflect`），保持 round-3 minimal-skill 反锚定理念；agent prompt 只含 skill + snapshot，由 evolution daemon 在 SKILL.md 通道沉淀正向 patterns
 - **Regime 感知搜索**：`tag_regime()` 将当前快照分类为离散标签（high_funding、high_vol、trending_up、extreme_fear 等），通过 Jaccard 重叠度检索最相关的历史案例
 - **结构化经验记忆**：LLM 将历史案例提炼为 `ExperienceMemory`（成功模式、禁止区域、战略洞见），支持增量演化和 maturity 分级（observation → hypothesis → rule）
 - **防过拟合五层防线**：最小样本阈值、maturity 分级、regime 感知验证、LLM 约束 prompt、代码核验胜率
@@ -485,7 +485,7 @@ src/cryptotrader/
 │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 ├── learning/
 │   ├── regime.py     # tag_regime（市场 regime 标签）
-│   ├── reflect.py     # 结构化经验记忆生成（ExperienceMemory JSON）
+│   ├── memory.py     # ExperienceRule / ExperienceMemory + maturity FSM + Pareto rank
 │   ├── context.py     # GSSC 引擎（汇集→选择→结构化，CJK 感知 token 估算）
 │   └── regime.py      # regime 标签（tag_regime）+ Jaccard 重叠度匹配
 └── backtest/

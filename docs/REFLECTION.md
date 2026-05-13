@@ -1,10 +1,28 @@
-# 经验记忆系统（Experience Memory）— 设计文档
+# 经验记忆系统（Experience Memory）— 历史设计文档
 
-> 每个 Agent 定期回顾自己的历史分析 + 实际结果，通过 LLM 生成策略备忘录，实现自我优化。
-
-> **注意**：本文档描述的是原始反思系统设计（reflect.py）。系统已在此基础上大幅增强，新增了 GSSC pipeline（gather → select → structure）、Regime-aware 搜索、结构化经验记忆（ExperienceRule / ExperienceMemory），以及 spec 020b 引入的 Evolution Daemon（pattern_extraction）。最新架构请参阅 CLAUDE.md。
+> ⚠️ **本文档描述的子系统已于 2026-05-13 全部删除** ⚠️
 >
-> **2026-05-13 更新**：legacy "统计校准 / 偏差校正注入" 路径（`journal/calibrate.py`、`detect_biases` 等）已完整删除（commit ccfc7d3）。原因：与 round-3 minimal-skill 反锚定理念冲突，且 23-50 样本量级在 crypto fat-tail 噪声中无统计意义。经验闭环现由 Evolution Daemon 的 pattern_extraction 接管——正向写入 SKILL.md 的 AUTO-DISTILLED-PATTERNS 段，不再向 prompt 注入"你有 bullish bias"类警示文本。
+> 文档保留为历史设计记录与 rationale 解释，便于将来读者理解为何当前
+> 代码库没有 reflect.py / calibrate.py / verbal.py。
+>
+> **删除清单**（与 round-3 minimal-skill 反锚定理念冲突）：
+>   - `journal/calibrate.py` 偏差校正（删于 commit `ccfc7d3`）
+>   - `learning/verbal.py` 历史相似 case 注入（删于 commit `8c3867d`）
+>   - `learning/reflect.py` + `nodes/reflection.py` LLM 自反备忘录注入
+>     （删于本轮 commit）
+>
+> 三个子系统共享同一缺陷：把 LLM 生成的小样本（n ≈ 3 ~ 50）"prior"塞到
+> agent prompt，相当于用噪声驱动的偏见标签覆盖 round-3 minimal-skill
+> 刚移除的所有数字/方向锚点。
+>
+> **当前唯一的经验闭环**：Evolution Daemon (`ops/daemon.py`, spec 020b)
+> 每日离线运行 `pattern_extraction`，正向蒸馏成功 case 到对应 agent 的
+> `agent_skills/<id>/SKILL.md` 的 `AUTO-DISTILLED-PATTERNS` 段。Agent 通过
+> PromptBuilder (spec 017b) 在构建 prompt 时加载 skill 自然受益——结构化
+> 通道，不污染 cycle 内 prompt 拼接。
+>
+> 最新架构请参阅根目录 `ARCHITECTURE.md` 顶部 2026-05-13 注解。下面的
+> 内容描述的是 **历史设计**（reflect.py 当时的实现思路），不反映现状。
 
 ---
 

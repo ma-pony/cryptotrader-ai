@@ -224,8 +224,9 @@ async def test_tag_regime_node_no_background_tasks() -> None:
     """tag_regime_node (replaces verbal_reinforcement, 2026-05-13) does not
     spawn any background work. The previous GSSC / maybe_reflect /
     get_experience paths were fully removed along with verbal-reinforcement
-    historical-case injection. Background pattern distillation lives in
-    nodes/reflection.py (run_reflection) — separate node."""
+    historical-case injection. Pattern distillation now lives in the
+    evolution daemon (ops/daemon.py) — daily cadence, runs out of the
+    trading-cycle hot path."""
     import inspect
 
     import cryptotrader.nodes.data as data_module

@@ -82,7 +82,7 @@ cryptotrader-ai/
 │   │   │   └── commit.py      # DecisionCommit 不可变哈希链 schema
 │   │   ├── learning/
 │   │   │   ├── regime.py     # tag_regime（市场 regime 标签）
-│   │   │   ├── reflect.py     # 结构化经验记忆（ExperienceRule JSON 生成）
+│   │   │   ├── memory.py     # ExperienceRule / ExperienceMemory + Pareto + FSM
 │   │   │   ├── context.py     # GSSC 引擎（gather → select → structure）
 │   │   │   ├── regime.py      # Regime 标签 + Jaccard 匹配
 │   │   │   ├── memory.py      # MemoryProvider Protocol + refilter_records_by_regime
@@ -296,7 +296,7 @@ class ArenaState(TypedDict):
 | `snapshot` | `DataSnapshot` | collect_data | 市场快照 |
 | `snapshot_summary` | `dict` | collect_data | 精简摘要 |
 | `regime_tags` | `list[str]` | tag_regime_node | 当前 regime 标签 |
-| `agent_reflections` | `dict[str, str]` | run_reflection | 各 Agent 策略备忘录 |
+| (移除) `agent_reflections` | – | – | 2026-05-13 删——reflect 子系统已废 |
 | `analyses` | `dict[str, dict]` | agent nodes | 4 个 Agent 分析结果 |
 | `verdict` | `dict` | verdict node | 最终决策 |
 | `risk_gate` | `dict` | risk_check | 风控结果（仅风控层）|
@@ -351,7 +351,7 @@ create_llm(model, temperature, timeout, json_mode)
 | `run_debate()` Bear | debate 模型 | 0.3 | 熊方论证 |
 | `judge_debate()` | debate 模型 | 0.1 | 法官裁决 |
 | `debate_round()` | debate 模型 | 0.3 | 交叉辩论（4 个 Agent 经 asyncio.gather 并行执行） |
-| `learning/reflect.py` | reflection 模型 | 0.3 | Agent 自我反思 |
+| (移除) reflection 模型 | – | – | 2026-05-13 删——LLM 自反 memo 注入 prompt 与 minimal-skill 反锚定冲突 |
 
 > 历史备注：早期实验性 supervisor 架构 (`graph_supervisor.py` + `langchain_agents.py` + `agents/skills.py` + `agents/tools.py`) 已于 2026-04-28 删除。当前主路径仅保留 `build_trading_graph()` / `build_lite_graph()` / `build_debate_graph()`。
 

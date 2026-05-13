@@ -243,11 +243,6 @@ class ExperienceConfig:
     regime_thresholds: RegimeThresholdsConfig = field(default_factory=RegimeThresholdsConfig)
 
 
-# ── Reflection (deprecated alias) ──
-
-ReflectionConfig = ExperienceConfig
-
-
 # ── Execution ──
 
 
@@ -785,8 +780,12 @@ def _merge(target: dict, source: dict) -> dict:
 
 
 def _build_experience_config(toml_data: dict) -> ExperienceConfig:
-    """Build ExperienceConfig from TOML, supporting both [experience] and legacy [reflection]."""
-    raw = dict(toml_data.get("experience", toml_data.get("reflection", {})))
+    """Build ExperienceConfig from the TOML ``[experience]`` section.
+
+    (Legacy ``[reflection]`` fallback removed 2026-05-13 — the reflection
+    subsystem itself is gone and no current toml carries that section.)
+    """
+    raw = dict(toml_data.get("experience", {}))
     regime_raw = raw.pop("regime_thresholds", {})
     return ExperienceConfig(
         **raw,

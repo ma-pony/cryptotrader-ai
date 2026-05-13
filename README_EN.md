@@ -72,7 +72,7 @@ Every agent's system prompt includes a **5-point pre-signal checklist**: contrad
 
 - **Regime tagging**: `tag_regime()` computes regime labels (high_funding, high_vol, trending_up, extreme_fear, etc.) from the data snapshot — used downstream by the evolution daemon's regime-cluster step and by DecisionCommit for retrieval. Verbal-reinforcement historical-case dump into agent prompts was removed 2026-05-13 (re-introduced the kind of prior anchoring round-3 minimal skills had just removed)
 - **GSSC pipeline**: `context.py` implements gather → select → structure: collects regime-matched cases and structured rules, scores by relevance, fits within token budget, and injects as structured context into agent prompts
-- **Structured experience memory**: `reflect.py` generates `ExperienceMemory` JSON (success_patterns, forbidden_zones, strategic_insights) with `ExperienceRule` entries per pattern. Rules carry maturity levels (observation → hypothesis → rule) and empirical win rates
+- **Structured experience memory**: `learning/memory.py` defines `ExperienceRule` / `ExperienceMemory` with maturity levels (observation → hypothesis → rule) and empirical win rates. The evolution daemon's `distill_patterns()` populates these from settled trades and writes them into the `AUTO-DISTILLED-PATTERNS` section of each agent's `SKILL.md`. The legacy per-cycle `reflect.py` injection path (LLM "strategy memo" into prompt) was removed 2026-05-13 — same anti-anchoring rationale as bias-correction and verbal-reinforcement
 - **Anti-overfitting 5-layer defense**: minimum sample thresholds, maturity gating, regime-aware verification (win rates computed only within matching regime), LLM constraint prompts, code-verified win rates
 - **Evolution daemon**: A standalone process runs daily Pareto re-ranking + regime re-clustering + skill-proposal triggers + pattern extraction. Distilled patterns are written into each `agent_skills/<id>/SKILL.md` under the `AUTO-DISTILLED-PATTERNS` section, replacing the legacy bias-correction injection path (removed 2026-05-13: was contradicting the round-3 minimal-skill anti-anchor philosophy)
 
@@ -463,7 +463,7 @@ src/cryptotrader/
 │   └── commit.py      # DecisionCommit + immutable hash-chained schema
 ├── learning/
 │   ├── regime.py     # tag_regime (market regime labels)
-│   ├── reflect.py     # Structured experience memory (ExperienceRule JSON generation)
+│   ├── memory.py     # ExperienceRule / ExperienceMemory + maturity FSM + Pareto rank
 │   ├── context.py     # GSSC engine (gather → select → structure → inject)
 │   └── regime.py      # Regime tagging (tag_regime) + Jaccard overlap matching
 └── backtest/

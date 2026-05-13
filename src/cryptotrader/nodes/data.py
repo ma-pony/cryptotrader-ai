@@ -236,8 +236,11 @@ async def tag_regime_node(state: ArenaState) -> dict:
       - DecisionCommit persists them for downstream regime-aware retrieval
 
     Skills injection (the proper feedback path) is handled by
-    PromptBuilder (spec 017b) inside agent.analyze().
-    Background pattern distillation runs in run_reflection() (nodes/reflection.py).
+    PromptBuilder (spec 017b) inside agent.analyze(). Pattern
+    distillation runs daily inside the evolution daemon
+    (ops/daemon.py); the in-cycle `run_reflection` node was removed
+    2026-05-13 because it duplicated the daemon's work at a higher
+    cadence with worse statistical grounding.
     """
     from cryptotrader.config import load_config
     from cryptotrader.learning.regime import tag_regime

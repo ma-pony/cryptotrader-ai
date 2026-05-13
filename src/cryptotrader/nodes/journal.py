@@ -155,12 +155,11 @@ def _build_causal_chain(state: ArenaState) -> dict | None:
         data = state.get("data", {})
         chain: dict = {}
 
-        # experience_memory_input: reflection 节点产出的 ExperienceMemory 摘要
-        # (字段从 2026-05-13 前的 `verbal_reinforcement_input` 改名，命名实
-        # 际指向 reflect.py 的输出，不再涉及已删除的 verbal_reinforcement 节点)
-        experience_memory = data.get("experience_memory")
-        if experience_memory:
-            chain["experience_memory_input"] = str(experience_memory)[:500]
+        # (Legacy `verbal_reinforcement_input` / `experience_memory_input` chain
+        # field removed 2026-05-13 — reflect.py and verbal.py both deleted.
+        # Pattern distillation now happens daily in the evolution daemon and
+        # is observable via SKILL.md AUTO-DISTILLED-PATTERNS rather than a
+        # per-cycle lineage entry.)
 
         # per-agent tool_calls 摘要（从 analyses 提取 key_factors + data_points）
         analyses = data.get("analyses", {})
