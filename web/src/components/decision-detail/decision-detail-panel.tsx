@@ -263,59 +263,9 @@ export const DecisionDetailPanel = ({ commitHash }: Props) => {
             id="sec-verdict"
             index={5}
             title={t('detail.verdict', { defaultValue: 'AI 裁决' })}
-            right={
-              data.bias && data.bias.severity !== 'low' ? (
-                <Badge variant={data.bias.severity === 'high' ? 'destructive' : 'secondary'}>
-                  偏差 {data.bias.severity}
-                </Badge>
-              ) : null
-            }
           />
           <div className="space-y-3">
             <VerdictCard verdict={data.verdict} />
-            {data.bias && data.bias.agents.length > 0 ? (
-              <div
-                className="rounded-lg border p-3"
-                style={{
-                  background: 'color-mix(in oklch, var(--violet-500) 8%, transparent)',
-                  borderColor: 'color-mix(in oklch, var(--violet-500) 25%, transparent)',
-                }}
-              >
-                <div
-                  className="text-[10px] uppercase tracking-wider font-medium mb-1"
-                  style={{ color: 'var(--violet-400)' }}
-                >
-                  偏差校正 · 过去 {data.bias.window_days} 天
-                </div>
-                <div className="text-xs text-foreground mb-2">{data.bias.summary}</div>
-                {data.bias.agents.some((a) => a.warnings.length > 0) ? (
-                  <div className="mt-2 space-y-1.5">
-                    {data.bias.agents
-                      .filter((a) => a.warnings.length > 0)
-                      .map((a) => (
-                        <div key={a.agent_id} className="flex items-start gap-2 text-[11px]">
-                          <span
-                            className="font-mono font-medium min-w-[80px]"
-                            style={{ color: 'var(--violet-400)' }}
-                          >
-                            {a.agent_id}
-                          </span>
-                          <div className="flex-1 space-y-0.5">
-                            {a.warnings.map((w, i) => (
-                              <div key={i} className="text-muted-foreground">
-                                · {w}
-                              </div>
-                            ))}
-                            <div className="font-mono text-[10px] text-muted-foreground">
-                              accuracy {(a.accuracy * 100).toFixed(0)}% · n={a.sample_size}
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                  </div>
-                ) : null}
-              </div>
-            ) : null}
           </div>
         </section>
 

@@ -358,14 +358,12 @@ async def make_verdict(state: ArenaState) -> dict:
             constraints = state["data"].get("backtest_constraints", {})
         else:
             constraints = await _gather_risk_constraints(state)
-        calibration = state["data"].get("verdict_calibration", "")
         position_context = state["data"].get("position_context")
         trend_context = state["data"].get("trend_context")
         verdict = await make_verdict_llm(
             analyses,
             model=model,
             constraints=constraints,
-            calibration=calibration,
             position_context=position_context,
             trend_context=trend_context,
         )

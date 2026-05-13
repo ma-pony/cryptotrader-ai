@@ -184,29 +184,21 @@ async def test_collect_snapshot_reuses_existing():
 
 @pytest.mark.asyncio
 async def test_verbal_reinforcement():
-    """verbal_reinforcement injects experience and calibration."""
+    """verbal_reinforcement injects experience + regime tags only.
+
+    Bias-correction injection was removed 2026-05-13; see commit history.
+    """
     from cryptotrader.nodes.data import verbal_reinforcement
 
     state = _base_state()
 
-    with (
-        patch("cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock, return_value=[]),
-        patch("cryptotrader.journal.calibrate.detect_biases", new_callable=AsyncMock, return_value={}),
-        patch(
-            "cryptotrader.journal.calibrate.generate_per_agent_corrections",
-            return_value={"tech_agent": "OVERCONFIDENT"},
-        ),
-        patch(
-            "cryptotrader.journal.calibrate.generate_verdict_calibration",
-            return_value="calibrate: reduce overconfidence",
-        ),
-    ):
+    with patch("cryptotrader.learning.verbal.get_experience", new_callable=AsyncMock, return_value=[]):
         result = await verbal_reinforcement(state)
 
     assert "historical_cases" in result["data"]
     assert "regime_tags" in result["data"]
-    assert result["data"]["agent_corrections"] == {"tech_agent": "OVERCONFIDENT"}
-    assert result["data"]["verdict_calibration"] == "calibrate: reduce overconfidence"
+    assert "agent_corrections" not in result["data"]
+    assert "verdict_calibration" not in result["data"]
 
 
 # ── nodes/debate.py ──

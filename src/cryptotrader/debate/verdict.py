@@ -261,7 +261,6 @@ def _format_trend_context(trend_context: dict | None) -> str:
 async def make_verdict_ai(
     analyses: dict[str, dict],
     constraints: dict | None = None,
-    calibration: str = "",
     model: str = "",
     position_context: dict | None = None,
     trend_context: dict | None = None,
@@ -275,7 +274,6 @@ async def make_verdict_ai(
     position_block = _format_position_context(position_context)
     trend_block = _format_trend_context(trend_context)
     constraint_block = _format_constraints(constraints or {})
-    calibration_block = f"\n\n{calibration}\n" if calibration else ""
 
     user_msg = f"""POSITION STATE:
 {position_block}
@@ -285,7 +283,7 @@ PRICE CONTEXT:
 
 RISK CONSTRAINTS (hard limits — you cannot exceed these):
 {constraint_block}
-{calibration_block}
+
 AGENT ANALYSES:
 {agent_reports}"""
 
@@ -379,7 +377,6 @@ async def make_verdict_llm(
     analyses: dict[str, dict],
     model: str = "",
     constraints: dict | None = None,
-    calibration: str = "",
     position_context: dict | None = None,
     trend_context: dict | None = None,
 ) -> TradeVerdict:
@@ -387,7 +384,6 @@ async def make_verdict_llm(
     return await make_verdict_ai(
         analyses,
         constraints=constraints,
-        calibration=calibration,
         model=model,
         position_context=position_context,
         trend_context=trend_context,

@@ -5,8 +5,8 @@ description: News and sentiment analysis skill for evaluating news headlines, re
 scope: agent:news
 version: '1.0'
 manually_edited: false
-access_count: 251
-last_accessed_at: '2026-05-12T14:52:29.249054+00:00'
+access_count: 323
+last_accessed_at: '2026-05-13T01:38:08.870563+00:00'
 ---
 # News & Sentiment Analysis Agent Skill
 

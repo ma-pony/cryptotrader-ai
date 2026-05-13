@@ -220,13 +220,14 @@ async def update_past_pnl(state: ArenaState) -> dict:
 
 @node_logger()
 async def verbal_reinforcement(state: ArenaState) -> dict:
-    """Inject past experience + per-agent bias corrections + structured experience memory."""
+    """Inject past experience + structured experience memory.
+
+    2026-05-13: bias-correction injection removed entirely (was contradicting
+    the round-3 minimal-skill anti-anchor philosophy by re-introducing
+    prescriptive directional language to agent prompts). Pattern learning
+    is now exclusively the evolution daemon's job.
+    """
     from cryptotrader.config import load_config
-    from cryptotrader.journal.calibrate import (
-        detect_biases,
-        generate_per_agent_corrections,
-        generate_verdict_calibration,
-    )
     from cryptotrader.journal.store import JournalStore
     from cryptotrader.learning.regime import tag_regime
     from cryptotrader.learning.verbal import get_experience
@@ -240,29 +241,16 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
     # Tag current regime
     regime_tags = tag_regime(summary, config.experience.regime_thresholds)
 
-    # Skip experience injection, bias detection, and reflection in backtest mode
-    # to prevent look-ahead bias (live journal contains future data relative to backtest candle)
+    # Skip experience injection in backtest mode to prevent look-ahead bias
+    # (live journal contains future data relative to backtest candle)
     historical_cases: list = []
-    agent_corrections: dict[str, str] = {}
-    verdict_calibration = ""
-
     if not is_backtest:
-        # Fetch historical cases (regime-aware)
         historical_cases = await get_experience(
             store,
             summary,
             regime_tags=regime_tags,
             thresholds=config.experience.regime_thresholds,
         )
-
-        # Detect biases and generate per-agent corrections + verdict calibration
-        try:
-            biases = await detect_biases(store, days=30)
-            agent_corrections = generate_per_agent_corrections(biases)
-            verdict_calibration = generate_verdict_calibration(biases)
-        except Exception:
-            logger.warning("Bias detection failed, continuing without calibration", exc_info=True)
-
         # Skills injection is handled by PromptBuilder (spec 017b) in agent.analyze().
         # Background distillation is triggered by run_reflection() node (nodes/reflection.py).
 
@@ -270,8 +258,6 @@ async def verbal_reinforcement(state: ArenaState) -> dict:
         "data": {
             "regime_tags": regime_tags,
             "historical_cases": historical_cases,
-            "agent_corrections": agent_corrections,
-            "verdict_calibration": verdict_calibration,
         }
     }
 

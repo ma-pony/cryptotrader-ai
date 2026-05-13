@@ -273,15 +273,13 @@ async def _publish_agent_done(
 
 
 def _build_experience(state: ArenaState, agent_type: str) -> str:
-    """Build experience string from state fields (steering/corrections only).
+    """Build experience string from state fields (reflection memo only).
 
     Skills injection is handled by PromptBuilder (spec 017b) inside agent.analyze().
+    Bias-correction injection removed 2026-05-13 — contradicted the round-3
+    minimal-skill anti-anchor philosophy.
     """
     experience = state["data"].get("experience", "")
-    agent_corrections = state["data"].get("agent_corrections", {})
-    correction = agent_corrections.get(agent_type, "")
-    if correction:
-        experience = f"{experience}\n\n{correction}" if experience else correction
     agent_reflections = state["data"].get("agent_reflections", {})
     reflection = agent_reflections.get(agent_type, "")
     if reflection:

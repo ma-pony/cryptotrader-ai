@@ -180,25 +180,6 @@ export const TokenUsageSchema = z.object({
   by_model: z.record(z.record(z.number())).default({}),
 });
 
-export const AgentBiasSchema = z.object({
-  agent_id: z.string(),
-  accuracy: z.number(),
-  neutral_rate: z.number(),
-  bullish_rate: z.number(),
-  bearish_rate: z.number(),
-  avg_conf_when_right: z.number(),
-  avg_conf_when_wrong: z.number(),
-  sample_size: z.number(),
-  warnings: z.array(z.string()).default([]),
-});
-
-export const BiasSchema = z.object({
-  agents: z.array(AgentBiasSchema).default([]),
-  summary: z.string().default(''),
-  severity: z.string().default('low'),
-  window_days: z.number().default(30),
-});
-
 export const RiskCheckSchema = z.object({
   name: z.string(),
   passed: z.boolean(),
@@ -255,7 +236,6 @@ export const DecisionDetailSchema = z.object({
   pnl: z.number().nullable().optional(),
   retrospective: z.string().nullable().optional(),
   debate_skip_reason: z.string().default(''),
-  bias: BiasSchema.nullable().optional(),
 });
 
 // ── §4 Backtest (matches BacktestParams / BacktestRunStatus / sessions) ──

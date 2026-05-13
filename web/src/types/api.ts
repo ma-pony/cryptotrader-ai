@@ -5,9 +5,7 @@ import type { z } from 'zod';
 
 import type {
   AgentAnalysisSchema,
-  AgentBiasSchema,
   BacktestMetricsSchema,
-  BiasSchema,
   BacktestParamsSchema,
   BacktestResultSchema,
   BacktestRunStatusSchema,
@@ -77,8 +75,6 @@ export type RiskGate = z.output<typeof RiskGateSchema>;
 export type Execution = z.output<typeof ExecutionSchema>;
 export type NodeTimelineEntry = z.output<typeof NodeTimelineEntrySchema>;
 export type DecisionDetail = z.output<typeof DecisionDetailSchema>;
-export type AgentBias = z.output<typeof AgentBiasSchema>;
-export type Bias = z.output<typeof BiasSchema>;
 
 // §4 Backtest
 export type BacktestParams = z.output<typeof BacktestParamsSchema>;

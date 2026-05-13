@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time as _time
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
@@ -122,35 +121,6 @@ class TokenUsageOut(BaseModel):
     by_model: dict[str, dict[str, float]] = Field(default_factory=dict)
 
 
-class AgentBiasOut(BaseModel):
-    """One agent's 30-day bias profile (derived from journal.calibrate.detect_biases)."""
-
-    agent_id: str
-    accuracy: float
-    neutral_rate: float
-    bullish_rate: float
-    bearish_rate: float
-    avg_conf_when_right: float
-    avg_conf_when_wrong: float
-    sample_size: int
-    warnings: list[str] = Field(default_factory=list)
-
-
-class BiasOut(BaseModel):
-    """Rolling bias snapshot at decision time.
-
-    - ``agents``: per-agent bias stats over the last ``window_days``
-    - ``summary``: human-readable one-liner for the Decision Detail hero
-    - ``severity``: ``"low"|"medium"|"high"`` based on worst-agent warnings
-    - ``window_days``: observation window used
-    """
-
-    agents: list[AgentBiasOut] = Field(default_factory=list)
-    summary: str = ""
-    severity: str = "low"
-    window_days: int = 30
-
-
 class RiskCheckOut(BaseModel):
     name: str
     passed: bool
@@ -202,7 +172,6 @@ class DecisionDetailOut(BaseModel):
     pnl: float | None = None
     retrospective: str | None = None
     debate_skip_reason: str = ""
-    bias: BiasOut | None = None
 
 
 def _pair_meta(pair: str) -> tuple[str, str]:
@@ -413,79 +382,6 @@ def _serialize_latency(breakdown: Any) -> LatencyBreakdownOut:
     )
 
 
-# Module-level cache: bias stats are a 30-day rolling window — they don't change
-# per-commit, so caching 60s shaves a 1000-row journal scan off every Decision Detail
-# GET. Keyed by the store identity so test fixtures with fresh stores don't bleed.
-_BIAS_CACHE_TTL = 60.0
-_bias_cache: dict[int, tuple[float, BiasOut | None]] = {}
-
-
-async def _build_bias(store: Any) -> BiasOut | None:
-    """Compute 30-day rolling bias snapshot from journal data, cached 60s per store.
-
-    Returns ``None`` when no agent has enough samples (journal.calibrate.detect_biases
-    skips agents with ``<3`` settled commits).
-    """
-    from cryptotrader.journal.calibrate import _build_agent_warnings, detect_biases
-
-    cache_key = id(store)
-    now = _time.monotonic()
-    cached = _bias_cache.get(cache_key)
-    if cached and now - cached[0] < _BIAS_CACHE_TTL:
-        return cached[1]
-
-    try:
-        stats = await detect_biases(store, days=30)
-    except Exception:
-        logger.info("detect_biases failed", exc_info=True)
-        _bias_cache[cache_key] = (now, None)
-        return None
-    if not stats:
-        _bias_cache[cache_key] = (now, None)
-        return None
-
-    agents: list[AgentBiasOut] = []
-    all_warnings: list[str] = []
-    for agent_id, s in stats.items():
-        warnings = _build_agent_warnings(s)
-        all_warnings.extend(warnings)
-        agents.append(
-            AgentBiasOut(
-                agent_id=agent_id,
-                accuracy=float(s.get("accuracy", 0.0) or 0.0),
-                neutral_rate=float(s.get("neutral_rate", 0.0) or 0.0),
-                bullish_rate=float(s.get("bullish_rate", 0.0) or 0.0),
-                bearish_rate=float(s.get("bearish_rate", 0.0) or 0.0),
-                avg_conf_when_right=float(s.get("avg_conf_when_right", 0.0) or 0.0),
-                avg_conf_when_wrong=float(s.get("avg_conf_when_wrong", 0.0) or 0.0),
-                sample_size=int(s.get("sample_size", 0) or 0),
-                warnings=warnings,
-            )
-        )
-
-    # Severity heuristic: 0 warnings → low; 1-2 → medium; 3+ → high
-    severity = "low"
-    if len(all_warnings) >= 3:
-        severity = "high"
-    elif len(all_warnings) >= 1:
-        severity = "medium"
-
-    # Summary — pick the most bullish/bearish skewed agent as the representative lead.
-    lead = max(agents, key=lambda a: abs(a.bullish_rate - a.bearish_rate), default=None)
-    if lead is not None and abs(lead.bullish_rate - lead.bearish_rate) > 0.3:
-        direction = "做多" if lead.bullish_rate > lead.bearish_rate else "做空"
-        pct = round(max(lead.bullish_rate, lead.bearish_rate) * 100, 0)
-        summary = f"过去 30 天 {lead.agent_id} {int(pct)}% {direction}倾向 · 注意确认偏差"
-    elif all_warnings:
-        summary = "检测到偏差: " + "; ".join(all_warnings[:2])
-    else:
-        summary = "过去 30 天无显著偏差"
-
-    result = BiasOut(agents=agents, summary=summary, severity=severity, window_days=30)
-    _bias_cache[cache_key] = (now, result)
-    return result
-
-
 def _serialize_tokens(usage: Any) -> TokenUsageOut:
     d = usage if isinstance(usage, dict) else {}
 
@@ -647,5 +543,4 @@ async def get_decision(commit_hash: str) -> DecisionDetailOut:
         pnl=(float(commit.pnl) if commit.pnl is not None else None),
         retrospective=getattr(commit, "retrospective", None),
         debate_skip_reason=getattr(commit, "debate_skip_reason", "") or "",
-        bias=await _build_bias(store),
     )
