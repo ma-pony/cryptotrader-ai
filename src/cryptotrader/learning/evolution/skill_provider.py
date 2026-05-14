@@ -71,8 +71,58 @@ def _extract_regime(snapshot: dict) -> str | None:
     return None
 
 
+def _access_state_path(skill_md_path: Path) -> Path:
+    """Sidecar JSON file for runtime-mutable access state (gitignored).
+
+    Lives next to ``SKILL.md`` as ``.access_state.json`` so the skill's
+    human-curated content stays diff-stable in git, and the auto-bumped
+    counters never pollute commits.
+    """
+    return skill_md_path.parent / ".access_state.json"
+
+
+def _read_access_state(skill_md_path: Path) -> tuple[int, datetime | None]:
+    """Read ``(access_count, last_accessed_at)`` from sidecar; ``(0, None)`` if absent."""
+    state_path = _access_state_path(skill_md_path)
+    if not state_path.exists():
+        return 0, None
+    try:
+        import json
+
+        data = json.loads(state_path.read_text(encoding="utf-8"))
+        count = int(data.get("access_count", 0))
+        ts_raw = data.get("last_accessed_at")
+        if not ts_raw:
+            return count, None
+        try:
+            ts = datetime.fromisoformat(str(ts_raw))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=UTC)
+            return count, ts
+        except (ValueError, TypeError):
+            return count, None
+    except Exception:
+        logger.warning("_read_access_state corrupt sidecar at %s", state_path, exc_info=True)
+        return 0, None
+
+
+def _write_access_state(skill_md_path: Path, count: int, ts: datetime) -> None:
+    """Atomic write of access state sidecar (overrides existing file)."""
+    import json
+
+    from cryptotrader.agents.skills._io import atomic_write
+
+    state_path = _access_state_path(skill_md_path)
+    payload = json.dumps(
+        {"access_count": count, "last_accessed_at": ts.isoformat()},
+        ensure_ascii=False,
+        indent=2,
+    )
+    atomic_write(state_path, payload + "\n")
+
+
 def _load_skill_from_path(path: Path) -> Any | None:
-    """从 SKILL.md 文件加载 Skill 对象。"""
+    """Load Skill from SKILL.md content + sidecar runtime state."""
     try:
         from cryptotrader.agents.skills._frontmatter import parse_frontmatter
         from cryptotrader.agents.skills.schema import Skill
@@ -80,17 +130,13 @@ def _load_skill_from_path(path: Path) -> Any | None:
         content = path.read_text(encoding="utf-8")
         fm, body = parse_frontmatter(content, path=path)
 
-        # 解析 last_accessed_at
-        raw_la = fm.get("last_accessed_at")
-        if raw_la is not None:
-            try:
-                la = datetime.fromisoformat(str(raw_la))
-                if la.tzinfo is None:
-                    la = la.replace(tzinfo=UTC)
-            except (ValueError, TypeError):
-                la = datetime.now(UTC)
+        # Runtime state from sidecar (.access_state.json). Falls back to file
+        # mtime for last_accessed_at so a brand-new skill scores like a recent
+        # one until it's been used once.
+        access_count, sidecar_ts = _read_access_state(path)
+        if sidecar_ts is not None:
+            la = sidecar_ts
         else:
-            # 用文件 mtime 作为默认值
             try:
                 la = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
             except OSError:
@@ -108,7 +154,7 @@ def _load_skill_from_path(path: Path) -> Any | None:
             regime_tags=list(fm.get("regime_tags") or []),
             triggers_keywords=list(fm.get("triggers_keywords") or []),
             importance=float(fm.get("importance", 0.5)),
-            access_count=int(fm.get("access_count", 0)),
+            access_count=access_count,
             last_accessed_at=la,
             confidence=float(fm.get("confidence", 0.5)),
         )
@@ -118,23 +164,17 @@ def _load_skill_from_path(path: Path) -> Any | None:
 
 
 def _write_back_access(skill: Any, now: datetime) -> None:
-    """回写 access_count + last_accessed_at 到 SKILL.md frontmatter（原子写）。"""
+    """Bump access_count + last_accessed_at; persist to sidecar only.
+
+    SKILL.md is NEVER touched by this — git-tracked content stays
+    diff-stable. State lives in ``<skill_dir>/.access_state.json``
+    (gitignored).
+    """
     try:
-        from cryptotrader.agents.skills._frontmatter import parse_frontmatter, render_frontmatter
-        from cryptotrader.agents.skills._io import atomic_write
-
-        path = skill.file_path
-        content = path.read_text(encoding="utf-8")
-        fm, body = parse_frontmatter(content, path=path)
-
-        fm["access_count"] = int(fm.get("access_count", 0)) + 1
-        fm["last_accessed_at"] = now.isoformat()
-
-        new_content = render_frontmatter(fm) + body
-        atomic_write(path, new_content)
-
-        # 更新内存中的 skill 对象
-        skill.access_count += 1
+        new_count = int(getattr(skill, "access_count", 0)) + 1
+        _write_access_state(skill.file_path, new_count, now)
+        # Update the in-memory Skill instance to match.
+        skill.access_count = new_count
         skill.last_accessed_at = now
     except Exception:
         logger.warning("_write_back_access failed for skill '%s'", getattr(skill, "name", "?"), exc_info=True)

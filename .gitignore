@@ -22,5 +22,12 @@ htmlcov/
 # agent_skills/ are the git-tracked artifacts.
 agent_memory/
 
+# Per-skill runtime access state (access_count / last_accessed_at).
+# Auto-bumped every time EvolvingSkillProvider picks a skill into a prompt;
+# kept in a sidecar next to SKILL.md so git-tracked content stays
+# diff-stable. Lives at agent_skills/<name>/.access_state.json and at
+# the test-fixture mirror under tests/fixtures/skills/.
+**/.access_state.json
+
 # Runtime logs (uvicorn / scheduler / etc) — local development convenience.
 logs/

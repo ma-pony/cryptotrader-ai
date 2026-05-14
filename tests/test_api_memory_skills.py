@@ -45,6 +45,8 @@ def _write_skill(
     write_draft: bool = False,
 ) -> Path:
     """写入测试用 SKILL.md（含 spec 019 全部新字段）。"""
+    import json
+
     skill_dir = skills_dir / name
     skill_dir.mkdir(parents=True, exist_ok=True)
     path = skill_dir / "SKILL.md"
@@ -61,8 +63,6 @@ regime_tags: {regime_str}
 triggers_keywords: {triggers_str}
 importance: {importance}
 confidence: {confidence}
-access_count: {access_count}
-last_accessed_at: "{la}"
 ---
 
 # Skill Body for {name}
@@ -70,6 +70,11 @@ last_accessed_at: "{la}"
 This is the body content for skill {name}.
 """
     path.write_text(content, encoding="utf-8")
+    # Seed sidecar so tests that assert access_count behavior have a known
+    # starting state (access_count + last_accessed_at moved out of SKILL.md
+    # frontmatter into <skill_dir>/.access_state.json 2026-05-14).
+    sidecar = skill_dir / ".access_state.json"
+    sidecar.write_text(json.dumps({"access_count": access_count, "last_accessed_at": la}), encoding="utf-8")
 
     if write_draft:
         draft = skill_dir / "SKILL.md.draft"

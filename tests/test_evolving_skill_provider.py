@@ -17,7 +17,12 @@ def _write_skill(
     access_count: int = 0,
     last_accessed_at: str | None = None,
 ) -> Path:
-    """写入测试用 SKILL.md（含 spec 019 新字段）。"""
+    """写入测试用 SKILL.md。access_count / last_accessed_at 自 2026-05-14 起
+    搬到 sidecar `<skill_dir>/.access_state.json`；本 helper 同步 seed sidecar
+    以模拟既有运行时状态。
+    """
+    import json
+
     path = skills_dir / name / "SKILL.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     regime_str = str(regime_tags or [])
@@ -33,13 +38,13 @@ regime_tags: {regime_str}
 triggers_keywords: {triggers_str}
 importance: {importance}
 confidence: {confidence}
-access_count: {access_count}
-last_accessed_at: "{la}"
 ---
 
 Body content for skill {name}.
 """
     path.write_text(content, encoding="utf-8")
+    sidecar = path.parent / ".access_state.json"
+    sidecar.write_text(json.dumps({"access_count": access_count, "last_accessed_at": la}), encoding="utf-8")
     return path
 
 
@@ -157,6 +162,9 @@ class TestEvolvingSkillProviderGetAvailableSkills:
         assert result == []
 
     def test_access_count_written_back(self, tmp_path):
+        """access_count + last_accessed_at land in sidecar JSON, not SKILL.md frontmatter."""
+        import json
+
         from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
 
         skills_dir = tmp_path / "agent_skills"
@@ -164,9 +172,15 @@ class TestEvolvingSkillProviderGetAvailableSkills:
         provider = EvolvingSkillProvider(skill_root=skills_dir)
         result = provider.get_available_skills("tech_agent", {})
         assert len(result) >= 1
-        # Read file back to verify access_count incremented
+        # SKILL.md must NOT be mutated — git-tracked content stays diff-stable.
         content = skill_path.read_text(encoding="utf-8")
-        assert "access_count: 1" in content
+        assert "access_count: 1" not in content
+        # Sidecar JSON must hold the bumped count.
+        sidecar = skill_path.parent / ".access_state.json"
+        assert sidecar.exists(), "expected .access_state.json next to SKILL.md"
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        assert data["access_count"] == 1
+        assert "last_accessed_at" in data
 
     def test_importance_affects_ordering(self, tmp_path):
         """高 importance 的 skill 应排在前面。"""
@@ -205,14 +219,27 @@ class TestEvolvingSkillProviderGetSkillByName:
         assert result is None
 
     def test_access_count_incremented(self, tmp_path):
+        """get_skill_by_name bumps sidecar, not SKILL.md frontmatter."""
+        import json
+
         from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
 
         skills_dir = tmp_path / "agent_skills"
         skill_path = _write_skill(skills_dir, "tech-analysis", scope="shared", access_count=5)
+        # Seed the sidecar to simulate prior usage (the frontmatter access_count=5
+        # is now ignored — only sidecar drives the bump).
+        sidecar = skill_path.parent / ".access_state.json"
+        sidecar.write_text(json.dumps({"access_count": 5, "last_accessed_at": "2026-05-01T00:00:00+00:00"}))
+
         provider = EvolvingSkillProvider(skill_root=skills_dir)
         provider.get_skill_by_name("tech-analysis")
+
+        # SKILL.md untouched
         content = skill_path.read_text(encoding="utf-8")
-        assert "access_count: 6" in content
+        assert "access_count: 6" not in content
+        # Sidecar bumped from 5 → 6
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+        assert data["access_count"] == 6
 
     def test_exception_returns_none(self):
         from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
