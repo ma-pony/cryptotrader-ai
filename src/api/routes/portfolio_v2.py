@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import time
 from datetime import datetime, timedelta
@@ -314,18 +315,23 @@ async def _compute_extras(
       unrealized snapshot, not a realized trade outcome.
     - **realized_pnl_30d**: sum of close-action realized ``pnl`` in the last
       30 days, also subject to the inception cutoff.
-    - **total_return / total_return_pct**: *trading* PnL since inception:
-      cumulative realized PnL (sum of all closed-trade ``pnl`` since the first
-      portfolio snapshot) plus current unrealized PnL (mark-to-market on open
-      positions). Pct denominator is the baseline (config.portfolio.initial_capital
-      when set, otherwise inception equity).
+    - **total_return / total_return_pct**: *realized* trading PnL since
+      inception — sum of all closed-trade ``pnl`` since the first portfolio
+      snapshot. **Does not include unrealized PnL on open positions** to avoid
+      the "paper-profit illusion" where a large open winner masks a string of
+      realized losers (a SOL short with +$441 unrealized hides 23 realized
+      trades averaging -$16). Pct denominator is the baseline
+      (config.portfolio.initial_capital when set, otherwise inception equity).
 
     *Why not ``equity - baseline``?* The earlier formula ``current_equity -
     inception_equity`` silently included USDT deposits and withdrawals — a
-    $3,500 user top-up showed as $3,500 of "总收益". Trader-grade dashboards
-    measure trading P&L (closed + unrealized), independent of capital flows.
-    See 2026-05-11 deep-review for the paradox this resolves
-    ("17 trades each negative but total positive").
+    $3,500 user top-up showed as $3,500 of "总收益".
+
+    *Why not ``realized + unrealized``?* (2026-05-11 design) The combined
+    measure was abandoned 2026-05-14: a single oversized open position can
+    flip the headline from -$376 to +$25, hiding the underlying losing
+    streak. Realized-only is conservative — open-position MTM is exposed
+    separately via ``unrealized_pnl`` per position in the snapshot.
     """
     from cryptotrader.config import load_config
 
@@ -340,23 +346,15 @@ async def _compute_extras(
         commits, now - timedelta(days=30), inception_cutoff=inception_ts
     )
 
-    # Sum unrealized PnL across all current positions (mark-to-market).
-    total_unrealized = 0.0
-    for pos in (raw_positions or {}).values():
-        if not isinstance(pos, dict):
-            continue
-        total_unrealized += float(pos.get("unrealized_pnl", 0.0) or 0.0)
-
-    # Trading PnL (excludes deposits/withdrawals).
-    total_return = realized_cumulative + total_unrealized
+    # Realized-only trading PnL (excludes deposits / withdrawals and excludes
+    # unrealized MTM on open positions — those are exposed per-position in
+    # the snapshot.positions[].unrealized_pnl field for transparency).
+    total_return = realized_cumulative
 
     # Pct denominator: baseline equity. Preference: explicit config > first snapshot.
     configured = float(cfg.portfolio.initial_capital or 0.0)
     baseline: float | None = configured if configured > 0 else _inception_equity(snaps)
-    if baseline is not None and baseline > 0:
-        total_return_pct = total_return / baseline
-    else:
-        total_return_pct = 0.0
+    total_return_pct = total_return / baseline if baseline is not None and baseline > 0 else 0.0
 
     return {
         "sharpe_90d": sharpe,
@@ -425,6 +423,30 @@ _EX_HISTORY_TTL_SEC = 60.0
 _ex_history_cache: dict[str, tuple[float, dict]] = {}
 
 
+async def _fetch_funding_window(ex: Any, since_ms: int, window: str) -> float:
+    """Sum funding payments since `since_ms`; 0.0 on failure (logged INFO)."""
+    try:
+        fundings = await asyncio.wait_for(ex.fetch_funding_history(since=since_ms, limit=200), timeout=4.0)
+        return sum(float(f.get("amount", 0) or 0) for f in (fundings or []))
+    except Exception:
+        logger.info("fetch_funding_history failed for %s", window, exc_info=True)
+        return 0.0
+
+
+async def _fetch_fees_window(ex: Any, since_ms: int, window: str) -> float:
+    """Sum absolute fees since `since_ms` and return as a negative cost; 0.0 on failure."""
+    try:
+        trades = await asyncio.wait_for(ex.fetch_my_trades(since=since_ms, limit=200), timeout=4.0)
+        total_fee = 0.0
+        for t in trades or []:
+            fee = t.get("fee") or {}
+            total_fee += abs(float(fee.get("cost", 0) or 0))
+        return -total_fee  # sign-flip so positive means cost
+    except Exception:
+        logger.info("fetch_my_trades failed for %s", window, exc_info=True)
+        return 0.0
+
+
 async def _fetch_exchange_history(now: datetime) -> dict | None:
     """Return ``{(window, kind): float}`` of funding/fee totals per window, or
     None if the live exchange is unreachable or running in paper mode.
@@ -467,46 +489,59 @@ async def _fetch_exchange_history(now: datetime) -> dict | None:
     try:
         for window, days in (("24h", 1), ("7d", 7), ("30d", 30)):
             since_ms = int((now - timedelta(days=days)).timestamp() * 1000)
-            # Funding
-            try:
-                fundings = await asyncio.wait_for(
-                    ex.fetch_funding_history(since=since_ms, limit=200), timeout=4.0
-                )
-                result[(window, "funding")] = sum(
-                    float(f.get("amount", 0) or 0) for f in (fundings or [])
-                )
-            except Exception:
-                logger.info("fetch_funding_history failed for %s", window, exc_info=True)
-                result[(window, "funding")] = 0.0
-            # Fees
-            try:
-                trades = await asyncio.wait_for(
-                    ex.fetch_my_trades(since=since_ms, limit=200), timeout=4.0
-                )
-                total_fee = 0.0
-                for t in trades or []:
-                    fee = t.get("fee") or {}
-                    total_fee += abs(float(fee.get("cost", 0) or 0))
-                result[(window, "fees")] = -total_fee  # sign-flip so + means cost
-            except Exception:
-                logger.info("fetch_my_trades failed for %s", window, exc_info=True)
-                result[(window, "fees")] = 0.0
+            result[(window, "funding")] = await _fetch_funding_window(ex, since_ms, window)
+            result[(window, "fees")] = await _fetch_fees_window(ex, since_ms, window)
     except Exception:
         logger.warning("Exchange history fetch failed", exc_info=True)
         return None
     finally:
-        try:
+        with contextlib.suppress(Exception):
             await ex.close()
-        except Exception:  # pragma: no cover
-            pass
 
     _ex_history_cache[cache_key] = (now_mono, {"_available": True, **{f"{w}:{k}": v for (w, k), v in result.items()}})
     return _ex_history_cache[cache_key][1]
 
 
-async def _compute_pnl_breakdowns(
-    database_url: str | None, current_equity: float
-) -> list[PnlBreakdown]:
+def _norm_ts(t: Any) -> datetime | None:
+    """Return a tz-aware datetime or None for snapshot timestamps."""
+    if t is None:
+        return None
+    if isinstance(t, datetime):
+        return t if t.tzinfo else t.replace(tzinfo=UTC)
+    return None
+
+
+def _first_eq_at_or_after(snaps: list[dict], cutoff: datetime) -> float | None:
+    """Earliest snapshot total_value at or after `cutoff`; None if no snapshot covers the window."""
+    for s in snaps:
+        t = _norm_ts(s.get("timestamp"))
+        if t and t >= cutoff:
+            return float(s.get("total_value", 0.0) or 0.0)
+    return None
+
+
+def _sum_realized_pnl_since(commits: list[Any], cutoff: datetime) -> float:
+    """Sum close-action realized pnl since `cutoff`."""
+    realized = 0.0
+    for c in commits:
+        ts = _coerce_timestamp(getattr(c, "timestamp", None))
+        if not ts:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        if ts < cutoff:
+            continue
+        action = (getattr(getattr(c, "verdict", None), "action", "") or "").lower()
+        if action != "close":
+            continue
+        pnl_val = getattr(c, "pnl", None)
+        if pnl_val is None:
+            continue
+        realized += float(pnl_val)
+    return realized
+
+
+async def _compute_pnl_breakdowns(database_url: str | None, current_equity: float) -> list[PnlBreakdown]:
     """Build 24h / 7d / 30d attribution with 4 buckets:
     realized / funding / fees / unrealized_delta.
 
@@ -520,44 +555,14 @@ async def _compute_pnl_breakdowns(
     exchange_ok = bool(ex_hist and ex_hist.get("_available"))
 
     out: list[PnlBreakdown] = []
-
-    def _norm(t: Any) -> datetime | None:
-        if t is None:
-            return None
-        if isinstance(t, datetime):
-            return t if t.tzinfo else t.replace(tzinfo=UTC)
-        return None
-
     for window, hours in (("24h", 24), ("7d", 24 * 7), ("30d", 24 * 30)):
         cutoff = now - timedelta(hours=hours)
-        eq_start = None
-        for s in snaps:
-            t = _norm(s.get("timestamp"))
-            if t and t >= cutoff:
-                eq_start = float(s.get("total_value", 0.0) or 0.0)
-                break
+        eq_start = _first_eq_at_or_after(snaps, cutoff)
         if eq_start is None:
             continue
 
         delta = current_equity - eq_start
-
-        realized = 0.0
-        for c in commits:
-            ts = _coerce_timestamp(getattr(c, "timestamp", None))
-            if not ts:
-                continue
-            if ts.tzinfo is None:
-                ts = ts.replace(tzinfo=UTC)
-            if ts < cutoff:
-                continue
-            action = (getattr(getattr(c, "verdict", None), "action", "") or "").lower()
-            if action != "close":
-                continue
-            pnl_val = getattr(c, "pnl", None)
-            if pnl_val is None:
-                continue
-            realized += float(pnl_val)
-
+        realized = _sum_realized_pnl_since(commits, cutoff)
         funding = float(ex_hist.get(f"{window}:funding", 0.0)) if ex_hist else 0.0
         fees = float(ex_hist.get(f"{window}:fees", 0.0)) if ex_hist else 0.0
         unrealized_delta = delta - realized - funding - fees
@@ -637,9 +642,7 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
         current_equity=equity,
         raw_positions=raw_positions,
     )
-    pnl_breakdowns = await _compute_pnl_breakdowns(
-        config.infrastructure.database_url, current_equity=equity
-    )
+    pnl_breakdowns = await _compute_pnl_breakdowns(config.infrastructure.database_url, current_equity=equity)
 
     return PortfolioSnapshotOut(
         equity=equity,

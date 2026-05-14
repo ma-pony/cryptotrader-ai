@@ -183,12 +183,13 @@ class TestComputeExtras:
         assert extras["avg_trade_pnl"] is None
 
     @pytest.mark.asyncio
-    async def test_total_return_realized_plus_unrealized(self) -> None:
-        """total_return = sum(realized close-action pnl since inception) + sum(unrealized).
+    async def test_total_return_realized_only_ignores_unrealized(self) -> None:
+        """total_return = sum(closed-trade pnl since inception). Open-position
+        unrealized PnL is NOT included (2026-05-14 redesign).
 
-        2026-05-11 redesign: ``total_return`` is *trading* P&L, not ``equity -
-        baseline``. The old formula counted USDT deposits as profit; the new
-        formula counts only closed-trade P&L plus current mark-to-market.
+        Rationale: a single large open winner can flip the headline from
+        net-negative realized to net-positive total, hiding a losing streak.
+        Open-position MTM is exposed per-position in snapshot.positions[].
         """
         base = datetime(2026, 1, 1, tzinfo=UTC)
         snaps = [{"timestamp": base.isoformat(), "total_value": 100_000.0}]
@@ -202,7 +203,7 @@ class TestComputeExtras:
             c.verdict = MagicMock()
             c.verdict.action = "close"
             commits.append(c)
-        # Current open position with $400 unrealized profit
+        # Open position has +$400 unrealized — must NOT be counted in total_return.
         raw_positions = {"BTC/USDT:USDT": {"unrealized_pnl": 400.0}}
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
@@ -211,15 +212,14 @@ class TestComputeExtras:
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
             js_cls.return_value.log = AsyncMock(return_value=commits)
             extras = await _compute_extras(None, current_equity=110_000.0, raw_positions=raw_positions)
-        # realized 600 + unrealized 400 = 1000; pct = 1000 / baseline 100_000 = 0.01
-        assert extras["total_return"] == pytest.approx(1000.0)
-        assert extras["total_return_pct"] == pytest.approx(0.01)
+        # Only realized 600 counted; unrealized 400 ignored. pct = 600 / 100_000 = 0.006
+        assert extras["total_return"] == pytest.approx(600.0)
+        assert extras["total_return_pct"] == pytest.approx(0.006)
 
     @pytest.mark.asyncio
     async def test_total_return_pct_uses_configured_initial_capital_baseline(self) -> None:
         """When config.portfolio.initial_capital > 0, it overrides the first-snapshot
-        baseline as the denominator for ``total_return_pct`` (numerator stays
-        realized + unrealized — the new trading-P&L definition)."""
+        baseline as the denominator for ``total_return_pct``."""
         from unittest.mock import MagicMock as _MagicMock
 
         base = datetime(2026, 1, 1, tzinfo=UTC)
@@ -241,16 +241,14 @@ class TestComputeExtras:
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
             js_cls.return_value.log = AsyncMock(return_value=[c])
             extras = await _compute_extras(None, current_equity=110_000.0, raw_positions=None)
-        # realized 1000 + unrealized 0 = 1000; pct uses configured baseline 100K → 0.01
+        # realized 1000; pct uses configured baseline 100K → 0.01
         assert extras["total_return"] == pytest.approx(1000.0)
         assert extras["total_return_pct"] == pytest.approx(0.01)
 
     @pytest.mark.asyncio
-    async def test_total_return_negative_when_realized_plus_unrealized_negative(self) -> None:
-        """Net loss case: realized losses + unrealized losses sum to negative
-        total_return. Matches '总收益' definition; previously this would have
-        been wrong if the user funded $0 → +$3500 deposit → showed +$3500 gain
-        even with negative trading P&L."""
+    async def test_total_return_negative_when_realized_negative(self) -> None:
+        """Net loss case: realized losses → negative total_return regardless of
+        open-position unrealized (which is ignored entirely)."""
         base = datetime(2026, 1, 1, tzinfo=UTC)
         snaps = [{"timestamp": base.isoformat(), "total_value": 100_000.0}]
         # 2 close trades, both losses: -500, -200 → realized -700
@@ -263,8 +261,8 @@ class TestComputeExtras:
             c.verdict = MagicMock()
             c.verdict.action = "close"
             commits.append(c)
-        # Current position underwater by -50
-        raw_positions = {"ETH/USDT:USDT": {"unrealized_pnl": -50.0}}
+        # Open position +$400 unrealized — must NOT mask the realized losses.
+        raw_positions = {"ETH/USDT:USDT": {"unrealized_pnl": 400.0}}
         with (
             patch("cryptotrader.portfolio.manager.PortfolioManager") as pm_cls,
             patch("cryptotrader.journal.store.JournalStore") as js_cls,
@@ -272,6 +270,6 @@ class TestComputeExtras:
             pm_cls.return_value.load_snapshots = AsyncMock(return_value=snaps)
             js_cls.return_value.log = AsyncMock(return_value=commits)
             extras = await _compute_extras(None, current_equity=92_500.0, raw_positions=raw_positions)
-        # realized -700 + unrealized -50 = -750
-        assert extras["total_return"] == pytest.approx(-750.0)
-        assert extras["total_return_pct"] == pytest.approx(-0.0075)
+        # realized -700 only; unrealized +400 ignored
+        assert extras["total_return"] == pytest.approx(-700.0)
+        assert extras["total_return_pct"] == pytest.approx(-0.007)
