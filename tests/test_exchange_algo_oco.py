@@ -21,6 +21,9 @@ def _make_okx_exchange() -> LiveExchange:
             "DOGE/USDT:USDT": {"id": "DOGE-USDT-SWAP"},
             "BTC/USDT:USDT": {"id": "BTC-USDT-SWAP"},
         }
+        # Identity precision helpers — real ccxt rounds to lotSz/tickSz.
+        mock_inst.amount_to_precision = MagicMock(side_effect=lambda pair, a: str(a))
+        mock_inst.price_to_precision = MagicMock(side_effect=lambda pair, x: str(x))
         mock_cls.return_value = mock_inst
         return LiveExchange(
             "okx",
@@ -69,6 +72,61 @@ async def test_place_algo_oco_success_returns_algo_id():
     assert params["slOrdPx"] == "-1"
     assert params["tpTriggerPx"] == "0.12"
     assert params["tpOrdPx"] == "-1"
+
+
+@pytest.mark.asyncio
+async def test_place_algo_oco_snaps_sz_to_lot_size():
+    """Regression: OKX rejects code 51121 when sz is not a multiple of lotSz.
+
+    Verifies place_algo_oco routes amount through ccxt's
+    ``amount_to_precision`` before constructing ``sz`` — matches the
+    snapping that ``place_order`` already does for the entry leg.
+    """
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    # DOGE-USDT-SWAP has lotSz=1 — caller passes a fractional fill (the
+    # bug surfaced 2026-05-14 with sz=4562.824176).
+    ex._exchange.amount_to_precision = MagicMock(return_value="4562")
+    ex._exchange.price_to_precision = MagicMock(side_effect=["0.108", "0.12"])
+    ex._exchange.private_post_trade_order_algo = AsyncMock(
+        return_value={"code": "0", "data": [{"algoId": "ok", "sCode": "0", "sMsg": ""}]}
+    )
+
+    await ex.place_algo_oco(
+        "DOGE/USDT:USDT",
+        side="buy",
+        amount=4562.824176,
+        sl_trigger_px=0.108,
+        tp_trigger_px=0.120,
+        pos_side="short",
+    )
+
+    ex._exchange.amount_to_precision.assert_called_once_with("DOGE/USDT:USDT", 4562.824176)
+    params = ex._exchange.private_post_trade_order_algo.await_args.args[0]
+    assert params["sz"] == "4562"
+    assert params["slTriggerPx"] == "0.108"
+    assert params["tpTriggerPx"] == "0.12"
+
+
+@pytest.mark.asyncio
+async def test_place_algo_oco_rejects_when_rounded_to_zero():
+    """If snapping rounds sz below lotSz to 0, raise ValueError early."""
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    ex._exchange.amount_to_precision = MagicMock(return_value="0")
+    ex._exchange.price_to_precision = MagicMock(side_effect=["0.108", "0.12"])
+    ex._exchange.private_post_trade_order_algo = AsyncMock()
+
+    with pytest.raises(ValueError, match="rounds to 0"):
+        await ex.place_algo_oco(
+            "DOGE/USDT:USDT",
+            side="buy",
+            amount=0.1,
+            sl_trigger_px=0.108,
+            tp_trigger_px=0.120,
+            pos_side="short",
+        )
+    ex._exchange.private_post_trade_order_algo.assert_not_called()
 
 
 @pytest.mark.asyncio

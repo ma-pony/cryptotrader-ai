@@ -793,18 +793,26 @@ class LiveExchange:
         await self._ensure_markets()
 
         inst_id = self._to_okx_inst_id(pair)
+        # Snap sz to OKX lotSz and trigger prices to tickSz via ccxt market
+        # metadata. Without this, OKX rejects with code 51121 "Order quantity
+        # must be a multiple of the lot size" — see audit 2026-05-14 DOGE.
+        sz_str = self._exchange.amount_to_precision(pair, amount)
+        if float(sz_str) <= 0:
+            raise ValueError(f"place_algo_oco: amount {amount} rounds to 0 at lotSz for {pair}")
+        sl_str = self._exchange.price_to_precision(pair, sl_trigger_px)
+        tp_str = self._exchange.price_to_precision(pair, tp_trigger_px)
         params = {
             "instId": inst_id,
             "tdMode": self._margin_mode,
             "side": side,
             "posSide": pos_side,
             "ordType": "oco",
-            "sz": str(amount),
+            "sz": sz_str,
             "reduceOnly": "true",
-            "slTriggerPx": str(sl_trigger_px),
+            "slTriggerPx": sl_str,
             "slTriggerPxType": "last",
             "slOrdPx": "-1",
-            "tpTriggerPx": str(tp_trigger_px),
+            "tpTriggerPx": tp_str,
             "tpTriggerPxType": "last",
             "tpOrdPx": "-1",
         }
