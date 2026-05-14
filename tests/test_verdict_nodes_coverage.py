@@ -9,8 +9,10 @@ import pytest
 
 from cryptotrader.nodes.verdict import (
     _extract_ohlcv_returns,
+    _inject_weighted_sl_tp,
     _measure_api_latency,
     _merge_returns,
+    _post_process_verdict,
     _should_downgrade_to_weighted,
 )
 
@@ -153,6 +155,81 @@ class TestShouldDowngradeToWeighted:
         }
         with patch("cryptotrader.risk.state.RedisStateManager", side_effect=Exception("no redis")):
             assert await _should_downgrade_to_weighted(state) is False
+
+
+class TestInjectWeightedSlTp:
+    """Verifies weighted-path SL/TP synthesis for directional verdicts.
+
+    Spec 012 vs Phase 1 conflict resolution: high-consensus pairs route to
+    `make_verdict_weighted` (no LLM) so they have no `stop_loss`/`take_profit`,
+    and Phase 1's `missing_sl_tp` hard-reject would force every such pair to
+    hold. `_inject_weighted_sl_tp` computes deterministic SL/TP from
+    entry+ATR using the same floors `_post_process_verdict` enforces, so the
+    synthetic values are guaranteed to pass the gates and the directional
+    intent survives.
+    """
+
+    def test_long_uses_atr_floor(self):
+        """ATR floor (1.5xATR) wins when entry x 1% is smaller."""
+        vd = {"action": "long"}
+        # entry=100, atr=2 → atr_floor=3, pct_floor=1 → stop_distance=3
+        _inject_weighted_sl_tp(vd, entry=100.0, atr=2.0)
+        assert vd["stop_loss"] == 97.0
+        assert vd["take_profit"] == 106.0  # entry + 2x3
+        assert "weighted_sl_tp_injected" in vd["guardrails"]
+
+    def test_short_uses_pct_floor_when_atr_smaller(self):
+        """1% pct floor wins when 1.5xATR is smaller — ATR-quiet regimes."""
+        vd = {"action": "short"}
+        # entry=100, atr=0.1 → atr_floor=0.15, pct_floor=1 → stop_distance=1
+        _inject_weighted_sl_tp(vd, entry=100.0, atr=0.1)
+        assert vd["stop_loss"] == 101.0  # entry + 1
+        assert vd["take_profit"] == 98.0  # entry - 2
+
+    def test_short_falls_back_to_pct_when_atr_missing(self):
+        """ATR None → only pct floor applies."""
+        vd = {"action": "short"}
+        _inject_weighted_sl_tp(vd, entry=50000.0, atr=None)
+        assert vd["stop_loss"] == 50500.0
+        assert vd["take_profit"] == 49000.0
+
+    def test_hold_is_noop(self):
+        """Hold/close actions don't get SL/TP — they have no position to protect."""
+        vd = {"action": "hold"}
+        _inject_weighted_sl_tp(vd, entry=100.0, atr=2.0)
+        assert vd.get("stop_loss") is None
+        assert vd.get("take_profit") is None
+        assert "guardrails" not in vd
+
+    def test_existing_sl_tp_not_overridden(self):
+        """If LLM already produced SL/TP, don't overwrite them."""
+        vd = {"action": "long", "stop_loss": 95.0, "take_profit": 110.0}
+        _inject_weighted_sl_tp(vd, entry=100.0, atr=2.0)
+        assert vd["stop_loss"] == 95.0
+        assert vd["take_profit"] == 110.0
+        assert "guardrails" not in vd
+
+    def test_missing_entry_is_noop(self):
+        """Cannot compute SL/TP without an entry reference."""
+        vd = {"action": "long"}
+        _inject_weighted_sl_tp(vd, entry=None, atr=2.0)
+        assert vd.get("stop_loss") is None
+
+    def test_zero_entry_is_noop(self):
+        vd = {"action": "short"}
+        _inject_weighted_sl_tp(vd, entry=0.0, atr=2.0)
+        assert vd.get("stop_loss") is None
+
+    def test_injected_values_pass_post_process_gates(self):
+        """Round-trip: synthesized SL/TP must satisfy direction + floor + R:R."""
+        vd = {"action": "short", "confidence": 0.65, "position_scale": 0.30, "reasoning": "applied: weighted::default"}
+        _inject_weighted_sl_tp(vd, entry=0.1135, atr=0.0015)
+        # Now run the same gate that previously rejected the weighted path.
+        _post_process_verdict(verdict=MagicMock(), raw_analyses={}, vd_dict=vd, entry_price=0.1135, atr=0.0015)
+        # Phase 1 reject would have flipped action to hold — verify it stayed short.
+        assert vd["action"] == "short"
+        # And the R:R was recorded by the gate (proves we passed the floor).
+        assert vd.get("risk_reward_ratio") == 2.0
 
 
 async def _coro(val):

@@ -21,6 +21,56 @@ _structlog = structlog.get_logger(__name__)
 _APPLIED_RE = re.compile(r"applied:\s*([A-Za-z0-9_:]+)")
 
 
+def _inject_weighted_sl_tp(vd_dict: dict, entry: float | None, atr: float | None) -> None:
+    """Synthesize deterministic SL/TP for a directional weighted verdict.
+
+    The weighted-fallback path (debate skipped on strong consensus / Redis
+    unreachable / circuit-breaker) has no LLM to produce ``stop_loss`` /
+    ``take_profit``, so Phase 1's ``missing_sl_tp`` hard-reject would force
+    every high-consensus pair to hold — defeating spec 012's "skip debate
+    to save LLM tokens on strong-consensus pairs" intent.
+
+    Mirror the floors that ``_post_process_verdict`` enforces so the
+    injected values always pass the gate:
+      stop_distance  = max(1.5 × ATR, 1% × entry)   ← matches gate line 160-162
+      target_distance = 2.0 × stop_distance         ← R:R = 2.0 ≥ 1.5 floor
+
+    No-op when entry is missing/non-positive or LLM already supplied SL/TP
+    (caller may have populated them via a different path).
+    """
+    action = vd_dict.get("action", "hold")
+    if action not in ("long", "short"):
+        return
+    if vd_dict.get("stop_loss") is not None or vd_dict.get("take_profit") is not None:
+        return
+    if not entry or entry <= 0:
+        return
+
+    atr_floor = 1.5 * atr if (atr and atr > 0) else 0.0
+    pct_floor = entry * 0.01
+    stop_distance = max(atr_floor, pct_floor)
+    target_distance = 2.0 * stop_distance
+
+    if action == "long":
+        sl = entry - stop_distance
+        tp = entry + target_distance
+    else:
+        sl = entry + stop_distance
+        tp = entry - target_distance
+
+    vd_dict["stop_loss"] = round(sl, 8)
+    vd_dict["take_profit"] = round(tp, 8)
+    vd_dict.setdefault("guardrails", []).append("weighted_sl_tp_injected")
+    logger.info(
+        "Weighted SL/TP injected: action=%s entry=%.6f sl=%.6f tp=%.6f stop_dist=%.6f (R:R=2.0)",
+        action,
+        entry,
+        sl,
+        tp,
+        stop_distance,
+    )
+
+
 def _force_hold(vd_dict: dict, reason: str) -> None:
     """Force the verdict to hold, log the rejection, record the reason as a guardrail.
 
@@ -398,6 +448,11 @@ async def make_verdict(state: ArenaState) -> dict:
         _trend = state["data"].get("trend_context") or {}
         _entry = float(_summary.get("price") or _trend.get("current_price") or 0.0) or None
         _atr = _trend.get("atr_14")
+        # Weighted path has no LLM to produce SL/TP — synthesize them from
+        # entry+ATR so the hard-reject gates don't force every high-consensus
+        # pair to hold. AI path keeps the LLM-provided values.
+        if verdict_source == "weighted":
+            _inject_weighted_sl_tp(verdict_data, _entry, _atr)
         _post_process_verdict(
             verdict,
             raw_analyses,
