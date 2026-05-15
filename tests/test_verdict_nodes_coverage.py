@@ -170,28 +170,29 @@ class TestInjectWeightedSlTp:
     """
 
     def test_long_uses_atr_floor(self):
-        """ATR floor (1.5xATR) wins when entry x 1% is smaller."""
+        """ATR floor (1.5xATR) wins when entry x 1% is smaller. Stop padded 0.1%."""
         vd = {"action": "long"}
-        # entry=100, atr=2 → atr_floor=3, pct_floor=1 → stop_distance=3
+        # entry=100, atr=2 → atr_floor=3, pct_floor=1 → stop_distance=3*1.001=3.003
         _inject_weighted_sl_tp(vd, entry=100.0, atr=2.0)
-        assert vd["stop_loss"] == 97.0
-        assert vd["take_profit"] == 106.0  # entry + 2x3
+        assert vd["stop_loss"] == pytest.approx(96.997)
+        assert vd["take_profit"] == pytest.approx(106.006)  # entry + 2 * 3.003
         assert "weighted_sl_tp_injected" in vd["guardrails"]
 
     def test_short_uses_pct_floor_when_atr_smaller(self):
         """1% pct floor wins when 1.5xATR is smaller — ATR-quiet regimes."""
         vd = {"action": "short"}
-        # entry=100, atr=0.1 → atr_floor=0.15, pct_floor=1 → stop_distance=1
+        # entry=100, atr=0.1 → atr_floor=0.15, pct_floor=1 → stop_distance=1*1.001=1.001
         _inject_weighted_sl_tp(vd, entry=100.0, atr=0.1)
-        assert vd["stop_loss"] == 101.0  # entry + 1
-        assert vd["take_profit"] == 98.0  # entry - 2
+        assert vd["stop_loss"] == pytest.approx(101.001)
+        assert vd["take_profit"] == pytest.approx(97.998)
 
     def test_short_falls_back_to_pct_when_atr_missing(self):
         """ATR None → only pct floor applies."""
         vd = {"action": "short"}
+        # entry=50000, atr=None → stop_distance=500*1.001=500.5, target=1001
         _inject_weighted_sl_tp(vd, entry=50000.0, atr=None)
-        assert vd["stop_loss"] == 50500.0
-        assert vd["take_profit"] == 49000.0
+        assert vd["stop_loss"] == pytest.approx(50500.5)
+        assert vd["take_profit"] == pytest.approx(48999.0)
 
     def test_hold_is_noop(self):
         """Hold/close actions don't get SL/TP — they have no position to protect."""
@@ -229,7 +230,48 @@ class TestInjectWeightedSlTp:
         # Phase 1 reject would have flipped action to hold — verify it stayed short.
         assert vd["action"] == "short"
         # And the R:R was recorded by the gate (proves we passed the floor).
-        assert vd.get("risk_reward_ratio") == 2.0
+        assert vd.get("risk_reward_ratio") == pytest.approx(2.0)
+
+    @pytest.mark.parametrize(
+        ("entry", "atr"),
+        [
+            # Cases observed in production where the unpadded version rejected
+            # itself via stop_too_tight because abs(sl-entry) re-derived in
+            # _post_process_verdict landed 1 ULP below the floor.
+            (2256.30, 13.157),  # ETH 2026-05-14 20:44 — pct_floor wins (22.563)
+            (2290.79, 17.177),  # ETH 2026-05-14 04:44 — atr_floor wins (25.7665)
+            (10.30, 0.0908574),  # LINK 2026-05-14 21:44 — atr_floor wins (0.136286)
+            # Stress points where pct_floor and atr_floor coincide.
+            (100.0, 0.6666667),  # both floors ≈ 1.0
+            (50000.0, 333.3333),  # both floors ≈ 500
+        ],
+    )
+    def test_round_trip_passes_gate_at_boundary(self, entry: float, atr: float):
+        """Regression: floats that previously hit stop_too_tight on identity floor.
+
+        Without the 0.1% pad: ``abs(entry + stop_distance - entry)`` rounds
+        1 ULP below ``max(atr_floor, pct_floor)`` for many entry/atr pairs,
+        causing the gate to force-hold a verdict that should have passed.
+        """
+        for action in ("long", "short"):
+            vd = {
+                "action": action,
+                "confidence": 0.65,
+                "position_scale": 0.30,
+                "reasoning": "applied: weighted::default",
+            }
+            _inject_weighted_sl_tp(vd, entry=entry, atr=atr)
+            _post_process_verdict(
+                verdict=MagicMock(),
+                raw_analyses={},
+                vd_dict=vd,
+                entry_price=entry,
+                atr=atr,
+            )
+            assert vd["action"] == action, (
+                f"{action} entry={entry} atr={atr}: rejected by {vd.get('guardrails')} when it should pass the floor"
+            )
+            assert vd.get("risk_reward_ratio") is not None
 
 
 async def _coro(val):

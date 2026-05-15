@@ -32,8 +32,15 @@ def _inject_weighted_sl_tp(vd_dict: dict, entry: float | None, atr: float | None
 
     Mirror the floors that ``_post_process_verdict`` enforces so the
     injected values always pass the gate:
-      stop_distance  = max(1.5 × ATR, 1% × entry)   ← matches gate line 160-162
-      target_distance = 2.0 × stop_distance         ← R:R = 2.0 ≥ 1.5 floor
+      stop_distance  = max(1.5 × ATR, 1% × entry) × 1.001   ← 0.1% pad
+      target_distance = 2.0 × stop_distance                  ← R:R = 2.0 ≥ 1.5 floor
+
+    The 0.1% pad on stop_distance prevents a float round-trip miss: gate
+    re-derives stop_distance as ``abs(sl - entry)``, and the subtraction
+    can land 1 ULP below the originally computed floor (observed on
+    ETH @ 2256.30 → 22.563 vs 22.562999... = rejected as stop_too_tight).
+    Padding 0.1% guarantees the recovered distance stays ≥ floor without
+    materially widening the stop.
 
     No-op when entry is missing/non-positive or LLM already supplied SL/TP
     (caller may have populated them via a different path).
@@ -48,7 +55,7 @@ def _inject_weighted_sl_tp(vd_dict: dict, entry: float | None, atr: float | None
 
     atr_floor = 1.5 * atr if (atr and atr > 0) else 0.0
     pct_floor = entry * 0.01
-    stop_distance = max(atr_floor, pct_floor)
+    stop_distance = max(atr_floor, pct_floor) * 1.001
     target_distance = 2.0 * stop_distance
 
     if action == "long":
