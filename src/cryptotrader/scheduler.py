@@ -197,7 +197,30 @@ class Scheduler:
         ]
 
     async def _run_cycle(self) -> None:
-        """Single trading cycle — run all pairs concurrently."""
+        """Single trading cycle — run all pairs concurrently.
+
+        Wrapped in an outer asyncio.wait_for so any hanging await inside
+        a pair's graph (ccxt connection, LLM call stuck after its own
+        timeout window, downstream callback that never resolves) cannot
+        block APScheduler past one interval. Observed 5/16-5/17: a single
+        hung cycle leaked an asyncio Task that AsyncIOScheduler still
+        treated as "running" under max_instances=1, silently dropping
+        every subsequent fire until the process was restarted. The hard
+        outer cap forces the asyncio.CancelledError back to APScheduler
+        so the slot frees and the next interval fires normally.
+        """
+        cycle_timeout_s = max(self.interval_minutes * 60 - 60, 60)
+        try:
+            await asyncio.wait_for(self._run_cycle_impl(), timeout=cycle_timeout_s)
+        except TimeoutError:
+            logger.error(
+                "Trading cycle exceeded outer timeout of %ds — cancelled to free "
+                "the APScheduler slot for the next interval",
+                cycle_timeout_s,
+            )
+
+    async def _run_cycle_impl(self) -> None:
+        """Inner cycle body — original logic, wrapped by _run_cycle."""
         try:
             tasks = [self._run_pair(p.canonical()) for p in self.pairs]
             await asyncio.gather(*tasks, return_exceptions=True)

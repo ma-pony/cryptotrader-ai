@@ -38,6 +38,40 @@ def _make_scheduler(interval_minutes: int = 60) -> Scheduler:
 # ---------------------------------------------------------------------------
 
 
+async def test_run_cycle_outer_timeout_cancels_hanging_cycle(caplog):
+    """Regression for the 5/16-5/17 APScheduler silent-skip bug.
+
+    When a single cycle hung on a leaked await (ccxt connection or LLM
+    callback that never resolved), AsyncIOScheduler kept its task slot
+    occupied under max_instances=1 → every subsequent fire was silently
+    dropped and the trading loop went dark until manual restart. Observed
+    9 cycles missed over 12 hours.
+
+    The outer asyncio.wait_for wrap in _run_cycle forces the task to
+    raise asyncio.TimeoutError, freeing the APScheduler slot for the next
+    interval. Verify the cancel path returns cleanly + logs the breach.
+    """
+    s = _make_scheduler(interval_minutes=60)
+
+    async def hangs_forever():
+        await asyncio.Event().wait()  # never set — pure hang
+
+    with patch.object(s, "_run_cycle_impl", side_effect=hangs_forever):
+        # Replace asyncio.wait_for with a fast-firing version so the test
+        # doesn't actually wait 59 minutes — captures the same logic.
+        original_wait_for = asyncio.wait_for
+
+        async def fast_wait_for(awaitable, **_kwargs):
+            return await original_wait_for(awaitable, timeout=0.1)
+
+        with patch("cryptotrader.scheduler.asyncio.wait_for", side_effect=fast_wait_for):
+            caplog.set_level(logging.ERROR, logger="cryptotrader.scheduler")
+            await s._run_cycle()
+
+    # Cycle returned (not hung) and logged the breach
+    assert any("exceeded outer timeout" in r.message for r in caplog.records)
+
+
 async def test_max_instances_job_parameter_is_one():
     """Trading cycle job must register with max_instances=1 (regression guard).
 

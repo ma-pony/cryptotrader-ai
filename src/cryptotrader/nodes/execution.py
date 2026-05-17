@@ -775,7 +775,28 @@ async def _attach_okx_algo_protect(
         return {}
 
     contract_size = _algo_contract_size(exchange, pair)
-    algo_sz = filled_amount / contract_size if contract_size != 1.0 else filled_amount
+    # spec 020c+ OCO sz bug fix (2026-05-17):
+    # On add-to-position, ``filled_amount`` is only the new increment, not the
+    # total position. Building the OCO with that value leaves the prior fills
+    # naked — observed cumulatively for SOL/DOGE across many sessions where
+    # each successive add cancelled the previous OCO and replaced it with a
+    # marginal-only sized one. Always size the OCO to the *total* current
+    # position so 100 % of the open exposure is reduceOnly-protected.
+    total_amount = abs(filled_amount)  # fallback if position lookup fails
+    try:
+        positions = await exchange.get_positions()
+        pos = positions.get(pair) or {}
+        pos_base = abs(float(pos.get("amount", 0.0) or 0.0))
+        if pos_base > 0:
+            total_amount = pos_base
+    except Exception:
+        logger.warning(
+            "OCO sizing: get_positions() failed for %s, falling back to filled_amount=%s",
+            pair,
+            filled_amount,
+            exc_info=True,
+        )
+    algo_sz = total_amount / contract_size if contract_size != 1.0 else total_amount
     close_side = "sell" if action == "long" else "buy"
 
     try:
