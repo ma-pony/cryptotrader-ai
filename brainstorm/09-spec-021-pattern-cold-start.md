@@ -2,7 +2,7 @@
 
 **关联 spec**：[014](../specs/014-trilogy-research/) / [018](../specs/019-memory-evolution/) / [020b](../specs/022-evolution-daemon/)
 **Date**: 2026-05-11
-**Status**: brainstorm 完成，待 ship
+**Status**: ✅ shipped 2026-05-13（commits c0df2c6 → 598329f / specs/024-pattern-cold-start/）— 3 patterns 已创建（tech 1 + chain 2），482 cases 持续累积，daemon `pattern_extraction` action 跑通
 
 ## 问题陈述
 
