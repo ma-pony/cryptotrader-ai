@@ -27,11 +27,11 @@ class TestGitignore:
 
 
 class TestAgentSkillsDirectory:
-    """测试 agent_skills/ 结构（FR-001 + FR-004）。"""
+    """测试 agent_skills/_internal/ 结构（FR-001 + FR-004，spec 022 路径迁移后）。"""
 
     def test_initial_five_skill_dirs_exist(self):
-        """agent_skills/ 下必须存在 initial 5 个 skill 目录（FR-004）。"""
-        skills_dir = REPO_ROOT / "agent_skills"
+        """agent_skills/_internal/ 下必须存在 initial 5 个 skill 目录（FR-004）。"""
+        skills_dir = REPO_ROOT / "agent_skills" / "_internal"
         expected = [
             "tech-analysis",
             "chain-analysis",
@@ -39,23 +39,23 @@ class TestAgentSkillsDirectory:
             "macro-analysis",
             "trading-knowledge",
         ]
-        assert skills_dir.exists(), "agent_skills/ 目录不存在"
+        assert skills_dir.exists(), "agent_skills/_internal/ 目录不存在"
         for name in expected:
-            assert (skills_dir / name).is_dir(), f"agent_skills/{name}/ 目录不存在"
+            assert (skills_dir / name).is_dir(), f"agent_skills/_internal/{name}/ 目录不存在"
 
     def test_each_skill_dir_has_skill_md(self):
         """每个 skill 目录都必须有 SKILL.md（FR-014）。"""
-        skills_dir = REPO_ROOT / "agent_skills"
+        skills_dir = REPO_ROOT / "agent_skills" / "_internal"
         for skill_dir in skills_dir.iterdir():
             if skill_dir.is_dir() and not skill_dir.name.startswith("."):
                 skill_md = skill_dir / "SKILL.md"
-                assert skill_md.exists(), f"{skill_dir.name}/SKILL.md 不存在"
+                assert skill_md.exists(), f"_internal/{skill_dir.name}/SKILL.md 不存在"
 
     def test_skill_md_frontmatter_compliant(self):
         """每个 SKILL.md frontmatter 必须包含 name、description、scope（FR-014 + FR-004a）。"""
         from cryptotrader.agents.skills._frontmatter import parse_frontmatter, validate_skill_frontmatter
 
-        skills_dir = REPO_ROOT / "agent_skills"
+        skills_dir = REPO_ROOT / "agent_skills" / "_internal"
         for skill_dir in sorted(skills_dir.iterdir()):
             if not skill_dir.is_dir() or skill_dir.name.startswith("."):
                 continue
@@ -66,12 +66,12 @@ class TestAgentSkillsDirectory:
             data, _ = parse_frontmatter(content, path=skill_md)
             # 不抛异常即表示 frontmatter 合规
             validate_skill_frontmatter(data, path=skill_md)
-            assert data["name"], f"{skill_dir.name}/SKILL.md 缺少 name 字段"
-            assert data["description"], f"{skill_dir.name}/SKILL.md 缺少 description 字段"
-            assert data["scope"], f"{skill_dir.name}/SKILL.md 缺少 scope 字段"
+            assert data["name"], f"_internal/{skill_dir.name}/SKILL.md 缺少 name 字段"
+            assert data["description"], f"_internal/{skill_dir.name}/SKILL.md 缺少 description 字段"
+            assert data["scope"], f"_internal/{skill_dir.name}/SKILL.md 缺少 scope 字段"
 
     def test_agent_skills_tracked_by_git(self):
-        """agent_skills/*/SKILL.md 应被 git 跟踪（不在 .gitignore 排除列表）。"""
+        """agent_skills/_internal/*/SKILL.md 应被 git 跟踪（不在 .gitignore 排除列表）。"""
         result = subprocess.run(
             ["git", "check-ignore", "--quiet", "agent_skills/"],
             cwd=REPO_ROOT,

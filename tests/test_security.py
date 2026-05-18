@@ -237,7 +237,7 @@ class TestAgentBaseIntegration:
         pb = PromptBuilder(
             agent_id="tech",
             config_dir=repo_root / "config" / "agents",
-            skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills"),
+            skill_provider=DefaultSkillProvider(skills_root=repo_root / "agent_skills/_internal"),
         )
         system_prompt_body = pb.config.body_sections["system_prompt"]
         sys_msg, _ = pb.build(snapshot={}, portfolio={})

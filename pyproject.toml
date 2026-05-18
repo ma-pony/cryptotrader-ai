@@ -190,8 +190,9 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_macro_coverage.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_post_process_verdict.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_debate_anti_ratchet.py" = ["RUF001", "RUF002", "RUF003"]
-# spec 014 test files use Chinese docstrings + assertion messages.
+# spec 014 / spec 022 test files use Chinese docstrings + assertion messages.
 "tests/test_two_layer_architecture.py" = ["RUF001", "RUF002", "RUF003", "S603", "S607"]
+"tests/test_skill_provider_internal_path.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_agent_memory_writer.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_anti_overfitting_equivalence.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 018 migration script + tests use Chinese docstrings/comments.
