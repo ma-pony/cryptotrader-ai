@@ -1,0 +1,123 @@
+openapi: 3.0.3
+info:
+  title: cryptotrader-ai — Events Heartbeat API（spec 022）
+  version: "1.0"
+  description: |
+    Pull-based 事件订阅端点。外部 agent 持续 poll 获取最新 verdict / trade / rejection / evolution 事件。
+    复用既有 journal 表 + SQL view `events_heartbeat`。
+
+paths:
+  /api/events/heartbeat:
+    get:
+      summary: Poll 最新事件
+      tags: [events]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: |
+            返回 since 之后的事件（ISO8601）。
+            如同时传 `cursor`，cursor 优先，since 忽略。
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: |
+            上次 response 的 `next_cursor`。续传分页。
+        - name: types
+          in: query
+          required: false
+          schema:
+            type: array
+            items:
+              type: string
+              enum: [verdict, trade, rejection, phase1_rejected, evolution, oco_state_change]
+          style: form
+          explode: false
+          description: |
+            按 event_type 过滤（逗号分隔）。
+            默认包含 must 4 类（verdict / trade / rejection / phase1_rejected）。
+            opt 类（evolution / oco_state_change）需显式 enable。
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: 事件列表 + next_cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, next_cursor]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/HeartbeatEvent'
+                  next_cursor:
+                    type: string
+                    nullable: true
+                    description: |
+                      下次 poll 应传入的 cursor token。
+                      `null` 表示无更多事件。
+                    example: "MjAyNi0wNS0xOFQwOTo1NzowMnwzNDg5N2Iy"
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    Unauthorized:
+      description: API_KEY missing or invalid
+
+  schemas:
+    HeartbeatEvent:
+      type: object
+      required: [timestamp, trace_id, event_type, payload]
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        trace_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum:
+            - verdict
+            - trade
+            - rejection
+            - phase1_rejected
+            - evolution
+            - oco_state_change
+        pair:
+          type: string
+          nullable: true
+          example: "SOL/USDT:USDT"
+          description: |
+            交易对（evolution 类无 pair）
+        payload:
+          type: object
+          description: |
+            event_type 相关 schema：
+            - verdict: action / scale / cf / divergence / thesis / source
+            - trade: algo_id / sz / sl / tp / entry / exit / contracts / side / pos_side
+            - rejection: check_name / reason
+            - phase1_rejected: reason ∈ {low_rr, stop_too_tight, missing_sl_tp, direction_inverted}
+            - evolution: event_subtype / artifact_name
+            - oco_state_change: algo_id / state ∈ {placed, cancelled, triggered}
+          additionalProperties: true
