@@ -28,6 +28,7 @@ from api.routes import (
     chat,
     chat_control,
     decisions,
+    events,
     health,
     hitl,
     market,
@@ -443,3 +444,4 @@ app.include_router(chat_control.router, dependencies=[Depends(verify_api_key)])
 app.include_router(hitl.router, dependencies=[Depends(verify_api_key)])
 app.include_router(market.router, dependencies=[Depends(verify_api_key)])
 app.include_router(memory.router, prefix="/api/memory", dependencies=[Depends(verify_api_key)])
+app.include_router(events.router, dependencies=[Depends(verify_api_key)])

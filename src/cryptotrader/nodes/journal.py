@@ -1,14 +1,27 @@
-"""Journal commit nodes — record trades and rejections."""
+"""Journal commit nodes — record trades and rejections.
+
+Also re-exports lightweight write helpers (spec 022 FR-022-15) from
+cryptotrader.journal.events so callers don't need two imports:
+  - record_phase1_rejection(trace_id, pair, reason, payload)
+  - record_evolution_event(event_subtype, artifact_name, payload)
+"""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
 
+from cryptotrader.journal.events import record_evolution_event, record_phase1_rejection
 from cryptotrader.state import ArenaState, get_pair
 from cryptotrader.tracing import node_logger
 
 logger = logging.getLogger(__name__)
+
+# Keep __all__ clean; callers may import directly from cryptotrader.journal.events.
+__all__ = [
+    "record_evolution_event",
+    "record_phase1_rejection",
+]
 
 
 _LATENCY_STAGE_MAP: dict[str, str] = {

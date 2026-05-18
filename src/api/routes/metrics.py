@@ -33,6 +33,25 @@ LLM_CACHE_HIT_RATE_GAUGE = Gauge(
 )
 
 # ---------------------------------------------------------------------------
+# spec 022 FR-022-22: Heartbeat events observability gauges
+# ---------------------------------------------------------------------------
+
+EVENTS_HEARTBEAT_POLL_COUNT_GAUGE = Gauge(
+    "events_heartbeat_poll_count_24h",
+    "Number of /api/events/heartbeat poll requests in the last 24h sliding window",
+)
+
+EVENTS_HEARTBEAT_POLL_LAG_GAUGE = Gauge(
+    "events_heartbeat_poll_lag_seconds",
+    "Average lag (seconds) between consecutive heartbeat polls, 24h sliding window",
+)
+
+EXTERNAL_SKILL_FETCH_COUNT_GAUGE = Gauge(
+    "external_skill_fetch_count_24h",
+    "Number of external /skill/<name> fetch requests in the last 24h sliding window",
+)
+
+# ---------------------------------------------------------------------------
 # Response model
 # ---------------------------------------------------------------------------
 
@@ -199,6 +218,20 @@ async def prometheus_metrics() -> Response:
             LLM_CACHE_HIT_RATE_GAUGE.set(get_cache_metrics_aggregator().average())
         except Exception:
             logger.debug("cache hit-rate gauge update failed (non-blocking)", exc_info=True)
+
+        # spec 022 FR-022-22: lazy update heartbeat + skill fetch gauges
+        try:
+            from cryptotrader.observability.heartbeat_metrics import (
+                get_external_skill_fetch_aggregator,
+                get_heartbeat_poll_aggregator,
+                get_heartbeat_poll_lag_aggregator,
+            )
+
+            EVENTS_HEARTBEAT_POLL_COUNT_GAUGE.set(get_heartbeat_poll_aggregator().count())
+            EVENTS_HEARTBEAT_POLL_LAG_GAUGE.set(get_heartbeat_poll_lag_aggregator().average())
+            EXTERNAL_SKILL_FETCH_COUNT_GAUGE.set(get_external_skill_fetch_aggregator().count())
+        except Exception:
+            logger.debug("heartbeat/skill gauge update failed (non-blocking)", exc_info=True)
 
         data = generate_latest()
         return Response(content=data, media_type=CONTENT_TYPE_LATEST)
