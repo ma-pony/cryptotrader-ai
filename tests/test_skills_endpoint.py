@@ -24,7 +24,7 @@ os.environ.setdefault("API_KEY", "test-key-025")
 _EXTERNAL_ROOT_ATTR = "api.routes.skills._EXTERNAL_SKILLS_ROOT"
 
 
-@pytest.fixture
+@pytest.fixture()
 def skills_root(tmp_path: Path) -> Path:
     """Temporary directory mimicking agent_skills/_external/."""
     root = tmp_path / "_external"
@@ -46,7 +46,7 @@ def _write_external_skill(root: Path, name: str, skill_name: str | None = None) 
     return path
 
 
-@pytest.fixture
+@pytest.fixture()
 def client(skills_root: Path):
     """TestClient with skills route pointing at tmp skills_root."""
     from api.main import app
