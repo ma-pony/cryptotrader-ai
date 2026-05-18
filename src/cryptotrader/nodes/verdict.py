@@ -92,6 +92,8 @@ def _force_hold(vd_dict: dict, reason: str) -> None:
     vd_dict["stop_loss"] = None
     vd_dict["take_profit"] = None
     vd_dict.setdefault("guardrails", []).append(f"rejected:{reason}")
+    # spec 022 FR-022-15: store trace context for async journal hook (added by make_verdict)
+    vd_dict["_phase1_rejected_reason"] = reason
 
 
 def _post_process_verdict(
@@ -467,6 +469,23 @@ async def make_verdict(state: ArenaState) -> dict:
             entry_price=_entry,
             atr=_atr,
         )
+
+    # spec 022 FR-022-15/T009: fire journal hook for Phase 1 hard-reject paths
+    _phase1_reason = verdict_data.pop("_phase1_rejected_reason", None)
+    if _phase1_reason:
+        try:
+            from cryptotrader.nodes.journal import record_phase1_rejection
+            from cryptotrader.tracing import get_trace_id
+
+            pair_str = get_pair(state).canonical()
+            await record_phase1_rejection(
+                trace_id=get_trace_id() or "",
+                pair=pair_str,
+                reason=_phase1_reason,
+                payload={"action": verdict_data.get("action"), "verdict_source": verdict_source},
+            )
+        except Exception:
+            logger.debug("phase1_rejection journal hook failed (non-blocking)", exc_info=True)
 
     await _process_schedule_follow_up(state, verdict_data)
 
