@@ -26,7 +26,7 @@ paths:
           required: false
           schema:
             type: string
-            enum: [observed, stable, active, archived]
+            enum: [observed, probationary, active, deprecated, archived]
           description: 按 maturity FSM 状态过滤
         - name: limit
           in: query
@@ -95,7 +95,7 @@ components:
           description: 触发该 pattern 的 applied 文本（来自 verdict thesis）
         maturity:
           type: string
-          enum: [observed, stable, active, archived]
+          enum: [observed, probationary, active, deprecated, archived]
           description: FSM 状态（spec 018）
         pnl_track:
           type: array

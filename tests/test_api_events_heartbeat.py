@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import base64
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+from cryptotrader._compat import UTC
 
 os.environ.setdefault("AUTH_MODE", "disabled")
 os.environ.setdefault("API_KEY", "test-key-022")

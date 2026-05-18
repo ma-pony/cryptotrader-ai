@@ -76,12 +76,12 @@ def _record_fetch(skill_name: str, request: Request, status: int) -> None:
     branch not merged). ImportError and AttributeError are both suppressed.
     """
     try:
-        from cryptotrader.observability.heartbeat_metrics import (
-            ExternalSkillFetchAggregator,  # type: ignore[import-not-found]
+        from cryptotrader.observability.heartbeat_metrics import (  # type: ignore[import-not-found]
+            get_external_skill_fetch_aggregator,
         )
 
         client_id = request.headers.get("X-Agent-ID", "unknown")
-        ExternalSkillFetchAggregator.record(skill_name, client_id, status)
+        get_external_skill_fetch_aggregator().record(skill_name, client_id, status)
     except (ImportError, AttributeError):
         pass
     except Exception:
@@ -103,7 +103,20 @@ async def get_skill(
     - format=json: SkillRecord JSON with frontmatter/body split
     - 404 if skill name does not exist under agent_skills/_external/
     """
+    # Path traversal guard: reject names containing path separators or dotdot components
+    # before touching the filesystem.
+    if not name or "/" in name or "\\" in name or ".." in name:
+        _record_fetch(name, request, 400)
+        raise HTTPException(status_code=400, detail="Invalid skill name")
+
     skill_path = _EXTERNAL_SKILLS_ROOT / name / "SKILL.md"
+
+    # Secondary guard: resolve() confirms the path stays inside _EXTERNAL_SKILLS_ROOT.
+    try:
+        skill_path.resolve().relative_to(_EXTERNAL_SKILLS_ROOT.resolve())  # noqa: ASYNC240
+    except ValueError:
+        _record_fetch(name, request, 400)
+        raise HTTPException(status_code=400, detail="Invalid skill name") from None
 
     if not skill_path.exists():
         _record_fetch(name, request, 404)

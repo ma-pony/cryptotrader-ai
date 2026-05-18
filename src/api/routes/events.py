@@ -133,7 +133,7 @@ _SQL_QUERY_CURSOR = (
     "SELECT timestamp, trace_id, event_type, pair, payload "
     "FROM journal "
     "WHERE event_type = ANY(:types) "
-    "AND (timestamp, COALESCE(trace_id, '')) > (:cutoff_ts, :cursor_tid) "
+    "AND (timestamp, COALESCE(trace_id, '')) < (:cutoff_ts, :cursor_tid) "
     "ORDER BY timestamp DESC, COALESCE(trace_id, '') DESC "
     "LIMIT :limit"
 )

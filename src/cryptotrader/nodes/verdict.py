@@ -208,10 +208,10 @@ def _post_process_verdict(
 
         # Direction sanity
         if action == "long" and not (sl_f < entry_price < tp_f):
-            _force_hold(vd_dict, "direction_inverted_long")
+            _force_hold(vd_dict, "direction_inverted")
             return vd_dict
         if action == "short" and not (tp_f < entry_price < sl_f):
-            _force_hold(vd_dict, "direction_inverted_short")
+            _force_hold(vd_dict, "direction_inverted")
             return vd_dict
 
         # Stop-distance floor
@@ -241,7 +241,7 @@ def _post_process_verdict(
                 sl_f,
                 tp_f,
             )
-            _force_hold(vd_dict, f"low_rr_{rr:.2f}")
+            _force_hold(vd_dict, "low_rr")
             return vd_dict
 
         vd_dict["risk_reward_ratio"] = round(rr, 3)

@@ -176,7 +176,7 @@ def test_long_inverted_direction_forces_hold():
     }  # stop above entry
     _post_process_verdict(None, {}, vd, entry_price=80000.0, atr=200.0)
     assert vd["action"] == "hold"
-    assert "rejected:direction_inverted_long" in vd.get("guardrails", [])
+    assert "rejected:direction_inverted" in vd.get("guardrails", [])
 
 
 def test_short_inverted_direction_forces_hold():
@@ -191,7 +191,7 @@ def test_short_inverted_direction_forces_hold():
     }  # stop below entry
     _post_process_verdict(None, {}, vd, entry_price=80000.0, atr=200.0)
     assert vd["action"] == "hold"
-    assert "rejected:direction_inverted_short" in vd.get("guardrails", [])
+    assert "rejected:direction_inverted" in vd.get("guardrails", [])
 
 
 def test_stop_too_tight_forces_hold():

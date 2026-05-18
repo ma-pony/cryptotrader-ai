@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
+
+from cryptotrader._compat import UTC
 
 REPO_ROOT = Path(__file__).parent.parent
 INTERNAL_SKILLS_DIR = REPO_ROOT / "agent_skills" / "_internal"
@@ -140,15 +142,26 @@ class TestEvolvingSkillProviderFromInternalPath:
         assert "shared-skill" in chain_names
 
     def test_access_count_written_back_in_internal(self, tmp_path):
-        """access_count 回写在 _internal 路径下仍然工作 (spec 019 FR-W9 不回归)。"""
+        """access_count 回写在 _internal 路径下仍然工作 (spec 019 FR-W9 不回归)。
+
+        spec 019 重构后，access_count 写入 .access_state.json sidecar 而非 SKILL.md，
+        以保持 git diff 稳定。本测试验证 sidecar 文件被正确更新。
+        """
+        import json
+
         from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
 
         skills_dir = tmp_path / "_internal"
         skill_path = _write_skill(skills_dir, "shared-skill", scope="shared", access_count=3)
         provider = EvolvingSkillProvider(skill_root=skills_dir)
         provider.get_available_skills("tech", {})
-        content = skill_path.read_text(encoding="utf-8")
-        assert "access_count: 4" in content
+        # access state persisted in sidecar, not SKILL.md.
+        # sidecar starts at 0 when absent (frontmatter access_count is ignored at
+        # runtime — sidecar is the single source of truth), so first access → 1.
+        sidecar = skill_path.parent / ".access_state.json"
+        assert sidecar.exists(), ".access_state.json sidecar 未生成"
+        state = json.loads(sidecar.read_text(encoding="utf-8"))
+        assert state["access_count"] == 1, f"期望 access_count=1（首次访问），实际={state['access_count']}"
 
     def test_empty_internal_dir_returns_empty(self, tmp_path):
         """_internal 目录为空时返回空列表 (FR-W9)。"""

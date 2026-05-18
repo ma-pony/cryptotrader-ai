@@ -10,13 +10,15 @@ GET /api/memory/patterns        — PatternRecord 列表（spec 024 SC-P3 补完
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from cryptotrader._compat import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -444,10 +446,10 @@ async def get_memory_patterns(
         )
 
     try:
-        items = _load_all_patterns(_MEMORY_ROOT, agent=agent, maturity=maturity)
-        if limit is not None:
-            items = items[:limit]
-        response = PatternsList(items=items, total=len(items))
+        all_items = _load_all_patterns(_MEMORY_ROOT, agent=agent, maturity=maturity)
+        total_count = len(all_items)
+        items = all_items[:limit] if limit is not None else all_items
+        response = PatternsList(items=items, total=total_count)
         return JSONResponse(
             content=response.model_dump(),
             headers={"Cache-Control": "max-age=30"},

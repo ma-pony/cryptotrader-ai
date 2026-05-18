@@ -209,7 +209,7 @@ class TestMaturityFilter:
 
 class TestLimitParam:
     def test_limit_truncates_results(self, client: TestClient, memory_root: Path) -> None:
-        """(d) ?limit=2 截断 items 为 2 条（总数 ≥ 3 时有效）。"""
+        """(d) ?limit=2 截断 items 为 2 条，total 返回预截断总数（≥ 3）。"""
         from unittest.mock import patch
 
         with patch("api.routes.memory._MEMORY_ROOT", memory_root):
@@ -218,11 +218,11 @@ class TestLimitParam:
         assert resp.status_code == 200
         data = resp.json()
         assert len(data["items"]) == 2
-        # total 反映实际返回数（截断后）
-        assert data["total"] == 2
+        # total 反映 limit 截断前的全量匹配数（合约语义：满足 query 的总记录数）
+        assert data["total"] >= 3
 
     def test_limit_0_returns_empty(self, client: TestClient, memory_root: Path) -> None:
-        """?limit=0 返回 items=[], total=0。"""
+        """?limit=0 返回 items=[]，total 反映全量匹配数（不因 limit=0 归零）。"""
         from unittest.mock import patch
 
         with patch("api.routes.memory._MEMORY_ROOT", memory_root):
@@ -231,7 +231,8 @@ class TestLimitParam:
         assert resp.status_code == 200
         data = resp.json()
         assert data["items"] == []
-        assert data["total"] == 0
+        # total 是预截断的全量匹配数；fixture 含 3 条 patterns
+        assert data["total"] >= 3
 
 
 # ── (e) ?agent=news 空目录返回 items=[] total=0（不 500）─────────────────────
