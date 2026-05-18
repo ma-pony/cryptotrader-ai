@@ -60,7 +60,7 @@
 - [x] T018 跑 `uv run ruff check src/cryptotrader/learning/memory.py src/cryptotrader/ops/daemon.py src/cryptotrader/config.py src/cli/main.py tests/test_distill_patterns_cold_start.py tests/test_pattern_slug_generation.py tests/test_daemon_pattern_extraction.py tests/test_cli_experience_distill.py tests/test_e2e_pattern_cold_start.py` clean
 - [x] T019 跑 SC-P1：`uv run arena experience distill --memory-dir agent_memory --cycles-window 200` exit 0 + ≥ 1 patterns created → 3 patterns created
 - [x] T020 跑 SC-P2：`find agent_memory/{tech,chain,news,macro}/patterns -name "*.md" 2>/dev/null | wc -l` ≥ 3 → 3 files
-- [ ] T021 跑 SC-P3：`curl /api/memory/rules` total > 0（API 重启可能需要）
+- [x] T021 跑 SC-P3：`curl /api/memory/patterns` total > 0 ✓（GET /api/memory/patterns 端点实现，spec 024 SC-P3 补完）
 - [x] T022 跑 SC-P4：`uv run arena evolution-daemon --once` 4 actions 全 PASS → pareto/regime/skill_proposal/pattern_extraction PASS
 - [x] T023 跑 `git log --oneline 024-pattern-cold-start..main | wc -l` ≤ 4 commit（SC-P10）
 
