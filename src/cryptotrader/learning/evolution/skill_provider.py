@@ -228,7 +228,7 @@ class EvolvingSkillProvider:
 
     def __init__(
         self,
-        skill_root: Path = Path("agent_skills"),
+        skill_root: Path = Path("agent_skills/_internal"),
         top_k: int = 5,
         skills_root: Path | None = None,
     ) -> None:

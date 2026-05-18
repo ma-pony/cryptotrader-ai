@@ -598,9 +598,9 @@ def skills_list():
 
     from cryptotrader.agents.skills.loader import parse_skill_md
 
-    skills_dir = Path("agent_skills")
+    skills_dir = Path("agent_skills/_internal")
     if not skills_dir.exists():
-        console.print("[dim]No agent_skills/ directory found.[/dim]")
+        console.print("[dim]No agent_skills/_internal/ directory found.[/dim]")
         return
 
     table = Table(title="Agent Skills")

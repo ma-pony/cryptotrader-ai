@@ -27,9 +27,9 @@ description: "Task list for spec 022 — Agent-Native Skill Protocol Layer"
 
 ## Phase 2: Foundational（blocking prerequisites for all stories）
 
-- [ ] T001 [P] 创建 `agent_skills/_external/` 子目录（5 个空 SKILL.md placeholder：cryptotrader / verdict-feed / market-intel / evolution-insights / execution-replay）— 后续 task 填内容
-- [ ] T002 [P] 在 `src/cryptotrader/observability/heartbeat_metrics.py` 新增模块 — 3 个 sliding-window aggregator（`HeartbeatPollAggregator` / `HeartbeatPollLagAggregator` / `ExternalSkillFetchAggregator`），复用 spec 020a `CacheMetricsAggregator` 模式（deque + threading.Lock）
-- [ ] T003 [P] 在 `src/api/routes/metrics.py` 注册 3 个新 Prometheus Gauge（`events_heartbeat_poll_count_24h` / `events_heartbeat_poll_lag_seconds` / `external_skill_fetch_count_24h`）+ `/metrics` lazy update from aggregator
+- [X] T001 [P] 创建 `agent_skills/_external/` 子目录（5 个空 SKILL.md placeholder：cryptotrader / verdict-feed / market-intel / evolution-insights / execution-replay）— 后续 task 填内容
+- [X] T002 [P] 在 `src/cryptotrader/observability/heartbeat_metrics.py` 新增模块 — 3 个 sliding-window aggregator（`HeartbeatPollAggregator` / `HeartbeatPollLagAggregator` / `ExternalSkillFetchAggregator`），复用 spec 020a `CacheMetricsAggregator` 模式（deque + threading.Lock）
+- [X] T003 [P] 在 `src/api/routes/metrics.py` 注册 3 个新 Prometheus Gauge（`events_heartbeat_poll_count_24h` / `events_heartbeat_poll_lag_seconds` / `external_skill_fetch_count_24h`）+ `/metrics` lazy update from aggregator
 
 ---
 
@@ -39,9 +39,9 @@ description: "Task list for spec 022 — Agent-Native Skill Protocol Layer"
 
 **Independent Test**：`curl /api/memory/patterns` 返回 `total >= 3` + items 含 maturity 字段 + 支持 `?agent=tech` 过滤。
 
-- [ ] T004 [US3] 在 `src/api/routes/memory.py` 加 `PatternRecordResponse` Pydantic v2 schema（复用 `cryptotrader.learning.memory.PatternRecord`，仅做 ApiResponse wrapping）
-- [ ] T005 [US3] 在 `src/api/routes/memory.py` 加 `GET /api/memory/patterns?agent=&maturity=&limit=` handler — 扫 `agent_memory/{tech,chain,news,macro}/patterns/*.md` → 调 `_load_pattern_record()` (spec 021 helper) → 应用 query filter → 返回 `{items, total}`
-- [ ] T006 [P] [US3] 创建 `tests/test_api_memory_patterns.py` — 5 用例：(a) total >= 3（基于 spec 021 已落地 3 patterns）；(b) `?agent=tech` 过滤；(c) `?maturity=observed` 过滤；(d) `?limit=2` 截断；(e) `?agent=news` 空目录返回 `items=[], total=0` 不 500
+- [X] T004 [US3] 在 `src/api/routes/memory.py` 加 `PatternRecordResponse` Pydantic v2 schema（复用 `cryptotrader.learning.memory.PatternRecord`，仅做 ApiResponse wrapping）
+- [X] T005 [US3] 在 `src/api/routes/memory.py` 加 `GET /api/memory/patterns?agent=&maturity=&limit=` handler — 扫 `agent_memory/{tech,chain,news,macro}/patterns/*.md` → 调 `_load_pattern_record()` (spec 021 helper) → 应用 query filter → 返回 `{items, total}`
+- [X] T006 [P] [US3] 创建 `tests/test_api_memory_patterns.py` — 5 用例：(a) total >= 3（基于 spec 021 已落地 3 patterns）；(b) `?agent=tech` 过滤；(c) `?maturity=observed` 过滤；(d) `?limit=2` 截断；(e) `?agent=news` 空目录返回 `items=[], total=0` 不 500
 
 **Checkpoint**：完成后可单独测试 — 闭 spec 021 T021。
 
@@ -53,15 +53,15 @@ description: "Task list for spec 022 — Agent-Native Skill Protocol Layer"
 
 **Independent Test**：(a) trigger trading cycle 产生 ≥ 4 events；(b) poll with `since=<cycle_start>` 返回 ≥ 4 events；(c) 续 cursor 返回 0；(d) `?types=verdict,trade` filter 仅 2 类。
 
-- [ ] T007 [US2] 在 `src/cryptotrader/nodes/journal.py` 加 `record_phase1_rejection(trace_id, pair, reason, payload)` write helper — 写入 `journal` 表 with `event_type="phase1_rejected"`
-- [ ] T008 [US2] 在 `src/cryptotrader/nodes/journal.py` 加 `record_evolution_event(event_subtype, artifact_name, payload)` write helper — 写入 `journal` 表 with `event_type="evolution_event"`
-- [ ] T009 [US2] 修改 `src/cryptotrader/nodes/verdict.py` — 在 Phase 1 hard-reject 路径（`low_rr` / `stop_too_tight` / `missing_sl_tp` / `direction_inverted`）调用 `journal.record_phase1_rejection()`
-- [ ] T010 [US2] 修改 `src/cryptotrader/ops/daemon.py` — 在 3 个钩子调用 `journal.record_evolution_event()`：(a) `_action_pattern_extraction` 创建新 pattern 后；(b) `_action_skill_proposal` 写 `.draft` 后；(c) `_action_pareto_rerank` rerank 完成后
-- [ ] T011 [US2] 创建 SQL view `events_heartbeat` migration script — 投影 `journal` 表的 6 个 event_type（verdict_decision / journal_trade_committed / risk_gate_rejected / phase1_rejected / evolution_event / oco_state_change）排序 `(timestamp DESC, trace_id DESC)`
-- [ ] T012 [US2] 创建 `src/api/routes/events.py` 新模块 — `HeartbeatEvent` Pydantic v2 schema + `GET /api/events/heartbeat?since=&cursor=&types=&limit=` handler + cursor encode/decode helper（base64-url `timestamp|trace_id` 编码）
-- [ ] T013 [US2] 在 `src/api/main.py` 注册 events router with `Depends(verify_api_key)`
-- [ ] T014 [US2] events handler 内集成 `HeartbeatPollAggregator.record(client_identifier)` + OTel span `events.heartbeat.poll` with `client_identifier` attr（API_KEY hash 后 8 位）
-- [ ] T015 [P] [US2] 创建 `tests/test_api_events_heartbeat.py` — 6 用例：(a) 基础 poll；(b) cursor 续传 → 0 events；(c) `since` + `cursor` 同传时 cursor 优先；(d) `?types=verdict,trade` filter；(e) 未来 `since` 返回空不报错；(f) limit 上限
+- [X] T007 [US2] 在 `src/cryptotrader/nodes/journal.py` 加 `record_phase1_rejection(trace_id, pair, reason, payload)` write helper — 写入 `journal` 表 with `event_type="phase1_rejected"`
+- [X] T008 [US2] 在 `src/cryptotrader/nodes/journal.py` 加 `record_evolution_event(event_subtype, artifact_name, payload)` write helper — 写入 `journal` 表 with `event_type="evolution_event"`
+- [X] T009 [US2] 修改 `src/cryptotrader/nodes/verdict.py` — 在 Phase 1 hard-reject 路径（`low_rr` / `stop_too_tight` / `missing_sl_tp` / `direction_inverted`）调用 `journal.record_phase1_rejection()`
+- [X] T010 [US2] 修改 `src/cryptotrader/ops/daemon.py` — 在 3 个钩子调用 `journal.record_evolution_event()`：(a) `_action_pattern_extraction` 创建新 pattern 后；(b) `_action_skill_proposal` 写 `.draft` 后；(c) `_action_pareto_rerank` rerank 完成后
+- [X] T011 [US2] 创建 SQL view `events_heartbeat` migration script — 投影 `journal` 表的 6 个 event_type（verdict_decision / journal_trade_committed / risk_gate_rejected / phase1_rejected / evolution_event / oco_state_change）排序 `(timestamp DESC, trace_id DESC)`
+- [X] T012 [US2] 创建 `src/api/routes/events.py` 新模块 — `HeartbeatEvent` Pydantic v2 schema + `GET /api/events/heartbeat?since=&cursor=&types=&limit=` handler + cursor encode/decode helper（base64-url `timestamp|trace_id` 编码）
+- [X] T013 [US2] 在 `src/api/main.py` 注册 events router with `Depends(verify_api_key)`
+- [X] T014 [US2] events handler 内集成 `HeartbeatPollAggregator.record(client_identifier)` + OTel span `events.heartbeat.poll` with `client_identifier` attr（API_KEY hash 后 8 位）
+- [X] T015 [P] [US2] 创建 `tests/test_api_events_heartbeat.py` — 6 用例：(a) 基础 poll；(b) cursor 续传 → 0 events；(c) `since` + `cursor` 同传时 cursor 优先；(d) `?types=verdict,trade` filter；(e) 未来 `since` 返回空不报错；(f) limit 上限
 
 **Checkpoint**：完成后可独立 demo heartbeat 端点。
 
@@ -75,25 +75,25 @@ description: "Task list for spec 022 — Agent-Native Skill Protocol Layer"
 
 ### Skill 路径迁移（atomic）
 
-- [ ] T016 [US1] git mv `agent_skills/tech/SKILL.md` → `agent_skills/_internal/tech/SKILL.md`（同样 chain/news/macro 共 4 个文件）
-- [ ] T017 [US1] 修改 `src/cryptotrader/learning/evolving_skill_provider.py` — `SKILL_DIR` (或类似) const 改 `agent_skills/_internal/`
-- [ ] T018 [US1] grep + 修改既有测试 fixture 中所有 `agent_skills/{tech,chain,news,macro}/` 路径引用到 `agent_skills/_internal/...`
-- [ ] T019 [P] [US1] 创建 `tests/test_skill_provider_internal_path.py` — 验证 EvolvingSkillProvider 从新路径正确 load 4 skills + spec 019 既有行为不回归
+- [X] T016 [US1] git mv `agent_skills/tech/SKILL.md` → `agent_skills/_internal/tech/SKILL.md`（同样 chain/news/macro 共 4 个文件）
+- [X] T017 [US1] 修改 `src/cryptotrader/learning/evolving_skill_provider.py` — `SKILL_DIR` (或类似) const 改 `agent_skills/_internal/`
+- [X] T018 [US1] grep + 修改既有测试 fixture 中所有 `agent_skills/{tech,chain,news,macro}/` 路径引用到 `agent_skills/_internal/...`
+- [X] T019 [P] [US1] 创建 `tests/test_skill_provider_internal_path.py` — 验证 EvolvingSkillProvider 从新路径正确 load 4 skills + spec 019 既有行为不回归
 
 ### 5 个 External SKILL.md
 
-- [ ] T020 [P] [US1] 写 `agent_skills/_external/cryptotrader/SKILL.md` — bootstrap：YAML frontmatter（`name: cryptotrader-ai` + description）+ install-locally curl 段落 + child skill 路由表（5 行）+ auth 说明（API_KEY Bearer） + future per-agent JWT 设计存档段落
-- [ ] T021 [P] [US1] 写 `agent_skills/_external/verdict-feed/SKILL.md` — use case + endpoint examples（`GET /api/verdicts/recent` + heartbeat subscribe pattern） + curl snippets + 引用 `docs/api/verdict.yaml` + `docs/api/events.yaml`
-- [ ] T022 [P] [US1] 写 `agent_skills/_external/market-intel/SKILL.md` — use case + endpoint examples（`GET /api/snapshot/{pair}` + `GET /api/agents/{name}/results/recent`） + curl snippets + 引用 `docs/api/market.yaml`
-- [ ] T023 [P] [US1] 写 `agent_skills/_external/evolution-insights/SKILL.md` — use case + endpoint examples（`GET /api/memory/skills` + `GET /api/memory/patterns` + `GET /api/memory/skill-proposals`） + curl snippets + 引用 `docs/api/memory.yaml`；含 PatternRecord / SkillRecord schema 示例
-- [ ] T024 [P] [US1] 写 `agent_skills/_external/execution-replay/SKILL.md` — use case + endpoint examples（`GET /api/journal/events` + OCO 状态查询） + curl snippets + 引用 `docs/api/execution.yaml`
+- [X] T020 [P] [US1] 写 `agent_skills/_external/cryptotrader/SKILL.md` — bootstrap：YAML frontmatter（`name: cryptotrader-ai` + description）+ install-locally curl 段落 + child skill 路由表（5 行）+ auth 说明（API_KEY Bearer） + future per-agent JWT 设计存档段落
+- [X] T021 [P] [US1] 写 `agent_skills/_external/verdict-feed/SKILL.md` — use case + endpoint examples（`GET /api/verdicts/recent` + heartbeat subscribe pattern） + curl snippets + 引用 `docs/api/verdict.yaml` + `docs/api/events.yaml`
+- [X] T022 [P] [US1] 写 `agent_skills/_external/market-intel/SKILL.md` — use case + endpoint examples（`GET /api/snapshot/{pair}` + `GET /api/agents/{name}/results/recent`） + curl snippets + 引用 `docs/api/market.yaml`
+- [X] T023 [P] [US1] 写 `agent_skills/_external/evolution-insights/SKILL.md` — use case + endpoint examples（`GET /api/memory/skills` + `GET /api/memory/patterns` + `GET /api/memory/skill-proposals`） + curl snippets + 引用 `docs/api/memory.yaml`；含 PatternRecord / SkillRecord schema 示例
+- [X] T024 [P] [US1] 写 `agent_skills/_external/execution-replay/SKILL.md` — use case + endpoint examples（`GET /api/journal/events` + OCO 状态查询） + curl snippets + 引用 `docs/api/execution.yaml`
 
 ### /skill/<name> endpoint
 
-- [ ] T025 [US1] 创建 `src/api/routes/skills.py` — `SkillRecord` Pydantic v2 schema + `GET /skill/{name}?format=markdown|json` handler — filesystem read `agent_skills/_external/<name>/SKILL.md` → split frontmatter / body → 按 format 返回 markdown 或 JSON
-- [ ] T026 [US1] 在 `src/api/main.py` 注册 skills router with `Depends(verify_api_key)`
-- [ ] T027 [US1] skills handler 内集成 `ExternalSkillFetchAggregator.record(skill_name, client_identifier, response_status)`
-- [ ] T028 [P] [US1] 创建 `tests/test_skills_endpoint.py` — 5 用例：(a) `/skill/cryptotrader` 返回 markdown；(b) `?format=json` 返回 SkillRecord；(c) 不存在 skill 返回 404；(d) auth 失败返回 401 + WWW-Authenticate header；(e) frontmatter 解析正确（name + description）
+- [X] T025 [US1] 创建 `src/api/routes/skills.py` — `SkillRecord` Pydantic v2 schema + `GET /skill/{name}?format=markdown|json` handler — filesystem read `agent_skills/_external/<name>/SKILL.md` → split frontmatter / body → 按 format 返回 markdown 或 JSON
+- [X] T026 [US1] 在 `src/api/main.py` 注册 skills router with `Depends(verify_api_key)`
+- [X] T027 [US1] skills handler 内集成 `ExternalSkillFetchAggregator.record(skill_name, client_identifier, response_status)`
+- [X] T028 [P] [US1] 创建 `tests/test_skills_endpoint.py` — 5 用例：(a) `/skill/cryptotrader` 返回 markdown；(b) `?format=json` 返回 SkillRecord；(c) 不存在 skill 返回 404；(d) auth 失败返回 401 + WWW-Authenticate header；(e) frontmatter 解析正确（name + description）
 
 **Checkpoint**：完成后可单独跑 SKILL.md 自我发现流程。
 
