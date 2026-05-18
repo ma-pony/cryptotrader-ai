@@ -36,6 +36,7 @@ from api.routes import (
     portfolio_v2,
     risk,
     scheduler,
+    skills,
 )
 from cryptotrader.tracing import set_trace_id
 
@@ -443,3 +444,4 @@ app.include_router(chat_control.router, dependencies=[Depends(verify_api_key)])
 app.include_router(hitl.router, dependencies=[Depends(verify_api_key)])
 app.include_router(market.router, dependencies=[Depends(verify_api_key)])
 app.include_router(memory.router, prefix="/api/memory", dependencies=[Depends(verify_api_key)])
+app.include_router(skills.router, dependencies=[Depends(verify_api_key)])
