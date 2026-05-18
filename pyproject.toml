@@ -205,7 +205,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/nodes/evolution.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_evolving_memory_provider.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_evolution_node.py" = ["RUF001", "RUF002", "RUF003", "SIM117"]
-"src/api/routes/memory.py" = ["RUF001", "RUF002", "RUF003", "C901"]
+"src/api/routes/memory.py" = ["RUF001", "RUF002", "RUF003", "C901", "RUF100"]
 "tests/test_api_memory.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_e2e_memory_evolution.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_load_skill_tool.py" = ["RUF001", "RUF002", "RUF003"]
@@ -290,6 +290,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_daemon_pattern_extraction.py" = ["RUF001", "RUF002", "RUF003", "PT023"]
 "tests/test_cli_experience_distill.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_e2e_pattern_cold_start.py" = ["RUF001", "RUF002", "RUF003", "PT023"]
+# spec 024 API patterns endpoint test uses Chinese docstrings/comments + runtime Path.
+"tests/test_api_memory_patterns.py" = ["RUF001", "RUF002", "RUF003", "TCH003", "PT001"]
 # spec 020a: observability module uses Chinese docstrings/comments.
 "src/cryptotrader/observability/*.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 020a: observability imports in log_llm_usage are used at runtime (TCH003).
