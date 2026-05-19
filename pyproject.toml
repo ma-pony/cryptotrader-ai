@@ -177,6 +177,13 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # en-dash, minus, ATR multiplication-sign for readability. C901 on risk_check
 # acknowledged — the function legitimately handles many guardrail branches.
 "src/cryptotrader/agents/macro.py" = ["RUF001"]
+# Chinese comments / docstrings in 3 core modules (spec 022 stamp gate cleanup).
+# RUF002 docstring fullwidth punctuation / RUF003 comment ambiguous chars / RUF100
+# stale noqa directives (BLE001 disabled at top-level since spec 020c).
+# portfolio/manager.py merged into existing per-file-ignore below.
+"src/cryptotrader/cycle_lock.py" = ["RUF003"]
+"src/cryptotrader/llm/reasoning_compat.py" = ["RUF001", "RUF002", "RUF003", "TC003"]
+"src/cryptotrader/risk/checks/position.py" = ["RUF002", "RUF003", "RUF100"]
 "src/cryptotrader/data/macro.py" = ["RUF001", "RUF003"]
 "src/cryptotrader/debate/verdict.py" = ["RUF001", "RUF002", "RUF003"]
 "src/cryptotrader/nodes/debate.py" = ["RUF001", "RUF002", "RUF003"]
@@ -248,7 +255,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_token_budget.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_config_loader.py" = ["RUF001", "RUF002", "RUF003", "E501"]
 # portfolio/manager.py: same SQLAlchemy declarative-class pattern as journal/store.
-"src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
+# spec 022 stamp gate: also covers Chinese comments + stale BLE001 noqa.
+"src/cryptotrader/portfolio/manager.py" = ["N806", "TID251", "RUF001", "RUF002", "RUF003", "RUF100"]
 # cli/main.py:
 # N806 — SQLAlchemy declarative class assigned in function (Base = declarative_base()).
 # S104 — uvicorn's --host default is 0.0.0.0 by design (containers expose the port).
