@@ -48,6 +48,12 @@ class Scheduler:
         self._scheduler = AsyncIOScheduler()
         self._stop_event: asyncio.Event | None = None
         self._trigger_engine = trigger_engine
+        # Watchdog state — tracks last successful cycle completion so the
+        # heartbeat task can detect IntervalTrigger silent-miss bug (observed
+        # 5/18 18:57 + 19:57 + 5/19 18:36; APScheduler's next_fire_time gets
+        # stuck and wakeup() alone doesn't recover). When > 1.5x interval has
+        # elapsed without a success, watchdog force-reschedules the job.
+        self._last_successful_cycle_at: datetime | None = None
 
         # FR-103: structured boot log so ops can grep `pair_init` for
         # spot/swap/future split at startup.
@@ -157,12 +163,22 @@ class Scheduler:
         logger.info("Scheduler stopped gracefully")
 
     async def _scheduler_heartbeat(self) -> None:
-        """Periodic wakeup nudge — defends against the long-uptime stuck bug.
+        """Periodic wakeup nudge + staleness watchdog.
+
+        wakeup() alone proved insufficient against the IntervalTrigger silent-miss
+        bug (5/18 18:57, 5/18 19:57, 5/19 18:36 — three confirmed misses). The
+        AsyncIOScheduler's next_fire_time gets stuck in the past and wakeup()
+        doesn't re-anchor it. So we also track last_successful_cycle_at and
+        force-reschedule the trading_cycle job when staleness exceeds 1.5x interval.
 
         5-min cadence keeps the apscheduler internal timer fresh without
-        meaningful overhead (wakeup() is a no-op when state is healthy).
-        Errors here are non-fatal; we log and keep looping.
+        meaningful overhead. Errors here are non-fatal; we log and keep looping.
         """
+        # Staleness threshold = 1.5x interval; long enough to allow a slow
+        # cycle (e.g., 5/18 09:19 took 40min during OKX cooldown) without
+        # false-positive force-reschedule, short enough to catch the silent
+        # miss before a second interval is lost.
+        stale_threshold_s = int(self.interval_minutes * 60 * 1.5)
         while self._stop_event is not None and not self._stop_event.is_set():
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=300)
@@ -174,6 +190,36 @@ class Scheduler:
                 logger.debug("scheduler heartbeat: wakeup() nudged")
             except Exception as exc:
                 logger.warning("scheduler heartbeat wakeup failed: %s", exc)
+            # Staleness check — only if we have a baseline (skip until first
+            # successful cycle to avoid bogus reschedule during startup delay).
+            if self._last_successful_cycle_at is not None:
+                elapsed_s = (datetime.now(UTC) - self._last_successful_cycle_at).total_seconds()
+                if elapsed_s > stale_threshold_s:
+                    logger.warning(
+                        "scheduler watchdog: last successful cycle was %.0fs ago "
+                        "(threshold %ds = 1.5x%dm) — IntervalTrigger likely silent-missed; "
+                        "force-rescheduling trading_cycle job",
+                        elapsed_s,
+                        stale_threshold_s,
+                        self.interval_minutes,
+                    )
+                    try:
+                        # Force the job to fire ASAP by rewriting next_run_time.
+                        # APScheduler will then re-anchor the IntervalTrigger
+                        # against this new baseline.
+                        self._scheduler.modify_job(
+                            "trading_cycle",
+                            next_run_time=datetime.now(UTC) + timedelta(seconds=10),
+                        )
+                        logger.warning(
+                            "scheduler watchdog: trading_cycle rescheduled to fire in 10s",
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "scheduler watchdog: force-reschedule failed: %s",
+                            exc,
+                            exc_info=True,
+                        )
 
     def stop(self) -> None:
         if self._stop_event:
@@ -246,6 +292,9 @@ class Scheduler:
                 )
             except Exception:
                 logger.info("Failed to write scheduler heartbeat", exc_info=True)
+            # Update watchdog state — only on success path so a stuck IntervalTrigger
+            # doesn't reset the staleness clock just by being scheduled.
+            self._last_successful_cycle_at = datetime.now(UTC)
         except Exception:
             logger.warning("Unexpected error in trading cycle", exc_info=True)
 
