@@ -1,6 +1,6 @@
 # cryptotrader-web
 
-CryptoTrader-AI 前端 — React 19 + Vite 7 + TypeScript 5.9 + Tailwind 3 SPA。
+CryptoTrader-AI 前端 — React 19 + Vite 8 + TypeScript 5.9 + Tailwind 3 SPA。
 
 提供监控/复盘/操作三类视图。
 

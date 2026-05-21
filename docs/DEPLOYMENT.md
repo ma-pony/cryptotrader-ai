@@ -12,7 +12,7 @@ This doc walks through provisioning that VPS end-to-end with the existing
 
 | Item | Recommendation | Why |
 |---|---|---|
-| Provider | Hetzner CPX21 ($6/mo) or DigitalOcean Basic ($6/mo) | Tested price/performance for 4-service compose |
+| Provider | Hetzner CPX21 ($6/mo) or DigitalOcean Basic ($6/mo) | Tested price/performance for 6-service compose |
 | RAM | **4 GB minimum** | postgres + redis + api + scheduler + caddy comfortably; AWS t3.micro 1 GB OOMs under load |
 | CPU | 2 vCPU shared | Cycles peak at ~30s of LLM I/O wait, never CPU-bound |
 | Disk | 80 GB SSD | Postgres journal grows ~50 MB/day; volume snapshots fit easily |
@@ -95,13 +95,15 @@ $EDITOR .env
 #   secret = "..."
 #   passphrase = "..."
 #   sandbox = true               # flip to false for live trading
-#   leverage = 2                 # perp leverage; 1 = no-op (default); applied
+#   leverage = 5                 # perp leverage; production uses 5x isolated
 #                                # via set_leverage on first contact per symbol
 #   margin_mode = "isolated"     # OKX: "isolated" | "cross" (default isolated)
 #
-# Plus scheduler trading pairs (perp linear by default — spot accounts cannot short):
+# Plus scheduler trading pairs (perp linear; BTC-only concentrated mode):
 #   [scheduler]
-#   pairs = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+#   pairs = ["BTC/USDT:USDT"]
+#   interval_minutes = 240       # aligned with OKX 4h K-lines + 8h funding
+#   exchange_id = "okx"
 #
 # Optional: pin total_return baseline if you funded in stages or want a fixed reference
 #   [portfolio]
@@ -257,22 +259,26 @@ The sandbox-to-live flip is small but consequential:
    relaxed for low-stakes sandbox observation; tighten for real money
    (e.g. 0.03 / 0.10 — closer to the original tight defaults).
 3. Set a smaller `[risk.position] max_single_pct` for the first weeks
-   (e.g. 0.10 = 10% of equity per trade, not 0.90).
-4. **Verify perp positon mode**: code assumes `long_short_mode` (per-side
+   (e.g. 0.10 = 10% of equity per trade). Production BTC-only mode uses
+   0.80 with `max_total_exposure_pct=4.00` and `max_margin_used_pct=0.90`.
+4. **Verify perp position mode**: code assumes `long_short_mode` (per-side
    long+short positions). Check via OKX web → 交易设置 → 持仓模式. If your
    account is in `net_mode`, orders will fail with sCode=51000 because of
-   the `posSide` parameter.
-5. **Set `[exchanges.okx] leverage = 1`** for the first weeks (default).
-   Higher values multiply position notional via `set_leverage` and require
-   careful risk-budget recalculation (with 2x leverage, `max_single_pct =
-   0.9` means 90% notional → ~45% equity margin used).
+   the `posSide` parameter (commit 07e105b fixes OCO sz using total position
+   size; commit fc9211d adds execution close fallback to position_context on
+   OKX cooldown).
+5. **Set `[exchanges.okx] leverage`** appropriately. Production uses `leverage = 5`
+   isolated on BTC-only concentrated mode. With 5x leverage, `max_single_pct =
+   0.80` means 80% notional → ~16% equity margin used at full scale.
 6. Pin `[portfolio] initial_capital = <starting USDT>` so the dashboard's
    "总收益" stays meaningful if you fund in stages.
 7. Run `arena live-check` (already in the CLI) to confirm credentials,
    trading pair listings, and rate-limit headroom before flipping
    `sandbox = false`.
 8. **Watch the first 5 cycles in `docker compose logs -f scheduler`.**
-   Don't walk away.
+   Don't walk away. The scheduler watchdog (commit 57eb884) checks heartbeat
+   every 5 min and force-reschedules via `modify_job` if no successful cycle
+   lands within 1.5×interval — it has self-healed 3 times in production.
 
 ## What this doc deliberately skips
 

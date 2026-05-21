@@ -20,7 +20,7 @@
 | 链上数据 | data/onchain.py | ✅ | 占位，Phase 1 只用 ccxt 资金费率 |
 | 新闻/宏观 | data/news.py, data/macro.py | ✅ | 占位，返回默认值 |
 | 数据聚合 | data/snapshot.py | ✅ | DataSnapshot 统一输出 |
-| TechAgent | agents/tech.py | ✅ | pandas-ta 指标（RSI/MACD/SMA/BBands/ATR）+ LLM 分析 |
+| TechAgent | agents/tech.py | ✅ | `agents/_indicators.py`（纯 pandas/numpy，无 native 依赖）指标（RSI/MACD/SMA/BBands/ATR）+ LLM 分析 |
 | ChainAgent | agents/chain.py | ✅ | 资金费率 + OI + Exchange Flow 数据注入 LLM |
 | NewsAgent | agents/news.py | ✅ | 占位 |
 | MacroAgent | agents/macro.py | ✅ | 占位 |
@@ -79,7 +79,7 @@
 
 ### 设计决策
 - 所有 provider 优雅降级：无 API Key → 返回默认值 + 日志警告，不崩溃
-- 新闻情绪用关键词匹配（不依赖外部 NLP 服务），Phase 4 可升级到 FinBERT
+- 新闻情绪用关键词匹配（不依赖外部 NLP 服务）；Phase 4a 已将情绪分析委托给 NewsAgent LLM（FinBERT 移除）
 - JournalStore 仍用内存，Phase 3 升级到 PostgreSQL
 - 权重校准需要历史 PnL 数据，初期返回等权
 
@@ -175,9 +175,9 @@ arena backtest --pair BTC/USDT --start 2025-01-01 --end 2025-12-31 --interval 4h
 # config/default.toml 新增
 [scheduler]
 enabled = false
-pairs = ["BTC/USDT", "ETH/USDT"]
-interval_minutes = 240  # 每 4 小时
-exchange_id = "binance"
+pairs = ["BTC/USDT:USDT"]      # 生产：BTC 专注模式（perp）
+interval_minutes = 240         # 4h 周期，与 OKX 4h K 线 + 8h 资金费率对齐
+exchange_id = "okx"            # 生产交易所
 daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 ```
 
@@ -226,7 +226,7 @@ events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_
 
 **最小可用的 Web 监控界面。**
 
-- 技术选型：React 19 + Vite 7 + TypeScript
+- 技术选型：React 19 + Vite 8 + TypeScript 5.9
 - 页面：
   1. **Overview**：当前持仓、今日 PnL、总 PnL、活跃 pair
   2. **Decisions**：最近决策列表（方向/置信度/分歧度/风控结果）
@@ -253,14 +253,14 @@ events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_
 - docs/deployment.md：Docker 部署指南
 
 ### Phase 3 交付标准
-- [ ] `arena run --pair BTC/USDT --mode paper` 结果持久化到 PostgreSQL
-- [ ] `arena backtest --pair BTC/USDT --start 2025-06-01 --end 2025-12-31` 输出完整回测报告
-- [ ] `arena scheduler start` 自动定时运行
-- [ ] `arena serve` 启动 API + Dashboard
-- [ ] LiveExchange 在 Binance testnet 上验证通过
-- [ ] Webhook 通知正常发送
-- [ ] 测试覆盖率 ≥80%
-- [ ] 文档完整
+- [X] `arena run --pair BTC/USDT --mode paper` 结果持久化到 PostgreSQL
+- [X] `arena backtest --pair BTC/USDT --start 2025-06-01 --end 2025-12-31` 输出完整回测报告
+- [X] `arena scheduler start` 自动定时运行
+- [X] `arena serve` 启动 API + Dashboard
+- [X] LiveExchange 在 OKX 上验证通过（exchange_id=okx；perp BTC/USDT:USDT）
+- [X] Webhook / Telegram 通知正常发送
+- [X] 测试覆盖率 ≥80%（当前 2279 tests collected）
+- [X] 文档完整
 
 ---
 
@@ -290,12 +290,8 @@ events = ["trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_
 
 ### 4.2 高级情绪分析
 
-当前：关键词匹配（Phase 2）。升级路径：
+当前：NewsAgent LLM 做情绪分析（FinBERT 已移除）；关键词匹配作为数据层 fallback 保留。升级路径：
 
-- **Phase 4a**：FinBERT 本地推理（HuggingFace transformers）
-  - 模型：ProsusAI/finbert（110M 参数，CPU 可跑）
-  - 输入：新闻标题 + 摘要
-  - 输出：positive/negative/neutral + 置信度
 - **Phase 4b**：社交媒体实时情绪
   - Twitter/X API（crypto KOL 监控）
   - Reddit（r/cryptocurrency, r/bitcoin 热帖）
@@ -387,7 +383,6 @@ model = "gpt-4o-mini"
 | 优先级 | 功能 | 理由 |
 |--------|------|------|
 | P0 | Agent 插件系统 | 社区增长的基础 |
-| P0 | 高级情绪分析 (FinBERT) | 低成本高收益，CPU 可跑 |
 | P1 | LLM + RL 混合 | 学术前沿，差异化 |
 | P1 | 高级 Dashboard | 用户体验 |
 | P2 | 多交易所套利 | 独立策略，可并行开发 |
@@ -400,11 +395,42 @@ model = "gpt-4o-mini"
 ## 总览：四阶段里程碑
 
 ```
-Phase 1 ✅  最小闭环        52 files, 11 tests   → 能跑通一次完整流程
-Phase 2 ✅  完整智能层      57 files, 51 tests   → 真实数据源 + API 服务
-Phase 3 ✅  实盘就绪        ~90 files, 347 tests → 持久化 + 回测 + 实盘 + 调度 + Skill 检索
-Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 + 社区
+Phase 1 ✅  最小闭环        52 files, 11 tests    → 能跑通一次完整流程
+Phase 2 ✅  完整智能层      57 files, 51 tests    → 真实数据源 + API 服务
+Phase 3 ✅  实盘就绪        ~90 files, 347 tests  → 持久化 + 回测 + 实盘 + 调度 + Skill 检索
+Phase 4a ✅ Trilogy 进化    ~140 files, 2279 tests → spec 016-022 全落地（见下方）
+Phase 4b    插件 + RL + 套利 ~100+ files           → RL + 插件 + 套利 + 社区
 ```
+
+---
+
+## Phase 4 — Trilogy 进化 + Agent-Native（spec 016–022，✅ 已落地）
+
+### 目标
+将系统从"规则辅助 AI"升级为"自进化 AI"——prompt 内容、记忆模式、技能知识均可通过数据反馈自动演化，同时对外实现 Anthropic Agent-Native Skill Protocol。
+
+### 交付总结
+
+| Spec | 主题 | 落地摘要 |
+|------|------|----------|
+| 016 | Trilogy 研究 | 8 项学术调研；D-ENG-01 daemon 架构；D-ENG-02 git lineage 决策 |
+| 017a/b | PromptBuilder + 4 agent 集成 | 配置驱动 prompt 组装；删除 ROLE 硬编码；middleware 模块 |
+| 018 | Memory Evolution | 5 信号 Maturity FSM；Pareto 剪枝；IVE 失败分类；~80 新测试 |
+| 019 | Skill Evolution | EvolvingSkillProvider（scope+regime+idf 两层检索）；LLM 自动 metadata 推断 |
+| 020a | Trilogy Ops | Anthropic prompt cache 观测（OTel `llm.cache.*` 属性）；rollback runbook；staging_validate |
+| 020b | Evolution Daemon | 独立进程（`src/cryptotrader/ops/daemon.py`）；daily Pareto+Regime+Skill proposal；soft degrade；**尚未加入 docker-compose.yml** |
+| 020c | Git Lineage | GitLineageHook；evolution branch orphan；transitions batch commit；asyncio.sleep + SIGTERM |
+| 021 | Pattern Cold-Start | 3 内置 pattern + daemon pattern_extraction action |
+| 022 | Agent-Native Skill Protocol | `agent_skills/_internal/`+`_external/` 重组；patterns API；heartbeat events；3 Prometheus gauge |
+
+**累计**：~260 新测试 / 11 Prometheus Gauge / OTel 全覆盖 / `_compat.py` Py 3.10 UTC shim
+
+**后落地修复**（post-stamp commits）：
+- `07e105b`：OCO sz 使用总仓位大小（修复 51000 + 部分覆盖问题）
+- `57eb884`：调度器 watchdog（静默丢失恢复，生产已自愈 3 次）
+- `fc9211d`：execution close fallback 到 position_context（OKX 冷却期兜底）
+
+---
 
 ### 技术债务追踪
 
@@ -413,7 +439,7 @@ Phase 4     进化与优化      ~100+ files           → RL + 插件 + 套利 
 | JournalStore 纯内存 | Phase 1 | ✅ 已解决 | PostgreSQL + 内存降级双模式 |
 | Portfolio 硬编码 | Phase 1 | ✅ 已解决 | PortfolioManager 完整持仓追踪 |
 | Redis 未实际连接 | Phase 1 | ✅ 已解决 | RedisStateManager 含保守降级 fallback |
-| 新闻情绪关键词匹配 | Phase 2 | 已更新 | FinBERT 已移除，情绪分析委托给 NewsAgent LLM；关键词匹配作为数据层 fallback 保留 |
+| 新闻情绪关键词匹配 | Phase 2 | ✅ 已解决 | FinBERT 已移除，情绪分析委托给 NewsAgent LLM；关键词匹配作为数据层 fallback 保留 |
 | 无回测验证 | Phase 2 | ✅ 已解决 | BacktestEngine 含完整回测引擎 |
 | LiveExchange 未验证 | Phase 1 | ✅ 已解决 | 生产级加固：重试、熔断、凭证系统 |
 | 无定时调度 | Phase 2 | ✅ 已解决 | APScheduler 3.x（IntervalTrigger + CronTrigger） |

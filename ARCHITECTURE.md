@@ -1,9 +1,13 @@
 # CryptoTrader AI — 系统架构设计文档
 
-> 版本：v6（2026-05-13）
+> 版本：v7（2026-05-21；spec 022 stamp 后）
+> 与 `docs/ARCHITECTURE.md` 分工：本文档侧重设计 rationale / 学术参考 / 市场定位 / MVP 路线；
+> `docs/ARCHITECTURE.md` 侧重技术参考（数据模型 / 状态机 / FastAPI 端点 / 配置 schema）。
 > 设计原则：agent prompt 只含 `skill (role + thinking)` + `snapshot (current data)`。
 > 所有把 LLM 自生成内容反馈回下一次 prompt 的闭环都已移除（自指循环 → 噪声放大）。
-> 反馈通道仅限：人工编辑 `agent_skills/<id>/SKILL.md` + 实时 `live_steering`（一次性，cycle 结束失效）。
+> 反馈通道仅限：人工编辑 `agent_skills/_internal/<id>/SKILL.md`、trilogy 进化系统离线产出
+> （spec 016–020c：Memory Evolution / Skill Evolution / Pareto / Git Lineage），
+> + 实时 `live_steering`（一次性，cycle 结束失效）。
 
 ---
 
@@ -424,10 +428,13 @@ def make_verdict(state: ArenaState) -> TradeVerdict:
 
 Agent prompt 的内容只由两类来源拼装：
 
-1. **静态 Skill 文件**（`agent_skills/<id>/SKILL.md`）—— 人工维护、git tracked。
-   每个 SKILL.md 由 frontmatter（name / scope / regime_tags / triggers_keywords /
-   importance / predictive_value 等数字字段）+ Markdown body（角色 + 思路 +
-   checklist）组成。**不含历史 case dump、不含方向预测、不含具体数字阈值**。
+1. **静态 Skill 文件**（`agent_skills/_internal/<id>/SKILL.md`，spec 022 重组）——
+   人工维护、git tracked。每个 SKILL.md 由 frontmatter（name / scope / regime_tags /
+   triggers_keywords / importance / predictive_value 等数字字段）+ Markdown body
+   （角色 + 思路 + checklist）组成。**不含历史 case dump、不含方向预测、不含具体
+   数字阈值**。`access_count` / `last_accessed_at` 写入 gitignored sidecar，保持
+   主文件 git-friendly。对外协议层（`_external/<id>/SKILL.md`）走相同规范但不
+   注入内部 prompt，只供 `GET /skill/<name>` 暴露给外部 agent。
 
 2. **当前 Cycle Snapshot**（`snapshot_summary` + `trend_context`）—— OHLCV、
    indicator、funding、news、macro，纯数据。
@@ -495,7 +502,7 @@ HumanMessage。一次性消费，cycle 结束自动失效——不形成 LLM-自
 | 资金流 | Exchange In/Outflow | CryptoQuant | 免费层(日级) | 日级 | 每日 |
 | 巨鲸 | 大额链上转账 | Whale Alert | 免费层(10次/min) | 分钟级 | 实时 |
 | 新闻 | crypto 新闻聚合 | 自建爬虫(CoinDesk等) | 免费 | 小时级 | 每小时 |
-| 社交情绪 | Twitter/Reddit 情绪 | snscrape + transformers | 免费 | 小时级 | 每小时 |
+| 社交情绪 | CoinGecko 社交热度（Twitter 粉丝 / Reddit 订阅 / 情绪投票）| CoinGecko Community API | 免费 | 小时级 | 每小时 |
 | 宏观 | 美联储利率、DXY | FRED API | 免费 | 日级 | 每日 |
 | BTC Dominance | 市场份额 | CoinGecko | 免费 | 分钟级 | 每分钟 |
 
@@ -665,34 +672,44 @@ except RedisError:
     return CheckResult(passed=False, reason="Redis 不可用，保守拒绝")
 ```
 
-### 6.5 风控参数（可热更新）
+### 6.5 风控参数
+
+> 全部位于 `config/default.toml` 的 `[risk.*]` 段；`config/local.toml` 可覆盖（gitignored）。
+> 不存在独立的 `risk.toml`。
 
 ```toml
-# config/risk.toml
-[position]
+# 默认（多 pair 分散）
+[risk.position]
 max_single_pct = 0.10          # 单币种最大仓位 10%
 max_total_exposure_pct = 0.50  # 总敞口最大 50%
+max_margin_used_pct = 0.40
 
-[loss]
+[risk.loss]
 max_daily_loss_pct = 0.03      # 日亏损上限 3%
 max_drawdown_pct = 0.10        # 最大回撤 10% → 强制平仓
 max_cvar_95 = 0.05             # CVaR(95) 上限 5%
 
-[cooldown]
+[risk.cooldown]
 same_pair_minutes = 60         # 同币种冷却 60 分钟
 post_loss_minutes = 120        # 亏损后冷却 120 分钟
 
-[volatility]
+[risk.volatility]
 flash_crash_threshold = 0.05   # 5分钟跌幅 5% 触发
-funding_rate_threshold = 0.001 # 资金费率 0.1%/8h 触发
+funding_rate_threshold = 0.005 # 资金费率 0.5% 触发
 
-[exchange]
-max_api_latency_ms = 2000      # API 延迟 2s 暂停
-health_check_interval_s = 30   # 健康检查间隔 30s
+[risk.exchange]
+max_api_latency_ms = 5000      # API 延迟 5s 才视为降级（OKX VPN 现实）
 
-[rate_limit]
-max_trades_per_hour = 6        # 每小时最多 6 笔
-max_trades_per_day = 20        # 每天最多 20 笔
+[risk.rate_limit]
+max_trades_per_hour = 6
+max_trades_per_day = 20
+
+# ── BTC-only 集中模式生产覆盖（config/local.toml）──
+# [risk.position]
+# max_single_pct = 0.80
+# max_total_exposure_pct = 4.00     # 5x 杠杆 × 80% single → 总 notional 上限
+# max_margin_used_pct = 0.90
+# max_same_direction_positions = 1  # BTC 是唯一 pair
 ```
 
 ---
@@ -899,15 +916,15 @@ engine = "paper"
 ### 9.2 独立使用
 
 ```bash
-# CLI 模式
-arena run --pair BTC/USDT --mode paper
-arena run --pair BTC/USDT ETH/USDT --mode live --exchange binance
+# CLI 模式（生产推荐 perp 线性合约）
+arena run --pair BTC/USDT:USDT --mode paper
+arena run --pair BTC/USDT:USDT --mode live   # 默认走 config 的 exchange_id=okx
 arena journal log --limit 10
 arena journal show abc12345
-arena backtest --pair BTC/USDT --start 2025-01-01 --end 2025-12-31
+arena backtest --pair BTC/USDT:USDT --start 2025-01-01 --end 2025-12-31
 
 # API 模式
-arena serve --port 8003
+arena serve --port 8003   # FastAPI + 嵌入式 scheduler + watchdog
 ```
 
 ### 9.3 集成到 crypto_trade_service
@@ -980,120 +997,74 @@ async def make_decision(self, signal: Signal) -> Decision:
 
 ## 10. 项目结构
 
+> **以下结构反映 spec 022 stamp 时（2026-05-21）的实际目录拓扑。
+> 风控参数全部在 `config/default.toml` 的 `[risk.*]` 段（不存在 `risk.toml`）。**
+
 ```
 cryptotrader-ai/
-├── README.md
+├── README.md / README_EN.md
 ├── LICENSE (MIT)
 ├── pyproject.toml
-├── docker-compose.yml
-├── .env.example
+├── docker-compose.yml       # 6 service: postgres / redis / api / web / scheduler / caddy
 ├── Makefile
 │
 ├── config/
-│   ├── default.toml           # 默认配置
-│   ├── exchanges.toml         # 交易所 API 配置
-│   └── risk.toml              # 风控参数（可热更新）
+│   ├── default.toml         # 全部默认配置（模式 / 模型 / 风控 / 调度器 / 数据源）
+│   ├── local.toml           # 本地覆盖（API key / 生产参数；gitignored）
+│   └── agents/<name>.md     # tech / chain / news / macro 的 system_prompt
 │
-├── src/
-│   └── cryptotrader/
-│       ├── __init__.py
-│       │
-│       ├── data/              # Layer 1: 数据层
-│       │   ├── __init__.py
-│       │   ├── market.py      # ccxt 行情采集
-│       │   ├── onchain.py     # DefiLlama + CoinGlass + CryptoQuant
-│       │   ├── news.py        # 新闻爬虫 + 情绪分析
-│       │   ├── macro.py       # FRED + CoinGecko 宏观数据
-│       │   ├── snapshot.py    # DataSnapshot 聚合
-│       │   └── providers/     # 数据源适配器
-│       │       ├── defillama.py
-│       │       ├── coinglass.py
-│       │       ├── cryptoquant.py
-│       │       └── whale_alert.py
-│       │
-│       ├── agents/            # Layer 2: 分析 Agent
-│       │   ├── __init__.py
-│       │   ├── base.py        # Agent 基类 + 标准输出格式
-│       │   ├── tech.py        # 技术面 Agent
-│       │   ├── chain.py       # 链上数据 Agent
-│       │   ├── news.py        # 新闻情绪 Agent
-│       │   └── macro.py       # 宏观 Agent
-│       │
-│       ├── debate/            # Layer 3: 辩论层
-│       │   ├── __init__.py
-│       │   ├── challenge.py   # 交叉质询 prompt 构建
-│       │   ├── convergence.py # 稳定性检测 + 分歧度计算
-│       │   └── verdict.py     # 共识生成 + 仓位调节
-│       │
-│       ├── risk/              # Layer 4: 风控层
-│       │   ├── __init__.py
-│       │   ├── gate.py        # RiskGate 主入口
-│       │   ├── checks/        # 11 项检查
-│       │   │   ├── __init__.py
-│       │   │   ├── position.py      # MaxPositionSize + MaxTotalExposure
-│       │   │   ├── loss.py          # DailyLossLimit + DrawdownLimit
-│       │   │   ├── cvar.py          # CVaR 检查
-│       │   │   ├── correlation.py   # 持仓相关性
-│       │   │   ├── cooldown.py      # 交易冷却期
-│       │   │   ├── volatility.py    # 闪崩检测 + 资金费率异常
-│       │   │   ├── rate_limit.py    # 交易频率限制
-│       │   │   └── exchange.py      # 交易所健康检查
-│       │   └── state.py       # Redis 风控状态管理
-│       │
-│       ├── execution/         # Layer 5: 执行层
-│       │   ├── __init__.py
-│       │   ├── order.py       # OrderManager + 状态机
-│       │   ├── exchange.py    # LiveExchange (ccxt 封装)
-│       │   ├── simulator.py   # PaperExchange (含滑点模型)
-│       │   └── reconcile.py   # 对账
-│       │
-│       ├── journal/           # Decision Journal
-│       │   ├── __init__.py
-│       │   ├── commit.py      # DecisionCommit 模型（不可变哈希链）
-│       │   └── store.py       # 存储（PostgreSQL）
-│       │
-│       ├── learning/          # 检索层（skill 检索）
-│       │   ├── __init__.py
-│       │   ├── regime.py     # tag_regime（regime 标签计算）
-│       │   └── evolution/
-│       │       ├── skill_provider.py # EvolvingSkillProvider（scope + regime + idf）
-│       │       └── idf.py            # IDF + keyword 提取
-│       │
-│       ├── graph.py           # LangGraph 主编排
-│       ├── models.py          # 全局数据模型
-│       └── config.py          # 配置加载
+├── agent_skills/            # spec 022 重组：内外协议分目录
+│   ├── _internal/{tech,chain,news,macro,trading-knowledge}/SKILL.md
+│   │                        # 注入 agent prompt 的内部能力（EvolvingSkillProvider 读）
+│   └── _external/{cryptotrader,verdict-feed,market-intel,
+│                  evolution-insights,execution-replay}/SKILL.md
+│                            # 对外 Anthropic SKILL.md 协议（GET /skill/<name>）
 │
-├── src/api/                   # FastAPI 服务
-│   ├── __init__.py
-│   ├── main.py
+├── agent_memory/            # trilogy 进化系统数据（spec 018-021）
+│   └── {tech,chain,news,macro}/patterns/*.md
+│
+├── src/cryptotrader/
+│   ├── data/                # 数据层：market / onchain / news / macro + providers/
+│   ├── agents/              # base + tech/chain/news/macro + _indicators.py（纯 pandas/numpy）
+│   ├── debate/              # challenge / convergence / verdict / researchers（bull/bear）
+│   ├── nodes/               # LangGraph 节点函数（agents/data/debate/verdict/execution/journal）
+│   ├── risk/                # gate.py（11 项顺序检查）+ state.py（Redis + 内存降级）
+│   ├── execution/           # simulator / exchange（LiveExchange ccxt）/ order / reconcile
+│   ├── portfolio/           # PortfolioManager（DB + 内存）
+│   ├── journal/             # store / commit / events.py（spec 022 record_evolution_event）
+│   ├── learning/            # regime + evolution/（skill_provider + idf）+ memory.py（spec 021/022）
+│   ├── observability/       # cache_metrics / heartbeat_metrics（spec 022 3 gauge）
+│   ├── ops/daemon.py        # evolution daemon（spec 020b；尚未在 compose 启用）
+│   ├── backtest/            # engine / session / cache / historical_data
+│   ├── graph.py             # 3 graph variants（full / lite / debate）
+│   ├── state.py             # ArenaState TypedDict + build_initial_state()
+│   ├── scheduler.py         # APScheduler + watchdog（spec post-022 fix）
+│   └── config.py            # TOML 配置加载 + dataclass 校验
+│
+├── src/api/                 # FastAPI 服务
 │   └── routes/
-│       ├── analyze.py         # POST /analyze
-│       ├── journal.py         # GET /journal/*
-│       └── health.py          # GET /health + /metrics
+│       ├── decisions.py / portfolio.py / risk.py / scheduler.py
+│       ├── chat.py / hitl.py / market.py / backtest.py
+│       ├── memory.py        # skills + patterns（spec 022 closes 021 T021）
+│       ├── events.py        # GET /api/events/heartbeat（spec 022）
+│       ├── skills.py        # GET /skill/<name>（spec 022 外部 SKILL.md）
+│       └── metrics.py       # Prometheus exporter（含 spec 022 新 3 gauge）
 │
-├── src/cli/                   # CLI
-│   ├── __init__.py
-│   └── main.py               # arena run / journal / backtest
+├── src/cli/main.py          # Typer CLI（arena run / serve / scheduler / backtest / live-check）
 │
-├── tests/
-│   ├── unit/
-│   │   ├── test_agents/
-│   │   ├── test_debate/
-│   │   ├── test_risk/
-│   │   └── test_execution/
-│   ├── integration/
-│   │   ├── test_graph.py      # 完整流程集成测试
-│   │   └── test_api.py
-│   └── fixtures/
-│       ├── snapshots/         # 测试用 DataSnapshot
-│       └── exchanges/         # Mock 交易所响应
+├── web/                     # React 19 + Vite 8 + TS 5.9 前端（仪表盘 / 决策 / 回测 / 风控）
+│
+├── tests/                   # 2279 tests（spec 022 stamp 基线）
+│
+├── specs/                   # spec-kit 历史归档（001–025；spec 016-022 = trilogy + agent-native）
 │
 └── docs/
-    ├── architecture.md        # 本文档
-    ├── getting-started.md
-    ├── configuration.md
-    ├── risk-management.md
-    └── contributing.md
+    ├── ARCHITECTURE.md      # 技术参考（与本设计文档分工）
+    ├── DEPLOYMENT.md        # 部署指南
+    ├── PRD.md               # 产品需求
+    ├── phases.md            # 阶段交付物清单
+    ├── frontend-architecture.md
+    ├── TRACING.md / logging-conventions.md / EDGE_CASES.md
 ```
 
 ---
@@ -1102,84 +1073,67 @@ cryptotrader-ai/
 
 | 组件 | 选型 | 版本 | 理由 |
 |------|------|------|------|
-| Agent 编排 | LangGraph | ≥0.2 | 状态机+并行+条件循环，TradingAgents/ai-hedge-fund 验证 |
-| LLM 统一接口 | LangChain ChatOpenAI | ≥0.3 | `create_llm()` 工厂，自动 fallback + SQLiteCache，按 Agent 配模型 |
-| 交易 | ccxt | ≥4.0 | 100+ 交易所统一接口 |
-| API 框架 | FastAPI | ≥0.115 | 异步，自动文档，Pydantic v2 |
+| Agent 编排 | LangGraph | ≥1.0 | 状态机+并行+条件循环；3 graph variants（full / lite / debate）|
+| LLM 统一接口 | LangChain ChatOpenAI | ≥1.2 | `create_llm()` 工厂，`with_fallbacks([fallback])` + `SQLiteCache`，按 agent 配模型 |
+| 交易 | ccxt | ≥4.x | OKX perp 主战场（spec 013 起统一 `BTC/USDT:USDT` canonical 符号）|
+| API 框架 | FastAPI | ≥0.135 | 异步，自动 OpenAPI，Pydantic v2 |
 | ORM | SQLAlchemy 2.0 | async | Decision Journal 存储 |
-| 数据库 | PostgreSQL | ≥15 | 决策记录、回测数据 |
-| 缓存 | Redis | ≥7 | 风控状态、冷却计时 |
-| 技术指标 | pandas-ta | latest | 纯 Python，无 C 依赖，安装简单 |
-| HTTP 客户端 | httpx | latest | 异步，链上 API 调用 |
-| 配置 | tomli + pydantic | — | TOML 配置 + 类型验证 |
-| CLI | typer | latest | 类型安全的 CLI 框架 |
-| 测试 | pytest + pytest-asyncio | — | 异步测试 |
-| 包管理 | uv | latest | 快速依赖解析 |
+| 数据库 | PostgreSQL | 16 | 决策记录、portfolio_snapshots、回测会话 |
+| 缓存 | Redis | 7 | 风控状态、冷却计时、live_steering 队列、限流 fixed-window |
+| 技术指标 | `agents/_indicators.py` | — | 纯 pandas/numpy 实现（替代 pandas-ta，零原生依赖）|
+| 调度 | APScheduler | ≥3.10 | IntervalTrigger 4h + 自研 watchdog（spec post-022 fix）|
+| HTTP 客户端 | httpx | latest | 异步链上 API 调用 |
+| 配置 | tomli + dataclass | — | TOML 配置 + 类型验证 |
+| CLI | typer + rich | latest | 类型安全的 CLI 框架 |
+| 测试 | pytest + pytest-asyncio | — | `asyncio_mode = "auto"`，2279 tests collected |
+| 包管理 | uv | latest | 快速依赖解析；litellm 已删除 |
+| 前端 | React 19 + Vite 8 + TS 5.9 | — | strict 模式 + Zustand + React Query + Radix UI |
+| 可观测性 | OpenTelemetry + Prometheus | — | OTel structlog 上下文 + Prometheus exporter（含 spec 022 3 gauge）|
 
 ---
 
-## 12. MVP 路线图
+## 12. 演进路线图（含已落地里程碑）
 
-### Phase 1: 最小闭环（2-3 周）
+> 本节是历史 + 未来的合并视图；按阶段标 ✅ 已完成 / 🟡 进行中 / ⬜ 未开始。每阶段详细交付物见 `docs/phases.md`。
 
-**目标：跑通一次完整的"数据→分析→辩论→风控→模拟盘执行"流程。**
+### Phase 1 — 最小闭环 ✅
+`arena run --pair BTC/USDT:USDT --mode paper` 跑通；2 个 agent 辩论 + 2 项风控；PaperExchange + Decision Journal。
 
-```
-Week 1: 骨架 + 数据层
-├── 项目初始化（pyproject.toml, 目录结构, CI）
-├── LangGraph 编排骨架（graph.py + ArenaState）
-├── 数据层：ccxt 行情（K线 + Ticker + 资金费率）
-└── DataSnapshot 模型
+### Phase 2 — 完整智能层 ✅
+4 agent（tech/chain/news/macro）+ 链上数据三件套 + 完整 11 项风控 + FastAPI 服务（含 SSE 流式 chat）。
 
-Week 2: Agent + 辩论 + 风控
-├── TechAgent（技术面分析）
-├── ChainAgent（链上数据，先只接 ccxt 资金费率）
-├── 2 轮交叉质询 + 稳定性检测
-├── Verdict（加权共识 + 分歧度）
-├── RiskGate：MaxPositionSize + DailyLossLimit
-└── PaperExchange（模拟盘 + 滑点模型）
+### Phase 3 — 实盘 + 回测 + Dashboard ✅
+LiveExchange（ccxt OKX perp）+ server-side OCO 保护；回测引擎 + SQLite OHLCV 缓存；React 19 + Vite 8 仪表盘；APScheduler 周期循环。
 
-Week 3: 闭环 + CLI
-├── OrderManager + 状态机
-├── Decision Journal（基础 commit chain）
-├── CLI：arena run --pair BTC/USDT --mode paper
-├── 基础测试
-└── README + 文档
-```
+### Phase 4 — Trilogy 进化系统 + Agent-Native（spec 016 → 022）✅
 
-**Phase 1 交付物：**
-- `arena run --pair BTC/USDT --mode paper` 能跑通
-- 2 个 Agent 辩论，2 项风控检查
-- 模拟盘执行 + Decision Journal 记录
-- 单元测试覆盖核心逻辑
+| Spec | 主题 | 主要交付物 |
+|------|------|-----------|
+| 016 | 项目研究 + daemon 决策 | 8 项研究综述 + D-ENG-01 daemon + D-ENG-02 lineage |
+| 017a/b | PromptBuilder 基建 + 4 agent 集成 | 删 ROLE 硬编码 + middleware 模块 |
+| 018 | Memory Evolution | 5-signal Maturity FSM + Pareto + IVE failure classification |
+| 019 | Skill Evolution | EvolvingSkillProvider + D-RT-01 retrieval + LLM 自动 metadata 推断 |
+| 020a | Trilogy Ops | cache observability + rollback runbook + staging_validate |
+| 020b | Evolution Daemon | 独立进程（src/cryptotrader/ops/daemon.py）/ daily Pareto+Regime+Skill proposal / soft degrade |
+| 020c | Git Lineage | GitLineageHook + evolution branch orphan + transitions batch commit |
+| 021 | Pattern Cold-Start | `agent_memory/{agent}/patterns/*.md` + daemon `pattern_extraction` action |
+| 022 | Agent-Native Skill Protocol | 5 `_external/SKILL.md` + `GET /skill/<name>` + `/api/memory/patterns` + `/api/events/heartbeat` + 3 Prometheus gauge |
 
-**Phase 1 不包含：** 新闻、宏观、链上三件套、UI、实盘、API 服务、Verbal Reinforcement。
+累计 ~260 新测试 / 11 Prometheus Gauge / OTel 全覆盖。
 
-### Phase 2: 完整智能层（2-3 周）
+### Phase 5 — 鲁棒性收尾（spec post-022 fix）✅
 
-- [ ] NewsAgent + MacroAgent
-- [ ] 链上数据三件套（DefiLlama + CoinGlass + CryptoQuant）
-- [ ] 完整 11 项风控
-- [ ] Verbal Reinforcement（经验反哺）
-- [ ] FastAPI 服务（/analyze + /journal）
-- [ ] Agent 权重校准
-- [ ] 多币种并行
+- `commit 07e105b`：OCO `sz` 用 total position size（修 OKX 51000 + 部分覆盖；16 场景实盘验证）
+- `commit 57eb884`：scheduler watchdog（IntervalTrigger silent-miss 自愈，生产 3 次实战）
+- `commit fc9211d`：execution close fallback `position_context`（OKX cooldown 时不再 silent drop）
 
-### Phase 3: 实盘 + 优化（2-3 周）
+### Phase 6 — 待规划 ⬜
 
-- [ ] 实盘交易（Binance/OKX via ccxt）
-- [ ] 对账系统
-- [ ] 回测引擎
-- [ ] 基础 Dashboard
-- [ ] 性能优化（数据缓存、并发控制）
-- [ ] 完善文档，开源发布
-
-### Phase 4: 进化（长期）
-
-- [ ] LLM + RL 结合（参考 Meta-RL-Crypto, FinCon）
-- [ ] 多交易所套利
-- [ ] DEX 支持
-- [ ] 社区贡献的 Agent 插件系统
+- A/B Experiment 框架（spec 023 候选）
+- OpenAPI 静态化 + demo external client（spec 022 deferred FR-022-7/8/9 + 23/24）
+- LLM + RL 结合（参考 Meta-RL-Crypto / FinCon）
+- 多交易所套利 / DEX 支持
+- 社区 agent 插件系统
 
 ---
 
@@ -1197,6 +1151,12 @@ Week 3: 闭环 + CLI
 | 8 | 链上信号组合使用 | IEEE Access 2025 (Herremans)：单一信号 alpha 衰减 | 单一信号策略：已被市场 price in |
 | 9 | 混合模型分级 | 成本模型估算：纯 4o ~$90/月 vs 混合 ~$9/月 | 全用强模型：10x 成本，分析层不需要 |
 | 10 | 双模式（独立+集成） | 开源用户直接用 + 公司项目无缝集成 | 只做独立：失去集成市场 |
+| 11 | 4h 周期（不是 1h） | 与 OKX perp 4h K 线 + funding 8h 对齐；1h 周期下 IntervalTrigger silent-miss 每小时 1 次；4h 让 timer 有更多余量 + LLM 成本降 75% | 1h 周期：触发更敏感但 silent miss + 噪音过载 |
+| 12 | BTC-only 集中模式 | 多 pair 时 macro_concentration 频繁拦 BTC；alts SL 触发率高于 BTC（ATR/price ≈ 2-3% vs BTC 1.5%）；5x 杠杆 + 80% single cap 给 BTC 单 pair 充分仓位 | 多 pair 分散：风控更难配 + 实盘亏多胜少 |
+| 13 | Scheduler Watchdog | APScheduler `IntervalTrigger.next_fire_time` 偶发卡在过去时间戳；`wakeup()` 不重新锚定。watchdog 每 5min 检查 `last_successful_cycle_at` 超过 `1.5×interval` → `modify_job` 强制 reschedule | 重启进程：人工介入 + 服务中断 |
+| 14 | Close 风控豁免 + cooldown fallback | 减仓不应被风控阻断（"risk reduction must not be blocked"）；OKX cooldown 时 close 用 `position_context`（DB）fallback，避免 silent drop | 让 close 也走完整 risk_gate：仓位无法及时止损；fetch fail 时直接 return：journal 假象 commit |
+| 15 | Trilogy 内/外协议分目录 | `_internal/` 注入 agent prompt；`_external/` 暴露给外部 AI agent（Codex / Cursor / Claude Code）。同一套 SKILL.md 规范，两个用途 | 单目录混用：外部 agent 看到内部 prompt + 容易拉错 skill |
+| 16 | trilogy soft fail | 进化产出不阻塞 cycle（commit 失败 / LLM 失败 / lock timeout 全 soft fail） | 进化阻塞：单次进化失败 → 整个交易循环停止 |
 
 ---
 

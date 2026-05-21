@@ -15,7 +15,7 @@
 | 数据处理 | pandas + numpy（纯 Python 指标见 `agents/_indicators.py`，无 talib 依赖）| >=2.3 |
 | 数据验证 | Pydantic | >=2.12 |
 | Web 框架 | FastAPI + Uvicorn | >=0.135 |
-| 仪表板 | React 19 + Vite 7 + TypeScript | web/ |
+| 仪表板 | React 19 + Vite 8 + TypeScript | web/ |
 | CLI | Typer | >=0.24 |
 | 数据库 | PostgreSQL 16 + SQLAlchemy | asyncpg >=0.29 |
 | 缓存 / 状态 | Redis 7 | redis >=7.3 |
@@ -27,10 +27,10 @@
 ```
 cryptotrader-ai/
 ├── config/
-│   ├── default.toml          # 主配置（执行模式、LLM 模型、风控参数）
-│   ├── local.toml             # 本地覆盖（API keys，gitignored）
-│   ├── risk.toml              # 风控参数
-│   └── exchanges.toml.example # 交易所凭证模板
+│   ├── default.toml          # 主配置（执行模式、LLM 模型、风控、调度器、数据源）
+│   ├── local.toml             # 本地覆盖（API keys + 生产参数；gitignored）
+│   ├── agents/<name>.md       # 4 个 agent 的 system_prompt + output_schema
+│   └── exchanges.toml.example # 交易所凭证模板（已弃用 — 现合并到 local.toml）
 ├── scripts/
 │   └── run_backtest.py        # 高级回测脚本（比 CLI 更多参数）
 ├── src/
@@ -44,8 +44,7 @@ cryptotrader-ai/
 │   │   │   ├── data_tools.py  # LangChain @tool 定义（6 Chain + 3 News）
 │   │   │   ├── prompt_builder.py     # 配置驱动 prompt 组装（system + skill + snapshot + live_steering）
 │   │   │   ├── snapshot_renderer.py  # snapshot 渲染
-│   │   │   ├── skills/               # SKILL.md 协议 + 加载
-│   │   │   └── _indicators.py # 纯 pandas/numpy 技术指标（替代 pandas_ta）
+│   │   │   └── _indicators.py # 纯 pandas/numpy 技术指标（无 native 依赖）
 │   │   ├── backtest/
 │   │   │   ├── engine.py      # BacktestEngine（LLM + SMA 模式）
 │   │   │   ├── session.py     # 回测 Session 存储（commits / results）
@@ -117,11 +116,24 @@ cryptotrader-ai/
 │   │       └── journal.py     # GET /journal/log, /journal/{hash}
 │   ├── cli/
 │   │   └── main.py            # Typer CLI（arena 命令）
-├── web/                       # React 19 + Vite 7 前端
-├── tests/                     # 2100+ 个测试
+├── agent_skills/
+│   ├── _internal/             # EvolvingSkillProvider 读取此目录
+│   │   ├── tech/SKILL.md      # scope: agent:tech
+│   │   ├── chain/SKILL.md     # scope: agent:chain
+│   │   ├── news/SKILL.md      # scope: agent:news
+│   │   ├── macro/SKILL.md     # scope: agent:macro
+│   │   └── trading-knowledge/SKILL.md  # scope: shared
+│   └── _external/             # Anthropic Agent-Native 出站协议
+│       ├── cryptotrader/SKILL.md
+│       ├── verdict-feed/SKILL.md
+│       ├── market-intel/SKILL.md
+│       ├── evolution-insights/SKILL.md
+│       └── execution-replay/SKILL.md
+├── web/                       # React 19 + Vite 8 前端
+├── tests/                     # 2279 个测试
 ├── pyproject.toml             # 项目配置 + 依赖
 ├── Makefile                   # 快捷命令
-├── docker-compose.yml         # 6 service：postgres / redis / api / web / scheduler / caddy
+├── docker-compose.yml         # 6 服务：postgres / redis / api / web / scheduler / caddy（evolution-daemon 代码已在 src/cryptotrader/ops/daemon.py，尚未加入 compose）
 └── CLAUDE.md                  # AI 编码指南
 ```
 
@@ -564,7 +576,7 @@ CORS：显式 `allow_methods` / `allow_headers` allowlist (与 `allow_credential
 | Verdict 记忆 | Yes | No |
 | position_scale 连续映射 | Yes | Yes (3 档) |
 
-### 9.4 Web 前端 (React 19 + Vite 7)
+### 9.4 Web 前端 (React 19 + Vite 8)
 
 | 页面 | 内容 |
 |------|------|
@@ -624,8 +636,14 @@ extreme_greed_fng = 75
 max_stop_loss_pct = 0.05
 
 [risk.position]
-max_single_pct = 0.10
-max_total_exposure_pct = 0.50
+max_single_pct = 0.10           # 默认；BTC 专注模式 config/local.toml 覆盖为 0.80
+max_total_exposure_pct = 0.50   # 默认；BTC 专注模式覆盖为 4.00（5x 杠杆名义值余量）
+# BTC-only 集中仓位覆盖（config/local.toml 示例）：
+#   max_single_pct = 0.80
+#   max_total_exposure_pct = 4.00
+#   max_margin_used_pct = 0.90   # 默认 0.40
+#   max_same_direction_positions = 1
+#   leverage = 5  isolated
 
 [risk.loss]
 max_daily_loss_pct = 0.03
@@ -647,10 +665,12 @@ low_confidence_pct = 0.06     # position_scale 映射地板
 
 [scheduler]
 enabled = false
-pairs = ["BTC/USDT", "ETH/USDT"]
-interval_minutes = 240
-exchange_id = "binance"
+pairs = ["BTC/USDT:USDT"]          # 生产默认：BTC 专注模式（perp）
+interval_minutes = 240              # 4h 周期，与 OKX 4h K 线 + 8h 资金费率对齐
+exchange_id = "okx"                 # 生产交易所
 daily_summary_hour = 0    # UTC hour for daily summary (0-23)
+# 调度器 watchdog（commit 57eb884）：每 5min 检测 last_successful_cycle_at，
+# 超过 1.5×interval 无响应时通过 modify_job 强制重调度。
 
 [providers]               # 各数据源 API Key + 开关
 # ... 20+ 配置项
@@ -667,19 +687,32 @@ daily_summary_hour = 0    # UTC hour for daily summary (0-23)
 
 ### 14.1 概述
 
-每个 agent 加载 prompt 时由 `EvolvingSkillProvider` 从 `agent_skills/` 中
+每个 agent 加载 prompt 时由 `EvolvingSkillProvider` 从 `agent_skills/_internal/`
 检索 top-k SKILL.md 注入到 `available_skills` section。SKILL.md 是 **人工维护
-的 git-tracked Markdown**，不依赖 LLM 自动生成。
+的 git-tracked Markdown**，不依赖 LLM 自动生成。`_external/` 目录存放 Anthropic
+Agent-Native 出站协议所需的 SKILL.md，供外部调用方发现，EvolvingSkillProvider
+不读取此目录。
 
-### 14.2 Skills 目录布局
+新增 API 端点（spec 022）：`GET /skill/<name>`（技能详情）、`GET /api/memory/patterns`
+（Pattern 列表）、`GET/POST /api/events/heartbeat`（心跳事件）。
+完整接口文档见 FastAPI 自动生成的 `/docs`。
+
+### 14.2 Skills 目录布局（spec 022 重组）
 
 ```
 agent_skills/
-├── tech-analysis/SKILL.md     # scope: agent:tech
-├── chain-analysis/SKILL.md    # scope: agent:chain
-├── news-analysis/SKILL.md     # scope: agent:news
-├── macro-analysis/SKILL.md    # scope: agent:macro
-└── trading-knowledge/SKILL.md # scope: shared
+├── _internal/                          # EvolvingSkillProvider 读取此目录
+│   ├── tech/SKILL.md                   # scope: agent:tech
+│   ├── chain/SKILL.md                  # scope: agent:chain
+│   ├── news/SKILL.md                   # scope: agent:news
+│   ├── macro/SKILL.md                  # scope: agent:macro
+│   └── trading-knowledge/SKILL.md      # scope: shared
+└── _external/                          # Anthropic Agent-Native 出站协议
+    ├── cryptotrader/SKILL.md
+    ├── verdict-feed/SKILL.md
+    ├── market-intel/SKILL.md
+    ├── evolution-insights/SKILL.md
+    └── execution-replay/SKILL.md
 ```
 
 **SKILL.md 格式**（Anthropic Skills 协议）：
@@ -711,8 +744,8 @@ manually_edited: false
 
 `EvolvingSkillProvider.get_available_skills(agent_id, snapshot, k=5)`：
 
-1. **第一层过滤** — scope 匹配（`agent:<id>` 或 `shared`）+ `regime_tags` 与
-   当前 snapshot regime 标签交集非空
+1. **第一层过滤** — 从 `agent_skills/_internal/` 扫描；scope 匹配（`agent:<id>` 或
+   `shared`）+ `regime_tags` 与当前 snapshot regime 标签交集非空
 2. **第二层打分** — `score = idf_score + importance × predictive_value + recency_bonus`
 3. **返回 top-k**；选中的 skill `access_count += 1`、`last_accessed_at = now`
 
@@ -721,8 +754,8 @@ manually_edited: false
 
 ### 14.4 注入机制
 
-`SkillsInjectionMiddleware`（`agents/skills/middleware.py`）：
-- 动态扫描 `agent_skills/*/SKILL.md` 的 `scope` 字段（LRU mtime 缓存）
+`SkillsInjectionMiddleware`（`agents/middleware.py`）：
+- 动态扫描 `agent_skills/_internal/*/SKILL.md` 的 `scope` 字段（LRU mtime 缓存）
 - 为每个 agent 组装 `own skill + shared skill` 的 system addendum
 - 在 `ToolAgent.analyze()` 中，`system = role_description + ANALYSIS_FRAMEWORK + addendum`
 

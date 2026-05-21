@@ -6,7 +6,7 @@ AI-powered crypto trading system using LangGraph multi-agent debate.
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2458%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2279%20collected-brightgreen.svg)]()
 
 ## Overview
 
@@ -21,13 +21,16 @@ Each agent runs a domain-specific **pre-signal checklist** (inspired by Devin's 
 - **11-check risk gate** — Pure rules, no LLM: position limits, CVaR, correlation, circuit breakers
 - **Decision journal** — Git-like immutable commit chain stored in PostgreSQL `decision_commits`
 - **Config-driven prompts** — Each agent's system_prompt / output_schema / token budget lives in `config/agents/<name>.md`; PromptBuilder assembles at runtime
-- **EvolvingSkillProvider** — Two-stage retrieval (scope + regime_tags filter → idf + importance + recency score) picks top-k skills from `agent_skills/<id>/SKILL.md` into the prompt
+- **EvolvingSkillProvider** (spec 019) — Two-stage retrieval (scope + regime_tags filter → idf + importance + recency score) picks top-k skills from `agent_skills/_internal/<id>/SKILL.md` into the prompt
+- **Trilogy evolution system** (spec 016 → 020c) — 8 specs delivering PromptBuilder + Memory Evolution (5-signal Maturity FSM) + Skill Evolution + Pareto frontier + Git Lineage + Evolution Daemon (daily Pareto + Regime + Skill proposal loop)
+- **Agent-Native Skill Protocol** (spec 022) — External Anthropic SKILL.md interface: `agent_skills/_external/{cryptotrader,verdict-feed,market-intel,evolution-insights,execution-replay}/` lets foreign agents integrate via a single `Read /skill/cryptotrader` message; `/api/events/heartbeat` pull-mode event feed; `/api/memory/patterns` exposes trilogy outputs
 - **Mandatory numeric SL/TP** — Verdict must output `stop_loss` + `take_profit` as plain numbers; missing / direction-inverted / too-tight / R:R < 1.5 → action forced to hold
 - **Backtesting engine** — Historical simulation with realistic cost modeling and no look-ahead bias
-- **Live trading ready** — ccxt-based exchange adapters with retry, precision, and timeout handling
-- **APScheduler automation** — Periodic trading cycles with daily portfolio summaries
+- **Live trading ready** — OKX perp adapter via ccxt with retry, precision, configurable leverage (`set_leverage` idempotent retry + long_short_mode dual-side application), server-side OCO protection
+- **APScheduler automation + watchdog** — 4-hour trading cycles; scheduler watchdog inspects `last_successful_cycle_at` every 5 min and force-reschedules when staleness exceeds `1.5 × interval` to defeat the `IntervalTrigger` silent-miss bug (3 self-heals validated in production)
 - **61+ data sources** — Unified SQLite store across 7 categories with rate limiting per source
-- **Anthropic prompt cache observability** — `apply_cache_control()` in production; OTel span attrs `llm.cache.{read,creation,hit_rate}`; Prometheus `llm_cache_hit_rate_24h_avg` gauge
+- **Anthropic prompt cache observability** — `apply_cache_control()` in production; OTel span attrs `llm.cache.{read,creation,hit_rate}`; Prometheus `llm_cache_hit_rate_24h_avg` gauge plus 3 new spec 022 heartbeat / external-skill gauges
+- **Close exempt from risk + cooldown fallback** — `close` bypasses the risk gate ("risk reduction must not be blocked"); during OKX venue cooldown `_build_close_order` falls back to `position_context` (DB-backed) instead of silently dropping (commit fc9211d)
 - **Live steering** — User real-time instructions flow through Redis queue into `live_steering` section, consumed once per cycle (no feedback loop)
 
 ## Architecture
@@ -70,11 +73,15 @@ Every agent's system prompt includes a **5-point pre-signal checklist**: contrad
 
 ### Prompt & Skill System
 
-- **Skill retrieval**: `EvolvingSkillProvider` loads `agent_skills/<id>/SKILL.md`, filters by scope + regime_tags, scores by `idf + importance + recency`, and injects top-5 into each agent prompt's `available_skills` section
+- **Directory layout** (spec 022 reorganization):
+  - `agent_skills/_internal/{tech,chain,news,macro,trading-knowledge}/SKILL.md` — internal capabilities injected into agent prompts
+  - `agent_skills/_external/{cryptotrader,verdict-feed,market-intel,evolution-insights,execution-replay}/SKILL.md` — external Anthropic SKILL.md protocol for foreign agents (Codex / Cursor / Claude Code)
+- **Skill retrieval**: `EvolvingSkillProvider` loads `agent_skills/_internal/<id>/SKILL.md`, filters by scope + regime_tags, scores by `idf + importance + recency`, and injects top-5 into each agent prompt's `available_skills` section; `access_count` / `last_accessed_at` persist to a gitignored sidecar
 - **Skill content**: human-maintained git-tracked Markdown — role + reasoning approach + checklists only; no historical case dumps, no directional predictions, no numeric thresholds
 - **Regime tagging**: `tag_regime()` classifies the snapshot into discrete labels (high_funding / high_vol / trending_up / extreme_fear / …) used for skill retrieval filtering
 - **SL/TP hard reject**: Verdict's `stop_loss` + `take_profit` must be plain numbers and pass four checks: present / direction-correct (long: stop < entry < take_profit) / stop-distance ≥ max(1.5×ATR, 1.0% of entry) / R:R ≥ 1.5 — failure forces `action=hold`
 - **Live steering**: Frontend chat writes real-time instructions to a Redis queue; the next cycle drains and injects them into `live_steering` (single-cycle lifetime, no feedback loop)
+- **Agent-native integration** (spec 022): External agents register with one prompt — `Read http://host:8003/skill/cryptotrader and register` → auto-pull bootstrap SKILL.md → route to child skills → call `/api/memory/patterns`, `/api/events/heartbeat`, `/api/verdicts/recent`, etc.
 
 ## Quickstart
 
@@ -103,11 +110,14 @@ export OPENAI_API_KEY=your_key
 ### First Run
 
 ```bash
-# Run one analysis cycle (paper trading)
-arena run --pair BTC/USDT --mode paper
+# Run one analysis cycle (paper trading) — perp linear contracts recommended
+# (spot accounts cannot short without inventory)
+arena run --pair BTC/USDT:USDT --mode paper
 
-# Multi-pair analysis with full debate
-arena run --pair BTC/USDT --pair ETH/USDT --graph full
+# Choose graph variant
+arena run --pair BTC/USDT:USDT --graph full   # debate gate + 2 debate rounds
+arena run --pair BTC/USDT:USDT --graph lite   # skip debate (backtest)
+arena run --pair BTC/USDT:USDT --graph debate # bull/bear adversarial + judge
 
 # View decision journal
 arena journal log --limit 10
@@ -144,7 +154,9 @@ arena scheduler start
 arena scheduler status
 ```
 
-APScheduler-based with `IntervalTrigger` (default 4h) for trading cycles and `CronTrigger` for daily portfolio summaries.
+APScheduler-based with `IntervalTrigger` (default 4h, aligned with OKX perp 4h K-lines + funding cadence) for trading cycles and `CronTrigger` for daily portfolio summaries.
+
+**Scheduler watchdog** (post-spec-022 fix, commit 57eb884): the AsyncIOScheduler `next_fire_time` occasionally gets stuck in the past, causing silent cycle misses. The watchdog checks `last_successful_cycle_at` every 5 min; if it exceeds `1.5 × interval_minutes`, the trading_cycle job is force-rescheduled via `modify_job`. Three production self-heals with zero manual intervention.
 
 ### Dashboard & API
 
@@ -172,7 +184,7 @@ arena serve --port 8003
 | `arena journal show <hash>` | Decision detail |
 | `arena migrate` | Create PostgreSQL tables |
 | `arena risk reset-breaker` | Reset circuit breaker |
-| `arena live-check --exchange binance` | Pre-flight check for live trading |
+| `arena live-check --exchange okx` | Pre-flight check for live trading |
 
 ## Data Sources
 
@@ -253,19 +265,38 @@ confusion_max_dispersion = 0.2
 
 [risk]
 max_stop_loss_pct = 0.05
+
+# Defaults (multi-pair diversified):
 [risk.position]
 max_single_pct = 0.10
 max_total_exposure_pct = 0.50
+max_margin_used_pct = 0.40
+
+# BTC-only concentrated production overrides (config/local.toml, post-spec-022):
+# [risk.position]
+# max_single_pct = 0.80
+# max_total_exposure_pct = 4.00       # 5x leverage × 80% single → total notional cap
+# max_margin_used_pct = 0.90
+# max_same_direction_positions = 1    # BTC is the sole pair
+
 [risk.loss]
 max_daily_loss_pct = 0.03
 max_drawdown_pct = 0.10
 
 [scheduler]
 enabled = false
-pairs = ["BTC/USDT", "ETH/USDT"]
-interval_minutes = 240
-exchange_id = "binance"
-daily_summary_hour = 0    # UTC hour (0-23)
+pairs = ["BTC/USDT:USDT"]    # BTC-only concentrated strategy; perp linear contract
+interval_minutes = 240        # 4h cadence, aligned with OKX perp 4h candles + 8h funding
+exchange_id = "okx"           # production uses OKX perp
+daily_summary_hour = 0        # UTC hour (0-23)
+
+[exchanges.okx]               # set in config/local.toml (gitignored)
+api_key = "..."
+secret = "..."
+passphrase = "..."
+sandbox = true                # demo trading environment
+leverage = 5                  # BTC 5x (vol lower than alts; 1.5×ATR SL ≈ 4% notional)
+margin_mode = "isolated"      # OKX: "isolated" | "cross"
 ```
 
 ### Environment Variables
@@ -329,34 +360,9 @@ Webhook notifications for 6 event types (configure in `config/default.toml`):
 | `reconcile_mismatch` | Position reconciliation detects mismatch |
 | `portfolio_stale` | Portfolio data becomes stale or unavailable |
 
-## API Endpoints
+## API & Authentication
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/health` | Public | Detailed component status (API/Redis/DB/LLM) — 503 if degraded |
-| GET | `/metrics` | Public | Prometheus metrics (text format) |
-| GET | `/scheduler/status` | Public | Scheduler heartbeat (LB probe) |
-| GET | `/api/portfolio/snapshot` | API Key | Current equity, cash, positions |
-| GET | `/api/portfolio/equity-curve?range=24h\|7d\|30d\|all` | API Key | Time-series equity points |
-| GET | `/api/risk/status` | API Key | Trade counts, circuit breaker, thresholds (live Redis ping) |
-| POST | `/api/risk/circuit-breaker/reset` | API Key | Manually clear breaker (409 if not active) |
-| GET | `/api/decisions?pair=&from=&to=&page=&size=` | API Key | Paginated decision list |
-| GET | `/api/decisions/{commit_hash}` | API Key | Full decision detail (agents/debate/verdict/risk_gate/timeline) |
-| GET | `/api/scheduler/status` | API Key | Next pair / next run timestamp |
-| GET / POST / PATCH / DELETE | `/api/scheduler/rules` | API Key | Trigger rule CRUD |
-| GET | `/api/metrics/summary` | API Key | Counters + p50/p95 latencies |
-| POST | `/api/backtest/run` | API Key | Submit async backtest (returns run_id) |
-| GET | `/api/backtest/runs/{run_id}` | API Key | Status + progress + result |
-| DELETE | `/api/backtest/runs/{run_id}` | API Key | Cancel running backtest |
-| GET | `/api/backtest/sessions` | API Key | Saved session names |
-| GET | `/api/backtest/sessions/{name}` | API Key | Load saved session |
-| POST | `/api/chat/stream` | API Key | SSE stream of full pipeline events |
-| POST | `/api/chat/interrupt/{session_id}` | API Key | Soft-interrupt running analysis |
-| POST | `/api/chat/steer/{session_id}` | API Key | Inject mid-pipeline guidance |
-| GET | `/api/hitl/pending` | API Key | Pending human-approval requests |
-| POST | `/api/hitl/{approval_id}/respond` | API Key | Approve / reject |
-| GET | `/api/market/{pair}` | API Key | Funding rate / open interest / liquidations |
-| GET | `/api/market/{pair}/ohlcv?timeframe=&limit=` | API Key | OHLCV bars |
+FastAPI auto-generates OpenAPI: start `arena serve --port 8003` then visit `http://localhost:8003/docs` for Swagger UI or `/redoc` for ReDoc. The external protocol entry point is `GET /skill/<name>` (public, no auth) — 5 child skills: `cryptotrader`, `verdict-feed`, `market-intel`, `evolution-insights`, `execution-replay`.
 
 **Authentication**: Default `AUTH_MODE=enabled` requires `API_KEY` env var; missing key fails startup. `AUTH_MODE=disabled` bypasses auth and logs a WARNING per request (dev only). All comparisons use `secrets.compare_digest` (timing-safe). **Rate limit**: 60 req/min/IP, Redis-backed when configured for multi-process safety; in-memory fallback for single-process dev. **CORS**: Explicit `allow_methods` / `allow_headers` allowlist (no wildcards) since `allow_credentials=true`.
 
@@ -382,21 +388,22 @@ Production-hardened `LiveExchange` wrapping ccxt:
 
 ```bash
 # Verify live trading readiness
-arena live-check --exchange binance
+arena live-check --exchange okx
 ```
 
 ## Docker Deployment
 
 ```bash
-# Start full stack (PostgreSQL 16 + Redis 7 + App + Dashboard + Scheduler)
+# Start full stack (PostgreSQL 16 + Redis 7 + API + Web + Scheduler + Caddy)
 docker compose up -d
 
-# Services:
-#   app        — FastAPI on :8003
-#   web        — React frontend on :5173
-#   scheduler  — Periodic trading cycles
+# Services (docker-compose.yml):
 #   postgres   — Decision journal + portfolio persistence
 #   redis      — Risk state + cooldowns + circuit breaker
+#   api        — FastAPI on :8003 (embedded scheduler + watchdog)
+#   web        — React frontend on :5173
+#   scheduler  — Standalone scheduler process (mutually exclusive with api; pick one)
+#   caddy      — Reverse proxy + TLS
 ```
 
 The Dockerfile uses multi-stage build with non-root user. Healthcheck polls `/health` every 30s.
@@ -466,7 +473,20 @@ src/cryptotrader/
     └── result.py      # BacktestResult metrics
 src/cli/main.py        # Typer CLI (arena command)
 src/api/               # FastAPI server (auth, rate limiting, middleware)
-web/                   # React 19 + Vite 7 frontend (dashboard, decisions, backtest, risk, metrics)
+web/                   # React 19 + Vite 8 frontend (dashboard, decisions, backtest, risk, metrics)
+agent_skills/
+├── _internal/         # Capabilities injected into agent prompts (spec 019/022)
+│   ├── tech-analysis/SKILL.md
+│   ├── chain-analysis/SKILL.md
+│   ├── news-analysis/SKILL.md
+│   ├── macro-analysis/SKILL.md
+│   └── trading-knowledge/SKILL.md
+└── _external/         # External Anthropic SKILL.md protocol (spec 022)
+    ├── cryptotrader/SKILL.md         # bootstrap + child router
+    ├── verdict-feed/SKILL.md
+    ├── market-intel/SKILL.md
+    ├── evolution-insights/SKILL.md
+    └── execution-replay/SKILL.md
 ```
 
 ## Tech Stack
@@ -477,21 +497,21 @@ web/                   # React 19 + Vite 7 frontend (dashboard, decisions, backt
 | Package Manager | uv + Hatchling |
 | LLM Orchestration | LangChain 1.2+ / LangGraph 1.0+ |
 | LLM Providers | ChatOpenAI (OpenAI, DeepSeek, Anthropic compatible) |
-| Exchange | ccxt (Binance, OKX, etc.) |
+| Exchange | ccxt (OKX perp primary) |
 | Data Processing | pandas + numpy (pure-Python indicators in `agents/_indicators.py`) |
 | Scheduling | APScheduler 3.x |
 | Database | PostgreSQL 16 + SQLAlchemy 2.0 async |
 | Cache / State | Redis 7 |
 | Local Storage | SQLite (market data store + LLM response cache) |
 | API Server | FastAPI + Uvicorn |
-| Dashboard | React 19 + Vite 7 + TypeScript |
+| Dashboard | React 19 + Vite 8 + TypeScript 5.9 |
 | CLI | Typer + Rich |
 
 ## Development
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v (347 tests)
+make test             # uv run pytest tests/ -v (2279 tests)
 make lint             # ruff check src/ tests/
 make format           # ruff format src/ tests/
 make scheduler        # arena scheduler start
@@ -511,7 +531,7 @@ arena sync             # Sync historical data
 
 - **Zero lint errors**: `ruff check src/ tests/` must pass with zero errors
 - **No `noqa` comments**: Refactor instead of suppressing (C901 threshold = 10)
-- **347 tests**, 1 skip, 70% coverage
+- **2279 tests collected** (spec 022 stamp baseline); 9 pre-existing failures unrelated to current spec
 - **Async tests**: `asyncio_mode = "auto"` — no `@pytest.mark.asyncio` needed
 - **Must use `uv run pytest`** (Python 3.12 venv), not bare `pytest`
 

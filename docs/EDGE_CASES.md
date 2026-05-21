@@ -20,6 +20,9 @@
 | **Spot 现货账户尝试做空且无库存** | `_build_entry_order` 早拦：返回 None + 写 `state.data.execution_error = "spot_short_no_inventory: ..."` → `execution_status` 透到 /decisions reject_reason，不再走完整下单流程产生 `ValueError` |
 | **`set_leverage` 在已开仓 symbol 上失败** | 警告吞掉，`_leverage_attempts` 计数；连续 `_LEVERAGE_RETRY_LIMIT = 3` 次失败才进缓存。让用户改 `[exchanges.okx] leverage = N` 后下次仓位释放后自动生效，不需重启 |
 | **`portfolio_unknown` / `redis_unavailable` 拒单事件** | reason 字段携带 `[error_type: msg]` 后缀，下次再触发可直接定位（不再需要 grep traceback） |
+| **APScheduler IntervalTrigger silent miss**（2026-05-20 实测 3 次/天） | `scheduler.py:_scheduler_heartbeat` 每 5min 检查 `last_successful_cycle_at`，超过 `1.5 × interval_minutes` 视为 silent-missed → `modify_job("trading_cycle", next_run_time=now+10s)` 强制重排。生产 3 次自愈成功，0 人工干预（commit 57eb884） |
+| **OKX venue cooldown 期间 close 被 silent drop**（2026-05-21 13:32 实测） | `_build_close_order` 的 `read_portfolio_from_exchange` 在 cooldown 时抛 `ExchangeNotAvailable` 被吞掉 → pos_amount=0 → return None → 假象 `algo_id=None` 提交。修复：fallback 到 `state["data"]["position_context"]`（由 `enrich_verdict_context` 从 PortfolioManager DB 构建，不依赖 exchange）；真无仓位也写 `execution_error` 不再 silent（commit fc9211d） |
+| **OCO `sz` 加仓后未刷新为 total position**（2026-05-17 实测） | `_attach_okx_algo_protect` / refresh 路径用增量 amount 下 OCO → OKX 51000 + 旧 OCO 只覆盖部分仓位。修复：每次 fresh-open / add-to-position 后用 `total = fetch_positions` 重新下整张 OCO（commit 07e105b，30+ hour 实盘验证 16 场景）|
 
 ## 2. 关键设计决策
 
@@ -60,7 +63,7 @@
 
 ```bash
 make lint          # uv run ruff check src/ tests/  → 必须零错误
-make test          # uv run pytest tests/ -v        → 2003 pass, 2 skip
+make test          # uv run pytest tests/ -v        → 2279 tests collected（截至 spec 022 stamp）
 ```
 
 - **禁止 `noqa` 注释** — 遇到 C901 必须重构，遇到 F401 必须删除或 `__all__`

@@ -210,8 +210,8 @@ Verdict AI 收到的完整上下文：
 
 | # | 检查 | 配置 | 说明 |
 |---|------|------|------|
-| 1 | MaxPositionSize | `max_single_pct=10%` | 单一仓位占比 |
-| 2 | MaxTotalExposure | `max_total_exposure_pct=50%` | 总敞口 |
+| 1 | MaxPositionSize | `max_single_pct=10%`（BTC 专注模式 config/local.toml 覆盖：80%）| 单一仓位占比 |
+| 2 | MaxTotalExposure | `max_total_exposure_pct=50%`（BTC 专注模式覆盖：400%，反映 5x 杠杆名义值）| 总敞口 |
 | 3 | DailyLossLimit | `max_daily_loss_pct=3%` | 日亏损限制 + 触发熔断 |
 | 4 | DrawdownLimit | `max_drawdown_pct=10%` | 最大回撤 |
 | 5 | CVaRCheck | `max_cvar_95=5%` | 95% 条件风险价值 |
@@ -229,11 +229,12 @@ Verdict AI 收到的完整上下文：
 ## 7. Skill 检索与反馈通道
 
 ```
-agent_skills/<id>/SKILL.md（人工维护，git-tracked）
+agent_skills/_internal/<id>/SKILL.md（人工维护，git-tracked；EvolvingSkillProvider 读取）
+agent_skills/_external/<name>/SKILL.md（Anthropic Agent-Native 出站协议；EvolvingSkillProvider 不读取）
     │
     ▼
 EvolvingSkillProvider.get_available_skills(agent_id, snapshot)
-    │  1. scope 过滤（agent:<id> / shared）+ regime_tags 交集
+    │  1. 从 _internal/ 扫描；scope 过滤（agent:<id> / shared）+ regime_tags 交集
     │  2. score = idf + importance × predictive_value + recency
     │  3. 取 top-5
     ▼
@@ -253,3 +254,19 @@ Agent LLM 调用（system + skill + snapshot + optional live_steering）
 
 **Live steering**：前端 chat 输入 → Redis 队列 `steering:<session>:<agent_id>`
 → cycle 启动时 drain → `live_steering` section 一次性注入；cycle 结束失效。
+
+---
+
+## 8. Spec 覆盖一览（spec 016 起）
+
+| Spec | 主题 | 关键交付 |
+|------|------|----------|
+| 016 | Trilogy 进化系统基础研究 | 8 项学术调研 + D-ENG-01 daemon + D-ENG-02 lineage 决策 |
+| 017a/b | PromptBuilder 基建 + 4 agent 集成 | 配置驱动 prompt 组装；删除 ROLE 硬编码；middleware 模块 |
+| 018 | Memory Evolution | 5 信号 Maturity FSM + Pareto 剪枝 + IVE 失败分类 |
+| 019 | Skill Evolution | EvolvingSkillProvider + D-RT-01 检索 + LLM 自动 metadata 推断 |
+| 020a | Trilogy Ops | Anthropic prompt cache 观测 + rollback runbook + staging_validate |
+| 020b | Evolution Daemon | 独立进程（`src/cryptotrader/ops/daemon.py`）；daily Pareto+Regime+Skill proposal；尚未加入 docker-compose.yml |
+| 020c | Git Lineage | GitLineageHook + evolution branch orphan + transitions batch commit |
+| 021 | Pattern Cold-Start | 3 内置 pattern + daemon pattern_extraction action |
+| 022 | Agent-Native Skill Protocol | `_internal/`+`_external/` 目录重组；patterns API；heartbeat events；3 Prometheus gauge：`events_heartbeat_poll_count_24h` / `events_heartbeat_poll_lag_seconds` / `external_skill_fetch_count_24h` |

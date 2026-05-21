@@ -6,7 +6,7 @@
 
 [![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2458%20passed-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2279%20collected-brightgreen.svg)]()
 
 ## 概述
 
@@ -21,14 +21,17 @@
 - **11 项风控检查** — 纯规则，零 LLM：仓位限制、CVaR、相关性、熔断器
 - **决策日志链** — 类 Git 不可变提交链，存于 PostgreSQL `decision_commits`，支持相似搜索
 - **配置驱动 prompt** — 4 agent 的 system_prompt / output_schema / token budget 全部外置到 `config/agents/<name>.md`，由 PromptBuilder 在运行时拼装
-- **EvolvingSkillProvider** — 两层检索（scope + regime_tags 过滤 → idf + importance + recency 打分）从 `agent_skills/<id>/SKILL.md` 选 top-k skill 进 prompt
+- **EvolvingSkillProvider**（spec 019）— 两层检索（scope + regime_tags 过滤 → idf + importance + recency 打分）从 `agent_skills/_internal/<id>/SKILL.md` 选 top-k skill 进 prompt
+- **Trilogy 进化系统**（spec 016 → 020c）— 8 spec 累计：PromptBuilder + Memory Evolution（5-signal Maturity FSM）+ Skill Evolution + Pareto + Git Lineage + Evolution Daemon（每日 Pareto + Regime + Skill proposal）
+- **Agent-Native Skill Protocol**（spec 022）— 外部 Anthropic SKILL.md 协议：`agent_skills/_external/{cryptotrader,verdict-feed,market-intel,evolution-insights,execution-replay}/` 让外部 agent 通过 `Read /skill/cryptotrader` 秒级集成；`/api/events/heartbeat` pull-mode 事件订阅；`/api/memory/patterns` 暴露 trilogy 产出
 - **强制 numeric SL/TP** — LLM verdict 必须输出 `stop_loss` + `take_profit` 数字字段；missing / 方向反 / 过紧 / R:R < 1.5 → action 强制 hold
 - **回测引擎** — 历史模拟，含真实成本建模和防前视偏差
-- **实盘就绪** — 基于 ccxt 的交易所适配器，带重试、精度处理、配置驱动 perp 杠杆（`set_leverage` 幂等重试 + long_short_mode 双侧应用）
-- **APScheduler 自动化** — 周期性交易循环 + 每日组合摘要
+- **实盘就绪** — 基于 ccxt 的 OKX perp 适配器，带重试、精度处理、配置驱动 perp 杠杆（`set_leverage` 幂等重试 + long_short_mode 双侧应用）+ server-side OCO 保护
+- **APScheduler 自动化 + Watchdog** — 4 小时周期交易循环；scheduler watchdog 每 5min 检查 `last_successful_cycle_at`，超过 1.5× interval 强制 `modify_job` reschedule，根治 IntervalTrigger silent miss 问题（生产 3 次自愈验证）
 - **61+ 数据源** — 统一 SQLite 存储，覆盖 7 个类别，按源独立限速
 - **可观测性优先** — 拒单事件携带 root cause 异常信息（`[ConnectionError: ...]`）；执行层失败与风控解耦（`execution_status` vs `risk_gate`）；CI 守护禁止 `logger.debug(..., exc_info=True)` 吞异常
-- **完整 Anthropic prompt cache 观测** — `apply_cache_control()` 生产级；OTel span attr `llm.cache.{read,creation,hit_rate}`；Prometheus `llm_cache_hit_rate_24h_avg` gauge
+- **完整 Anthropic prompt cache 观测** — `apply_cache_control()` 生产级；OTel span attr `llm.cache.{read,creation,hit_rate}`；Prometheus `llm_cache_hit_rate_24h_avg` gauge + 3 个 spec 022 heartbeat / external skill fetch gauge
+- **Close 风控豁免 + cooldown fallback** — `close` 动作豁免全部风控（"risk reduction must not be blocked"）；OKX venue cooldown 时 `_build_close_order` 自动 fallback 到 `position_context`（DB），不会 silent drop（commit fc9211d）
 - **Live steering** — 用户实时引导通过 Redis 队列注入 `live_steering` section，每 cycle 即用即丢，不形成闭环
 
 ## 系统架构
@@ -71,11 +74,15 @@
 
 ### Prompt 与技能系统
 
-- **Skill 检索**：`EvolvingSkillProvider` 读取 `agent_skills/<id>/SKILL.md`，按 scope + regime_tags 过滤，按 `idf + importance + recency` 打分，取 top-5 注入 agent prompt 的 `available_skills` section
+- **目录拓扑**（spec 022 重组）：
+  - `agent_skills/_internal/{tech,chain,news,macro,trading-knowledge}/SKILL.md` — 注入 agent prompt 的内部能力
+  - `agent_skills/_external/{cryptotrader,verdict-feed,market-intel,evolution-insights,execution-replay}/SKILL.md` — 暴露给外部 AI agent（Codex / Cursor / Claude Code）的对外协议
+- **Skill 检索**：`EvolvingSkillProvider` 读取 `agent_skills/_internal/<id>/SKILL.md`，按 scope + regime_tags 过滤，按 `idf + importance + recency` 打分，取 top-5 注入 agent prompt 的 `available_skills` section；access_count / last_accessed_at 写入 gitignored sidecar
 - **Skill 内容**：人工维护 git-tracked Markdown 文件，仅含角色 + 思路 + checklist；不含历史 case dump、不含方向预测、不含数字阈值
 - **Regime 标签**：`tag_regime()` 把当前 snapshot 分类为离散标签（high_funding / high_vol / trending_up / extreme_fear 等），用于 skill retrieval 过滤
 - **SL/TP 强约束**：verdict 输出的 `stop_loss` + `take_profit` 必须是数字，且通过 4 道 hard-reject：missing → hold / 方向反（long 但 stop ≥ entry）→ hold / stop 距离 < max(1.5×ATR, 1%) → hold / R:R < 1.5 → hold
 - **Live steering**：用户通过前端 chat 实时引导，写入 Redis 队列；cycle 启动时一次性消费并注入 `live_steering` section，cycle 结束失效
+- **Agent-Native 集成**（spec 022）：外部 agent 单条 `Read http://host:8003/skill/cryptotrader and register` → 自动拉 bootstrap SKILL.md → 路由到 child skill → 调 `/api/memory/patterns` / `/api/events/heartbeat` / `/api/verdicts/recent` 等
 
 ## 快速开始
 
@@ -104,11 +111,13 @@ export OPENAI_API_KEY=your_key
 ### 首次运行
 
 ```bash
-# 运行单次分析（模拟交易）
-arena run --pair BTC/USDT --mode paper
+# 运行单次分析（模拟交易）— 推荐 perp 线性合约（spot 账户无库存时无法做空）
+arena run --pair BTC/USDT:USDT --mode paper
 
-# 多交易对分析（完整辩论）
-arena run --pair BTC/USDT --pair ETH/USDT --graph full
+# 切换图模式
+arena run --pair BTC/USDT:USDT --graph full   # 含辩论门控 + 2 轮辩论
+arena run --pair BTC/USDT:USDT --graph lite   # 跳辩论（回测用）
+arena run --pair BTC/USDT:USDT --graph debate # 多空对抗 + 评委
 
 # 查看决策日志
 arena journal log --limit 10
@@ -145,7 +154,9 @@ arena scheduler start
 arena scheduler status
 ```
 
-基于 APScheduler，`IntervalTrigger`（默认 4 小时）执行交易循环，`CronTrigger` 发送每日组合摘要。
+基于 APScheduler，`IntervalTrigger`（默认 4 小时，与 OKX perp 4h K 线 + funding 周期对齐）执行交易循环，`CronTrigger` 发送每日组合摘要。
+
+**Scheduler Watchdog**（spec post-022 fix，commit 57eb884）：`AsyncIOScheduler` 的 `next_fire_time` 偶发被卡在过去时间戳导致 cycle 静默 miss。watchdog 每 5min 检查 `last_successful_cycle_at`，超过 `1.5 × interval_minutes` 视为 silent miss → `modify_job("trading_cycle", next_run_time=now+10s)` 强制重排。生产 3 次实战自愈，0 人工干预。
 
 ### 仪表盘 & API
 
@@ -173,7 +184,7 @@ arena serve --port 8003
 | `arena journal show <hash>` | 决策详情 |
 | `arena migrate` | 创建 PostgreSQL 表 |
 | `arena risk reset-breaker` | 重置熔断器 |
-| `arena live-check --exchange binance` | 实盘就绪检查 |
+| `arena live-check --exchange okx` | 实盘就绪检查 |
 
 ## 数据源
 
@@ -252,28 +263,38 @@ gate_confusion_threshold = 0.05  # 分歧度高于此值时跳过辩论（迷茫
 
 [risk]
 max_stop_loss_pct = 0.05
+
+# 默认（多 pair 分散）：
 [risk.position]
 max_single_pct = 0.10
 max_total_exposure_pct = 0.50
+max_margin_used_pct = 0.40
+
+# BTC-only 集中模式生产实参（config/local.toml 覆盖；spec 022 post-stamp 调整）：
+# [risk.position]
+# max_single_pct = 0.80
+# max_total_exposure_pct = 4.00     # 5x 杠杆 × 80% single → 总 notional 上限
+# max_margin_used_pct = 0.90
+# max_same_direction_positions = 1  # BTC 是唯一 pair
+
 [risk.loss]
 max_daily_loss_pct = 0.03
 max_drawdown_pct = 0.10
 
 [scheduler]
 enabled = false
-# 推荐用 perp 线性合约（spot 现货账户无库存时无法做空）
-pairs = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
-interval_minutes = 240
-exchange_id = "binance"
-daily_summary_hour = 0    # UTC 小时（0-23）
+pairs = ["BTC/USDT:USDT"]   # BTC-only 集中策略；perp 线性合约
+interval_minutes = 240       # 4h 周期，与 OKX perp 4h K 线 + funding 8h 对齐
+exchange_id = "okx"          # 生产用 OKX perp
+daily_summary_hour = 0       # UTC 小时（0-23）
 
-[exchanges.okx]            # 在 config/local.toml 中（gitignored）
+[exchanges.okx]              # 在 config/local.toml 中（gitignored）
 api_key = "..."
 secret = "..."
 passphrase = "..."
-sandbox = true
-leverage = 1               # perp 杠杆；1 = no-op（默认；保持交易所默认）
-margin_mode = "isolated"   # OKX: "isolated" | "cross"
+sandbox = true               # demo trading 环境
+leverage = 5                 # BTC-only 5x（波动较 alts 低，单笔 SL 1.5×ATR ≈ 4% notional）
+margin_mode = "isolated"     # OKX: "isolated" | "cross"
 
 [portfolio]
 initial_capital = 0.0      # 0 = 用首次 portfolio_snapshots 作为总收益基线；
@@ -352,34 +373,9 @@ VITE_API_BASE_URL=http://localhost:8003
 | `reconcile_mismatch` | 仓位对账发现不一致 |
 | `portfolio_stale` | 组合数据过期或不可用 |
 
-## API 端点
+## API & 认证
 
-| 方法 | 路径 | 认证 | 描述 |
-|------|------|------|------|
-| GET | `/health` | 公开 | 详细组件状态（API/Redis/DB/LLM）— 503 表示降级 |
-| GET | `/metrics` | 公开 | Prometheus 指标（文本格式）|
-| GET | `/scheduler/status` | 公开 | 调度器心跳（LB 探测）|
-| GET | `/api/portfolio/snapshot` | API Key | 当前权益、现金、持仓 |
-| GET | `/api/portfolio/equity-curve?range=24h\|7d\|30d\|all` | API Key | 时序权益数据点 |
-| GET | `/api/risk/status` | API Key | 交易次数、熔断、阈值（实时 Redis ping）|
-| POST | `/api/risk/circuit-breaker/reset` | API Key | 手动重置熔断（未触发返 409）|
-| GET | `/api/decisions?pair=&from=&to=&page=&size=` | API Key | 决策列表（分页 + 日期筛选）|
-| GET | `/api/decisions/{commit_hash}` | API Key | 决策详情（含 agents/debate/verdict/risk_gate/timeline）|
-| GET | `/api/scheduler/status` | API Key | 下次触发币对 / 时间 |
-| GET / POST / PATCH / DELETE | `/api/scheduler/rules` | API Key | 触发规则 CRUD |
-| GET | `/api/metrics/summary` | API Key | 计数器 + p50/p95 延迟 |
-| POST | `/api/backtest/run` | API Key | 异步提交回测（返 run_id）|
-| GET | `/api/backtest/runs/{run_id}` | API Key | 状态 + 进度 + 结果 |
-| DELETE | `/api/backtest/runs/{run_id}` | API Key | 取消运行中的回测 |
-| GET | `/api/backtest/sessions` | API Key | 已保存的会话名 |
-| GET | `/api/backtest/sessions/{name}` | API Key | 加载已保存会话 |
-| POST | `/api/chat/stream` | API Key | SSE 流式分析（30s keepalive）|
-| POST | `/api/chat/interrupt/{session_id}` | API Key | 软中断 |
-| POST | `/api/chat/steer/{session_id}` | API Key | 注入中途引导 |
-| GET | `/api/hitl/pending` | API Key | 待人工审批的请求 |
-| POST | `/api/hitl/{approval_id}/respond` | API Key | 同意 / 拒绝 |
-| GET | `/api/market/{pair}` | API Key | 资金费率 / OI / 清算 |
-| GET | `/api/market/{pair}/ohlcv?timeframe=&limit=` | API Key | OHLCV 蜡烛 |
+FastAPI 自动 OpenAPI：`arena serve --port 8003` 启动后访问 `http://localhost:8003/docs` 看 Swagger UI，`/redoc` 看 ReDoc。对外协议层的 Anthropic SKILL.md 入口 `GET /skill/<name>`（无认证，公开）— 5 个 child skill：`cryptotrader` / `verdict-feed` / `market-intel` / `evolution-insights` / `execution-replay`。
 
 **认证**：默认 `AUTH_MODE=enabled`，`API_KEY` env 必须设置；缺失则进程启动失败。`AUTH_MODE=disabled` 仅作 dev opt-out（每请求 WARNING 日志）。所有比较使用 `secrets.compare_digest`（防时序攻击）。**限流**：60 次/分钟/IP，配置 Redis 时为多进程安全 fixed window；单进程 dev 降级内存。**CORS**：显式 `allow_methods` / `allow_headers` allowlist（与 `allow_credentials=true` 配合）。
 
@@ -405,21 +401,22 @@ VITE_API_BASE_URL=http://localhost:8003
 
 ```bash
 # 验证实盘就绪状态
-arena live-check --exchange binance
+arena live-check --exchange okx
 ```
 
 ## Docker 部署
 
 ```bash
-# 启动全套服务（PostgreSQL 16 + Redis 7 + 应用 + 仪表盘 + 调度器）
+# 启动全套服务（PostgreSQL 16 + Redis 7 + API + 前端 + 调度器 + 反向代理）
 docker compose up -d
 
-# 服务清单：
-#   app        — FastAPI :8003
-#   web        — React 前端 :5173
-#   scheduler  — 周期性交易循环
+# 服务清单（docker-compose.yml）：
 #   postgres   — 决策日志 + 组合持久化
 #   redis      — 风控状态 + 冷却 + 熔断器
+#   api        — FastAPI :8003（含 scheduler 内嵌 + watchdog）
+#   web        — React 前端 :5173
+#   scheduler  — 独立 scheduler 进程（与 api 互斥；二选一）
+#   caddy      — 反向代理 + TLS
 ```
 
 Dockerfile 使用多阶段构建 + 非 root 用户。健康检查每 30 秒轮询 `/health`。
@@ -489,7 +486,20 @@ src/cryptotrader/
     └── result.py      # BacktestResult 指标
 src/cli/main.py        # Typer CLI（arena 命令）
 src/api/               # FastAPI 服务（认证、限流、中间件）
-web/                   # React 19 + Vite 7 前端（仪表盘、决策、回测、风控、指标）
+web/                   # React 19 + Vite 8 前端（仪表盘、决策、回测、风控、指标）
+agent_skills/
+├── _internal/         # 注入 agent prompt 的内部能力（spec 019/022）
+│   ├── tech-analysis/SKILL.md
+│   ├── chain-analysis/SKILL.md
+│   ├── news-analysis/SKILL.md
+│   ├── macro-analysis/SKILL.md
+│   └── trading-knowledge/SKILL.md
+└── _external/         # 对外 Anthropic SKILL.md 协议（spec 022）
+    ├── cryptotrader/SKILL.md       # bootstrap + child 路由
+    ├── verdict-feed/SKILL.md
+    ├── market-intel/SKILL.md
+    ├── evolution-insights/SKILL.md
+    └── execution-replay/SKILL.md
 ```
 
 ## 技术栈
@@ -507,14 +517,14 @@ web/                   # React 19 + Vite 7 前端（仪表盘、决策、回测�
 | 缓存/状态 | Redis 7 |
 | 本地存储 | SQLite（市场数据存储 + LLM 响应缓存）|
 | API 服务 | FastAPI + Uvicorn |
-| 仪表盘 | React 19 + Vite 7 + TypeScript |
+| 仪表盘 | React 19 + Vite 8 + TypeScript 5.9 |
 | CLI | Typer + Rich |
 
 ## 开发
 
 ```bash
 make install          # uv pip install -e ".[dev]"
-make test             # pytest tests/ -v（347 个测试）
+make test             # uv run pytest tests/ -v（2279 个测试）
 make lint             # ruff check src/ tests/
 make format           # ruff format src/ tests/
 make scheduler        # arena scheduler start
@@ -534,7 +544,7 @@ arena sync             # 同步历史数据
 
 - **零 lint 错误**：`ruff check src/ tests/` 必须零错误通过
 - **禁止 `noqa` 注释**：遇到 C901 必须重构（阈值 = 10）
-- **347 个测试**，1 个跳过，70% 覆盖率
+- **2279 个测试**（spec 022 stamp 时基线），9 pre-existing failures 与本 spec 无关
 - **异步测试**：`asyncio_mode = "auto"` — 无需 `@pytest.mark.asyncio`
 - **必须用 `uv run pytest`**（Python 3.12 venv），不要用裸 `pytest`
 

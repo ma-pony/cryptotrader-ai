@@ -5,7 +5,7 @@
 | Layer | Technology | Version |
 |---|---|---|
 | Framework | React | 19.x |
-| Build | Vite | 7.x |
+| Build | Vite | 8.x |
 | Language | TypeScript | 5.9 (strict) |
 | Styling | Tailwind CSS | 3.x + CSS variables |
 | Components | Radix UI | Primitives |
@@ -117,6 +117,10 @@ CSS HSL variables with `data-theme="dark|light"` on `<html>`. Semantic tokens (`
 | `/api/hitl/:id/respond` | POST | Approve / reject |
 | `/api/market/:pair` | GET | Funding rate / OI / liquidations |
 | `/api/market/:pair/ohlcv?timeframe=&limit=` | GET | OHLCV bars |
+| `/api/memory/skills?agent=&limit=` | GET | Trilogy evolution skills (spec 019) |
+| `/api/memory/patterns?agent=&maturity=&limit=` | GET | Evolved PatternRecord list (spec 022 — closes spec 021 T021) |
+| `/api/events/heartbeat?since=&types=&limit=&cursor=` | GET | Pull-mode event stream (verdict / trade / rejection / evolution) — spec 022 |
+| `/skill/<name>` | GET | External Anthropic SKILL.md fetch (cryptotrader / verdict-feed / market-intel / evolution-insights / execution-replay) |
 
 ## Auth & API Key Handling
 
