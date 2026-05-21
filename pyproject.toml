@@ -177,6 +177,13 @@ known-first-party = ["cryptotrader", "api", "cli"]
 # en-dash, minus, ATR multiplication-sign for readability. C901 on risk_check
 # acknowledged — the function legitimately handles many guardrail branches.
 "src/cryptotrader/agents/macro.py" = ["RUF001"]
+# Chinese comments / docstrings in 3 core modules (spec 022 stamp gate cleanup).
+# RUF002 docstring fullwidth punctuation / RUF003 comment ambiguous chars / RUF100
+# stale noqa directives (BLE001 disabled at top-level since spec 020c).
+# portfolio/manager.py merged into existing per-file-ignore below.
+"src/cryptotrader/cycle_lock.py" = ["RUF003"]
+"src/cryptotrader/llm/reasoning_compat.py" = ["RUF001", "RUF002", "RUF003", "TC003"]
+"src/cryptotrader/risk/checks/position.py" = ["RUF002", "RUF003", "RUF100"]
 "src/cryptotrader/data/macro.py" = ["RUF001", "RUF003"]
 "src/cryptotrader/debate/verdict.py" = ["RUF001", "RUF002", "RUF003"]
 "src/cryptotrader/nodes/debate.py" = ["RUF001", "RUF002", "RUF003"]
@@ -190,8 +197,10 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_macro_coverage.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_post_process_verdict.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_debate_anti_ratchet.py" = ["RUF001", "RUF002", "RUF003"]
-# spec 014 test files use Chinese docstrings + assertion messages.
+# spec 014 / spec 022 test files use Chinese docstrings + assertion messages.
 "tests/test_two_layer_architecture.py" = ["RUF001", "RUF002", "RUF003", "S603", "S607"]
+"tests/test_skill_provider_internal_path.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_skills_endpoint.py" = ["TCH002", "TCH003", "PT001"]
 "tests/test_agent_memory_writer.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_anti_overfitting_equivalence.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 018 migration script + tests use Chinese docstrings/comments.
@@ -205,7 +214,7 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/nodes/evolution.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_evolving_memory_provider.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_evolution_node.py" = ["RUF001", "RUF002", "RUF003", "SIM117"]
-"src/api/routes/memory.py" = ["RUF001", "RUF002", "RUF003", "C901"]
+"src/api/routes/memory.py" = ["RUF001", "RUF002", "RUF003", "C901", "RUF100"]
 "tests/test_api_memory.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_e2e_memory_evolution.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_load_skill_tool.py" = ["RUF001", "RUF002", "RUF003"]
@@ -246,7 +255,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_token_budget.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_config_loader.py" = ["RUF001", "RUF002", "RUF003", "E501"]
 # portfolio/manager.py: same SQLAlchemy declarative-class pattern as journal/store.
-"src/cryptotrader/portfolio/manager.py" = ["N806", "TID251"]
+# spec 022 stamp gate: also covers Chinese comments + stale BLE001 noqa.
+"src/cryptotrader/portfolio/manager.py" = ["N806", "TID251", "RUF001", "RUF002", "RUF003", "RUF100"]
 # cli/main.py:
 # N806 — SQLAlchemy declarative class assigned in function (Base = declarative_base()).
 # S104 — uvicorn's --host default is 0.0.0.0 by design (containers expose the port).
@@ -290,6 +300,8 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "tests/test_daemon_pattern_extraction.py" = ["RUF001", "RUF002", "RUF003", "PT023"]
 "tests/test_cli_experience_distill.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_e2e_pattern_cold_start.py" = ["RUF001", "RUF002", "RUF003", "PT023"]
+# spec 024 API patterns endpoint test uses Chinese docstrings/comments + runtime Path.
+"tests/test_api_memory_patterns.py" = ["RUF001", "RUF002", "RUF003", "TCH003", "PT001"]
 # spec 020a: observability module uses Chinese docstrings/comments.
 "src/cryptotrader/observability/*.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 020a: observability imports in log_llm_usage are used at runtime (TCH003).

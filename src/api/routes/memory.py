@@ -4,12 +4,13 @@ GET /api/memory/skills          — skill 列表
 GET /api/memory/skills/{name}   — skill 详情
 GET /api/memory/skill-access    — skill access 统计
 GET /api/memory/skill-proposals — draft proposals
+GET /api/memory/patterns        — PatternRecord 列表（spec 024 SC-P3 补完）
 """
 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,12 +18,49 @@ from fastapi import APIRouter, Query
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
+from cryptotrader._compat import UTC
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["memory"])
 
 _VALID_AGENTS = {"tech", "chain", "news", "macro"}
 _SKILLS_ROOT = Path("agent_skills")
+_MEMORY_ROOT = Path("agent_memory")
+
+
+# ── PatternRecord API schema (spec 024 SC-P3) ─────────────────────────────────
+
+
+class PnLTrackResponse(BaseModel):
+    pnls: list[float]
+
+
+class PatternRecordResponse(BaseModel):
+    """PatternRecord API wrapper (spec 024 / FR-022-17~20).
+
+    直接映射 cryptotrader.learning.memory.PatternRecord 字段。
+    """
+
+    name: str
+    agent: str
+    description: str
+    maturity: str
+    regime_tags: list[str]
+    pnl_track: PnLTrackResponse
+    source_cycles: list[str]
+    body: str
+    version: int
+    manually_edited: bool
+    created: str | None
+
+
+class PatternsList(BaseModel):
+    items: list[PatternRecordResponse]
+    total: int
+
+
+# ── Skill API schema ───────────────────────────────────────────────────────────
 
 
 class SkillItem(BaseModel):
@@ -320,6 +358,104 @@ async def get_skill_proposals(
         )
     except Exception as exc:
         logger.warning("GET /api/memory/skill-proposals failed", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "memory_io_error", "detail": str(exc)},
+        )
+
+
+# ── GET /api/memory/patterns ───────────────────────────────────────────────────
+
+
+def _load_all_patterns(
+    memory_root: Path,
+    agent: str | None = None,
+    maturity: str | None = None,
+) -> list[PatternRecordResponse]:
+    """扫 agent_memory/{tech,chain,news,macro}/patterns/*.md，返回 PatternRecordResponse 列表。
+
+    跳过 .gitkeep / .lock 文件；单文件解析失败 log warning + 继续。
+    agent / maturity 过滤在加载后应用。
+    """
+    from cryptotrader.learning.memory import _load_pattern_record
+
+    agents_to_scan = [agent] if agent else sorted(_VALID_AGENTS)
+    results: list[PatternRecordResponse] = []
+
+    for ag in agents_to_scan:
+        patterns_dir = memory_root / ag / "patterns"
+        if not patterns_dir.exists():
+            continue
+        for md_path in sorted(patterns_dir.iterdir()):
+            if md_path.name in {".gitkeep", ".lock"} or md_path.suffix != ".md":
+                continue
+            record = _load_pattern_record(md_path)
+            if record is None:
+                continue
+            if maturity is not None and record.maturity != maturity:
+                continue
+            results.append(
+                PatternRecordResponse(
+                    name=record.name,
+                    agent=record.agent,
+                    description=record.description,
+                    maturity=record.maturity,
+                    regime_tags=record.regime_tags,
+                    pnl_track=PnLTrackResponse(pnls=record.pnl_track.pnls),
+                    source_cycles=record.source_cycles,
+                    body=record.body,
+                    version=record.version,
+                    manually_edited=record.manually_edited,
+                    created=record.created,
+                )
+            )
+    return results
+
+
+@router.get("/patterns", response_model=PatternsList)
+async def get_memory_patterns(
+    agent: str | None = Query(default=None, description="tech / chain / news / macro"),
+    maturity: str | None = Query(default=None, description="observed / probationary / active / deprecated / archived"),
+    limit: int | None = Query(default=None, description="最多返回条数；缺省不限制"),
+) -> JSONResponse:
+    """GET /api/memory/patterns — 返回 trilogy 进化系统产出的 PatternRecord 列表。
+
+    - 扫 agent_memory/{tech,chain,news,macro}/patterns/*.md
+    - 支持 ?agent=&maturity=&limit= query filter
+    - 目录为空或不存在时返回 items=[], total=0（不 500）
+
+    spec 024 SC-P3 补完；FR-022-17/18/19/20。
+    """
+    if agent is not None and agent not in _VALID_AGENTS:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_query", "detail": f"agent must be one of {sorted(_VALID_AGENTS)}"},
+        )
+
+    valid_maturity = {"observed", "probationary", "active", "deprecated", "archived"}
+    if maturity is not None and maturity not in valid_maturity:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_query", "detail": f"maturity must be one of {sorted(valid_maturity)}"},
+        )
+
+    if limit is not None and limit < 0:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "invalid_query", "detail": "limit must be >= 0"},
+        )
+
+    try:
+        all_items = _load_all_patterns(_MEMORY_ROOT, agent=agent, maturity=maturity)
+        total_count = len(all_items)
+        items = all_items[:limit] if limit is not None else all_items
+        response = PatternsList(items=items, total=total_count)
+        return JSONResponse(
+            content=response.model_dump(),
+            headers={"Cache-Control": "max-age=30"},
+        )
+    except Exception as exc:
+        logger.warning("GET /api/memory/patterns failed", exc_info=True)
         return JSONResponse(
             status_code=500,
             content={"error": "memory_io_error", "detail": str(exc)},

@@ -8,9 +8,11 @@ from __future__ import annotations
 import logging
 import math
 import time
-from datetime import UTC, datetime
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+from cryptotrader._compat import UTC
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +230,7 @@ class EvolvingSkillProvider:
 
     def __init__(
         self,
-        skill_root: Path = Path("agent_skills"),
+        skill_root: Path = Path("agent_skills/_internal"),
         top_k: int = 5,
         skills_root: Path | None = None,
     ) -> None:

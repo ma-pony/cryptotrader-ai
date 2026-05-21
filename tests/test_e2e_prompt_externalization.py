@@ -35,7 +35,7 @@ def _build_pb(agent_id: str, skills_root: Path | None = None):
     return PromptBuilder(
         agent_id=agent_id,
         config_dir=CONFIG_DIR,
-        skill_provider=DefaultSkillProvider(skills_root=skills_root or REPO_ROOT / "agent_skills"),
+        skill_provider=DefaultSkillProvider(skills_root=skills_root or REPO_ROOT / "agent_skills/_internal"),
     )
 
 

@@ -23,7 +23,7 @@ def _get_or_build_pb(agent_id: str, model: str) -> PromptBuilder:
     global _skill_provider
     _repo_root = Path(__file__).parent.parent.parent.parent
     if _skill_provider is None:
-        _skill_provider = EvolvingSkillProvider(skill_root=_repo_root / "agent_skills")
+        _skill_provider = EvolvingSkillProvider(skill_root=_repo_root / "agent_skills/_internal")
         import cryptotrader.agents.skills.tool as _skill_tool_mod
 
         _skill_tool_mod.load_skill_tool = _skill_tool_mod._make_load_skill_tool(provider=_skill_provider)

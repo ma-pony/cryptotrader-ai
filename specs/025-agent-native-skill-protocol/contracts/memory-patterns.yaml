@@ -1,0 +1,130 @@
+openapi: 3.0.3
+info:
+  title: cryptotrader-ai — Memory Patterns API（spec 022 闭 spec 021 T021）
+  version: "1.0"
+  description: |
+    暴露 trilogy 进化系统产出的 PatternRecord 列表。
+    Patterns 是从 cases 提炼的 maturity-tracked 决策模式（spec 018/021）。
+
+paths:
+  /api/memory/patterns:
+    get:
+      summary: 列出所有 patterns
+      tags: [memory]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: agent
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [tech, chain, news, macro]
+          description: 按 agent scope 过滤
+        - name: maturity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [observed, probationary, active, deprecated, archived]
+          description: 按 maturity FSM 状态过滤
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+      responses:
+        '200':
+          description: PatternRecord 列表
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, total]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/PatternRecord'
+                  total:
+                    type: integer
+                    description: 满足 query 的总记录数（不含 limit 截断）
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      description: 单 API_KEY auth（参考 cryptotrader/SKILL.md bootstrap）
+
+  responses:
+    Unauthorized:
+      description: API_KEY missing or invalid
+      headers:
+        WWW-Authenticate:
+          schema:
+            type: string
+            example: 'Bearer realm="cryptotrader-ai"'
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail:
+                type: string
+                example: "Invalid API key"
+
+  schemas:
+    PatternRecord:
+      type: object
+      required: [agent, slug, applied_text, maturity, pnl_track, source_cycles, regime_tags, created_at, last_updated_at]
+      properties:
+        agent:
+          type: string
+          enum: [tech, chain, news, macro]
+        slug:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+          example: "sma-breakdown-short"
+        applied_text:
+          type: string
+          description: 触发该 pattern 的 applied 文本（来自 verdict thesis）
+        maturity:
+          type: string
+          enum: [observed, probationary, active, deprecated, archived]
+          description: FSM 状态（spec 018）
+        pnl_track:
+          type: array
+          items:
+            type: number
+          description: 历史 PnL 列表（filtered None）
+        source_cycles:
+          type: array
+          items:
+            type: string
+          maxItems: 5
+          description: 触发该 pattern 的 cycle_id 列表（最多 5 个）
+        regime_tags:
+          type: array
+          items:
+            type: string
+          maxItems: 3
+          description: 市场 regime 标签（top 3 频次）
+        created_at:
+          type: string
+          format: date-time
+        last_updated_at:
+          type: string
+          format: date-time
+        description:
+          type: string
+          nullable: true
+          description: LLM-distill 生成的简短描述（spec 021 b239a8d）
+        body:
+          type: string
+          nullable: true
+          description: LLM-distill 生成的详细 body

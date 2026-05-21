@@ -1,0 +1,87 @@
+openapi: 3.0.3
+info:
+  title: cryptotrader-ai — Skill Fetch API（spec 022）
+  version: "1.0"
+  description: |
+    暴露 `agent_skills/_external/<name>/SKILL.md` 给外部 agent。
+    Bootstrap 入口：`/skill/cryptotrader` — agent 读完后按 child skill 路由表 fetch 其他 skills。
+
+paths:
+  /skill/{name}:
+    get:
+      summary: Fetch external SKILL.md
+      tags: [skill]
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema:
+            type: string
+            enum:
+              - cryptotrader
+              - verdict-feed
+              - market-intel
+              - evolution-insights
+              - execution-replay
+          description: external skill 名称（对应 `agent_skills/_external/<name>/SKILL.md`）
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [markdown, json]
+            default: markdown
+          description: |
+            response 格式：
+            - `markdown`（默认）：原文 markdown，Content-Type: text/markdown
+            - `json`：parsed SkillRecord，Content-Type: application/json
+      responses:
+        '200':
+          description: Skill content
+          content:
+            text/markdown:
+              schema:
+                type: string
+                description: 原 SKILL.md 内容（YAML frontmatter + body）
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SkillRecord'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Skill name 不存在
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+
+  responses:
+    Unauthorized:
+      description: API_KEY missing or invalid
+
+  schemas:
+    SkillRecord:
+      type: object
+      required: [name, description, frontmatter, body, last_modified_at]
+      properties:
+        name:
+          type: string
+          example: "cryptotrader"
+        description:
+          type: string
+          description: 来自 YAML frontmatter
+        frontmatter:
+          type: object
+          description: 完整 YAML frontmatter（含 name + description）
+          additionalProperties: true
+        body:
+          type: string
+          description: markdown body（不含 frontmatter delimiters）
+        last_modified_at:
+          type: string
+          format: date-time
+          description: filesystem mtime

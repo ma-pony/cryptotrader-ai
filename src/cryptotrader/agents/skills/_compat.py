@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
+
+from cryptotrader._compat import UTC
 
 
 def utcnow_str() -> str:

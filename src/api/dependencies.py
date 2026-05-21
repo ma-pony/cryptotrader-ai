@@ -49,4 +49,8 @@ async def verify_api_key(request: Request):
     key = request.headers.get("X-API-Key", "")
     # secrets.compare_digest avoids timing attacks against API_KEY.
     if not secrets.compare_digest(key, API_KEY):
-        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )

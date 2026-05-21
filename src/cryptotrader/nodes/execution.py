@@ -442,11 +442,32 @@ async def _build_close_order(pair: str, price: float, state: ArenaState):
         exchange_portfolio = await read_portfolio_from_exchange(state)
         pos = (exchange_portfolio or {}).get("positions", {}).get(pair, {})
         pos_amount = pos.get("amount", 0)
-    except Exception:
-        logger.warning("Exchange portfolio fetch for close failed", exc_info=True)
-        pos = {}
-        pos_amount = 0
+    except Exception as exc:
+        # Cooldown / circuit-breaker fallback: risk_gate already let the close
+        # through ("risk reduction must not be blocked"), so execution must not
+        # silently drop it. position_context is built by enrich_verdict_context
+        # from PortfolioManager (DB-backed, no exchange call) and is the same
+        # truth the AI saw when it decided to close — reuse it.
+        pos_ctx = state["data"].get("position_context") or {}
+        side = pos_ctx.get("side")
+        ctx_amount = float(pos_ctx.get("amount", 0) or 0)
+        avg_entry = float(pos_ctx.get("entry_price", 0) or 0)
+        if side in ("long", "short") and ctx_amount > 0:
+            pos_amount = ctx_amount if side == "long" else -ctx_amount
+            pos = {"amount": pos_amount, "avg_price": avg_entry}
+            logger.warning(
+                "Exchange portfolio fetch for close failed (%s) — falling back to position_context: %s %g @ %.2f",
+                exc,
+                side,
+                ctx_amount,
+                avg_entry,
+            )
+        else:
+            logger.warning("Exchange portfolio fetch for close failed", exc_info=True)
+            pos = {}
+            pos_amount = 0
     if pos_amount == 0:
+        state["data"]["execution_error"] = "close_skipped: fetch_positions failed and no cached position_context"
         return None
     # Realized PnL = unrealized_pnl at the moment of close (derivatives), or
     # (close_price - avg_entry) * amount for spot. Store on state so the journal
