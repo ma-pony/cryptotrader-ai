@@ -58,6 +58,32 @@ async def test_build_close_order_uses_perp_canonical_key():
 
 
 @pytest.mark.asyncio
+async def test_build_close_order_falls_back_to_position_context_on_cooldown():
+    """2026-05-21 incident: OKX cooldown caused fetch_positions to throw,
+    silently dropping a verdict=close. Fallback to position_context (DB-backed,
+    set by enrich_verdict_context) so risk-reduction orders survive transient
+    venue unavailability."""
+    state = _state_for("BTC/USDT:USDT")
+    state["data"]["position_context"] = {
+        "side": "long",
+        "entry_price": 77577.0,
+        "current_price": 77847.0,
+        "amount": 0.2945,
+    }
+
+    with patch(
+        "cryptotrader.nodes.execution.read_portfolio_from_exchange",
+        AsyncMock(side_effect=RuntimeError("okx venue in cooldown (229s remaining)")),
+    ):
+        order = await _build_close_order("BTC/USDT:USDT", price=77847.0, state=state)
+
+    assert order is not None, "cooldown must fall back to position_context, not drop"
+    assert order.side == "sell", "long fallback closes via sell"
+    assert order.amount == 0.2945
+    assert state["data"].get("realized_pnl") is not None
+
+
+@pytest.mark.asyncio
 async def test_build_close_order_returns_none_when_no_perp_position():
     """If the canonical key is absent, no order is built (no spot-form fallback)."""
     state = _state_for("BTC/USDT:USDT")
@@ -141,9 +167,7 @@ async def test_perp_close_passes_pos_side_long_for_existing_long():
     # isolated/cross margin mode for the order — fixes spurious sCode=51008
     # "Insufficient USDT margin" when isolated-mode leverage + default tdMode
     # disagree.
-    assert args[5] == {"posSide": "long", "tdMode": "isolated"}, (
-        f"expected posSide+tdMode, got {args[5]}"
-    )
+    assert args[5] == {"posSide": "long", "tdMode": "isolated"}, f"expected posSide+tdMode, got {args[5]}"
 
 
 @pytest.mark.asyncio
