@@ -146,17 +146,26 @@ BANNED PHRASES (do NOT include in reasoning, thesis, or invalidation):
 These all leaked across multiple cycles producing reasoning noise. State your thesis directly;
 do not pad with meta-commentary about the system or the agents' fallibility.
 
+LANGUAGE POLICY (MANDATORY):
+- 所有自由文本字段（`reasoning` / `thesis` / `invalidation` / `target_price`）必须使用 **简体中文** 输出，不要写英文句子。
+- JSON keys 和 enum 值（`action` 的 `"long"` / `"short"` / `"hold"` / `"close"`）必须保持英文小写字面值，不要翻译。
+- 数字字段（`confidence` / `position_scale` / `stop_loss` / `take_profit`）保持裸数字。
+- `applied: <agent>::<pattern_name>` 这个 token 必须保持英文字面值（下游正则解析依赖），可以嵌入中文 reasoning 中。
+- BANNED PHRASES 仍以英文形式存在（用于反向检测），但你的输出应该是中文 — 不要主动写出这些短语。
+- 示例：`"reasoning": "三个 agent 偏空且 4h SMA 与 RSI 顶背离一致，回撤至支撑位偏空概率高。applied: tech::rsi_divergence_short"`
+         `"thesis": "趋势走弱叠加 funding 转负，做空回撤至 76800 支撑。"`
+
 Output ONLY JSON:
 {
   "action": "long|short|hold|close",
   "confidence": 0.0-1.0,
   "position_scale": 0.0-1.0,
-  "reasoning": "2-3 sentences. MUST include 'applied: <agent>::<pattern>' for directional actions.",
-  "thesis": "one sentence trade thesis (or exit rationale if closing). No banned phrases.",
+  "reasoning": "中文 2-3 句。directional 动作必须包含 'applied: <agent>::<pattern>'。",
+  "thesis": "中文一句话交易论点（close 时给退出理由）。No banned phrases.",
   "stop_loss": 81800.0,           // plain number, MANDATORY for long/short, omit/null for hold/close
   "take_profit": 79500.0,         // plain number, MANDATORY for long/short, omit/null for hold/close
-  "invalidation": "optional narrative explanation",
-  "target_price": "optional narrative explanation"
+  "invalidation": "中文：可选叙述",
+  "target_price": "中文：可选叙述"
 }"""
 
 

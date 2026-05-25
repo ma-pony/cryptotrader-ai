@@ -21,7 +21,12 @@ Rules:
 - Cite specific numbers from the analyst reports (e.g. "RSI at 28 indicates oversold" not "RSI is low").
 - Address the strongest bear argument directly — don't ignore it.
 - Acknowledge weaknesses in your own case to build credibility, then explain why the bull thesis still holds.
-- Do NOT use generic crypto platitudes ("institutions are coming", "adoption is growing"). Only use data provided."""
+- Do NOT use generic crypto platitudes ("institutions are coming", "adoption is growing"). Only use data provided.
+
+LANGUAGE POLICY (MANDATORY):
+- 你的论述必须使用 **简体中文**，不要写英文段落。
+- 指标名（RSI / MACD / funding rate / OI 等）作为术语保留英文；具体数字保持裸数字。
+- 反驳和论点用中文表达，例如："RSI 14 在 1h 跌至 28 显示超卖；4h 资金费率连续 3 期为负，空头拥挤反向风险高 —— 这是做多机会。"""
 
 BEAR_SYSTEM = """You are a Bear Researcher in an adversarial debate. Your job is to build the strongest possible case
 for SELLING/SHORTING.
@@ -34,7 +39,12 @@ Rules:
 high").
 - Address the strongest bull argument directly — don't ignore it.
 - Acknowledge weaknesses in your own case to build credibility, then explain why the bear thesis still holds.
-- Do NOT use generic crypto FUD ("regulation is coming", "bubble will pop"). Only use data provided."""
+- Do NOT use generic crypto FUD ("regulation is coming", "bubble will pop"). Only use data provided.
+
+LANGUAGE POLICY (MANDATORY):
+- 你的论述必须使用 **简体中文**，不要写英文段落。
+- 指标名（RSI / MACD / funding rate / OI 等）作为术语保留英文；具体数字保持裸数字。
+- 反驳和论点用中文表达，例如："funding rate 0.05% 显示多头拥挤；BB 上轨被触及且 MACD 4h 顶背离 —— 回调风险大于上行空间。"""
 
 REBUTTAL_TEMPLATE = """The opposing analyst argued:
 {opponent_argument}
@@ -128,8 +138,13 @@ Rules:
 - Do NOT default to hold. Take a stance.
 - Confidence should reflect how decisive the winner was, not a compromise.
 
-Respond ONLY with JSON: {{"action": "long|short|hold", "confidence": 0.0-1.0, "reasoning": "one sentence: which side won
-and the key evidence that decided it"}}"""
+LANGUAGE POLICY (MANDATORY):
+- `reasoning` 字段必须使用 **简体中文** 输出。
+- JSON keys 和 `action` 的 enum 值（`"long"` / `"short"` / `"hold"`）必须保持英文小写字面值。
+- 数字保持裸数字。
+- 示例：`{{"action": "short", "confidence": 0.65, "reasoning": "空方证据更扎实：funding 转负 + 4h RSI 顶背离 + 鲸鱼净流入交易所，多方仅靠 oversold 论据偏弱。"}}`
+
+Respond ONLY with JSON: {{"action": "long|short|hold", "confidence": 0.0-1.0, "reasoning": "中文一句：哪一方胜出，关键证据是什么"}}"""
 
 
 async def judge_debate(

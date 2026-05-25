@@ -58,7 +58,14 @@ Confidence calibration:
 Data sufficiency self-assessment:
 - "high": Your core data sources are present and complete. You can make a well-informed directional call.
 - "medium": Some data is present but key sources are missing or stale. Moderate confidence at best.
-- "low": Most of your core data is missing, zero, or placeholder. You MUST set confidence <= 0.3 and direction to "neutral". Do NOT guess a direction without data — say "insufficient data" in reasoning.
+- "low": Most of your core data is missing, zero, or placeholder. You MUST set confidence <= 0.3 and direction to "neutral". Do NOT guess a direction without data — say "数据不足" in reasoning.
+
+LANGUAGE POLICY (MANDATORY):
+- 所有自由文本字段（`reasoning` / `key_factors` / `risk_flags`）必须使用 **简体中文** 输出，不要写英文句子。
+- 引用新闻标题时可保留原标题英文，但解读和情绪判定需要中文表述。
+- JSON keys 和 enum 值（`direction` 的 `"bullish"` / `"bearish"` / `"neutral"`、`data_sufficiency` 的 `"high"` / `"medium"` / `"low"`）保持英文小写字面值。
+- 数字字段保持裸数字。
+- 示例：`"reasoning": "12 条新闻中 7 条偏空（ETF 单日净流出 1.2 亿美元、美 SEC 加密执法升级），CoinGecko 社交热度 24h -8%，情绪偏空但缺乏催化剂。"`
 
 ## user_tail
 
