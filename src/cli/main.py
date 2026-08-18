@@ -39,7 +39,7 @@ def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
     mode: Annotated[str, typer.Option("--mode", "-m", help="paper or live")] = "paper",
     exchange: Annotated[str, typer.Option("--exchange", "-e", help="Exchange (default: from config)")] = "",
-    graph: Annotated[str, typer.Option("--graph", "-g", help="full, lite, debate, supervisor")] = "full",
+    graph: Annotated[str, typer.Option("--graph", "-g", help="configured, full, lite, debate, kronos")] = "configured",
 ):
     """Run one analysis cycle for each pair sequentially."""
     if pair is None:
@@ -51,19 +51,24 @@ def run(
     asyncio.run(_run(pair, mode, exchange, graph))
 
 
-async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = "full"):
+async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = "configured"):
     from cryptotrader.config import load_config
-    from cryptotrader.graph import build_debate_graph, build_lite_graph, build_trading_graph
+    from cryptotrader.graph import build_debate_graph, build_kronos_graph, build_lite_graph, build_trading_graph
 
     config = load_config()
     if not exchange_id:
         exchange_id = config.exchange_id
+    if graph_mode == "configured":
+        graph_mode = "kronos" if config.signal_engine == "kronos" else "full"
     builders = {
         "full": build_trading_graph,
         "lite": build_lite_graph,
         "debate": build_debate_graph,
+        "kronos": build_kronos_graph,
     }
-    graph = builders.get(graph_mode, build_trading_graph)()
+    if graph_mode not in builders:
+        raise typer.BadParameter(f"Unknown graph '{graph_mode}'")
+    graph = builders[graph_mode]()
 
     # Live mode pre-flight checks
     if mode == "live":
@@ -82,14 +87,14 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
     # `arena run --mode live` exit logs an aiohttp "Unclosed connector" warning
     # and a deque of dangling ResponseHandlers.
     try:
-        await _run_pairs_loop(pairs, mode, exchange_id, graph, config)
+        await _run_pairs_loop(pairs, mode, exchange_id, graph, config, graph_mode)
     finally:
         from cryptotrader.nodes.execution import close_live_exchanges
 
         await close_live_exchanges()
 
 
-async def _run_pairs_loop(pairs, mode, exchange_id, graph, config):
+async def _run_pairs_loop(pairs, mode, exchange_id, graph, config, graph_mode):
     from cryptotrader.cycle_lock import cycle_lock
     from cryptotrader.risk.state import RedisStateManager
 
@@ -100,10 +105,11 @@ async def _run_pairs_loop(pairs, mode, exchange_id, graph, config):
             if not acquired:
                 console.print(f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]")
                 continue
-            await _run_one_pair(pair, mode, exchange_id, graph, config)
+            await _run_one_pair(pair, mode, exchange_id, graph, config, graph_mode)
 
 
-async def _run_one_pair(pair: str, mode: str, exchange_id: str, graph, config) -> None:
+async def _run_one_pair(pair: str, mode: str, exchange_id: str, graph, config, graph_mode: str) -> None:
+    from cryptotrader.state import build_initial_state
     from cryptotrader.tracing import add_timing_to_trace, run_graph_traced, set_trace_id
 
     trace_id = set_trace_id()
@@ -111,35 +117,36 @@ async def _run_one_pair(pair: str, mode: str, exchange_id: str, graph, config) -
         f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
     )
 
-    # ArenaState is a TypedDict (type-only annotation); the dict literal
-    # below satisfies it structurally without an explicit annotation.
-    initial = {
-        "messages": [],
-        "data": {},
-        "metadata": {
-            "pair": pair,
-            "engine": mode,
-            "exchange_id": exchange_id,
-            "timeframe": config.data.default_timeframe,
-            "ohlcv_limit": config.data.ohlcv_limit,
-            "analysis_model": config.models.analysis,
-            "debate_model": config.models.debate,
-            "verdict_model": config.models.verdict,
-            "models": {
-                "tech_agent": config.models.tech_agent,
-                "chain_agent": config.models.chain_agent,
-                "news_agent": config.models.news_agent,
-                "macro_agent": config.models.macro_agent,
-            },
-            "database_url": config.infrastructure.database_url,
-            "redis_url": config.infrastructure.redis_url,
-            "convergence_threshold": config.debate.convergence_threshold,
-            "max_single_pct": config.risk.position.max_single_pct,
-        },
-        "debate_round": 0,
-        "max_debate_rounds": config.debate.max_rounds,
-        "divergence_scores": [],
-    }
+    timeframe = None
+    ohlcv_limit = None
+    extra_metadata = None
+    if graph_mode == "kronos":
+        k = config.kronos
+        timeframe = k.timeframe
+        ohlcv_limit = k.ohlcv_limit
+        extra_metadata = {
+            "kronos_cfg": {
+                "gate_path": k.gate_path,
+                "model_name": k.model_name,
+                "tokenizer_name": k.tokenizer_name,
+                "device": k.device,
+                "lookback": k.lookback,
+                "pred_len": k.pred_len,
+                "sample_count": k.sample_count,
+                "step2_short_threshold": k.step2_short_threshold,
+                "aux_symbol": k.aux_symbol,
+            }
+        }
+
+    initial = build_initial_state(
+        pair,
+        engine=mode,
+        exchange_id=exchange_id,
+        timeframe=timeframe,
+        ohlcv_limit=ohlcv_limit,
+        config=config,
+        extra_metadata=extra_metadata,
+    )
 
     try:
         result, node_trace = await run_graph_traced(graph, initial)

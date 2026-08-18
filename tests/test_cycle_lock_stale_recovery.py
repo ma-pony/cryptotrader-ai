@@ -45,9 +45,7 @@ async def test_try_acquire_lock_stale_dead_pid_steals():
     # Seed a stale lock as if a dead process held it
     await rs.try_acquire_lock("cycle_lock:test", owner_id="99999999:stale", ttl=600)
     # New owner should be able to acquire (memory path detects dead PID)
-    acquired = await rs.try_acquire_lock(
-        "cycle_lock:test", owner_id=f"{os.getpid()}:new", ttl=600
-    )
+    acquired = await rs.try_acquire_lock("cycle_lock:test", owner_id=f"{os.getpid()}:new", ttl=600)
     assert acquired is True
 
 
@@ -56,9 +54,7 @@ async def test_try_acquire_lock_live_owner_blocks():
     """Memory path: live PID owner blocks new acquisition."""
     rs = RedisStateManager(redis_url=None)
     await rs.try_acquire_lock("cycle_lock:test", owner_id=f"{os.getpid()}:a", ttl=600)
-    acquired = await rs.try_acquire_lock(
-        "cycle_lock:test", owner_id=f"{os.getpid()}:b", ttl=600
-    )
+    acquired = await rs.try_acquire_lock("cycle_lock:test", owner_id=f"{os.getpid()}:b", ttl=600)
     assert acquired is False
 
 
@@ -67,7 +63,5 @@ async def test_try_acquire_lock_legacy_owner_blocks():
     """Memory path: legacy bare-uuid owner is treated as alive (safe default)."""
     rs = RedisStateManager(redis_url=None)
     await rs.try_acquire_lock("cycle_lock:test", owner_id="legacy-bare-uuid", ttl=600)
-    acquired = await rs.try_acquire_lock(
-        "cycle_lock:test", owner_id=f"{os.getpid()}:b", ttl=600
-    )
+    acquired = await rs.try_acquire_lock("cycle_lock:test", owner_id=f"{os.getpid()}:b", ttl=600)
     assert acquired is False

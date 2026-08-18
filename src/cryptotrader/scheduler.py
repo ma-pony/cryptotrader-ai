@@ -81,14 +81,35 @@ class Scheduler:
         # delayed the trigger by >1s; cycle came back only after API restart.
         # 5-min grace ≪ 60-min interval so no risk of doubling up.
         _startup_delay_s = 15
+        # Align the trading cycle to the candle close instead of an arbitrary
+        # interval anchored at process start. For a 240m (4h) interval we fire
+        # 2 min after each 4h close (00:02/04:02/.../20:02 UTC) so the just-closed
+        # bar is available from the exchange — Kronos must predict on a COMPLETE
+        # latest bar, not a forming one. Falls back to interval if the cadence
+        # isn't a clean hour multiple.
+        _candle_aligned = self.interval_minutes % 60 == 0 and self.interval_minutes <= 24 * 60
+        if _candle_aligned:
+            _hours_step = self.interval_minutes // 60
+            _cycle_trigger: Any = CronTrigger(hour=f"*/{_hours_step}", minute=2, timezone="UTC")
+            # No immediate startup fire: let the first cycle land on the next
+            # aligned candle close so Kronos always predicts on a complete bar.
+            _cycle_job_kwargs: dict[str, Any] = {}
+            logger.info(
+                "Trading cycle trigger: cron */%dh at minute=2 UTC (candle-aligned, first fire at next close)",
+                _hours_step,
+            )
+        else:
+            _cycle_trigger = IntervalTrigger(minutes=self.interval_minutes)
+            _cycle_job_kwargs = {"next_run_time": datetime.now(UTC) + timedelta(seconds=_startup_delay_s)}
+            logger.info("Trading cycle trigger: interval %dm (not hour-aligned)", self.interval_minutes)
         self._scheduler.add_job(
             self._run_cycle,
-            IntervalTrigger(minutes=self.interval_minutes),
+            _cycle_trigger,
             id="trading_cycle",
             name="Trading cycle",
-            next_run_time=datetime.now(UTC) + timedelta(seconds=_startup_delay_s),
             max_instances=1,
             misfire_grace_time=300,
+            **_cycle_job_kwargs,
         )
 
         # Register daily summary job — cron at configured hour UTC
@@ -132,6 +153,7 @@ class Scheduler:
             loop.add_signal_handler(sig, self.stop)
 
         self._scheduler.start()
+        self._write_scheduler_heartbeat()
         logger.info(
             "Scheduler started: pairs=%s interval=%dm daily_summary_hour=%d",
             [p.canonical() for p in self.pairs],
@@ -282,21 +304,24 @@ class Scheduler:
             # Heartbeat: write timestamp to disk after every cycle so docker
             # healthcheck ("arena scheduler healthcheck") can detect a hung
             # scheduler (file mtime older than 2x interval = unhealthy).
-            try:
-                from pathlib import Path
-
-                hb_dir = Path.home() / ".cryptotrader"
-                hb_dir.mkdir(parents=True, exist_ok=True)
-                (hb_dir / "scheduler.heartbeat").write_text(
-                    datetime.now(UTC).isoformat(),
-                )
-            except Exception:
-                logger.info("Failed to write scheduler heartbeat", exc_info=True)
+            self._write_scheduler_heartbeat()
             # Update watchdog state — only on success path so a stuck IntervalTrigger
             # doesn't reset the staleness clock just by being scheduled.
             self._last_successful_cycle_at = datetime.now(UTC)
         except Exception:
             logger.warning("Unexpected error in trading cycle", exc_info=True)
+
+    @staticmethod
+    def _write_scheduler_heartbeat() -> None:
+        """Record scheduler liveness without forcing an off-cycle trade."""
+        try:
+            from pathlib import Path
+
+            hb_dir = Path.home() / ".cryptotrader"
+            hb_dir.mkdir(parents=True, exist_ok=True)
+            (hb_dir / "scheduler.heartbeat").write_text(datetime.now(UTC).isoformat())
+        except Exception:
+            logger.info("Failed to write scheduler heartbeat", exc_info=True)
 
     async def _write_cycle_snapshot(self) -> None:
         """Write a fresh portfolio_snapshots row for the cycle.
@@ -435,20 +460,50 @@ class Scheduler:
         self._status[pair]["trace_id"] = trace_id
         try:
             from cryptotrader.config import load_config
-            from cryptotrader.graph import build_trading_graph
 
             config = load_config()
-            graph = build_trading_graph()
             from cryptotrader.state import build_initial_state
 
             extra_meta: dict[str, Any] = {"cycle_count": self._cycle_count}
             if trigger_meta:
                 extra_meta["schedule_depth"] = trigger_meta.get("schedule_depth", 0)
                 extra_meta["trigger_event_id"] = trigger_meta.get("trigger_event_id")
+
+            # Signal-engine selection: "kronos" → Kronos-primary graph (variant B/C),
+            # otherwise the default 4-agent LLM debate graph.
+            kcfg_timeframe = None
+            kcfg_ohlcv_limit = None
+            if config.signal_engine == "kronos":
+                from cryptotrader.graph import build_kronos_graph
+
+                graph = build_kronos_graph()
+                k = config.kronos
+                # CRITICAL: gate trained on 4h bars + Kronos needs ≥460 lookback.
+                # Override collection timeframe/limit for the Kronos cycle.
+                kcfg_timeframe = k.timeframe
+                kcfg_ohlcv_limit = k.ohlcv_limit
+                extra_meta["kronos_cfg"] = {
+                    "gate_path": k.gate_path,
+                    "model_name": k.model_name,
+                    "tokenizer_name": k.tokenizer_name,
+                    "device": k.device,
+                    "lookback": k.lookback,
+                    "pred_len": k.pred_len,
+                    "sample_count": k.sample_count,
+                    "step2_short_threshold": k.step2_short_threshold,
+                    "aux_symbol": k.aux_symbol,
+                }
+            else:
+                from cryptotrader.graph import build_trading_graph
+
+                graph = build_trading_graph()
+
             initial = build_initial_state(
                 pair,
                 engine=config.engine,
                 exchange_id=config.scheduler.exchange_id,
+                timeframe=kcfg_timeframe,
+                ohlcv_limit=kcfg_ohlcv_limit,
                 config=config,
                 extra_metadata=extra_meta,
             )

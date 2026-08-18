@@ -12,12 +12,19 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ src/
 COPY config/ config/
+COPY artifacts/ artifacts/
+COPY vendor/ vendor/
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1
 
 # Non-root user
-RUN useradd --create-home appuser
+RUN useradd --create-home appuser && \
+    mkdir -p /home/appuser/.cache/huggingface && \
+    chown -R appuser:appuser /home/appuser/.cache
+
+# Fail the image build if the checked-in gate or vendored runtime is missing.
+RUN python -c "import pickle; pickle.load(open('artifacts/kronos/gate_v21.pkl', 'rb')); from vendor.kronos_model import KronosPredictor"
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

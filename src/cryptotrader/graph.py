@@ -39,6 +39,7 @@ from cryptotrader.nodes.debate import (
 )
 from cryptotrader.nodes.execution import check_stop_loss, place_order
 from cryptotrader.nodes.journal import journal_rejection, journal_trade
+from cryptotrader.nodes.kronos_signal import kronos_signal
 from cryptotrader.nodes.verdict import _risk_gate_cache, make_verdict, risk_check, risk_router
 from cryptotrader.state import ArenaState, merge_dicts
 
@@ -47,6 +48,8 @@ __all__ = [
     "_risk_gate_cache",
     "build_backtest_graph",
     "build_debate_graph",
+    "build_kronos_backtest_graph",
+    "build_kronos_graph",
     "build_lite_graph",
     "build_trading_graph",
     "bull_bear_debate",
@@ -209,6 +212,85 @@ def _stop_loss_router(state: ArenaState) -> str:
     if state.get("data", {}).get("stop_loss_triggered"):
         return "exit_position"
     return "continue"
+
+
+def build_kronos_backtest_graph(config: dict | None = None) -> Any:
+    """Kronos-primary backtest graph (variant B/C, no LLM debate).
+
+    Pipeline: init → collect_data → update_pnl → tag_regime → kronos_signal
+      → risk_gate → END
+
+    Mirrors build_backtest_graph but replaces [4 agents + debate + LLM verdict]
+    with the single kronos_signal node. Execution/journal handled by the
+    backtest engine externally. Used for A/B comparison vs the LLM graph.
+    """
+    graph = StateGraph(ArenaState)
+
+    graph.add_node("init_decision", init_decision)
+    graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("update_pnl", update_past_pnl)
+    graph.add_node("tag_regime", tag_regime_node)
+    graph.add_node("kronos_signal", kronos_signal)
+    graph.add_node("risk_gate", risk_check)
+
+    graph.add_edge(START, "init_decision")
+    graph.add_edge("init_decision", "collect_data")
+    graph.add_edge("collect_data", "update_pnl")
+    graph.add_edge("update_pnl", "tag_regime")
+    graph.add_edge("tag_regime", "kronos_signal")
+    graph.add_edge("kronos_signal", "risk_gate")
+    graph.add_edge("risk_gate", END)
+
+    return graph.compile()
+
+
+def build_kronos_graph(config: dict | None = None) -> Any:
+    """Kronos-primary LIVE graph (variant C: pure Kronos, no LLM debate).
+
+    Pipeline: init → collect_data → update_pnl → stop_loss_check
+      → [exit → risk_gate] / [continue → tag_regime → kronos_signal → risk_gate]
+      → risk_router → [approved → execute → record_trade] / [rejected → record_rejection]
+
+    Reuses cryptotrader-ai infra: stop-loss check, 11-check risk gate,
+    OKX execution (place_order), decision journal. Only the SIGNAL is Kronos.
+
+    Variant B (LLM veto layer) can be added later by inserting an llm_veto
+    node between kronos_signal and risk_gate.
+    """
+    graph = StateGraph(ArenaState)
+
+    graph.add_node("init_decision", init_decision)
+    graph.add_node("collect_data", collect_snapshot)
+    graph.add_node("update_pnl", update_past_pnl)
+    graph.add_node("stop_loss_check", check_stop_loss)
+    graph.add_node("tag_regime", tag_regime_node)
+    graph.add_node("kronos_signal", kronos_signal)
+    graph.add_node("risk_gate", risk_check)
+    graph.add_node("execute", place_order)
+    graph.add_node("record_trade", journal_trade)
+    graph.add_node("record_rejection", journal_rejection)
+
+    graph.add_edge(START, "init_decision")
+    graph.add_edge("init_decision", "collect_data")
+    graph.add_edge("collect_data", "update_pnl")
+    graph.add_edge("update_pnl", "stop_loss_check")
+    graph.add_conditional_edges(
+        "stop_loss_check",
+        _stop_loss_router,
+        {"exit_position": "risk_gate", "continue": "tag_regime"},
+    )
+    graph.add_edge("tag_regime", "kronos_signal")
+    graph.add_edge("kronos_signal", "risk_gate")
+    graph.add_conditional_edges(
+        "risk_gate",
+        risk_router,
+        {"approved": "execute", "rejected": "record_rejection"},
+    )
+    graph.add_edge("execute", "record_trade")
+    graph.add_edge("record_trade", END)
+    graph.add_edge("record_rejection", END)
+
+    return graph.compile()
 
 
 def _build_full_graph(config: dict | None = None) -> Any:

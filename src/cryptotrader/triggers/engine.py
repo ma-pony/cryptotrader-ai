@@ -123,12 +123,14 @@ class PriceTriggerEngine:
         if self._market_client is None:
             import ccxt.async_support as ccxt_async
 
+            from cryptotrader.ccxt_options import fetch_market_types
+
             # Binance public endpoints are the only source these polls
             # support today; can be made configurable later by reading
             # ``config.scheduler.exchange_id`` if other exchanges grow
             # equivalent ``fetch_ohlcv`` / ``fetch_funding_rates`` coverage.
             self._market_client = ccxt_async.binance(
-                {"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}}
+                {"enableRateLimit": True, "options": {"fetchMarkets": fetch_market_types("binance")}}
             )
         return self._market_client
 

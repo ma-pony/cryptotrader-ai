@@ -8,6 +8,8 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
+from cryptotrader.ccxt_options import fetch_market_types
+
 if TYPE_CHECKING:
     from cryptotrader.models import Order
 
@@ -128,7 +130,7 @@ class LiveExchange:
             # avoids `load_markets` failing wholesale when one of those instType
             # endpoints is briefly unavailable upstream — the surfaced
             # ExchangeNotAvailable cascades to portfolio_unknown rejections.
-            "options": {"fetchMarkets": ["spot", "swap"]},
+            "options": {"fetchMarkets": fetch_market_types(exchange_id)},
         }
         if passphrase:
             config["password"] = passphrase

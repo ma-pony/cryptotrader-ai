@@ -56,6 +56,31 @@ def test_scheduler_registers_jobs():
     assert "daily_summary" in job_ids
 
 
+async def test_candle_aligned_job_is_scheduled_not_paused():
+    """Cron-aligned cycles must receive a real next run time on startup."""
+    s = Scheduler(["BTC/USDT"], interval_minutes=240)
+    s._startup_reconcile = AsyncMock()
+    s._close_live_exchanges = AsyncMock()
+    loop = asyncio.get_running_loop()
+
+    with (
+        patch.object(loop, "add_signal_handler"),
+        patch.object(s, "_scheduler_heartbeat", new_callable=AsyncMock),
+    ):
+        task = asyncio.create_task(s.start())
+        for _ in range(20):
+            if s._stop_event is not None:
+                break
+            await asyncio.sleep(0)
+
+        job = s._scheduler.get_job("trading_cycle")
+        assert isinstance(job.trigger, CronTrigger)
+        assert job.next_run_time is not None
+
+        s.stop()
+        await task
+
+
 async def test_scheduler_jobs_property():
     """Verify .jobs returns structured job info."""
     s = Scheduler(["BTC/USDT"], interval_minutes=120)
@@ -165,9 +190,14 @@ async def test_run_cycle_top_level_exception_caught(caplog):
     """_run_cycle() top-level try/except catches unexpected errors and logs warning."""
     s = Scheduler(["BTC/USDT"], interval_minutes=60)
 
+    async def raise_after_closing(*coroutines, **_kwargs):
+        for coroutine in coroutines:
+            coroutine.close()
+        raise RuntimeError("gather failure")
+
     # Force asyncio.gather itself to raise
     with (
-        patch("asyncio.gather", side_effect=RuntimeError("gather failure")),
+        patch("asyncio.gather", side_effect=raise_after_closing),
         caplog.at_level(logging.WARNING, logger="cryptotrader.scheduler"),
     ):
         await s._run_cycle()

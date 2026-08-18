@@ -12,10 +12,27 @@ import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
 
+from cryptotrader.ccxt_options import fetch_market_types
 from cryptotrader.data.store import cache_result, get_cached_or_none
 from cryptotrader.models import MarketData
 
 logger = logging.getLogger(__name__)
+
+_TIMEFRAME_UNIT_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+
+
+def _timeframe_ms(timeframe: str) -> int:
+    try:
+        return int(timeframe[:-1]) * _TIMEFRAME_UNIT_MS[timeframe[-1]]
+    except (KeyError, TypeError, ValueError):
+        return 3_600_000
+
+
+def _closed_ohlcv(rows: list, timeframe: str, now_ms: int) -> list:
+    """Return only candles whose full interval has elapsed."""
+    tf_ms = _timeframe_ms(timeframe)
+    current_open_ms = now_ms - now_ms % tf_ms
+    return [row for row in rows if row and row[0] < current_open_ms]
 
 
 class MarketCollector:
@@ -43,32 +60,38 @@ class MarketCollector:
 
         # fetchMarkets restricts load_markets to types we actually use — see
         # comment in execution/exchange.py for why future/option are excluded.
-        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)({"options": {"fetchMarkets": ["spot", "swap"]}})
+        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)(
+            {"options": {"fetchMarkets": fetch_market_types(exchange_id)}}
+        )
         try:
             await exchange.load_markets()
 
-            # Validate OHLCV cache: must have enough bars AND last bar must be recent
+            # Validate OHLCV cache against the latest fully closed candle. A candle
+            # that is still forming must never become strategy input or cache state.
             use_cache = False
-            if cached_ohlcv is not None and isinstance(cached_ohlcv, list) and len(cached_ohlcv) >= limit * 0.8:
+            live_now_ms = int(time.time() * 1000)
+            if isinstance(cached_ohlcv, list):
                 if date is not None:
                     # Backtest mode: skip wall-clock staleness check — cached data is correct for this date
-                    use_cache = True
+                    use_cache = len(cached_ohlcv) >= limit
                 else:
-                    # Live mode: check if the last candle timestamp is within 2x the timeframe
-                    _tf_seconds = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
-                    tf_sec = _tf_seconds.get(timeframe, 3600)
-                    last_ts_ms = cached_ohlcv[-1][0] if cached_ohlcv[-1] else 0
-                    age_sec = time.time() - last_ts_ms / 1000
-                    use_cache = age_sec < tf_sec * 2
+                    cached_ohlcv = _closed_ohlcv(cached_ohlcv, timeframe, live_now_ms)[-limit:]
+                    expected_last_open = live_now_ms - live_now_ms % _timeframe_ms(timeframe) - _timeframe_ms(timeframe)
+                    last_ts_ms = cached_ohlcv[-1][0] if cached_ohlcv else 0
+                    use_cache = len(cached_ohlcv) >= limit and last_ts_ms >= expected_last_open
 
             if use_cache:
                 logger.debug("Using cached OHLCV for %s %s (%d bars)", pair, timeframe, len(cached_ohlcv))
                 df = pd.DataFrame(cached_ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
             else:
-                ohlcv_raw = await exchange.fetch_ohlcv(pair, timeframe, limit=limit)
+                fetch_limit = limit if date is not None else limit + 1
+                fetch_params = {"paginate": True} if fetch_limit > 300 else {}
+                ohlcv_raw = await exchange.fetch_ohlcv(pair, timeframe, limit=fetch_limit, params=fetch_params)
+                if date is None:
+                    ohlcv_raw = _closed_ohlcv(ohlcv_raw, timeframe, live_now_ms)[-limit:]
                 df = pd.DataFrame(ohlcv_raw, columns=["timestamp", "open", "high", "low", "close", "volume"])
-                # Cache raw OHLCV data
+                # Live cache contains closed candles only.
                 cache_result(ohlcv_key, ohlcv_raw)
                 df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
 
@@ -129,7 +152,7 @@ class MarketDataService:
         exchange_cls = getattr(ccxt, exchange_id, None)
         if exchange_cls is None:
             return snapshot
-        ex = exchange_cls({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
+        ex = exchange_cls({"enableRateLimit": True, "options": {"fetchMarkets": fetch_market_types(exchange_id)}})
         try:
             try:
                 fr = await ex.fetch_funding_rate(pair)
@@ -152,7 +175,7 @@ async def fetch_klines_binance(symbol: str = "BTC", interval: str = "1h", limit:
     """Fetch K-line data via ccxt Binance. Returns {"klines": [{"t", "o", "h", "l", "c", "v"}, ...]}."""
     result: dict = {"klines": []}
     pair = f"{symbol}/USDT"
-    exchange = ccxt.binance({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
+    exchange = ccxt.binance({"enableRateLimit": True, "options": {"fetchMarkets": fetch_market_types("binance")}})
     try:
         ohlcv = await exchange.fetch_ohlcv(pair, timeframe=interval, limit=limit)
         result["klines"] = [

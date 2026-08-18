@@ -67,7 +67,7 @@ class CommitObservability:
     token_usage: dict[str, Any] = field(default_factory=dict)
     consensus_metrics: Any = None  # ConsensusMetrics | None
     debate_skip_reason: str = ""
-    verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
+    verdict_source: Literal["ai", "weighted", "hold_all_mock", "kronos"] = "ai"
     trace_id: str | None = None
 
 
@@ -240,7 +240,7 @@ class TradeVerdict:
     # Not parsed by guardrails or execute path.
     invalidation: str = ""
     target_price: str = ""
-    verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
+    verdict_source: Literal["ai", "weighted", "hold_all_mock", "kronos"] = "ai"
 
     def __post_init__(self) -> None:
         self.confidence = max(0.0, min(1.0, self.confidence))
@@ -362,7 +362,7 @@ class DecisionCommit:
     trace_id: str | None = None
     # Observability fields (tasks 1.2)
     consensus_metrics: ConsensusMetrics | None = None
-    verdict_source: Literal["ai", "weighted", "hold_all_mock"] = "ai"
+    verdict_source: Literal["ai", "weighted", "hold_all_mock", "kronos"] = "ai"
     node_trace: list[NodeTraceEntry] = field(default_factory=list)
     debate_skip_reason: str = ""
     # Latency per pipeline stage (ms) — see :class:`LatencyBreakdown` for the shape.

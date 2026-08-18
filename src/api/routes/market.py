@@ -169,13 +169,15 @@ async def get_ohlcv(
     try:
         import ccxt.async_support as ccxt
 
+        from cryptotrader.ccxt_options import fetch_market_types
+
         # Even though _validate_exchange bounds the input, re-check via hasattr
         # so a ccxt version that drops a listed exchange yields 404-equivalent empty
         # response rather than AttributeError.
         exchange_cls = getattr(ccxt, exchange, None)
         if exchange_cls is None:
             return OHLCVResponse()
-        ex = exchange_cls({"options": {"fetchMarkets": ["spot", "swap"]}})
+        ex = exchange_cls({"options": {"fetchMarkets": fetch_market_types(exchange)}})
         try:
             raw = await ex.fetch_ohlcv(pair_symbol, timeframe, limit=limit)
         finally:

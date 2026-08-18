@@ -9,6 +9,28 @@ import pytest
 # ── MarketCollector ──
 
 
+def test_closed_ohlcv_excludes_forming_candle():
+    from cryptotrader.data.market import _closed_ohlcv
+
+    hour = 3_600_000
+    now_ms = 10 * hour + 2 * 60_000
+    rows = [
+        [8 * hour, 1, 1, 1, 1, 1],
+        [9 * hour, 2, 2, 2, 2, 2],
+        [10 * hour, 3, 3, 3, 3, 3],
+    ]
+
+    assert _closed_ohlcv(rows, "1h", now_ms) == rows[:2]
+
+
+def test_fetch_market_types_match_ccxt_exchange_names():
+    from cryptotrader.ccxt_options import fetch_market_types
+
+    assert fetch_market_types("binance") == ["spot", "linear"]
+    assert fetch_market_types("okx") == ["spot", "swap"]
+    assert fetch_market_types("coinbase") == ["spot"]
+
+
 @pytest.mark.asyncio
 async def test_market_collector():
     """MarketCollector assembles MarketData from ccxt."""
@@ -47,7 +69,35 @@ async def test_market_collector():
     assert result.funding_rate == 0.0003
     assert result.volatility >= 0
     assert len(result.ohlcv) == 3
+    mock_ccxt.binance.assert_called_once_with({"options": {"fetchMarkets": ["spot", "linear"]}})
     mock_exchange.close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_market_collector_paginates_large_ohlcv_request():
+    """Kronos-sized requests must bypass exchange single-page limits."""
+    from cryptotrader.data.market import MarketCollector
+
+    start_ms = 1_700_000_000_000
+    rows = [[start_ms + i * 14_400_000, 1, 2, 0.5, 1.5, 10] for i in range(513)]
+    mock_exchange = MagicMock()
+    mock_exchange.load_markets = AsyncMock()
+    mock_exchange.fetch_ohlcv = AsyncMock(return_value=rows)
+    mock_exchange.fetch_ticker = AsyncMock(return_value={"last": 1.5})
+    mock_exchange.fetch_funding_rate = AsyncMock(return_value={"fundingRate": 0.0})
+    mock_exchange.fetch_order_book = AsyncMock(return_value={"bids": [[1, 1]], "asks": [[2, 1]]})
+    mock_exchange.close = AsyncMock()
+
+    with (
+        patch("cryptotrader.data.market.ccxt") as mock_ccxt,
+        patch("cryptotrader.data.market.get_cached_or_none", return_value=None),
+        patch("cryptotrader.data.market.cache_result"),
+    ):
+        mock_ccxt.okx.return_value = mock_exchange
+        result = await MarketCollector().collect("BTC/USDT", "okx", "4h", 512)
+
+    mock_exchange.fetch_ohlcv.assert_awaited_once_with("BTC/USDT", "4h", limit=513, params={"paginate": True})
+    assert len(result.ohlcv) == 512
 
 
 @pytest.mark.asyncio
@@ -63,7 +113,11 @@ async def test_market_collector_funding_rate_fallback():
     mock_exchange.fetch_order_book = AsyncMock(return_value={"bids": [[50000, 1]], "asks": [[51000, 1]]})
     mock_exchange.close = AsyncMock()
 
-    with patch("cryptotrader.data.market.ccxt") as mock_ccxt:
+    with (
+        patch("cryptotrader.data.market.ccxt") as mock_ccxt,
+        patch("cryptotrader.data.market.get_cached_or_none", return_value=None),
+        patch("cryptotrader.data.market.cache_result"),
+    ):
         mock_ccxt.binance.return_value = mock_exchange
         collector = MarketCollector()
         result = await collector.collect("ETH/USDT", "binance")

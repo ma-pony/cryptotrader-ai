@@ -6,7 +6,7 @@ external network calls mocked out so they can execute in an offline environment.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -124,6 +124,87 @@ def test_simple_signal_insufficient_data():
     engine = BacktestEngine("BTC/USDT", "2025-01-01", "2025-01-02")
     window = [[0, 100, 101, 99, 100, 1000]]
     assert engine._simple_signal(window) == "hold"
+
+
+@pytest.mark.asyncio
+async def test_custom_graph_runs_without_llm():
+    """A quantitative graph must not fall back to the SMA signal path."""
+    from cryptotrader.backtest.engine import _BacktestLoopState
+
+    graph = object()
+    engine = BacktestEngine(
+        "BTC/USDT",
+        "2025-01-01",
+        "2025-01-02",
+        use_llm=False,
+        graph_builder=lambda: graph,
+    )
+    assert engine._build_graph() is graph
+
+    engine._build_snapshot = MagicMock(return_value=object())
+    engine._run_graph = AsyncMock(
+        return_value={
+            "data": {
+                "verdict": {"action": "long", "position_scale": 0.6},
+                "risk_gate": {"passed": True},
+            }
+        }
+    )
+    state = _BacktestLoopState(
+        equity=10_000,
+        equity_curve=[10_000],
+        peak=10_000,
+        graph=graph,
+        max_stop_loss_pct=0.1,
+    )
+
+    signal = await engine._evaluate_bar_signal([[0, 100, 101, 99, 100, 1]], 0, 0, state)
+
+    assert signal["action"] == "long"
+    assert signal["position_scale"] == 0.6
+    engine._run_graph.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_custom_graph_receives_configured_metadata():
+    engine = BacktestEngine(
+        "BTC/USDT",
+        "2025-01-01",
+        "2025-01-02",
+        use_llm=False,
+        graph_builder=lambda: object(),
+        graph_metadata={"kronos_cfg": {"pred_len": 7}},
+    )
+    candles = _make_candles(2)
+    engine._candles = candles
+    snapshot = engine._build_snapshot(candles, candles[-1][0], 1)
+
+    with patch(
+        "cryptotrader.tracing.run_graph_traced",
+        new=AsyncMock(side_effect=lambda _graph, state: (state, [])),
+    ):
+        result = await engine._run_graph(object(), snapshot, equity=10_000, peak=10_000)
+
+    assert result["metadata"]["kronos_cfg"]["pred_len"] == 7
+    assert result["metadata"]["backtest_mode"] is True
+
+
+def test_snapshot_uses_only_completed_daily_derivatives_data():
+    engine = BacktestEngine("BTC/USDT", "2024-01-01", "2024-01-03")
+    candles = _make_candles(7)
+    engine._candles = candles
+    engine._funding = {"2024-01-01": 0.01, "2024-01-02": 0.99}
+    engine._fut_vol = {
+        "2024-01-01": {"volume": 123.0},
+        "2024-01-02": {"volume": 999.0},
+    }
+    engine._oi = {"2024-01-02": {"openInterestValue": 999.0}}
+
+    snapshot = engine._build_snapshot(candles, candles[-1][0], len(candles) - 1)
+
+    assert snapshot.market.funding_rate == 0.01
+    assert snapshot.onchain.open_interest == 0.0
+    assert snapshot.onchain.liquidations_24h["futures_volume"] == 123.0
 
 
 # ---------------------------------------------------------------------------

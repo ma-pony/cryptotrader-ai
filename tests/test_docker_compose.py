@@ -2,7 +2,7 @@
 
 Validates:
 - Service naming: api, scheduler, web, redis, postgres
-- Resource limits on api/scheduler/web (memory: 512m, cpus: "1.0")
+- Resource limits on api/scheduler/web
 - ctdata named volume mounted at /home/appuser/.cryptotrader
 - DOCS_ENABLED=false env var on api service
 """
@@ -45,23 +45,23 @@ def test_no_legacy_app_service(compose):
 # ---- Resource limits ----
 
 
-@pytest.mark.parametrize("service_name", ["api", "scheduler"])
-def test_resource_limits_memory(compose, service_name):
-    """deploy.resources.limits.memory must be 512m for api/scheduler."""
+@pytest.mark.parametrize(("service_name", "expected"), [("api", "512m"), ("scheduler", "2g")])
+def test_resource_limits_memory(compose, service_name, expected):
+    """Each service must retain its workload-specific memory limit."""
     svc = compose["services"][service_name]
     limits = svc.get("deploy", {}).get("resources", {}).get("limits", {})
-    assert limits.get("memory") == "512m", (
-        f"service '{service_name}' missing memory limit '512m', got: {limits.get('memory')}"
+    assert limits.get("memory") == expected, (
+        f"service '{service_name}' missing memory limit '{expected}', got: {limits.get('memory')}"
     )
 
 
-@pytest.mark.parametrize("service_name", ["api", "scheduler"])
-def test_resource_limits_cpus(compose, service_name):
-    """deploy.resources.limits.cpus must be '1.0' for api/scheduler."""
+@pytest.mark.parametrize(("service_name", "expected"), [("api", "1.0"), ("scheduler", "2.0")])
+def test_resource_limits_cpus(compose, service_name, expected):
+    """Each service must retain its workload-specific CPU limit."""
     svc = compose["services"][service_name]
     limits = svc.get("deploy", {}).get("resources", {}).get("limits", {})
-    assert str(limits.get("cpus")) == "1.0", (
-        f"service '{service_name}' missing cpus limit '1.0', got: {limits.get('cpus')}"
+    assert str(limits.get("cpus")) == expected, (
+        f"service '{service_name}' missing cpus limit '{expected}', got: {limits.get('cpus')}"
     )
 
 

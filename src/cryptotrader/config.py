@@ -536,9 +536,30 @@ class AgentsConfig:
 
 
 @dataclass
+class KronosConfig:
+    """Kronos signal-engine config (used when signal_engine='kronos')."""
+
+    enabled: bool = False
+    gate_path: str = "artifacts/kronos/gate_v21.pkl"
+    model_name: str = "NeoQuasar/Kronos-base"
+    tokenizer_name: str = "NeoQuasar/Kronos-Tokenizer-base"
+    device: str = ""  # "" → auto (mps/cuda/cpu)
+    lookback: int = 460
+    pred_len: int = 50
+    sample_count: int = 5
+    step2_short_threshold: float = 0.04
+    aux_symbol: str = "BTCUSDT"
+    # Kronos gate trained on 4h bars; collection MUST use these.
+    timeframe: str = "4h"
+    ohlcv_limit: int = 512
+
+
+@dataclass
 class AppConfig:
     mode: str = "standalone"
     engine: str = "paper"
+    # "llm" → 4-agent debate graph; "kronos" → Kronos-primary graph
+    signal_engine: str = "llm"
     exchange_id: str = "binance"
     llm: LLMConfig = field(default_factory=LLMConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
@@ -560,6 +581,7 @@ class AppConfig:
     hitl: HitlConfig = field(default_factory=HitlConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
+    kronos: KronosConfig = field(default_factory=KronosConfig)
 
 
 # ── Configuration validation ──
@@ -924,6 +946,7 @@ def _build_config(toml_data: dict) -> AppConfig:
     return AppConfig(
         mode=app.get("mode", "standalone"),
         engine=app.get("engine", "paper"),
+        signal_engine=app.get("signal_engine", "llm"),
         exchange_id=app.get("exchange_id", "binance"),
         llm=llm_cfg,
         models=ModelConfig(**toml_data.get("models", {})),
@@ -945,6 +968,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         hitl=_build_hitl_config(toml_data),
         agents=_build_agents_config(toml_data),
         mcp=_build_mcp_config(toml_data),
+        kronos=KronosConfig(**toml_data.get("kronos", {})),
     )
 
 

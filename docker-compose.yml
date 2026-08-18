@@ -94,10 +94,12 @@ services:
     environment:
       CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
       CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
+      HF_HOME: /home/appuser/.cache/huggingface
     env_file:
       - .env
     volumes:
       - ctdata:/home/appuser/.cryptotrader
+      - hf_cache:/home/appuser/.cache/huggingface
     depends_on:
       postgres:
         condition: service_healthy
@@ -115,8 +117,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: "1.0"
+          memory: 2g
+          cpus: "2.0"
 
   # Reverse proxy with automatic Let's Encrypt — only used in VPS
   # deployment (see docs/DEPLOYMENT.md). Local-dev runs ``api`` and
@@ -143,3 +145,4 @@ volumes:
   ctdata:
   caddydata:
   caddyconfig:
+  hf_cache:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -52,6 +52,8 @@ class BacktestEngine:
         fee_bps: float | None = None,
         position_pct: float | None = None,
         lookback: int | None = None,
+        graph_builder: Callable[[], Any] | None = None,
+        graph_metadata: dict[str, Any] | None = None,
         progress_callback: Callable[[float], None] | None = None,
     ):
         from cryptotrader.config import load_config
@@ -72,6 +74,8 @@ class BacktestEngine:
         risk_cfg = load_config().risk.position
         self.position_pct = position_pct if position_pct is not None else risk_cfg.max_single_pct
         self.lookback = lookback if lookback is not None else bt_cfg.lookback
+        self.graph_builder = graph_builder
+        self.graph_metadata = graph_metadata or {}
         self.progress_callback = progress_callback
         # Cache config once to avoid re-parsing TOML per candle
         self._config = None
@@ -355,13 +359,11 @@ class BacktestEngine:
         if not candles:
             return BacktestResult()
 
-        from cryptotrader.graph import build_backtest_graph
-
         st = _BacktestLoopState(
             equity=self.capital,
             equity_curve=[self.capital],
             peak=self.capital,
-            graph=build_backtest_graph() if self.use_llm else None,
+            graph=self._build_graph(),
             max_stop_loss_pct=self._cached_config.risk.max_stop_loss_pct,
         )
 
@@ -380,6 +382,16 @@ class BacktestEngine:
         )
         st.trades.extend(final_trades)
         return self._compute_result(equity, st.equity_curve, st.trades, st.decisions)
+
+    def _build_graph(self) -> Any:
+        if self.graph_builder is not None:
+            return self.graph_builder()
+        if not self.use_llm:
+            return None
+
+        from cryptotrader.graph import build_backtest_graph
+
+        return build_backtest_graph()
 
     async def _process_backtest_bar(self, i: int, candles: list[list], st: _BacktestLoopState) -> None:
         window = candles[max(0, i - self.lookback) : i + 1]
@@ -454,7 +466,7 @@ class BacktestEngine:
         debate_skipped = False
         node_trace: list[dict] = []
 
-        if st.graph and self.use_llm:
+        if st.graph:
             snapshot = self._build_snapshot(window, ts, i)
             result = await self._run_graph(st.graph, snapshot, st.position, st.entry_price, st.equity, st.peak)
             node_trace = result.pop("_node_trace", [])
@@ -528,10 +540,15 @@ class BacktestEngine:
 
         df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
         cur = window[-1]
-        date_str = datetime.fromtimestamp(ts / 1000, UTC).strftime("%Y-%m-%d")
+        snapshot_dt = datetime.fromtimestamp(ts / 1000, UTC)
+        date_str = snapshot_dt.strftime("%Y-%m-%d")
+        # Daily aggregates are only complete after the UTC day closes. Lag
+        # funding, futures volume, OI, and long/short ratios by one day so an
+        # intraday backtest bar cannot see the rest of its own day.
+        completed_daily_date = (snapshot_dt - timedelta(days=1)).strftime("%Y-%m-%d")
 
         # Historical funding rate
-        fr_val = self._funding.get(date_str, 0.0)
+        fr_val = self._funding.get(completed_daily_date, 0.0)
 
         # Fear & Greed
         fng_val = self._fng.get(date_str, 50)
@@ -542,15 +559,14 @@ class BacktestEngine:
         dxy_val = self._dxy.get(date_str, 0.0)
 
         # Futures volume
-        fv = self._fut_vol.get(date_str, {})
+        fv = self._fut_vol.get(completed_daily_date, {})
         fut_volume = fv.get("volume", 0.0)
         # 20-day average volume ratio
-        vol_20d = []
-        for j in range(max(0, candle_idx - 20), candle_idx):
-            d_j = datetime.fromtimestamp(self._candles[j][0] / 1000, UTC).strftime("%Y-%m-%d")
-            vj = self._fut_vol.get(d_j, {}).get("volume", 0)
-            if vj > 0:
-                vol_20d.append(vj)
+        vol_20d = [
+            float(data.get("volume", 0.0))
+            for day, data in sorted(self._fut_vol.items())
+            if day < completed_daily_date and data.get("volume", 0.0) > 0
+        ][-20:]
         avg_vol = sum(vol_20d) / len(vol_20d) if vol_20d else max(fut_volume, 1)
         vol_ratio = fut_volume / avg_vol if avg_vol > 0 else 1.0
 
@@ -559,9 +575,9 @@ class BacktestEngine:
 
         # Extended data from unified store
         etf = self._etf_flows.get(date_str, {})
-        oi_data = self._oi.get(date_str, {})
-        ls_data = self._ls_ratio.get(date_str, {})
-        oi_val = oi_data.get("openInterestValue", fut_volume) if oi_data else fut_volume
+        oi_data = self._oi.get(completed_daily_date, {})
+        ls_data = self._ls_ratio.get(completed_daily_date, {})
+        oi_val = oi_data.get("openInterestValue", 0.0) if oi_data else 0.0
         defi_tvl = self._defi_tvl.get(date_str, 0.0)
         hashrate = self._btc_hashrate.get(date_str, 0.0)
         stablecoin = self._stablecoin_supply.get(date_str, 0.0)
@@ -674,6 +690,12 @@ class BacktestEngine:
             "pair": self.pair,
         }
 
+        graph_metadata = {
+            "llm_verdict": self.use_llm,
+            "backtest_mode": True,
+            "redis_url": "DISABLED",
+            **self.graph_metadata,
+        }
         initial = build_initial_state(
             self.pair,
             engine="paper",
@@ -681,7 +703,7 @@ class BacktestEngine:
             config=self._cached_config,
             # Explicit sentinel — consumer must treat "DISABLED" as "no Redis".
             # Prevents accidental fallback to live Redis if None is treated as "use default".
-            extra_metadata={"llm_verdict": self.use_llm, "backtest_mode": True, "redis_url": "DISABLED"},
+            extra_metadata=graph_metadata,
             extra_data={
                 "position_context": pos_ctx,
                 "backtest_constraints": backtest_constraints,

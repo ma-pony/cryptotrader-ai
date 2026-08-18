@@ -63,7 +63,9 @@ async def fetch_historical(pair: str, timeframe: str, since_ms: int, until_ms: i
 
     import ccxt.async_support as ccxt_async
 
-    exchange = ccxt_async.binance({"enableRateLimit": True, "options": {"fetchMarkets": ["spot", "swap"]}})
+    # ccxt ≥4.5 rejects "swap" in fetchMarkets list ("not a supported market type").
+    # Backtest only needs spot OHLCV — restrict to spot to stay version-compatible.
+    exchange = ccxt_async.binance({"enableRateLimit": True, "options": {"fetchMarkets": ["spot"]}})
     all_candles = []
     cursor = since_ms
 
