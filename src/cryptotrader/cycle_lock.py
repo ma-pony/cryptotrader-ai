@@ -32,7 +32,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# TTL: graph_timeout_s caps a real cycle at 300s (then +60s margin for fee /
+# TTL: cycle_timeout_s caps a real cycle at 300s (then +60s margin for fee /
 # OKX retry tail). 200s would be too aggressive; 360s leaves 1× headroom and
 # bounds worst-case stale-lock wait to 6 minutes when the PID-alive check
 # misses (e.g. permission-denied path).  Combined with stale-PID stealing

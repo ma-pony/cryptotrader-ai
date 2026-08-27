@@ -147,15 +147,15 @@ def test_drawdown_limit_does_not_trip_circuit_breaker():
     from unittest.mock import AsyncMock, MagicMock
 
     from cryptotrader.config import LossConfig
-    from cryptotrader.models import TradeVerdict
     from cryptotrader.risk.checks.loss import DrawdownLimit
+    from tests.factories.signal_fusion import risk_request
 
     async def go():
         mock_redis = MagicMock()
         mock_redis.available = True
         mock_redis.set_circuit_breaker = AsyncMock()
         check = DrawdownLimit(LossConfig(max_drawdown_pct=0.10), mock_redis)
-        result = await check.evaluate(TradeVerdict(action="long", confidence=0.8), {"drawdown": 0.20})
+        result = await check.evaluate(risk_request(), {"drawdown": 0.20})
         assert not result.passed
         mock_redis.set_circuit_breaker.assert_not_called()
 

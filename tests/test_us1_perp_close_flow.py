@@ -1,107 +1,13 @@
-"""US1 (spec 013) — perp close flow integration test.
-
-Verifies that with state.metadata.pair = ccxt unified perp symbol
-(``BTC/USDT:USDT``), the verdict→execution pipeline:
-
-1. _build_close_order looks up positions keyed by the same canonical
-2. The resulting Order.pair is the canonical str (no spot-form translation)
-3. LiveExchange.place_order forwards that pair to ccxt.create_order verbatim
-"""
+"""Perpetual order integration tests for canonical exchange symbols."""
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from cryptotrader.execution.exchange import LiveExchange
 from cryptotrader.models import Order
-from cryptotrader.nodes.execution import _build_close_order
-
-
-def _state_for(pair: str) -> dict[str, Any]:
-    return {
-        "metadata": {
-            "pair": pair,
-            "engine": "live",
-            "exchange_id": "okx",
-            "database_url": "postgresql+asyncpg://stub",
-        },
-        "data": {"snapshot_summary": {"price": 84500.0}},
-    }
-
-
-@pytest.mark.asyncio
-async def test_build_close_order_uses_perp_canonical_key():
-    """Position lookup must match the perp ccxt unified symbol."""
-    state = _state_for("BTC/USDT:USDT")
-    exchange_portfolio = {
-        "positions": {
-            "BTC/USDT:USDT": {"amount": 0.02, "avg_price": 84708.8},
-        },
-        "total_value": 1700.0,
-        "cash": 1500.0,
-    }
-
-    with patch(
-        "cryptotrader.nodes.execution.read_portfolio_from_exchange",
-        AsyncMock(return_value=exchange_portfolio),
-    ):
-        order = await _build_close_order("BTC/USDT:USDT", price=84500.0, state=state)
-
-    assert order is not None, "perp position must produce a close order"
-    assert isinstance(order, Order)
-    assert order.pair == "BTC/USDT:USDT", "Order.pair must stay canonical (ccxt full symbol)"
-    assert order.side == "sell", "long position closes via sell"
-    assert order.amount == 0.02
-
-
-@pytest.mark.asyncio
-async def test_build_close_order_falls_back_to_position_context_on_cooldown():
-    """2026-05-21 incident: OKX cooldown caused fetch_positions to throw,
-    silently dropping a verdict=close. Fallback to position_context (DB-backed,
-    set by enrich_verdict_context) so risk-reduction orders survive transient
-    venue unavailability."""
-    state = _state_for("BTC/USDT:USDT")
-    state["data"]["position_context"] = {
-        "side": "long",
-        "entry_price": 77577.0,
-        "current_price": 77847.0,
-        "amount": 0.2945,
-    }
-
-    with patch(
-        "cryptotrader.nodes.execution.read_portfolio_from_exchange",
-        AsyncMock(side_effect=RuntimeError("okx venue in cooldown (229s remaining)")),
-    ):
-        order = await _build_close_order("BTC/USDT:USDT", price=77847.0, state=state)
-
-    assert order is not None, "cooldown must fall back to position_context, not drop"
-    assert order.side == "sell", "long fallback closes via sell"
-    assert order.amount == 0.2945
-    assert state["data"].get("realized_pnl") is not None
-
-
-@pytest.mark.asyncio
-async def test_build_close_order_returns_none_when_no_perp_position():
-    """If the canonical key is absent, no order is built (no spot-form fallback)."""
-    state = _state_for("BTC/USDT:USDT")
-    exchange_portfolio = {
-        # Stale spot-form key (the Phase 0 band-aid era leftover) must NOT
-        # satisfy a perp pair lookup after Phase 3b.
-        "positions": {"BTC/USDT": {"amount": 0.02, "avg_price": 84708.8}},
-        "total_value": 1700.0,
-        "cash": 1500.0,
-    }
-
-    with patch(
-        "cryptotrader.nodes.execution.read_portfolio_from_exchange",
-        AsyncMock(return_value=exchange_portfolio),
-    ):
-        order = await _build_close_order("BTC/USDT:USDT", price=84500.0, state=state)
-
-    assert order is None, "spot-form key must not satisfy perp canonical lookup"
 
 
 def _stub_okx_perp(*, position_amount: float = 0.02):

@@ -1,4 +1,4 @@
-"""Tests for read_portfolio_from_exchange spot-balance merging.
+"""Tests for ExchangePortfolioReader spot-balance merging.
 
 Production bug (2026-05-01): after a spot ETH long fill, ``positions``
 returned by ``read_portfolio_from_exchange`` was empty even though the
@@ -19,16 +19,16 @@ These tests pin down:
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock
 
 import pytest
 
 
-def _build_state(pair: str = "ETH/USDT") -> dict:
-    return {
-        "metadata": {"engine": "live", "exchange_id": "okx", "pair": pair},
-        "data": {"snapshot_summary": {"price": 2300.0}},
-    }
+def _request(pair: str = "ETH/USDT"):
+    from cryptotrader.decision.models import CycleRequest
+    from cryptotrader.pair import Pair
+
+    return CycleRequest(pair=Pair.parse(pair), mode="live", exchange_id="okx")
 
 
 def _make_exchange(
@@ -40,6 +40,7 @@ def _make_exchange(
 ):
     ex = AsyncMock()
     ex.get_balance = AsyncMock(return_value=dict(balances))
+    ex.get_free_balance = AsyncMock(return_value=dict(balances))
     ex.get_positions = AsyncMock(return_value=dict(perps or {}))
 
     async def _fetch(symbol: str) -> dict[str, Any]:
@@ -56,17 +57,15 @@ def _make_exchange(
 @pytest.mark.asyncio
 async def test_spot_eth_balance_appears_as_position():
     """ETH spot balance is surfaced as a position with ticker-derived avg_price."""
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(
         balances={"USDT": 4697.51, "ETH": 1.68},
         perps={},
         ticker_prices={"ETH/USDT": 2285.0},
     )
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("ETH/USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT"), 2300.0)
 
-    assert result is not None
     assert result["cash"] == pytest.approx(4697.51)
     assert "ETH/USDT" in result["positions"]
     eth = result["positions"]["ETH/USDT"]
@@ -79,13 +78,11 @@ async def test_spot_eth_balance_appears_as_position():
 
 @pytest.mark.asyncio
 async def test_usdt_balance_stays_as_cash_not_position():
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(balances={"USDT": 10000.0}, perps={}, ticker_prices={})
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("BTC/USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("BTC/USDT"), 2300.0)
 
-    assert result is not None
     assert result["cash"] == pytest.approx(10000.0)
     assert result["positions"] == {}
     assert result["total_value"] == pytest.approx(10000.0)
@@ -94,7 +91,7 @@ async def test_usdt_balance_stays_as_cash_not_position():
 @pytest.mark.asyncio
 async def test_perp_position_not_overwritten_by_spot_balance():
     """If a perp position exists for ETH/USDT:USDT, do NOT clobber it with spot ETH/USDT."""
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     perps = {"ETH/USDT:USDT": {"amount": 1.0, "avg_price": 2300.0, "side": "long"}}
     ex = _make_exchange(
@@ -102,10 +99,8 @@ async def test_perp_position_not_overwritten_by_spot_balance():
         perps=perps,
         ticker_prices={"ETH/USDT": 2285.0},
     )
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("ETH/USDT:USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT:USDT"), 2300.0)
 
-    assert result is not None
     # Both spot ETH/USDT and perp ETH/USDT:USDT should appear (different pairs, both real)
     assert result["positions"]["ETH/USDT:USDT"]["avg_price"] == 2300.0  # perp untouched
     assert result["positions"]["ETH/USDT"]["amount"] == pytest.approx(0.5)
@@ -114,17 +109,15 @@ async def test_perp_position_not_overwritten_by_spot_balance():
 @pytest.mark.asyncio
 async def test_spot_balance_without_ticker_uses_zero_price():
     """Ticker fails → row still appears so caller sees the balance, but priced at 0."""
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(
         balances={"USDT": 1000.0, "OBSCURE": 100.0},
         perps={},
         ticker_raises=True,
     )
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("BTC/USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("BTC/USDT"), 2300.0)
 
-    assert result is not None
     assert "OBSCURE/USDT" in result["positions"]
     assert result["positions"]["OBSCURE/USDT"]["avg_price"] == 0.0
     # total_value excludes the unpriced spot
@@ -133,17 +126,15 @@ async def test_spot_balance_without_ticker_uses_zero_price():
 
 @pytest.mark.asyncio
 async def test_multiple_spot_balances_all_appear():
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(
         balances={"USDT": 1000.0, "ETH": 1.0, "BTC": 0.05},
         perps={},
         ticker_prices={"ETH/USDT": 2200.0, "BTC/USDT": 77000.0},
     )
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("ETH/USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT"), 2300.0)
 
-    assert result is not None
     assert "ETH/USDT" in result["positions"]
     assert "BTC/USDT" in result["positions"]
     assert result["total_value"] == pytest.approx(1000.0 + 1.0 * 2200.0 + 0.05 * 77000.0)
@@ -151,17 +142,15 @@ async def test_multiple_spot_balances_all_appear():
 
 @pytest.mark.asyncio
 async def test_zero_amount_balance_is_skipped():
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(
         balances={"USDT": 1000.0, "ETH": 0.0},
         perps={},
         ticker_prices={"ETH/USDT": 2200.0},
     )
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("ETH/USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT"), 2300.0)
 
-    assert result is not None
     assert "ETH/USDT" not in result["positions"]
 
 
@@ -173,17 +162,15 @@ async def test_dust_balance_is_skipped():
     successful market sell. Without this filter, /api/portfolio/snapshot
     surfaced microscopic phantom long positions to the AI.
     """
-    from cryptotrader.portfolio.manager import read_portfolio_from_exchange
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(
         balances={"USDT": 1000.0, "ETH": 2.91e-07, "BTC": 3.19e-09},
         perps={},
         ticker_prices={"ETH/USDT": 2200.0, "BTC/USDT": 77000.0},
     )
-    with patch("cryptotrader.nodes.execution._get_exchange", AsyncMock(return_value=(ex, None))):
-        result = await read_portfolio_from_exchange(_build_state("BTC/USDT"))
+    result = await ExchangePortfolioReader(ex).read(_request("BTC/USDT"), 2300.0)
 
-    assert result is not None
     assert "ETH/USDT" not in result["positions"]
     assert "BTC/USDT" not in result["positions"]
     assert result["total_value"] == pytest.approx(1000.0)

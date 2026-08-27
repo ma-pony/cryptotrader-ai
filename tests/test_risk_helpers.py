@@ -195,16 +195,16 @@ class TestKnownPairs:
     async def test_union_of_positions_and_recent_commits(self) -> None:
         portfolio = {"positions": {"BTC/USDT": {"amount": 0.1}}}
         recent = [MagicMock(pair="ETH/USDT"), MagicMock(pair="BTC/USDT")]
-        with patch("cryptotrader.journal.store.JournalStore") as js_cls:
-            js_cls.return_value.log = AsyncMock(return_value=recent)
+        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
+            js_cls.return_value.list = AsyncMock(return_value=recent)
             pairs = await _known_pairs(None, portfolio=portfolio)
         assert set(pairs) == {"BTC/USDT", "ETH/USDT"}
 
     @pytest.mark.asyncio
     async def test_zero_amount_position_excluded(self) -> None:
         portfolio = {"positions": {"BTC/USDT": {"amount": 0.0}}}
-        with patch("cryptotrader.journal.store.JournalStore") as js_cls:
-            js_cls.return_value.log = AsyncMock(return_value=[])
+        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
+            js_cls.return_value.list = AsyncMock(return_value=[])
             pairs = await _known_pairs(None, portfolio=portfolio)
         assert pairs == []
 
@@ -212,36 +212,41 @@ class TestKnownPairs:
 class TestBuildRecentBlocks:
     @pytest.mark.asyncio
     async def test_only_rejected_commits_included(self) -> None:
-        passed = MagicMock()
-        passed.risk_gate = MagicMock(passed=True, rejected_by="", reason="")
-        rejected = MagicMock()
-        rejected.risk_gate = MagicMock(passed=False, rejected_by="CooldownCheck", reason="same-pair")
-        rejected.hash = "abc123"
-        rejected.timestamp = datetime(2026, 1, 1, tzinfo=UTC)
+        from tests.factories.signal_fusion import cycle_record
 
-        with patch("cryptotrader.journal.store.JournalStore") as js_cls:
-            js_cls.return_value.log = AsyncMock(return_value=[passed, rejected])
+        passed = cycle_record(status="risk_rejected", risk_result={"passed": True})
+        rejected = cycle_record(
+            status="risk_rejected",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            risk_result={"passed": False, "rejected_by": "CooldownCheck", "reason": "same-pair"},
+        )
+
+        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
+            js_cls.return_value.list = AsyncMock(return_value=[passed, rejected])
             blocks = await _build_recent_blocks(None)
         assert len(blocks) == 1
         assert blocks[0].rule == "CooldownCheck"
 
     @pytest.mark.asyncio
     async def test_capped_at_10(self) -> None:
-        many = []
-        for i in range(20):
-            c = MagicMock()
-            c.risk_gate = MagicMock(passed=False, rejected_by="X", reason="y")
-            c.hash = f"h{i}"
-            c.timestamp = datetime(2026, 1, 1, tzinfo=UTC)
-            many.append(c)
-        with patch("cryptotrader.journal.store.JournalStore") as js_cls:
-            js_cls.return_value.log = AsyncMock(return_value=many)
+        from tests.factories.signal_fusion import cycle_record
+
+        many = [
+            cycle_record(
+                status="risk_rejected",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                risk_result={"passed": False, "rejected_by": "X", "reason": f"y{i}"},
+            )
+            for i in range(20)
+        ]
+        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
+            js_cls.return_value.list = AsyncMock(return_value=many)
             blocks = await _build_recent_blocks(None)
         assert len(blocks) == 10
 
     @pytest.mark.asyncio
     async def test_journal_error_returns_empty(self) -> None:
-        with patch("cryptotrader.journal.store.JournalStore") as js_cls:
-            js_cls.return_value.log = AsyncMock(side_effect=RuntimeError("db down"))
+        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
+            js_cls.return_value.list = AsyncMock(side_effect=RuntimeError("db down"))
             blocks = await _build_recent_blocks(None)
         assert blocks == []

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from cryptotrader.config import RiskConfig
-from cryptotrader.models import TradeVerdict
 from cryptotrader.risk.gate import RiskGate
 from cryptotrader.risk.state import RedisStateManager
 
@@ -34,16 +33,14 @@ async def test_risk_gate_with_token_security():
 @pytest.mark.asyncio
 async def test_token_security_check_integration():
     """Test token security check in isolation."""
-    from cryptotrader.models import CheckResult
     from cryptotrader.risk.checks.token_security import TokenSecurityCheck
+    from cryptotrader.risk.models import RiskCheckResult
+    from tests.factories.signal_fusion import risk_request
 
     check = TokenSecurityCheck()
 
-    # Test with verdict without contract address (should pass)
-    verdict = TradeVerdict(action="long", confidence=0.8, reasoning="Test")
-
-    result = await check.evaluate(verdict, {})
-    assert isinstance(result, CheckResult)
+    result = await check.evaluate(risk_request(), {})
+    assert isinstance(result, RiskCheckResult)
     assert result.passed is True
 
 

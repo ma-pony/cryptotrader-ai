@@ -3,7 +3,7 @@
 Returns the current portfolio Snapshot (equity, cash, positions, pnl_24h, drawdown).
 Replaces the legacy GET /portfolio with a richer schema aligned to data-model §1.
 
-Strategy: mock PortfolioManager + read_portfolio_from_exchange (live exchange call) —
+Strategy: mock PortfolioManager + the cycle-owned live portfolio reader —
 we never hit a real exchange in unit tests.  503 path triggered by both helpers
 returning falsy values.
 """
@@ -53,7 +53,7 @@ class TestPortfolioSnapshotShape:
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
-                "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+                "api.routes.portfolio_v2._read_live_portfolio",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -75,7 +75,7 @@ class TestPortfolioSnapshotShape:
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
-                "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+                "api.routes.portfolio_v2._read_live_portfolio",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -105,7 +105,7 @@ class TestPortfolioSnapshotShape:
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
-                "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+                "api.routes.portfolio_v2._read_live_portfolio",
                 AsyncMock(
                     return_value={
                         "cash": 0.0,
@@ -146,7 +146,7 @@ class TestPortfolioSnapshotShape:
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
-                "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+                "api.routes.portfolio_v2._read_live_portfolio",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -166,7 +166,7 @@ class TestPortfolioSnapshotShape:
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
-                "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+                "api.routes.portfolio_v2._read_live_portfolio",
                 AsyncMock(return_value=None),
             ),
         ):
@@ -187,7 +187,7 @@ class TestPortfolioSnapshotErrors:
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
-                "cryptotrader.portfolio.manager.read_portfolio_from_exchange",
+                "api.routes.portfolio_v2._read_live_portfolio",
                 AsyncMock(return_value=None),
             ),
         ):

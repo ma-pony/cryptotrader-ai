@@ -1,553 +1,117 @@
 # CryptoTrader AI
 
-**简体中文** · [English](README_EN.md)
+CryptoTrader AI 是一个可插拔的加密资产信号融合与交易系统。Kronos、LLM 四智能体委员会以及自定义策略都只是信号组件；系统把所有启用组件的输出按信任权重确定性融合，再统一生成目标仓位、退出价格、风控结论和执行计划。
 
-基于 LangGraph 多智能体辩论的 AI 加密货币交易系统。
+## 核心模型
 
-[![Python 3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-2279%20collected-brightgreen.svg)]()
+每个组件只回答三个问题：方向、置信度和理由。
 
-## 概述
-
-4 个专业 AI 智能体（技术面、链上数据、新闻情绪、宏观经济）独立分析市场数据，然后通过交叉挑战辩论轮次达成共识。硬编码的风控门（11 项规则检查，不依赖 LLM）强制执行仓位限制、损失限制和熔断机制。每个决策都记录在类 Git 的决策日志中，便于审计和基于经验的学习。
-
-每个智能体在输出信号前都会运行**领域专属的预信号检查清单**（受 Devin 的先思后行模式启发），以减少过度自信和幻觉。
-
-### 核心特性
-
-- **多智能体辩论** — 4 个智能体独立分析后，经辩论门控渐进过滤：共识或迷茫时跳过辩论，否则进入 2-3 轮并行交叉质疑
-- **三种图模式** — 完整辩论流程（含辩论门控）、轻量回测、多空对抗+评委
-- **11 项风控检查** — 纯规则，零 LLM：仓位限制、CVaR、相关性、熔断器
-- **决策日志链** — 类 Git 不可变提交链，存于 PostgreSQL `decision_commits`，支持相似搜索
-- **配置驱动 prompt** — 4 agent 的 system_prompt / output_schema / token budget 全部外置到 `config/agents/<name>.md`，由 PromptBuilder 在运行时拼装
-- **EvolvingSkillProvider**（spec 019）— 两层检索（scope + regime_tags 过滤 → idf + importance + recency 打分）从 `agent_skills/_internal/<id>/SKILL.md` 选 top-k skill 进 prompt
-- **Trilogy 进化系统**（spec 016 → 020c）— 8 spec 累计：PromptBuilder + Memory Evolution（5-signal Maturity FSM）+ Skill Evolution + Pareto + Git Lineage + Evolution Daemon（每日 Pareto + Regime + Skill proposal）
-- **Agent-Native Skill Protocol**（spec 022）— 外部 Anthropic SKILL.md 协议：`agent_skills/_external/{cryptotrader,verdict-feed,market-intel,evolution-insights,execution-replay}/` 让外部 agent 通过 `Read /skill/cryptotrader` 秒级集成；`/api/events/heartbeat` pull-mode 事件订阅；`/api/memory/patterns` 暴露 trilogy 产出
-- **强制 numeric SL/TP** — LLM verdict 必须输出 `stop_loss` + `take_profit` 数字字段；missing / 方向反 / 过紧 / R:R < 1.5 → action 强制 hold
-- **回测引擎** — 历史模拟，含真实成本建模和防前视偏差
-- **实盘就绪** — 基于 ccxt 的 OKX perp 适配器，带重试、精度处理、配置驱动 perp 杠杆（`set_leverage` 幂等重试 + long_short_mode 双侧应用）+ server-side OCO 保护
-- **APScheduler 自动化 + Watchdog** — 4 小时周期交易循环；scheduler watchdog 每 5min 检查 `last_successful_cycle_at`，超过 1.5× interval 强制 `modify_job` reschedule，根治 IntervalTrigger silent miss 问题（生产 3 次自愈验证）
-- **61+ 数据源** — 统一 SQLite 存储，覆盖 7 个类别，按源独立限速
-- **可观测性优先** — 拒单事件携带 root cause 异常信息（`[ConnectionError: ...]`）；执行层失败与风控解耦（`execution_status` vs `risk_gate`）；CI 守护禁止 `logger.debug(..., exc_info=True)` 吞异常
-- **完整 Anthropic prompt cache 观测** — `apply_cache_control()` 生产级；OTel span attr `llm.cache.{read,creation,hit_rate}`；Prometheus `llm_cache_hit_rate_24h_avg` gauge + 3 个 spec 022 heartbeat / external skill fetch gauge
-- **Close 风控豁免 + cooldown fallback** — `close` 动作豁免全部风控（"risk reduction must not be blocked"）；OKX venue cooldown 时 `_build_close_order` 自动 fallback 到 `position_context`（DB），不会 silent drop（commit fc9211d）
-- **Live steering** — 用户实时引导通过 Redis 队列注入 `live_steering` section，每 cycle 即用即丢，不形成闭环
-
-## 系统架构
-
-```
-数据采集 → tag_regime → 4 智能体（并行）
-  → 辩论门控 → [跳过] → 上下文丰富 → 裁决
-             → [辩论] → 2 轮辩论（轮内并行）
-  → 裁决（含 SL/TP hard-reject）→ 风控门（11 项检查）→ 执行 / 拒绝 → 日志记录
-                                                          ↓
-                                                持仓回写 → 快照保存
+```text
+ComponentSignal
+  component_id
+  direction: long | short | neutral
+  confidence: 0..1
+  reasoning
+  details
 ```
 
-**三种图模式：**
-- `build_trading_graph()` — 完整流程，含辩论门控（共识/迷茫时跳过辩论）、2 轮辩论、AI 裁决可降级
-- `build_lite_graph()` — 跳过辩论，用于回测
-- `build_debate_graph()` — 多空对抗辩论 + 评委（TradingAgents 风格）
+融合器先把方向映射为 `long=+1`、`short=-1`、`neutral=0`，计算启用组件的加权分数。这个正负分数只用于内部融合；最终业务对象是更直观的：
 
-### 智能体分工
-
-| 智能体 | 类型 | 数据 | 职责 |
-|--------|------|------|------|
-| TechAgent | BaseAgent | OHLCV + pandas-ta 指标（RSI、MACD、SMA、BBands、ATR）| 技术形态识别 |
-| ChainAgent | ToolAgent | OI、资金费率、交易所净流量、鲸鱼转账、DeFi TVL | 链上信号检测 |
-| NewsAgent | ToolAgent | RSS 标题 + 关键词情绪 + CoinGecko 社交热度 | 新闻情绪分析 |
-| MacroAgent | BaseAgent | 利率、美元指数、BTC 主导率、恐惧贪婪、ETF 流量、VIX | 宏观环境评估 |
-
-- **BaseAgent**：单次 LLM 调用，结构化 JSON 输出
-- **ToolAgent**：LangChain 代理，带工具调用循环，可实时查询数据（回测模式下降级为单次调用，避免前视偏差）
-
-每个智能体的系统提示都包含 **5 点预信号检查清单**：矛盾检查、证据落地、信心合理性、基准概率意识、近因偏差防范。`data_sufficiency="low"` 时信心值上限为 0.3。
-
-### 辩论流程
-
-1. **第 1 轮**：4 个智能体独立分析
-2. **辩论门控**：评估智能体共识程度；达成共识或极度迷茫时跳过辩论直接进入裁决，否则进入辩论轮次
-3. **第 2-3 轮（轮内并行）**：每个智能体看到其他人的分析结果，必须用具体数据点支持自己保持或修改立场
-4. **收敛检查**：每轮计算分歧度（`confidence × direction` 的总体标准差），相对变化 < 10% 或达到最大轮数时停止
-5. **裁决**：单个 LLM（temperature=0.1）综合所有智能体输出、持仓上下文（空仓/多头/空头、入场价、浮动盈亏）、价格趋势和风控约束 → 输出 `{action, confidence, position_scale, reasoning, thesis, stop_loss, take_profit}`
-
-### Prompt 与技能系统
-
-- **目录拓扑**（spec 022 重组）：
-  - `agent_skills/_internal/{tech,chain,news,macro,trading-knowledge}/SKILL.md` — 注入 agent prompt 的内部能力
-  - `agent_skills/_external/{cryptotrader,verdict-feed,market-intel,evolution-insights,execution-replay}/SKILL.md` — 暴露给外部 AI agent（Codex / Cursor / Claude Code）的对外协议
-- **Skill 检索**：`EvolvingSkillProvider` 读取 `agent_skills/_internal/<id>/SKILL.md`，按 scope + regime_tags 过滤，按 `idf + importance + recency` 打分，取 top-5 注入 agent prompt 的 `available_skills` section；access_count / last_accessed_at 写入 gitignored sidecar
-- **Skill 内容**：人工维护 git-tracked Markdown 文件，仅含角色 + 思路 + checklist；不含历史 case dump、不含方向预测、不含数字阈值
-- **Regime 标签**：`tag_regime()` 把当前 snapshot 分类为离散标签（high_funding / high_vol / trending_up / extreme_fear 等），用于 skill retrieval 过滤
-- **SL/TP 强约束**：verdict 输出的 `stop_loss` + `take_profit` 必须是数字，且通过 4 道 hard-reject：missing → hold / 方向反（long 但 stop ≥ entry）→ hold / stop 距离 < max(1.5×ATR, 1%) → hold / R:R < 1.5 → hold
-- **Live steering**：用户通过前端 chat 实时引导，写入 Redis 队列；cycle 启动时一次性消费并注入 `live_steering` section，cycle 结束失效
-- **Agent-Native 集成**（spec 022）：外部 agent 单条 `Read http://host:8003/skill/cryptotrader and register` → 自动拉 bootstrap SKILL.md → 路由到 child skill → 调 `/api/memory/patterns` / `/api/events/heartbeat` / `/api/verdicts/recent` 等
-
-## 快速开始
-
-### 前置条件
-
-- Python 3.12+
-- [uv](https://docs.astral.sh/uv/) 包管理器
-- 一个兼容 OpenAI 的 LLM API Key（OpenAI、Anthropic、DeepSeek 等）
-
-### 安装
-
-```bash
-# 克隆并安装
-git clone https://github.com/your-org/cryptotrader-ai.git
-cd cryptotrader-ai
-uv sync
-
-# 配置 LLM 端点
-cp config/default.toml config/local.toml
-# 编辑 config/local.toml：设置 [llm] api_key 和 base_url
-
-# 或使用环境变量
-export OPENAI_API_KEY=your_key
+```text
+TargetPosition
+  side: long | short | flat
+  size_ratio: 0..1
 ```
 
-### 首次运行
+`size_ratio` 表示在风控允许的单标的上限内希望达到的比例，不是杠杆倍数，也不是直接下单量。执行层比较当前仓位和目标仓位，只交易差值。
 
-```bash
-# 运行单次分析（模拟交易）— 推荐 perp 线性合约（spot 账户无库存时无法做空）
-arena run --pair BTC/USDT:USDT --mode paper
+## 内置组件
 
-# 切换图模式
-arena run --pair BTC/USDT:USDT --graph full   # 含辩论门控 + 2 轮辩论
-arena run --pair BTC/USDT:USDT --graph lite   # 跳辩论（回测用）
-arena run --pair BTC/USDT:USDT --graph debate # 多空对抗 + 评委
+- `kronos`：Kronos 时序模型与门控逻辑，输出纯市场方向信号。
+- `llm_committee`：技术、链上、新闻、宏观四个智能体。委员会内部保留多轮交叉质询、收敛判断和最终摘要，外部仍只输出一个标准信号。
 
-# 查看决策日志
-arena journal log --limit 10
-arena journal show <hash>
-```
+自定义组件实现统一协议后，通过 `[signal_plugins].factories` 注册。Factory 使用 `package.module:function` 格式并返回组件实例。启动时会校验组件 ID 唯一、Profile 引用的组件均已安装。
 
-### 回测
+## 全局 Signal Profile
 
-```bash
-# AI 智能体回测
-arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --interval 4h
-
-# 快速 SMA 交叉回测（无 LLM 调用）
-arena backtest --pair BTC/USDT --start 2024-01-01 --end 2024-06-01 --no-llm
-
-# 先同步历史数据，回测数据更丰富
-arena sync
-```
-
-回测引擎特性：
-- **防前视偏差**：bar[i] 生成信号，bar[i+1] 开盘执行
-- **真实成本**：可配置滑点（5 bps）+ 手续费（10 bps）
-- **动态仓位**：高信心 35%、中等 12%、低 6%
-- **丰富数据**：ETF 流量、OI、多空比、DeFi TVL、VIX、S&P500、稳定币供应、哈希率
-- **指标输出**：总收益、夏普比率（365 天年化）、最大回撤、胜率、权益曲线
-
-### 调度器
-
-```bash
-# 启动周期性交易循环（需 config 中 scheduler.enabled=true）
-arena scheduler start
-
-# 查看组合状态
-arena scheduler status
-```
-
-基于 APScheduler，`IntervalTrigger`（默认 4 小时，与 OKX perp 4h K 线 + funding 周期对齐）执行交易循环，`CronTrigger` 发送每日组合摘要。
-
-**Scheduler Watchdog**（spec post-022 fix，commit 57eb884）：`AsyncIOScheduler` 的 `next_fire_time` 偶发被卡在过去时间戳导致 cycle 静默 miss。watchdog 每 5min 检查 `last_successful_cycle_at`，超过 `1.5 × interval_minutes` 视为 silent miss → `modify_job("trading_cycle", next_run_time=now+10s)` 强制重排。生产 3 次实战自愈，0 人工干预。
-
-### 仪表盘 & API
-
-```bash
-# Web 前端（React + Vite）
-arena web --port 5173
-
-# FastAPI 服务
-arena serve --port 8003
-```
-
-## CLI 命令参考
-
-| 命令 | 说明 |
-|------|------|
-| `arena run --pair BTC/USDT --mode paper` | 单次分析 + 执行 |
-| `arena run --pair BTC/USDT --graph full\|lite\|debate` | 选择图模式 |
-| `arena backtest --pair BTC/USDT --start DATE --end DATE` | 历史回测 |
-| `arena sync` | 同步所有历史数据到 SQLite |
-| `arena serve --port 8003` | 启动 FastAPI 服务 |
-| `arena web` | 启动 React Web 前端 |
-| `arena scheduler start` | 启动周期调度器 |
-| `arena scheduler status` | 查看组合和仓位 |
-| `arena journal log --limit 10` | 最近决策列表 |
-| `arena journal show <hash>` | 决策详情 |
-| `arena migrate` | 创建 PostgreSQL 表 |
-| `arena risk reset-breaker` | 重置熔断器 |
-| `arena live-check --exchange okx` | 实盘就绪检查 |
-
-## 数据源
-
-### 行情与链上
-
-5 个数据源，支持优雅降级（无 API Key 也能运行）：
-
-| 数据源 | 数据 | 成本 | 需要 Key |
-|--------|------|------|---------|
-| Binance | 期货 OI、资金费率、清算、多空比 | 免费 | 否 |
-| DefiLlama | DeFi TVL、7 日变化、稳定币供应 | 免费 | 否 |
-| CoinGlass | 持仓量、清算数据 | 免费层（1000 次/月）| 是 |
-| CryptoQuant | 交易所净流入流出 | 免费层（每日）| 是 |
-| Whale Alert | 大额转账 | 免费层（10 次/分钟）| 是 |
-
-### 新闻与情绪
-
-| 数据源 | 数据 | 成本 |
-|--------|------|------|
-| CoinDesk, CoinTelegraph, Decrypt | RSS 标题抓取 | 免费 |
-| CoinGecko 社区 API | 社交热度（Twitter 粉丝、Reddit 订阅、情绪投票）| 免费 |
-
-### 宏观
-
-| 数据源 | 数据 | 成本 |
-|--------|------|------|
-| FRED | 美联储利率、美元指数、VIX、S&P 500 | 免费（需 Key）|
-| CoinGecko | BTC 主导率 | 免费 |
-| Alternative.me | 恐惧贪婪指数 | 免费 |
-| SoSoValue | BTC/ETH ETF 日流量、净资产 | 免费（需 Key）|
-
-### 统一数据存储
-
-所有数据缓存在 `~/.cryptotrader/market_data.db`（SQLite，WAL 模式）：
-- 61+ 数据源，覆盖 7 个类别（宏观、链上、衍生品、DeFi、情绪、ETF、稳定币）
-- 按源独立限速（5 分钟到 1 小时 TTL）
-- 交易日数据前向填充（FRED、ETF），处理周末和假期
-- `arena sync` 批量拉取全部历史数据用于回测
-
-## 配置
-
-### 配置文件
-
-```
-config/
-├── default.toml          # 主配置（模式、模型、风控、调度器、数据源）
-├── local.toml            # 本地覆盖（API Key，已 gitignore）
-└── exchanges.toml.example  # 交易所凭证模板
-```
-
-先加载 `default.toml`，再深度合并 `local.toml`。首次加载后全局缓存。
-
-### 关键配置段
+默认配置位于 `config/default.toml`：
 
 ```toml
-[llm]
-api_key = ""           # 统一 LLM API Key
-base_url = ""          # API 端点（如 "http://localhost:3000/v1"）
+[signal_plugins]
+factories = []
 
-[models]               # 按角色选择模型 — 模型名必须存在于 LLM 网关
-analysis = "deepseek-v4-flash"
-debate = "deepseek-v4-flash"
-verdict = "gpt-5.5"
-tech_agent = "deepseek-v4-flash"
-chain_agent = "deepseek-v4-flash"
-news_agent = "deepseek-v4-flash"
-macro_agent = "deepseek-v4-flash"
-fallback = "deepseek-v4-flash"
-# 任何留空字段会回退到 models.analysis → models.fallback
+[signal_profile]
+neutral_threshold = 0.20
+max_target_ratio = 1.0
+atr_stop_multiplier = 2.0
+reward_ratio = 2.0
+hitl_required = false
 
-[debate]
-max_rounds = 3
-convergence_threshold = 0.1
-gate_consensus_threshold = 0.8   # 分歧度低于此值时跳过辩论（共识）
-gate_confusion_threshold = 0.05  # 分歧度高于此值时跳过辩论（迷茫）
+[[signal_profile.components]]
+component_id = "kronos"
+enabled = true
+weight = 0.60
 
-[risk]
-max_stop_loss_pct = 0.05
-
-# 默认（多 pair 分散）：
-[risk.position]
-max_single_pct = 0.10
-max_total_exposure_pct = 0.50
-max_margin_used_pct = 0.40
-
-# BTC-only 集中模式生产实参（config/local.toml 覆盖；spec 022 post-stamp 调整）：
-# [risk.position]
-# max_single_pct = 0.80
-# max_total_exposure_pct = 4.00     # 5x 杠杆 × 80% single → 总 notional 上限
-# max_margin_used_pct = 0.90
-# max_same_direction_positions = 1  # BTC 是唯一 pair
-
-[risk.loss]
-max_daily_loss_pct = 0.03
-max_drawdown_pct = 0.10
-
-[scheduler]
-enabled = false
-pairs = ["BTC/USDT:USDT"]   # BTC-only 集中策略；perp 线性合约
-interval_minutes = 240       # 4h 周期，与 OKX perp 4h K 线 + funding 8h 对齐
-exchange_id = "okx"          # 生产用 OKX perp
-daily_summary_hour = 0       # UTC 小时（0-23）
-
-[exchanges.okx]              # 在 config/local.toml 中（gitignored）
-api_key = "..."
-secret = "..."
-passphrase = "..."
-sandbox = true               # demo trading 环境
-leverage = 5                 # BTC-only 5x（波动较 alts 低，单笔 SL 1.5×ATR ≈ 4% notional）
-margin_mode = "isolated"     # OKX: "isolated" | "cross"
-
-[portfolio]
-initial_capital = 0.0      # 0 = 用首次 portfolio_snapshots 作为总收益基线；
-                           # 推荐 pin 实际本金（如 100000），中途充提不失真
-
-[experience.regime_thresholds]
-# Snapshot regime classification thresholds (used by tag_regime).
-high_funding = 0.0003
-negative_funding = -0.0001
-high_vol = 0.025
-low_vol = 0.010
-trending_up = 0.05
-trending_down = -0.05
-extreme_fear_fng = 25
-extreme_greed_fng = 75
+[[signal_profile.components]]
+component_id = "llm_committee"
+enabled = true
+weight = 0.40
 ```
 
-### 环境变量
+所有启用组件的权重必须精确合计为 `1.0`。网页 `/strategy` 可以动态启停组件、调整信任占比、融合阈值、目标仓位上限、ATR 止损倍数、盈亏比和 HITL。保存会生成新的 Profile revision；已经开始的周期继续使用冻结快照，新配置从下一周期生效。
+
+## 唯一交易主链
+
+实时、模拟和回测共用同一个 `TradingCycle`：
+
+```text
+冻结 Profile
+  → 汇总所有组件的数据需求
+  → 生成同一时点的 SignalContext
+  → 并行运行全部启用组件
+  → 严格成功检查
+  → 加权融合
+  → TargetPosition
+  → 统一 ATR ExitPolicy
+  → 可选 HITL
+  → RiskGate
+  → 目标仓位差值下单
+  → trading_cycles Journal
+```
+
+任何启用组件失败，整个周期以 `component_failed` 结束，不拿残缺结果交易。HITL 开启后保存完整的 Profile revision、上下文和交易计划；网页审批通过时会重新读取当前仓位并重新规划订单，但不会重新生成信号。
+
+## 启动
+
+要求 Python 3.12+、Node.js 20+、uv 和 pnpm。
 
 ```bash
-# ── API 鉴权（生产必须）──
-# 默认 AUTH_MODE=enabled — API_KEY 必须设置，否则进程启动失败。
-# AUTH_MODE=disabled 仅作 dev opt-out（每请求打 WARNING 日志）。
-AUTH_MODE=enabled
-API_KEY=$(openssl rand -hex 32)
+uv sync --all-extras
+cp config/default.toml config/local.toml
 
-# ── 链上数据源（可选但推荐）──
-# 缺 key 时 provider 返 None；chain_agent prompt 会被告知哪些数据源
-# 不可用，自动降低 data_sufficiency。
-COINGLASS_API_KEY=your_key
-CRYPTOQUANT_API_KEY=your_key
-WHALE_ALERT_API_KEY=your_key
-FRED_API_KEY=your_key
-
-# ── 基础设施（用 CRYPTOTRADER_INFRASTRUCTURE__* 前缀注入 config）──
-CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL=postgresql+asyncpg://...
-CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL=redis://localhost:6379
-
-# ── 前端（生产构建拒绝 VITE_API_KEY）──
-# 仅 dev .env.local 用一次性 hydrate 进 useSettingsStore
-VITE_API_BASE_URL=http://localhost:8003
-# VITE_API_KEY= （仅 dev；生产用户在 Settings UI 输入）
+uv run arena serve --port 8003
+cd web && pnpm install && pnpm dev
 ```
 
-## 风控门
-
-11 项规则检查（不依赖 LLM），全部可在 `config/default.toml` 的 `[risk]` 段配置：
-
-| 检查项 | 功能 | 默认值 |
-|--------|------|--------|
-| 最大单仓位 | 限制单个仓位占组合比例 | 10% |
-| 总敞口 | 限制总敞口 | 50% |
-| 日损失限制 | 日损失达到阈值触发熔断 | 3% |
-| 最大回撤 | 深度回撤期间拒绝交易 | 10% |
-| CVaR (99%) | 基于近期收益的条件风险价值 | 5% |
-| 相关性 | 阻止高度相关的仓位（14 个硬编码组）| — |
-| 冷却时间 | 同一交易对的最小交易间隔 | 60 分钟 |
-| 亏损后冷却 | 亏损交易后的额外冷却 | 120 分钟 |
-| 波动率 | 极端波动或闪崩时拒绝 | — |
-| 资金费率 | 资金费率异常时阻止（拥挤信号）| — |
-| 频率限制 | 每小时/每天交易次数上限 | — |
-| 交易所健康 | 执行前检查 API 延迟 | — |
-
-`close` 动作（平仓）**豁免全部风控检查** — 减仓是降低风险，不应被阻断。
-
-## 通知
-
-6 种事件类型的 Webhook 通知（在 `config/default.toml` 配置）：
-
-| 事件 | 触发条件 |
-|------|---------|
-| `trade` | 订单成功成交 |
-| `rejection` | 风控门拒绝交易 |
-| `circuit_breaker` | 日损失限制触发熔断 |
-| `daily_summary` | 调度器每日发送组合摘要 |
-| `reconcile_mismatch` | 仓位对账发现不一致 |
-| `portfolio_stale` | 组合数据过期或不可用 |
-
-## API & 认证
-
-FastAPI 自动 OpenAPI：`arena serve --port 8003` 启动后访问 `http://localhost:8003/docs` 看 Swagger UI，`/redoc` 看 ReDoc。对外协议层的 Anthropic SKILL.md 入口 `GET /skill/<name>`（无认证，公开）— 5 个 child skill：`cryptotrader` / `verdict-feed` / `market-intel` / `evolution-insights` / `execution-replay`。
-
-**认证**：默认 `AUTH_MODE=enabled`，`API_KEY` env 必须设置；缺失则进程启动失败。`AUTH_MODE=disabled` 仅作 dev opt-out（每请求 WARNING 日志）。所有比较使用 `secrets.compare_digest`（防时序攻击）。**限流**：60 次/分钟/IP，配置 Redis 时为多进程安全 fixed window；单进程 dev 降级内存。**CORS**：显式 `allow_methods` / `allow_headers` allowlist（与 `allow_credentials=true` 配合）。
-
-## 执行层
-
-### 模拟交易
-
-- 默认模式，不涉及真实资金
-- 可配置初始余额（默认 $10,000）
-- 滑点模型：`base + amount × price × 1e-8`
-- 通过 `asyncio.Lock` 保证线程安全
-
-### 实盘交易
-
-生产级加固的 `LiveExchange`，封装 ccxt：
-
-- **重试机制**：指数退避（3 次），致命错误不重试（认证、权限、余额不足）
-- **余额预检**：每次下单前验证可用余额
-- **精度处理**：应用交易所特定的 `amount_to_precision()` / `price_to_precision()`
-- **最小下单量**：检查交易所市场限制
-- **超时控制**：每 2 秒轮询，30 秒后自动撤单
-- **飞行前检查**：`arena live-check` 验证凭证、API 延迟、Redis 和数据库
+常用命令：
 
 ```bash
-# 验证实盘就绪状态
-arena live-check --exchange okx
+uv run arena run --pair BTC/USDT --mode paper
+uv run arena backtest --pair BTC/USDT --start 2025-01-01 --end 2025-03-01
+uv run arena journal log
+uv run arena journal show <cycle-id>
+uv run arena scheduler start
+uv run arena migrate
 ```
 
-## Docker 部署
+API 的主要资源包括 `/api/signal-profile`、`/api/decisions`、`/api/hitl`、`/api/portfolio`、`/api/risk` 和 `/api/backtest`。
+
+## 验证
 
 ```bash
-# 启动全套服务（PostgreSQL 16 + Redis 7 + API + 前端 + 调度器 + 反向代理）
-docker compose up -d
-
-# 服务清单（docker-compose.yml）：
-#   postgres   — 决策日志 + 组合持久化
-#   redis      — 风控状态 + 冷却 + 熔断器
-#   api        — FastAPI :8003（含 scheduler 内嵌 + watchdog）
-#   web        — React 前端 :5173
-#   scheduler  — 独立 scheduler 进程（与 api 互斥；二选一）
-#   caddy      — 反向代理 + TLS
+uv run pytest --no-cov -q
+uv run ruff check src tests scripts
+cd web && pnpm test && pnpm typecheck && pnpm lint
 ```
 
-Dockerfile 使用多阶段构建 + 非 root 用户。健康检查每 30 秒轮询 `/health`。
-
-## 项目结构
-
-```
-src/cryptotrader/
-├── models.py          # 所有数据模型（DataSnapshot, AgentAnalysis, TradeVerdict, Order 等）
-├── config.py          # TOML 配置加载 + 数据类验证
-├── graph.py           # LangGraph 编排（3 种图模式）
-├── state.py           # ArenaState TypedDict + build_initial_state() 工厂
-├── scheduler.py       # APScheduler 周期性交易循环 + 每日摘要
-├── notifications.py   # Webhook 通知（6 种事件）
-├── db.py              # 共享 async DB session 工厂
-├── data/
-│   ├── store.py       # 统一 SQLite 存储（61+ 源，按源限速）
-│   ├── snapshot.py    # SnapshotAggregator（数据聚合入口）
-│   ├── market.py      # ccxt OHLCV + ticker + 资金费率 + 波动率
-│   ├── onchain.py     # 聚合 5 个数据源（并行获取）
-│   ├── news.py        # RSS + 关键词情绪 + CoinGecko 社交热度
-│   ├── macro.py       # FRED + CoinGecko + 恐惧贪婪 + SoSoValue ETF
-│   ├── sync.py        # 批量历史同步（arena sync）
-│   └── providers/     # Binance, DefiLlama, CoinGlass, CryptoQuant, WhaleAlert, SoSoValue
-├── agents/
-│   ├── base.py        # BaseAgent + ToolAgent + create_llm() 工厂
-│   ├── tech.py        # TechAgent（pandas-ta 指标）
-│   ├── chain.py       # ChainAgent（ToolAgent + 链上工具）
-│   ├── news.py        # NewsAgent（ToolAgent + 新闻工具）
-│   ├── macro.py       # MacroAgent（宏观环境分析）
-│   └── data_tools.py  # LangChain @tool 定义（6 链上 + 3 新闻）
-├── debate/
-│   ├── challenge.py   # 交叉挑战 prompt 构建
-│   ├── convergence.py # 分歧度计算 + 收敛检测
-│   ├── verdict.py     # AI 裁决（LLM）+ 规则裁决（回测）
-│   └── researchers.py # 多空对抗辩论 + 评委
-├── nodes/             # LangGraph 节点函数
-│   ├── agents.py      # 4 智能体并行
-│   ├── data.py        # 数据采集 + PnL 更新 + 趋势上下文
-│   ├── debate.py      # 辩论轮次 + 收敛路由
-│   ├── verdict.py     # 裁决 + 风控检查
-│   ├── execution.py   # 下单 + 止损 + 仓位更新
-│   └── journal.py     # 日志记录
-├── risk/
-│   ├── gate.py        # RiskGate（11 项顺序检查）
-│   └── state.py       # RedisStateManager（含内存降级）
-├── execution/
-│   ├── simulator.py   # PaperExchange（模拟交易）
-│   ├── exchange.py    # LiveExchange（ccxt，生产级加固）
-│   ├── order.py       # OrderManager（状态机）
-│   └── reconcile.py   # 仓位对账
-├── portfolio/
-│   └── manager.py     # PortfolioManager（DB + 内存）
-├── journal/
-│   ├── store.py       # JournalStore（PostgreSQL + 内存降级）
-│   └── commit.py      # DecisionCommit 不可变哈希链 schema
-├── learning/
-│   ├── regime.py             # tag_regime（市场 regime 标签）
-│   └── evolution/
-│       ├── skill_provider.py # EvolvingSkillProvider（scope + regime + idf 两层检索）
-│       └── idf.py            # IDF + keyword 提取
-└── backtest/
-    ├── engine.py      # BacktestEngine（LLM + SMA 模式）
-    ├── session.py     # 回测会话存储（commits.jsonl + result.json）
-    ├── cache.py       # OHLCV SQLite 缓存
-    ├── historical_data.py  # FnG、资金费率、FRED、期货成交量
-    └── result.py      # BacktestResult 指标
-src/cli/main.py        # Typer CLI（arena 命令）
-src/api/               # FastAPI 服务（认证、限流、中间件）
-web/                   # React 19 + Vite 8 前端（仪表盘、决策、回测、风控、指标）
-agent_skills/
-├── _internal/         # 注入 agent prompt 的内部能力（spec 019/022）
-│   ├── tech-analysis/SKILL.md
-│   ├── chain-analysis/SKILL.md
-│   ├── news-analysis/SKILL.md
-│   ├── macro-analysis/SKILL.md
-│   └── trading-knowledge/SKILL.md
-└── _external/         # 对外 Anthropic SKILL.md 协议（spec 022）
-    ├── cryptotrader/SKILL.md       # bootstrap + child 路由
-    ├── verdict-feed/SKILL.md
-    ├── market-intel/SKILL.md
-    ├── evolution-insights/SKILL.md
-    └── execution-replay/SKILL.md
-```
-
-## 技术栈
-
-| 组件 | 技术 |
-|------|------|
-| 语言 | Python 3.12+ |
-| 包管理 | uv + Hatchling |
-| LLM 编排 | LangChain 1.2+ / LangGraph 1.0+ |
-| LLM 提供商 | ChatOpenAI（兼容 OpenAI、DeepSeek、Anthropic）|
-| 交易所连接 | ccxt（Binance、OKX 等）|
-| 数据处理 | pandas + pandas-ta + numpy |
-| 调度 | APScheduler 3.x |
-| 数据库 | PostgreSQL 16 + SQLAlchemy 2.0 async |
-| 缓存/状态 | Redis 7 |
-| 本地存储 | SQLite（市场数据存储 + LLM 响应缓存）|
-| API 服务 | FastAPI + Uvicorn |
-| 仪表盘 | React 19 + Vite 8 + TypeScript 5.9 |
-| CLI | Typer + Rich |
-
-## 开发
-
-```bash
-make install          # uv pip install -e ".[dev]"
-make test             # uv run pytest tests/ -v（2279 个测试）
-make lint             # ruff check src/ tests/
-make format           # ruff format src/ tests/
-make scheduler        # arena scheduler start
-make pre-commit-run   # 运行所有 pre-commit 钩子
-
-# 运行单个测试
-uv run pytest tests/test_risk_gate.py -v
-uv run pytest tests/test_risk_gate.py::test_max_position -v
-
-# Docker 基础设施
-docker compose up -d   # PostgreSQL 16 + Redis 7
-arena migrate          # 创建数据库表
-arena sync             # 同步历史数据
-```
-
-### 代码质量
-
-- **零 lint 错误**：`ruff check src/ tests/` 必须零错误通过
-- **禁止 `noqa` 注释**：遇到 C901 必须重构（阈值 = 10）
-- **2279 个测试**（spec 022 stamp 时基线），9 pre-existing failures 与本 spec 无关
-- **异步测试**：`asyncio_mode = "auto"` — 无需 `@pytest.mark.asyncio`
-- **必须用 `uv run pytest`**（Python 3.12 venv），不要用裸 `pytest`
-
-## 许可证
-
-MIT
+更完整的模块边界和数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。

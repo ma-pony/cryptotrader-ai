@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "cryptotrader-ai"
 version = "0.1.0"
-description = "AI-powered crypto trading system using LangGraph multi-agent debate"
+description = "AI-powered crypto trading system with pluggable signal fusion"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -97,8 +97,6 @@ omit = [
     "src/cryptotrader/data/providers/binance.py",
     "src/cryptotrader/data/providers/rss_news.py",
     "src/cryptotrader/data/providers/sosovalue.py",
-    # Alternative supervisor/agent pattern — not on the main execution path.
-    "src/cryptotrader/debate/researchers.py",
     # MCP Server wrappers are thin Provider call delegates (same rationale as providers).
     "src/cryptotrader/mcp/servers/*.py",
 ]
@@ -152,20 +150,11 @@ ignore = [
 [tool.ruff.lint.isort]
 known-first-party = ["cryptotrader", "api", "cli"]
 
-# Banned imports: domain layer (agents/, debate/, execution/, risk/, learning/)
-# must NOT import from nodes/ or graph.py (unidirectional dependency rule).
-# Files outside the domain layer that legitimately import nodes/ or graph.py
-# are listed below in per-file-ignores with TID251 exempted.
-[tool.ruff.lint.flake8-tidy-imports.banned-api]
-"cryptotrader.nodes" = {msg = "Domain layer must not import from nodes/ -- dependency direction is nodes -> domain, not the reverse."}
-"cryptotrader.graph" = {msg = "Domain layer must not import from graph.py -- graph.py is the entry-point assembler above the nodes layer."}
-
 [tool.ruff.lint.per-file-ignores]
 "examples/**/*.py" = ["T201"]
-# Scripts are entry-layer launchers and may import graph.py / nodes (TID251 exempt).
 # staging_validate.py uses Chinese docstrings/comments (RUF002/RUF003),
 # subprocess for migrate dry-run (S603), and Callable at runtime (TCH003).
-"scripts/**/*.py" = ["T201", "TID251", "RUF002", "RUF003", "S603", "TCH003"]
+"scripts/**/*.py" = ["T201", "RUF002", "RUF003", "S603", "TCH003"]
 # spec 020c: lineage.py uses subprocess to invoke git CLI (intentional, no user input).
 # S603 (subprocess call) and S607 (partial path) are false positives here.
 "src/cryptotrader/ops/lineage.py" = ["S603", "S607"]
@@ -219,7 +208,6 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/tracing.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_macro_concentration.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_macro_coverage.py" = ["RUF001", "RUF002", "RUF003"]
-"tests/test_post_process_verdict.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_debate_anti_ratchet.py" = ["RUF001", "RUF002", "RUF003"]
 # spec 014 / spec 022 test files use Chinese docstrings + assertion messages.
 "tests/test_two_layer_architecture.py" = ["RUF001", "RUF002", "RUF003", "S603", "S607"]
@@ -235,7 +223,6 @@ known-first-party = ["cryptotrader", "api", "cli"]
 "src/cryptotrader/learning/evolution/provider.py" = ["RUF001", "RUF002", "RUF003", "PERF401"]
 "src/cryptotrader/learning/evolution/fsm.py" = ["RUF001", "RUF002", "RUF003", "C901"]
 "tests/test_fsm.py" = ["RUF001", "RUF002", "RUF003"]
-"src/cryptotrader/nodes/evolution.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_evolving_memory_provider.py" = ["RUF001", "RUF002", "RUF003", "TCH003"]
 "tests/test_evolution_node.py" = ["RUF001", "RUF002", "RUF003", "SIM117"]
 "src/api/routes/memory.py" = ["RUF001", "RUF002", "RUF003", "C901", "RUF100"]

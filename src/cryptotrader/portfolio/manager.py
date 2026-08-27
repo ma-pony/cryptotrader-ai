@@ -5,15 +5,11 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from cryptotrader._compat import UTC
 from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.pair import market_type_for as _market_type_for
-from cryptotrader.state import get_pair
-
-if TYPE_CHECKING:
-    from cryptotrader.state import ArenaState
 
 logger = logging.getLogger(__name__)
 
@@ -520,8 +516,7 @@ def _equity_contribution(
              would under-report by the same amount on shorts. Both wrong;
              unrealized_pnl is the only correct value.
 
-    Used by both ``read_portfolio_from_exchange`` (live, traded_pair set) and
-    ``PortfolioManager.get_portfolio`` (DB / memory, traded_pair="").
+    Used by ``PortfolioManager.get_portfolio`` for persisted snapshots.
     """
     from cryptotrader.pair import Pair as _Pair
 
@@ -544,92 +539,3 @@ def _equity_contribution(
             price = 0.0
         total += amount * price
     return total
-
-
-async def read_portfolio_from_exchange(state: ArenaState) -> dict[str, Any] | None:
-    """Read current portfolio directly from exchange.
-
-    Lifted from nodes/execution.py to break the same-layer dependency
-    between nodes/verdict.py and nodes/execution.py.  The function is
-    defined here (portfolio layer) and re-exported from nodes/execution.py
-    for backward compatibility.
-
-    Returns None on failure.  Includes positions with avg_price and
-    unrealized PnL.
-    """
-    # Lazy import to avoid a module-level circular dependency:
-    # portfolio.manager -> nodes.execution -> portfolio.manager (PortfolioManager).
-    # All cross-layer imports inside nodes.execution are already lazy, so this
-    # late binding is safe and consistent with the existing pattern.
-    from cryptotrader.nodes.execution import _get_exchange
-
-    try:
-        pair = get_pair(state).canonical()
-    except (KeyError, TypeError, ValueError):
-        pair = "BTC/USDT"
-    current_price = state["data"].get("snapshot_summary", {}).get("price", 0)
-
-    try:
-        exchange, _ = await _get_exchange(state, pair)
-        balances = await exchange.get_balance()
-        # spec 021 D1: also pull `free` balance so risk-gate margin check can
-        # reject before sending the order to OKX (avoids sCode=51008 reject).
-        free_balances: dict = {}
-        try:
-            free_balances = await exchange.get_free_balance()
-        except (AttributeError, Exception):  # noqa: BLE001 — paper exchange / older adapter
-            free_balances = balances
-
-        # Get positions with avg_price and unrealized PnL
-        current_prices = {pair: current_price} if current_price else {}
-        try:
-            # PaperExchange accepts current_prices; LiveExchange does not
-            positions = await exchange.get_positions(current_prices=current_prices)
-        except TypeError:
-            positions = await exchange.get_positions()
-    except Exception as e:
-        logger.warning("Failed to read portfolio from exchange: %s: %s", type(e).__name__, e, exc_info=True)
-        # Stash error context on state so the rejection event can carry it (规范 3).
-        state["data"]["_portfolio_read_error"] = {"type": type(e).__name__, "msg": str(e)}
-        return None
-
-    cash = balances.get("USDT", 0.0)
-    free_cash = free_balances.get("USDT", cash)
-
-    # Spec ledger 2026-05-01: ccxt's fetchPositions only returns derivatives.
-    # Spot non-USDT balances (e.g. ETH from a spot market buy) were silently
-    # dropped here, so the API saw cash drain with no offsetting position
-    # ($8540 → $4697 with positions=[] after a real ETH long fill).
-    # Merge them in, priced via fetch_ticker — never substitute the active
-    # cycle's price (would inherit the wrong pair's price; same class of bug
-    # the avg_price write fix addresses on the persistence side).
-    from cryptotrader.nodes.execution import _get_market_price, _is_dust
-
-    for asset, amount in balances.items():
-        # Skip stablecoin (cash) AND post-close dust residue (ETH=2.91e-07
-        # type values) — same threshold as the persistence-side filter so
-        # the API view doesn't surface phantom microscopic positions even
-        # when OKX still reports the rounding crumbs.
-        if asset == "USDT" or _is_dust(amount):
-            continue
-        spot_pair = f"{asset}/USDT"
-        if spot_pair in positions:
-            # Perp/derivative already reported for this symbol — preserve it.
-            continue
-        avg_price = await _get_market_price(exchange, spot_pair)
-        positions[spot_pair] = {
-            "amount": amount,
-            "side": "long" if amount > 0 else "short",
-            "avg_price": avg_price,
-            "unrealized_pnl": 0.0,
-            "liquidation_price": None,
-        }
-
-    total_pos_value = _equity_contribution(positions, traded_pair=pair, current_price=current_price)
-
-    return {
-        "cash": cash,
-        "free_cash": free_cash,  # spec 021 D1: drives margin pre-check
-        "positions": positions,
-        "total_value": cash + total_pos_value,
-    }

@@ -243,7 +243,7 @@ class ExperienceConfig:
 class ExecutionConfig:
     order_wait_seconds: int = 30
     retry_attempts: int = 3
-    graph_timeout_s: int = 300
+    cycle_timeout_s: int = 300
 
 
 # ── Scheduler ──
@@ -378,23 +378,6 @@ class ChartAnalysisConfig:
     fast_model: str = ""
     max_image_bytes: int = 4_718_592
     description_max_tokens: int = 800
-
-
-@dataclass
-class HitlTelegramConfig:
-    enabled: bool = False
-    bot_token: str = ""
-    chat_id: str = ""
-
-
-@dataclass
-class HitlConfig:
-    enabled: bool = False
-    min_position_scale: float = 0.5
-    divergence_threshold: float = 0.6
-    cold_start_min_trades: int = 5
-    approval_timeout_seconds: int = 300
-    telegram: HitlTelegramConfig = field(default_factory=HitlTelegramConfig)
 
 
 @dataclass
@@ -538,9 +521,8 @@ class AgentsConfig:
 
 @dataclass
 class KronosConfig:
-    """Kronos signal-engine config (used when signal_engine='kronos')."""
+    """Kronos component runtime configuration."""
 
-    enabled: bool = False
     gate_path: str = "artifacts/kronos/gate_v21.pkl"
     model_name: str = "NeoQuasar/Kronos-base"
     tokenizer_name: str = "NeoQuasar/Kronos-Tokenizer-base"
@@ -593,8 +575,6 @@ class SignalProfileDefaultsConfig:
 class AppConfig:
     mode: str = "standalone"
     engine: str = "paper"
-    # "llm" → 4-agent debate graph; "kronos" → Kronos-primary graph
-    signal_engine: str = "llm"
     exchange_id: str = "binance"
     llm: LLMConfig = field(default_factory=LLMConfig)
     models: ModelConfig = field(default_factory=ModelConfig)
@@ -613,7 +593,6 @@ class AppConfig:
     exchanges: ExchangesConfig = field(default_factory=ExchangesConfig)
     chart_analysis: ChartAnalysisConfig = field(default_factory=ChartAnalysisConfig)
     chat: ChatConfig = field(default_factory=ChatConfig)
-    hitl: HitlConfig = field(default_factory=HitlConfig)
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     kronos: KronosConfig = field(default_factory=KronosConfig)
@@ -650,8 +629,6 @@ def validate_config(cfg: AppConfig) -> None:
     _check_open_unit_interval(cfg.risk.loss.max_daily_loss_pct, "risk.loss.max_daily_loss_pct")
     _check_open_unit_interval(cfg.risk.position.max_single_pct, "risk.position.max_single_pct")
     _check_open_unit_interval(cfg.debate.consensus_skip_threshold, "debate.consensus_skip_threshold")
-    if cfg.hitl.enabled:
-        _check_open_unit_interval(cfg.hitl.min_position_scale, "hitl.min_position_scale")
     if not cfg.models.fallback.strip():
         raise ConfigurationError(
             field_path="models.fallback",
@@ -825,13 +802,6 @@ def _build_notifications_config(toml_data: dict) -> NotificationsConfig:
     return NotificationsConfig(**raw, telegram=TelegramConfig(**telegram_raw))
 
 
-def _build_hitl_config(toml_data: dict) -> HitlConfig:
-    """Build HitlConfig, extracting nested [hitl.telegram]."""
-    raw = dict(toml_data.get("hitl", {}))
-    telegram_raw = raw.pop("telegram", {})
-    return HitlConfig(**raw, telegram=HitlTelegramConfig(**telegram_raw))
-
-
 def _build_agents_config(toml_data: dict) -> AgentsConfig:
     """Build AgentsConfig from TOML [agents.*] sections."""
     agents_raw = toml_data.get("agents", {})
@@ -991,7 +961,6 @@ def _build_config(toml_data: dict) -> AppConfig:
     return AppConfig(
         mode=app.get("mode", "standalone"),
         engine=app.get("engine", "paper"),
-        signal_engine=app.get("signal_engine", "llm"),
         exchange_id=app.get("exchange_id", "binance"),
         llm=llm_cfg,
         models=ModelConfig(**toml_data.get("models", {})),
@@ -1010,7 +979,6 @@ def _build_config(toml_data: dict) -> AppConfig:
         exchanges=exchanges,
         chart_analysis=ChartAnalysisConfig(**toml_data.get("chart_analysis", {})),
         chat=ChatConfig(**toml_data.get("chat", {})),
-        hitl=_build_hitl_config(toml_data),
         agents=_build_agents_config(toml_data),
         mcp=_build_mcp_config(toml_data),
         kronos=KronosConfig(**toml_data.get("kronos", {})),

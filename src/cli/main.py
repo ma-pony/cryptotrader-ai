@@ -17,7 +17,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-app = typer.Typer(name="arena", help="CryptoTrader AI — Multi-agent debate trading")
+app = typer.Typer(name="arena", help="CryptoTrader AI — pluggable signal fusion trading")
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -150,51 +150,57 @@ def journal_log(limit: int = typer.Option(10, "--limit", "-n")):
 
 async def _journal_log(limit: int):
     from cryptotrader.config import load_config
+    from cryptotrader.journal.store import CycleJournalStore
 
     config = load_config()
-    from cryptotrader.journal.store import JournalStore
-
-    store = JournalStore(config.infrastructure.database_url)
-    commits = await store.log(limit=limit)
-    if not commits:
-        console.print("[dim]No decisions recorded yet.[/dim]")
+    cycles = await CycleJournalStore(config.infrastructure.database_url).list(limit=limit)
+    if not cycles:
+        console.print("[dim]No trading cycles recorded yet.[/dim]")
         return
-    table = Table(title="Decision Journal")
-    table.add_column("Hash", style="cyan")
+    table = Table(title="Trading Cycle Journal")
+    table.add_column("Cycle", style="cyan")
     table.add_column("Time")
     table.add_column("Pair")
-    table.add_column("Action")
-    for c in commits:
-        action = c.verdict.action if c.verdict else "N/A"
-        table.add_row(c.hash, str(c.timestamp), c.pair, action)
+    table.add_column("Status")
+    table.add_column("Target")
+    for cycle in cycles:
+        target = cycle.target_position or {}
+        target_text = str(target.get("side", "—"))
+        if target.get("size_ratio") is not None:
+            target_text += f" {float(target['size_ratio']):.2%}"
+        table.add_row(cycle.cycle_id, str(cycle.created_at), cycle.pair, cycle.status, target_text)
     console.print(table)
 
 
 @journal_app.command("show")
-def journal_show(hash: str = typer.Argument(...)):
+def journal_show(cycle_id: str = typer.Argument(...)):
     """Show decision detail."""
-    asyncio.run(_journal_show(hash))
+    asyncio.run(_journal_show(cycle_id))
 
 
-async def _journal_show(hash: str):
+async def _journal_show(cycle_id: str):
     from cryptotrader.config import load_config
-    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.journal.store import CycleJournalStore
 
     config = load_config()
-    store = JournalStore(config.infrastructure.database_url)
-    commit = await store.show(hash)
-    if not commit:
-        console.print(f"[red]Commit {hash} not found[/red]")
+    cycle = await CycleJournalStore(config.infrastructure.database_url).get(cycle_id)
+    if not cycle:
+        console.print(f"[red]Cycle {cycle_id} not found[/red]")
         return
     console.print_json(
         data={
-            "hash": commit.hash,
-            "pair": commit.pair,
-            "timestamp": str(commit.timestamp),
-            "debate_rounds": commit.debate_rounds,
-            "divergence": commit.divergence,
-            "verdict": commit.verdict.action if commit.verdict else None,
-            "risk_gate": commit.risk_gate.passed if commit.risk_gate else None,
+            "cycle_id": cycle.cycle_id,
+            "pair": cycle.pair,
+            "created_at": cycle.created_at.isoformat(),
+            "status": cycle.status,
+            "profile_revision": cycle.profile_revision,
+            "component_signals": list(cycle.component_signals),
+            "fusion": cycle.fused_signal,
+            "target_position": cycle.target_position,
+            "trade_plan": cycle.trade_plan,
+            "hitl_result": cycle.hitl_result,
+            "risk_result": cycle.risk_result,
+            "execution_result": cycle.execution_result,
         }
     )
 
@@ -243,6 +249,7 @@ def scheduler_start():
 
 
 async def _scheduler_start():
+    from cryptotrader.bootstrap import build_trading_cycle
     from cryptotrader.config import load_config
     from cryptotrader.scheduler import Scheduler
 
@@ -256,7 +263,15 @@ async def _scheduler_start():
     console.print(
         f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m (daily summary at {summary_hour}:00 UTC)"
     )
-    s = Scheduler(pairs, interval, daily_summary_hour=summary_hour)
+    cycle = build_trading_cycle(config, config.engine)
+    s = Scheduler(
+        pairs,
+        interval,
+        daily_summary_hour=summary_hour,
+        cycle=cycle,
+        exchange_id=config.scheduler.exchange_id or config.exchange_id,
+        mode=config.engine,
+    )
     await s.start()
 
 

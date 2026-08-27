@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from cryptotrader.cycle_events import NullCycleEventSink
 from cryptotrader.decision.engine import DecisionEngine
@@ -13,6 +13,7 @@ from cryptotrader.execution.planner import ExecutionPlanner
 from cryptotrader.execution.service import ExecutionService
 from cryptotrader.hitl.store import ApprovalStore
 from cryptotrader.journal.store import CycleJournalStore
+from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 from cryptotrader.profiles.repository import SignalProfileRepository
 from cryptotrader.risk.gate import RiskGate
 from cryptotrader.risk.state import RedisStateManager
@@ -26,7 +27,6 @@ from cryptotrader.trading_cycle import TradingCycle
 if TYPE_CHECKING:
     from cryptotrader.config import AppConfig
     from cryptotrader.cycle_events import CycleEventSink
-    from cryptotrader.decision.models import CycleRequest
     from cryptotrader.profiles.models import SignalProfile
 
 
@@ -48,53 +48,6 @@ class SeededProfileRepository:
             self._memory = replace(profile, revision=self._memory.revision + 1)
             return self._memory
         return await self.repository.replace(profile)
-
-
-class ExchangePortfolioReader:
-    """Read portfolio and risk facts from the same exchange used for orders."""
-
-    def __init__(self, exchange, database_url: str | None = None) -> None:
-        self.exchange = exchange
-        self.database_url = database_url
-
-    async def read(self, request: CycleRequest, current_price: float) -> dict[str, Any]:
-        balances = await self.exchange.get_balance()
-        try:
-            free_balances = await self.exchange.get_free_balance()
-        except AttributeError:
-            free_balances = balances
-        try:
-            positions = await self.exchange.get_positions(
-                current_prices={request.pair.canonical(): current_price},
-            )
-        except TypeError:
-            positions = await self.exchange.get_positions()
-
-        cash = float(balances.get("USDT", 0.0) or 0.0)
-        free_cash = float(free_balances.get("USDT", cash) or 0.0)
-        total_value = cash
-        for pair, position in positions.items():
-            amount = float(position.get("amount", 0.0) or 0.0)
-            if ":" in pair:
-                total_value += float(position.get("unrealized_pnl", 0.0) or 0.0)
-            else:
-                mark = float(position.get("avg_price", 0.0) or 0.0)
-                if pair == request.pair.canonical():
-                    mark = current_price
-                total_value += amount * mark
-        portfolio: dict[str, Any] = {
-            "cash": cash,
-            "free_cash": free_cash,
-            "positions": positions,
-            "total_value": total_value,
-        }
-        if self.database_url:
-            from cryptotrader.portfolio.manager import PortfolioManager
-
-            manager = PortfolioManager(self.database_url)
-            portfolio["daily_pnl"] = await manager.get_daily_pnl()
-            portfolio["drawdown"] = await manager.get_drawdown()
-        return portfolio
 
 
 def _build_exchange(config: AppConfig, mode: str):

@@ -36,6 +36,25 @@ def _strip_markdown_fences(text: str) -> str:
     return text.strip()
 
 
+def _extract_embedded_object(text: str) -> dict:
+    """Parse the first balanced JSON object embedded in surrounding text."""
+    start = text.find("{")
+    if start == -1:
+        raise ValueError("no JSON object found")
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                result = json.loads(text[start : index + 1])
+                if isinstance(result, dict):
+                    return result
+                raise ValueError("embedded JSON value is not an object")
+    raise ValueError("unbalanced JSON object")
+
+
 def _try_parse(text: str) -> dict | None:
     """Try parsing text as JSON, returning None on failure."""
     try:
@@ -47,9 +66,7 @@ def _try_parse(text: str) -> dict | None:
         pass
 
     try:
-        from cryptotrader.debate.verdict import _extract_json
-
-        return _extract_json(text)
+        return _extract_embedded_object(text)
     except (ValueError, json.JSONDecodeError):
         pass
 
@@ -65,7 +82,7 @@ async def extract_json_with_retry(
 ) -> dict:
     """Extract JSON from text, retrying with LLM if parsing fails.
 
-    1. Try _strip_markdown_fences + json.loads / _extract_json (no retry count)
+    1. Try fenced, plain, or embedded JSON parsing (no retry count)
     2. If llm provided and max_retries > 0: ask LLM to fix the JSON
     3. Final fallback: return empty dict and log warning
     """

@@ -71,6 +71,8 @@ def _run_smoke_cycle() -> None:
 
     在 --dry-run 模式下只校验关键模块能正常导入，不实际触发 scheduler。
     """
+    import asyncio
+
     # 校验 agents.base 可以导入（LLM 创建路径）
     from cryptotrader.agents.base import create_llm, log_llm_usage  # noqa: F401
 
@@ -78,15 +80,12 @@ def _run_smoke_cycle() -> None:
     with contextlib.suppress(ImportError):
         from cryptotrader import scheduler as _sched  # noqa: F401
 
-    # 校验 graph 可以导入（不构建）
-    # 确认 classify_case 是 coroutine function（async def）
-    import asyncio
-
-    from cryptotrader.graph import build_trading_graph  # noqa: F401
-
-    # 校验 IVE async 化后模块可导入
+    # 校验新的唯一顶层编排与组件注册可以导入（不连接外部服务）
+    from cryptotrader.bootstrap import build_signal_registry, build_trading_cycle  # noqa: F401
     from cryptotrader.learning.evolution.ive import classify_case
+    from cryptotrader.trading_cycle import TradingCycle  # noqa: F401
 
+    # 确认 classify_case 是 coroutine function（async def）
     if not asyncio.iscoroutinefunction(classify_case):
         raise AssertionError(
             "classify_case must be async def (FR-Z10); found sync function — IVE async migration incomplete"

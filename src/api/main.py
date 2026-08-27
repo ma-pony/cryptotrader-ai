@@ -200,45 +200,6 @@ async def _shutdown_scheduler(app_instance: FastAPI) -> None:
             await task
 
 
-async def _init_hitl_telegram(app_instance: FastAPI) -> None:
-    """Start Telegram HITL bot + expire stale approvals on startup."""
-    from cryptotrader.config import load_config
-
-    config = load_config()
-    app_instance.state.telegram_bot = None
-
-    db_url = config.infrastructure.database_url
-    if db_url:
-        try:
-            from cryptotrader.hitl.store import ApprovalStore
-
-            expired = await ApprovalStore.expire_stale(db_url)
-            if expired:
-                logger.info("Expired %d stale HITL approvals on startup", expired)
-        except Exception:
-            logger.info("Failed to expire stale HITL approvals", exc_info=True)
-
-    if not config.hitl.telegram.enabled or not config.hitl.telegram.bot_token:
-        return
-
-    if not db_url:
-        logger.warning("HITL Telegram enabled but no database_url configured; skipping")
-        return
-
-    try:
-        from cryptotrader.hitl.telegram import TelegramApprovalBot
-
-        bot = TelegramApprovalBot(
-            bot_token=config.hitl.telegram.bot_token,
-            chat_id=config.hitl.telegram.chat_id,
-            db_url=db_url,
-        )
-        await bot.start()
-        app_instance.state.telegram_bot = bot
-    except Exception:
-        logger.warning("Failed to start HITL Telegram bot", exc_info=True)
-
-
 # ── Docs endpoint control ──
 # Read DOCS_ENABLED env var (default: "false").  When false/absent, Swagger UI
 # and ReDoc are disabled to prevent API schema information leakage in production

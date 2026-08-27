@@ -9,15 +9,12 @@ from cryptotrader.models import (
     VALID_TRANSITIONS,
     AgentAnalysis,
     DataSnapshot,
-    DecisionCommit,
-    GateResult,
     MacroData,
     MarketData,
     NewsSentiment,
     OnchainData,
     Order,
     OrderStatus,
-    TradeVerdict,
 )
 
 
@@ -47,11 +44,6 @@ def test_agent_analysis():
     assert a.confidence == 0.8
 
 
-def test_trade_verdict():
-    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.85)
-    assert v.action == "long"
-
-
 def test_order_status_transitions():
     assert OrderStatus.SUBMITTED in VALID_TRANSITIONS[OrderStatus.PENDING]
     assert OrderStatus.FILLED in VALID_TRANSITIONS[OrderStatus.SUBMITTED]
@@ -74,23 +66,3 @@ def test_data_snapshot():
         macro=MacroData(),
     )
     assert snap.pair == "BTC/USDT"
-
-
-def test_gate_result():
-    g = GateResult(passed=False, rejected_by="DailyLossLimit", reason="exceeded")
-    assert not g.passed
-    assert g.rejected_by == "DailyLossLimit"
-
-
-def test_decision_commit():
-    dc = DecisionCommit(
-        hash="abc12345",
-        parent_hash=None,
-        timestamp=datetime.now(UTC),
-        pair="BTC/USDT",
-        snapshot_summary={},
-        analyses={},
-        debate_rounds=2,
-    )
-    assert dc.hash == "abc12345"
-    assert dc.pnl is None

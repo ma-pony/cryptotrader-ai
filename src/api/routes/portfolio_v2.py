@@ -7,16 +7,13 @@ import contextlib
 import logging
 import time
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import Any, Literal, cast
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from api.routes._utils import coerce_timestamp as _coerce_timestamp  # backwards compat
 from cryptotrader._compat import UTC
-
-if TYPE_CHECKING:
-    from cryptotrader.state import ArenaState
 
 logger = logging.getLogger(__name__)
 
@@ -134,24 +131,27 @@ def _compute_pnl_pct(equity: float, pnl_24h: float) -> float:
     return pnl_24h / baseline
 
 
-def _build_state(pair: str | None = None) -> dict:
-    """Minimum ArenaState shape for read_portfolio_from_exchange.
-
-    Spec 013 deep-review fix: when ``pair`` is None, derive from the first
-    configured scheduler pair (canonical str). Hardcoded ``BTC/USDT`` was
-    silently under-reporting equity on perp accounts because ``BTC/USDT``
-    !=  ``BTC/USDT:USDT`` in the position dict.
-    """
-    from cryptotrader.config import load_config
-
-    config = load_config()
+def _configured_pair(config, pair: str | None = None) -> str:
     if pair is None:
         configured = list(getattr(config.scheduler, "pairs", []) or [])
         pair = configured[0].canonical() if configured else "BTC/USDT"
-    return {
-        "metadata": {"pair": pair, "engine": config.engine, "exchange_id": config.exchange_id},
-        "data": {"snapshot_summary": {}},
-    }
+    return pair
+
+
+async def _read_live_portfolio(request: Request, config, pair: str | None = None) -> dict | None:
+    """Read through the portfolio component owned by the running cycle."""
+    cycle = getattr(request.app.state, "trading_cycle", None)
+    contexts = getattr(cycle, "contexts", None)
+    reader = getattr(contexts, "portfolio", None)
+    if reader is None:
+        return None
+
+    from cryptotrader.decision.models import CycleRequest
+    from cryptotrader.pair import Pair
+
+    exchange_id = config.scheduler.exchange_id or config.exchange_id
+    cycle_request = CycleRequest(Pair.parse(_configured_pair(config, pair)), "live", exchange_id)
+    return await reader.read(cycle_request, 0.0)
 
 
 def _daily_last_equity(snaps: list[dict], cutoff: datetime) -> dict[str, float]:
@@ -561,10 +561,9 @@ async def _compute_pnl_breakdowns(database_url: str | None, current_equity: floa
 
 
 @router.get("/snapshot", response_model=PortfolioSnapshotOut)
-async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
+async def get_portfolio_snapshot(request: Request) -> PortfolioSnapshotOut:
     """Return current portfolio snapshot. Prefer live exchange over DB."""
     from cryptotrader.config import load_config
-    from cryptotrader.portfolio import manager as pm_mod
     from cryptotrader.portfolio.manager import PortfolioManager
 
     config = load_config()
@@ -585,14 +584,14 @@ async def get_portfolio_snapshot() -> PortfolioSnapshotOut:
     else:
         try:
             live = await asyncio.wait_for(
-                pm_mod.read_portfolio_from_exchange(cast("ArenaState", _build_state())),
+                _read_live_portfolio(request, config),
                 timeout=_OKX_FETCH_TIMEOUT_SEC,
             )
             globals()["_OKX_LAST_FAIL_AT"] = 0.0
             globals()["_OKX_LAST_OK_AT"] = now
             globals()["_OKX_LAST_OK_RESULT"] = live
         except Exception:
-            logger.info("read_portfolio_from_exchange timed out / failed; using DB", exc_info=True)
+            logger.info("live portfolio read timed out / failed; using DB", exc_info=True)
             globals()["_OKX_LAST_FAIL_AT"] = now
             live = None
 

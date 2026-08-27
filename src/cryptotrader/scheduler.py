@@ -333,13 +333,13 @@ class Scheduler:
     async def _write_cycle_snapshot(self) -> None:
         """Write a fresh portfolio_snapshots row for the cycle.
 
-        Live mode: pull real exchange equity via read_portfolio_from_exchange.
+        Pull current equity through the portfolio component owned by TradingCycle.
         Paper / fallback: read whatever PortfolioManager already knows from DB.
         Either way, swallow errors — a missed snapshot is far less harmful than
         crashing the cycle.
         """
         from cryptotrader.config import load_config
-        from cryptotrader.portfolio.manager import PortfolioManager, read_portfolio_from_exchange
+        from cryptotrader.portfolio.manager import PortfolioManager
 
         config = load_config()
         db_url = config.infrastructure.database_url
@@ -348,18 +348,12 @@ class Scheduler:
         total = 0.0
         cash = 0.0
         try:
-            if config.engine == "live" and self.pairs:
-                # Build a minimal state for the exchange call; price=0 is fine —
-                # exchange.get_balance/get_positions don't need it for the cash leg.
-                state = {
-                    "metadata": {
-                        "engine": "live",
-                        "exchange_id": config.scheduler.exchange_id,
-                        "pair": self.pairs[0].canonical(),
-                    },
-                    "data": {"snapshot_summary": {"price": 0}},
-                }
-                ex_portfolio = await read_portfolio_from_exchange(state)
+            reader = getattr(getattr(self.cycle, "contexts", None), "portfolio", None)
+            if reader is not None and self.pairs:
+                from cryptotrader.decision.models import CycleRequest
+
+                request = CycleRequest(self.pairs[0], self.mode, self.exchange_id)
+                ex_portfolio = await reader.read(request, 0.0)
                 if ex_portfolio:
                     total = float(ex_portfolio.get("total_value", 0.0) or 0.0)
                     cash = float(ex_portfolio.get("cash", 0.0) or 0.0)
@@ -482,7 +476,7 @@ class Scheduler:
             from cryptotrader.decision.models import CycleRequest
             from cryptotrader.pair import Pair
 
-            graph_timeout = config.execution.graph_timeout_s
+            cycle_timeout = config.execution.cycle_timeout_s
             try:
                 outcome = await asyncio.wait_for(
                     self.cycle.run(
@@ -492,11 +486,11 @@ class Scheduler:
                             self.exchange_id or config.scheduler.exchange_id or config.exchange_id,
                         )
                     ),
-                    timeout=graph_timeout,
+                    timeout=cycle_timeout,
                 )
             except TimeoutError:
-                logger.error("Scheduler timed out after %ds for pair %s", graph_timeout, pair)
-                self._status[pair]["last_error"] = f"timeout after {graph_timeout}s"
+                logger.error("Scheduler timed out after %ds for pair %s", cycle_timeout, pair)
+                self._status[pair]["last_error"] = f"timeout after {cycle_timeout}s"
                 return
             self._status[pair]["last_error"] = None
             action = outcome.trade_plan.target.side if outcome.trade_plan is not None else "flat"

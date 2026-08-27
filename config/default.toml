@@ -4,14 +4,10 @@
 [app]
 mode = "standalone"    # standalone | api
 engine = "paper"       # paper | live
-signal_engine = "llm"  # llm (4-agent debate) | kronos (Kronos-primary graph)
 exchange_id = "binance"  # default exchange for market data
 
-# Kronos signal engine (active when signal_engine = "kronos").
-# Gate trained on 4h bars; timeframe/ohlcv_limit are overridden for the
-# Kronos cycle so collection matches the gate's training distribution.
+# Kronos signal component. Enablement and trust weight live in [signal_profile].
 [kronos]
-enabled = false
 gate_path = "artifacts/kronos/gate_v21.pkl"
 model_name = "NeoQuasar/Kronos-base"
 tokenizer_name = "NeoQuasar/Kronos-Tokenizer-base"
@@ -70,7 +66,7 @@ fallback = "glm-5"
 # spec 021 D2/D3: 60→90s. chain_agent + news_agent 因多轮 tool-calling
 # (4-6 round) 在 deepseek-v4-flash 上经常逼近 60s 上限，触发 27/cycle
 # degraded path; debate_round_2 也撞 60s（4 agent 一起重新分析）。升到
-# 90s 给所有 LLM 调用 +50% 余量，仍远低于 graph_timeout_s=600。
+# 90s 给所有 LLM 调用 +50% 余量，仍远低于 cycle_timeout_s=600。
 timeout_seconds = 90
 
 [debate]
@@ -209,11 +205,11 @@ token_tax_threshold = 10
 # 状态发散。提到 120s 兜底沙箱慢撮合，对真实交易所影响很小（成交常 <5s）。
 order_wait_seconds = 120
 retry_attempts = 3
-# graph_timeout_s 600s 留 margin：5-pair 并发 + evaluate_node 慢调用（180-267s
+# cycle_timeout_s 600s 留 margin：5-pair 并发 + 组件慢调用
 # in prod，与 spec 018 IVE classify_case 串行 LLM 有关）。300s 时观察到大量
 # Scheduler timed out 导致 graph 在 evaluate_node 后 cancel，execute/journal
 # 节点未触发 → 累计 17 actionable verdicts missed @ 8h live（2026-05-11 诊断）。
-graph_timeout_s = 600
+cycle_timeout_s = 600
 
 [notifications]
 webhook_url = ""
@@ -262,18 +258,6 @@ vision_models = [
 fast_model = ""
 max_image_bytes = 4718592
 description_max_tokens = 800
-
-[hitl]
-enabled = false
-min_position_scale = 0.5
-divergence_threshold = 0.6
-cold_start_min_trades = 5
-approval_timeout_seconds = 300
-
-[hitl.telegram]
-enabled = false
-bot_token = ""
-chat_id = ""
 
 [chat]
 # 分析事件缓冲区 TTL（秒），过期后无法重连回放
