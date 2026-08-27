@@ -352,7 +352,7 @@ git commit -m "feat: add signal fusion domain models"
 - Modify: `src/cryptotrader/config.py`
 - Modify: `config/default.toml`
 - Test: `tests/test_signal_registry.py`
-- Modify: `tests/test_config_loader.py`
+- Test: `tests/test_signal_config.py`
 
 **Interfaces:**
 - Consumes: Task 1 的 `DataRequirements`、`SignalContext`、`ComponentSignal`、`SignalProfile`。
@@ -392,7 +392,7 @@ def test_config_loads_plugin_factories_and_default_profile(tmp_path):
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `uv run pytest tests/test_signal_registry.py tests/test_config_loader.py --no-cov -q`
+Run: `uv run pytest tests/test_signal_registry.py tests/test_signal_config.py --no-cov -q`
 
 Expected: FAIL，缺少 Registry 和新配置字段。
 
@@ -455,14 +455,14 @@ weight = 0.40
 
 - [ ] **Step 5: 运行配置与 Registry 测试**
 
-Run: `uv run pytest tests/test_signal_registry.py tests/test_config_loader.py --no-cov -q`
+Run: `uv run pytest tests/test_signal_registry.py tests/test_signal_config.py --no-cov -q`
 
 Expected: PASS。
 
 - [ ] **Step 6: 提交 Registry 和默认配置**
 
 ```bash
-git add src/cryptotrader/signals/component.py src/cryptotrader/signals/registry.py src/cryptotrader/config.py config/default.toml tests/test_signal_registry.py tests/test_config_loader.py
+git add src/cryptotrader/signals/component.py src/cryptotrader/signals/registry.py src/cryptotrader/config.py config/default.toml tests/test_signal_registry.py tests/test_signal_config.py
 git commit -m "feat: add configurable signal component registry"
 ```
 
