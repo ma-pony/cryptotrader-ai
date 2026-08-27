@@ -31,3 +31,6 @@ agent_memory/
 
 # Runtime logs (uvicorn / scheduler / etc) — local development convenience.
 logs/
+
+# Isolated development worktrees
+.worktrees/
