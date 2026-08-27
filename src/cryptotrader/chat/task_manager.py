@@ -7,10 +7,10 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Coroutine
+    from collections.abc import Awaitable, Callable
 
     from cryptotrader.chat.event_bus import EventBus
     from cryptotrader.config import ChatConfig
@@ -32,7 +32,6 @@ class AnalysisTask:
     event_bus: EventBus
     created_at: float = field(default_factory=time.monotonic)
     completed: bool = False
-    completed_agents: list[str] = field(default_factory=list)
 
 
 class BackgroundTaskManager:
@@ -60,7 +59,7 @@ class BackgroundTaskManager:
         self,
         session_id: str,
         pair: str,
-        coro: Coroutine[Any, Any, None],
+        runner: Callable[[asyncio.Event], Awaitable[None]],
         trigger_source: str,
         event_bus: EventBus,
     ) -> AnalysisTask:
@@ -75,9 +74,10 @@ class BackgroundTaskManager:
             )
             notify_task.add_done_callback(lambda _: None)
             existing.interrupt_event.set()
+            existing.task.cancel()
 
         interrupt_event = asyncio.Event()
-        task = asyncio.create_task(coro, name=f"analysis:{session_id}")
+        task = asyncio.create_task(runner(interrupt_event), name=f"analysis:{session_id}")
         task.add_done_callback(lambda _t: self._on_task_done(session_id))
 
         analysis_task = AnalysisTask(
@@ -105,6 +105,7 @@ class BackgroundTaskManager:
         if task.interrupt_event.is_set():
             return False
         task.interrupt_event.set()
+        task.task.cancel()
         return True
 
     @staticmethod

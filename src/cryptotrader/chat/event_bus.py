@@ -78,3 +78,15 @@ class EventBus:
     def unsubscribe(self, q: asyncio.Queue[SSEEnvelope]) -> None:
         with contextlib.suppress(ValueError):
             self._subscribers.remove(q)
+
+
+class EventBusCycleSink:
+    """Adapt typed TradingCycle events to the existing SSE EventBus."""
+
+    def __init__(self, event_bus: EventBus) -> None:
+        self.event_bus = event_bus
+
+    async def publish(self, event) -> None:
+        from cryptotrader.cycle_serialization import json_value
+
+        await self.event_bus.publish(event.name, json_value(event.data))

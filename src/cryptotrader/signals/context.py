@@ -124,7 +124,11 @@ class LiveSignalContextProvider:
         if self.default_timeframe not in snapshots:
             raise ValueError(f"default timeframe {self.default_timeframe!r} is missing from requirements")
         price = _current_price(snapshots[primary.timeframe].market)
-        portfolio = await self.portfolio.read(request, price)
+        portfolio = dict(await self.portfolio.read(request, price))
+        primary_market = snapshots[primary.timeframe].market
+        portfolio["recent_prices"] = [float(value) for value in primary_market.ohlcv["close"].dropna().tolist()]
+        portfolio["funding_rate"] = float(primary_market.funding_rate or 0.0)
+        portfolio["symbol"] = request.pair.base
         equity = float(portfolio.get("total_value", 0.0) or 0.0)
         current_position = _position_snapshot(
             portfolio,
@@ -151,7 +155,10 @@ class LiveSignalContextProvider:
         from cryptotrader.decision.models import CycleRequest
 
         request = CycleRequest(context.pair, context.mode, context.exchange_id, context.as_of)
-        portfolio = await self.portfolio.read(request, context.current_price)
+        portfolio = dict(await self.portfolio.read(request, context.current_price))
+        portfolio.setdefault("recent_prices", context.portfolio.get("recent_prices", []))
+        portfolio.setdefault("funding_rate", context.portfolio.get("funding_rate", 0.0))
+        portfolio.setdefault("symbol", context.pair.base)
         price = float(portfolio.get("current_price", context.current_price) or context.current_price)
         equity = float(portfolio.get("total_value", 0.0) or 0.0)
         current_position = _position_snapshot(

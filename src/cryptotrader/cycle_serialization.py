@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
@@ -17,7 +18,13 @@ if TYPE_CHECKING:
 
 def json_value(value: Any) -> Any:
     """把组件 details 等扩展字段收敛为可持久化 JSON 值。"""
-    return json.loads(json.dumps(value, default=str))
+
+    def encode(item):
+        if is_dataclass(item):
+            return asdict(item)
+        return str(item)
+
+    return json.loads(json.dumps(value, default=encode))
 
 
 def component_signal_payload(signal: ComponentSignal) -> dict[str, Any]:

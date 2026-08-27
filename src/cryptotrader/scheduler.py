@@ -26,6 +26,10 @@ class Scheduler:
         interval_minutes: int = 240,
         daily_summary_hour: int = 0,
         trigger_engine: Any | None = None,
+        *,
+        cycle=None,
+        exchange_id: str = "",
+        mode: str = "paper",
     ):
         # Per spec 013-pair-value-object: scheduler holds list[Pair]; legacy
         # callers passing list[str] are auto-promoted to spot Pair instances
@@ -48,6 +52,9 @@ class Scheduler:
         self._scheduler = AsyncIOScheduler()
         self._stop_event: asyncio.Event | None = None
         self._trigger_engine = trigger_engine
+        self.cycle = cycle
+        self.exchange_id = exchange_id
+        self.mode = mode
         # Watchdog state — tracks last successful cycle completion so the
         # heartbeat task can detect IntervalTrigger silent-miss bug (observed
         # 5/18 18:57 + 19:57 + 5/19 18:36; APScheduler's next_fire_time gets
@@ -376,29 +383,32 @@ class Scheduler:
             logger.info("cycle snapshot: write failed", exc_info=True)
 
     async def _close_live_exchanges(self) -> None:
-        from cryptotrader.nodes.execution import _live_exchanges
-
-        for ex_id, exchange in list(_live_exchanges.items()):
-            try:
-                await exchange.close()
-            except Exception:
-                logger.info("Failed to close exchange %s", ex_id, exc_info=True)
-        _live_exchanges.clear()
+        exchange = getattr(getattr(self.cycle, "executor", None), "exchange", None)
+        if exchange is None:
+            return
+        try:
+            await exchange.close()
+        except Exception:
+            logger.info("Failed to close scheduler exchange", exc_info=True)
 
     async def _startup_reconcile(self) -> None:
         """Run startup reconciliation to detect orphaned orders (live mode only)."""
         from cryptotrader.config import load_config
 
         config = load_config()
-        if config.engine != "live":
+        if self.mode != "live" and config.engine != "live":
             return
 
         try:
             from cryptotrader.execution.reconcile import Reconciler
-            from cryptotrader.nodes.execution import _get_exchange
 
-            dummy_state = {"metadata": {"engine": "live", "exchange_id": config.scheduler.exchange_id}, "data": {}}
-            exchange, _ = await _get_exchange(dummy_state, self.pairs[0].canonical())
+            if self.cycle is None:
+                from cryptotrader.bootstrap import build_trading_cycle
+
+                self.mode = "live"
+                self.exchange_id = self.exchange_id or config.scheduler.exchange_id or config.exchange_id
+                self.cycle = build_trading_cycle(config, "live")
+            exchange = self.cycle.executor.exchange
             reconciler = Reconciler(exchange)
             orphans = await reconciler.detect_orphans(set())
             if orphans:
@@ -462,87 +472,46 @@ class Scheduler:
             from cryptotrader.config import load_config
 
             config = load_config()
-            from cryptotrader.state import build_initial_state
+            if self.cycle is None:
+                from cryptotrader.bootstrap import build_trading_cycle
 
-            extra_meta: dict[str, Any] = {"cycle_count": self._cycle_count}
-            if trigger_meta:
-                extra_meta["schedule_depth"] = trigger_meta.get("schedule_depth", 0)
-                extra_meta["trigger_event_id"] = trigger_meta.get("trigger_event_id")
+                self.mode = config.engine
+                self.exchange_id = self.exchange_id or config.scheduler.exchange_id or config.exchange_id
+                self.cycle = build_trading_cycle(config, self.mode)
 
-            # Signal-engine selection: "kronos" → Kronos-primary graph (variant B/C),
-            # otherwise the default 4-agent LLM debate graph.
-            kcfg_timeframe = None
-            kcfg_ohlcv_limit = None
-            if config.signal_engine == "kronos":
-                from cryptotrader.graph import build_kronos_graph
-
-                graph = build_kronos_graph()
-                k = config.kronos
-                # CRITICAL: gate trained on 4h bars + Kronos needs ≥460 lookback.
-                # Override collection timeframe/limit for the Kronos cycle.
-                kcfg_timeframe = k.timeframe
-                kcfg_ohlcv_limit = k.ohlcv_limit
-                extra_meta["kronos_cfg"] = {
-                    "gate_path": k.gate_path,
-                    "model_name": k.model_name,
-                    "tokenizer_name": k.tokenizer_name,
-                    "device": k.device,
-                    "lookback": k.lookback,
-                    "pred_len": k.pred_len,
-                    "sample_count": k.sample_count,
-                    "step2_short_threshold": k.step2_short_threshold,
-                    "aux_symbol": k.aux_symbol,
-                }
-            else:
-                from cryptotrader.graph import build_trading_graph
-
-                graph = build_trading_graph()
-
-            initial = build_initial_state(
-                pair,
-                engine=config.engine,
-                exchange_id=config.scheduler.exchange_id,
-                timeframe=kcfg_timeframe,
-                ohlcv_limit=kcfg_ohlcv_limit,
-                config=config,
-                extra_metadata=extra_meta,
-            )
-            from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
+            from cryptotrader.decision.models import CycleRequest
+            from cryptotrader.pair import Pair
 
             graph_timeout = config.execution.graph_timeout_s
-            import time as _time
-
-            from cryptotrader.metrics import get_metrics_collector
-
-            pipeline_t0 = _time.monotonic()
             try:
-                result, node_trace = await asyncio.wait_for(run_graph_traced(graph, initial), timeout=graph_timeout)
-                # Histogram observation populates pipeline_p50_ms / p95_ms in
-                # /api/metrics/summary. Also fired in chat analysis_runner.
-                get_metrics_collector().observe_pipeline_duration(ms=(_time.monotonic() - pipeline_t0) * 1000.0)
-                add_timing_to_trace(node_trace)
-                for t in node_trace:
-                    logger.info("Node %s [%dms]: %s", t["node"], t["duration_ms"], t["summary"][:120])
+                outcome = await asyncio.wait_for(
+                    self.cycle.run(
+                        CycleRequest(
+                            Pair.parse(pair),
+                            self.mode,
+                            self.exchange_id or config.scheduler.exchange_id or config.exchange_id,
+                        )
+                    ),
+                    timeout=graph_timeout,
+                )
             except TimeoutError:
                 logger.error("Scheduler timed out after %ds for pair %s", graph_timeout, pair)
                 self._status[pair]["last_error"] = f"timeout after {graph_timeout}s"
                 return
             self._status[pair]["last_error"] = None
-
-            data = result.get("data", {})
-            verdict = data.get("verdict", {})
-            risk_gate = data.get("risk_gate", {})
-            action = verdict.get("action", "unknown")
-            risk_passed = risk_gate.get("passed", False)
+            action = outcome.trade_plan.target.side if outcome.trade_plan is not None else "flat"
+            risk_passed = outcome.risk_result.passed if outcome.risk_result is not None else None
             self._status[pair]["last_action"] = action
             self._status[pair]["risk_passed"] = risk_passed
+            self._status[pair]["last_status"] = outcome.status
+            self._status[pair]["cycle_id"] = outcome.cycle_id
             logger.info(
-                "Cycle complete [%s] trace=%s: action=%s confidence=%.2f risk=%s",
+                "Cycle complete [%s] trace=%s: status=%s target=%s risk=%s",
                 pair,
                 trace_id,
+                outcome.status,
                 action,
-                verdict.get("confidence", 0),
-                "PASS" if risk_passed else f"REJECT({risk_gate.get('rejected_by', '?')})",
+                risk_passed,
             )
 
         except Exception as e:

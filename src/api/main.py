@@ -65,9 +65,6 @@ async def lifespan(_app: FastAPI):
     # Initialize trigger engine if enabled
     await _init_trigger_engine(_app)
 
-    # Initialize HITL Telegram bot if enabled
-    await _init_hitl_telegram(_app)
-
     # Initialize trading scheduler if enabled
     await _init_scheduler(_app)
 
@@ -76,44 +73,30 @@ async def lifespan(_app: FastAPI):
     # Shutdown scheduler first (it owns trading-cycle + daily-summary jobs)
     await _shutdown_scheduler(_app)
 
-    # Shutdown HITL Telegram bot
-    telegram_bot = getattr(_app.state, "telegram_bot", None)
-    if telegram_bot is not None:
-        await telegram_bot.stop()
-
     # Shutdown trigger engine
     trigger_engine = getattr(_app.state, "trigger_engine", None)
     if trigger_engine is not None:
         await trigger_engine.stop()
 
-    from cryptotrader.nodes.execution import close_live_exchanges
-
-    await close_live_exchanges()
+    cycle = getattr(_app.state, "trading_cycle", None)
+    exchange = getattr(getattr(cycle, "executor", None), "exchange", None)
+    if exchange is not None:
+        await exchange.close()
     logger.info("Shutting down")
 
 
 async def _init_signal_profile(app_instance: FastAPI) -> None:
+    from cryptotrader.bootstrap import build_trading_cycle
     from cryptotrader.config import load_config
-    from cryptotrader.profiles.models import validate_signal_profile
-    from cryptotrader.profiles.repository import SignalProfileRepository
-    from cryptotrader.signals.components.kronos import KronosComponent
-    from cryptotrader.signals.components.llm_committee import LLMCommitteeComponent
-    from cryptotrader.signals.registry import SignalComponentRegistry
 
     config = load_config()
-    registry = SignalComponentRegistry((KronosComponent(config.kronos), LLMCommitteeComponent(config)))
-    for factory in config.signal_plugins.factories:
-        registry.load_factory(factory)
-    default = validate_signal_profile(config.signal_profile_defaults.to_profile(), registry.ids())
-
-    app_instance.state.signal_registry = registry
-    app_instance.state.signal_profile_repository = None
-    if not config.infrastructure.database_url:
+    cycle = build_trading_cycle(config, config.engine)
+    await cycle.profiles.get()
+    app_instance.state.trading_cycle = cycle
+    app_instance.state.signal_registry = cycle.registry
+    app_instance.state.signal_profile_repository = cycle.profiles.repository
+    if cycle.profiles.repository is None:
         logger.info("No database configured; global signal profile persistence is unavailable")
-        return
-    repository = SignalProfileRepository(config.infrastructure.database_url)
-    await repository.get_or_create(default)
-    app_instance.state.signal_profile_repository = repository
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:
@@ -181,6 +164,9 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
         pairs=config.scheduler.pairs,
         interval_minutes=config.scheduler.interval_minutes,
         daily_summary_hour=config.scheduler.daily_summary_hour,
+        cycle=app_instance.state.trading_cycle,
+        exchange_id=config.scheduler.exchange_id or config.exchange_id,
+        mode=config.engine,
     )
     # Scheduler.start() is blocking (awaits a stop_event), so run as a task.
     task = asyncio.create_task(scheduler.start(), name="trading-scheduler")

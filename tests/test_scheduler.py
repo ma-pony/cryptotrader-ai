@@ -10,6 +10,30 @@ from apscheduler.triggers.interval import IntervalTrigger
 from cryptotrader.scheduler import Scheduler
 
 
+class _Cycle:
+    def __init__(self):
+        self.requests = []
+
+    async def run(self, request):
+        from cryptotrader.decision.models import CycleOutcome
+
+        self.requests.append(request)
+        return CycleOutcome("cycle-1", "no_change", 1)
+
+
+async def test_scheduler_routes_pair_through_injected_trading_cycle():
+    cycle = _Cycle()
+    scheduler = Scheduler(["BTC/USDT:USDT"], cycle=cycle, exchange_id="okx")
+
+    await scheduler._run_pair_locked("BTC/USDT:USDT")
+
+    assert len(cycle.requests) == 1
+    assert cycle.requests[0].pair.canonical() == "BTC/USDT:USDT"
+    assert cycle.requests[0].mode == "paper"
+    assert cycle.requests[0].exchange_id == "okx"
+    assert scheduler.status["BTC/USDT:USDT"]["last_status"] == "no_change"
+
+
 def test_scheduler_init():
     s = Scheduler(["BTC/USDT"], interval_minutes=60)
     # Per spec 013: Scheduler stores list[Pair]; legacy list[str] callers

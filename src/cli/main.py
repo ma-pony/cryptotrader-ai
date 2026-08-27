@@ -39,7 +39,6 @@ def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
     mode: Annotated[str, typer.Option("--mode", "-m", help="paper or live")] = "paper",
     exchange: Annotated[str, typer.Option("--exchange", "-e", help="Exchange (default: from config)")] = "",
-    graph: Annotated[str, typer.Option("--graph", "-g", help="configured, full, lite, debate, kronos")] = "configured",
 ):
     """Run one analysis cycle for each pair sequentially."""
     if pair is None:
@@ -48,27 +47,16 @@ def run(
         cfg_pairs = load_config().scheduler.pairs
         # cfg_pairs is list[Pair] post spec 013; project canonical str expected by _run
         pair = [p.canonical() for p in cfg_pairs] if cfg_pairs else ["BTC/USDT"]
-    asyncio.run(_run(pair, mode, exchange, graph))
+    asyncio.run(_run(pair, mode, exchange))
 
 
-async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = "configured"):
+async def _run(pairs: list[str], mode: str, exchange_id: str):
+    from cryptotrader.bootstrap import build_trading_cycle
     from cryptotrader.config import load_config
-    from cryptotrader.graph import build_debate_graph, build_kronos_graph, build_lite_graph, build_trading_graph
 
     config = load_config()
     if not exchange_id:
         exchange_id = config.exchange_id
-    if graph_mode == "configured":
-        graph_mode = "kronos" if config.signal_engine == "kronos" else "full"
-    builders = {
-        "full": build_trading_graph,
-        "lite": build_lite_graph,
-        "debate": build_debate_graph,
-        "kronos": build_kronos_graph,
-    }
-    if graph_mode not in builders:
-        raise typer.BadParameter(f"Unknown graph '{graph_mode}'")
-    graph = builders[graph_mode]()
 
     # Live mode pre-flight checks
     if mode == "live":
@@ -82,19 +70,14 @@ async def _run(pairs: list[str], mode: str, exchange_id: str, graph_mode: str = 
         if creds.sandbox:
             console.print("[yellow]WARNING: Running in SANDBOX mode (sandbox=true in config)[/yellow]")
 
-    # Cleanup hook — runs on every exit path so the cached LiveExchange (ccxt
-    # async aiohttp connector) gets explicitly closed. Without this, every
-    # `arena run --mode live` exit logs an aiohttp "Unclosed connector" warning
-    # and a deque of dangling ResponseHandlers.
+    cycle = build_trading_cycle(config, mode)
     try:
-        await _run_pairs_loop(pairs, mode, exchange_id, graph, config, graph_mode)
+        await _run_pairs_loop(pairs, mode, exchange_id, cycle, config)
     finally:
-        from cryptotrader.nodes.execution import close_live_exchanges
-
-        await close_live_exchanges()
+        await cycle.executor.exchange.close()
 
 
-async def _run_pairs_loop(pairs, mode, exchange_id, graph, config, graph_mode):
+async def _run_pairs_loop(pairs, mode, exchange_id, cycle, config):
     from cryptotrader.cycle_lock import cycle_lock
     from cryptotrader.risk.state import RedisStateManager
 
@@ -105,52 +88,21 @@ async def _run_pairs_loop(pairs, mode, exchange_id, graph, config, graph_mode):
             if not acquired:
                 console.print(f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]")
                 continue
-            await _run_one_pair(pair, mode, exchange_id, graph, config, graph_mode)
+            await _run_one_pair(pair, mode, exchange_id, cycle)
 
 
-async def _run_one_pair(pair: str, mode: str, exchange_id: str, graph, config, graph_mode: str) -> None:
-    from cryptotrader.state import build_initial_state
-    from cryptotrader.tracing import add_timing_to_trace, run_graph_traced, set_trace_id
+async def _run_one_pair(pair: str, mode: str, exchange_id: str, cycle) -> None:
+    from cryptotrader.decision.models import CycleRequest
+    from cryptotrader.pair import Pair
+    from cryptotrader.tracing import set_trace_id
 
     trace_id = set_trace_id()
     console.print(
         f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
     )
 
-    timeframe = None
-    ohlcv_limit = None
-    extra_metadata = None
-    if graph_mode == "kronos":
-        k = config.kronos
-        timeframe = k.timeframe
-        ohlcv_limit = k.ohlcv_limit
-        extra_metadata = {
-            "kronos_cfg": {
-                "gate_path": k.gate_path,
-                "model_name": k.model_name,
-                "tokenizer_name": k.tokenizer_name,
-                "device": k.device,
-                "lookback": k.lookback,
-                "pred_len": k.pred_len,
-                "sample_count": k.sample_count,
-                "step2_short_threshold": k.step2_short_threshold,
-                "aux_symbol": k.aux_symbol,
-            }
-        }
-
-    initial = build_initial_state(
-        pair,
-        engine=mode,
-        exchange_id=exchange_id,
-        timeframe=timeframe,
-        ohlcv_limit=ohlcv_limit,
-        config=config,
-        extra_metadata=extra_metadata,
-    )
-
     try:
-        result, node_trace = await run_graph_traced(graph, initial)
-        add_timing_to_trace(node_trace)
+        outcome = await cycle.run(CycleRequest(Pair.parse(pair), mode, exchange_id))
     except Exception as exc:
         if mode == "live":
             console.print(f"[red]ERROR: {exc}[/red]")
@@ -158,36 +110,29 @@ async def _run_one_pair(pair: str, mode: str, exchange_id: str, graph, config, g
             raise typer.Exit(1) from None
         raise
 
-    _print_result(pair, result, node_trace)
+    _print_result(pair, outcome)
 
 
-def _print_result(pair: str, result: dict, node_trace: list[dict]):
-    """Print node trace and decision summary tables."""
+def _print_result(pair: str, outcome):
+    """Print one TradingCycle result."""
     from rich.table import Table
-
-    verdict = result.get("data", {}).get("verdict", {})
-    risk = result.get("data", {}).get("risk_gate", {})
-    order = result.get("data", {}).get("order")
-
-    trace_table = Table(title="Graph Node Trace")
-    trace_table.add_column("Node", style="cyan")
-    trace_table.add_column("Duration", style="yellow")
-    trace_table.add_column("Output", style="white")
-    for t in node_trace:
-        trace_table.add_row(t["node"], f"{t['duration_ms']}ms", t["summary"][:120])
-    console.print(trace_table)
 
     table = Table(title=f"Decision Summary — {pair}")
     table.add_column("Field", style="cyan")
     table.add_column("Value", style="green")
     table.add_row("Pair", pair)
-    table.add_row("Action", verdict.get("action", "N/A"))
-    table.add_row("Confidence", f"{verdict.get('confidence', 0):.2%}")
-    table.add_row("Divergence", f"{verdict.get('divergence', 0):.2%}")
-    table.add_row("Position Scale", f"{verdict.get('position_scale', 0):.2%}")
-    table.add_row("Risk Gate", "PASS" if risk.get("passed") else f"REJECT: {risk.get('reason', '')}")
-    if order:
-        table.add_row("Order", f"{order.get('side', '')} {order.get('amount', 0):.6f} @ {order.get('price', 0):.2f}")
+    table.add_row("Cycle", outcome.cycle_id)
+    table.add_row("Status", outcome.status)
+    if outcome.trade_plan is not None:
+        table.add_row("Target", f"{outcome.trade_plan.target.side} {outcome.trade_plan.target.size_ratio:.2%}")
+        table.add_row("Fused Score", f"{outcome.trade_plan.fused_signal.score:+.4f}")
+    if outcome.risk_result is not None:
+        table.add_row(
+            "Risk Gate",
+            "PASS" if outcome.risk_result.passed else f"REJECT: {outcome.risk_result.reason}",
+        )
+    if outcome.execution_result is not None:
+        table.add_row("Execution", "PASS" if outcome.execution_result.succeeded else outcome.execution_result.error)
     console.print(table)
 
 
@@ -396,15 +341,13 @@ async def _migrate():
     if not db_url:
         console.print("[red]DATABASE_URL not configured — nothing to migrate.[/red]")
         raise typer.Exit(1)
-    from sqlalchemy.ext.asyncio import create_async_engine
+    from cryptotrader.hitl.store import ApprovalStore
+    from cryptotrader.journal.store import CycleJournalStore
+    from cryptotrader.profiles.repository import SignalProfileRepository
 
-    from cryptotrader.journal.store import _sa_models
-
-    Base, _ = _sa_models()
-    engine = create_async_engine(db_url)
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    await engine.dispose()
+    await CycleJournalStore(db_url).ensure_table()
+    await ApprovalStore(db_url).ensure_table()
+    await SignalProfileRepository(db_url).ensure_table()
     console.print("[green]Database tables created / verified.[/green]")
 
 

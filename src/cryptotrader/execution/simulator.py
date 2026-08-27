@@ -22,6 +22,8 @@ class PaperExchange:
 
         _cfg = load_config()
         self._orders: dict[str, dict[str, Any]] = {}
+        self._algos: dict[str, dict[str, Any]] = {}
+        self._derivative_positions: dict[str, dict[str, Any]] = {}
         if initial_balances is not None:
             self._balances: dict[str, float] = dict(initial_balances)
         else:
@@ -30,6 +32,18 @@ class PaperExchange:
         self._cost_basis: dict[str, dict[str, float]] = {}
         if initial_positions:
             for pair, pos in initial_positions.items():
+                pair_object = Pair.parse(pair)
+                if pair_object.market_type != "spot":
+                    amount = float(pos.get("amount", 0.0) or 0.0)
+                    if amount:
+                        self._derivative_positions[pair] = {
+                            "amount": amount,
+                            "side": "long" if amount > 0.0 else "short",
+                            "avg_price": float(pos.get("avg_price", 0.0) or 0.0),
+                            "unrealized_pnl": 0.0,
+                            "liquidation_price": None,
+                        }
+                    continue
                 asset = Pair.parse(pair).base
                 amount = pos.get("amount", 0.0)
                 avg_price = pos.get("avg_price", 0.0)
@@ -42,6 +56,29 @@ class PaperExchange:
     def estimate_slippage(self, order: Order) -> float:
         impact = order.amount * order.price * 1e-8
         return self._slippage_base + impact
+
+    def _update_derivative_position(self, order: Order, fill_price: float) -> None:
+        current = self._derivative_positions.get(order.pair)
+        current_amount = float((current or {}).get("amount", 0.0) or 0.0)
+        delta = order.amount if order.side == "buy" else -order.amount
+        next_amount = current_amount + delta
+        if abs(next_amount) < 1e-12:
+            self._derivative_positions.pop(order.pair, None)
+            return
+        if current_amount * next_amount <= 0.0:
+            avg_price = fill_price
+        elif abs(next_amount) > abs(current_amount):
+            current_cost = abs(current_amount) * float((current or {}).get("avg_price", fill_price))
+            avg_price = (current_cost + abs(delta) * fill_price) / abs(next_amount)
+        else:
+            avg_price = float((current or {}).get("avg_price", fill_price))
+        self._derivative_positions[order.pair] = {
+            "amount": next_amount,
+            "side": "long" if next_amount > 0.0 else "short",
+            "avg_price": avg_price,
+            "unrealized_pnl": 0.0,
+            "liquidation_price": None,
+        }
 
     async def place_order(self, order: Order) -> dict[str, Any]:
         async with self._lock:
@@ -62,7 +99,7 @@ class PaperExchange:
             is_derivative = pair_obj.market_type != "spot"
 
             # Balance pre-check (include fee in buy cost)
-            if is_derivative:
+            if is_derivative and not order.reduce_only:
                 # Conservative paper-mode margin: assume 1x (worst-case full notional).
                 # When real leverage > 1, USDT cash buffer is even larger than needed,
                 # so this never spuriously fails an order that the live exchange
@@ -113,6 +150,7 @@ class PaperExchange:
                 # exchange path or DB read merges them in — acceptable because
                 # the journal records the order and the portfolio API uses DB.
                 self._balances["USDT"] = self._balances.get("USDT", 0) - fee
+                self._update_derivative_position(order, fill_price)
             elif order.side == "buy":
                 self._balances["USDT"] -= cost + fee
                 self._balances[base] = self._balances.get(base, 0) + order.amount
@@ -150,6 +188,9 @@ class PaperExchange:
         async with self._lock:
             return {k: v for k, v in self._balances.items() if v != 0}
 
+    async def get_free_balance(self) -> dict[str, float]:
+        return await self.get_balance()
+
     async def get_positions(self, current_prices: dict[str, float] | None = None) -> dict[str, dict[str, Any]]:
         """Return current positions with cost-basis and unrealized PnL.
 
@@ -159,7 +200,16 @@ class PaperExchange:
         Returns: {pair: {"amount", "side", "avg_price", "unrealized_pnl", "liquidation_price"}}
         """
         async with self._lock:
-            positions: dict[str, dict[str, Any]] = {}
+            positions: dict[str, dict[str, Any]] = {
+                pair: dict(position) for pair, position in self._derivative_positions.items()
+            }
+            for pair, position in positions.items():
+                current_price = (current_prices or {}).get(pair, 0.0)
+                if current_price > 0.0:
+                    direction = 1.0 if position["amount"] > 0.0 else -1.0
+                    position["unrealized_pnl"] = (
+                        (current_price - position["avg_price"]) * abs(position["amount"]) * direction
+                    )
             for asset, amount in self._balances.items():
                 if asset == "USDT" or amount == 0:
                     continue
@@ -180,6 +230,44 @@ class PaperExchange:
     async def fetch_open_orders(self) -> list[dict[str, Any]]:
         async with self._lock:
             return [o for o in self._orders.values() if o.get("status") == "open"]
+
+    async def place_algo_oco(
+        self,
+        pair: str,
+        *,
+        side: str,
+        amount: float,
+        sl_trigger_px: float,
+        tp_trigger_px: float,
+        pos_side: str,
+    ) -> str:
+        async with self._lock:
+            algo_id = str(uuid.uuid4())
+            self._algos[algo_id] = {
+                "algoId": algo_id,
+                "pair": pair,
+                "side": side,
+                "amount": amount,
+                "sl_trigger_px": sl_trigger_px,
+                "tp_trigger_px": tp_trigger_px,
+                "pos_side": pos_side,
+                "status": "pending",
+            }
+            return algo_id
+
+    async def cancel_algo(self, algo_id: str, pair: str) -> None:
+        async with self._lock:
+            algo = self._algos.get(algo_id)
+            if algo is not None and algo["pair"] == pair:
+                algo["status"] = "cancelled"
+
+    async def list_pending_algos(self, pair: str | None = None) -> list[dict[str, Any]]:
+        async with self._lock:
+            return [
+                dict(algo)
+                for algo in self._algos.values()
+                if algo["status"] == "pending" and (pair is None or algo["pair"] == pair)
+            ]
 
     async def close(self) -> None:
         pass

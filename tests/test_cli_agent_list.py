@@ -12,6 +12,12 @@ from cryptotrader.config import AgentConfig, AgentsConfig, AppConfig
 runner = CliRunner()
 
 
+def test_run_command_has_no_graph_option():
+    result = runner.invoke(app, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "--graph" not in result.output
+
+
 def _make_config(**agents_overrides) -> AppConfig:
     agents_map = {}
     for agent_id, data in agents_overrides.items():
