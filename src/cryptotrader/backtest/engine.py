@@ -1,10 +1,11 @@
-"""Backtest engine — steps through historical data and runs the full graph."""
+"""Historical execution of the same TradingCycle used by paper and live modes."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
@@ -13,30 +14,178 @@ import pandas as pd
 from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import _TF_MS, fetch_historical
 from cryptotrader.backtest.result import BacktestResult
+from cryptotrader.decision.models import CycleRequest
+from cryptotrader.execution.service import ExecutionOrderResult, ExecutionResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 from cryptotrader.pair import Pair
+from cryptotrader.signals.models import CandleRequirement, DataRequirements, PositionSnapshot
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    from cryptotrader.decision.models import CycleOutcome, ExecutionPlan
+    from cryptotrader.journal.models import TradingCycleRecord
+    from cryptotrader.profiles.models import SignalProfile
+    from cryptotrader.signals.context import HistoricalSignalContextProvider
+
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class _BacktestLoopState:
-    """Mutable state threaded through the per-bar loop helpers."""
+class FrozenProfileRepository:
+    """A point-in-time profile view owned by one backtest run."""
 
-    equity: float
-    equity_curve: list[float]
-    peak: float
-    graph: Any  # CompiledGraph | None
-    max_stop_loss_pct: float
-    position: float = 0.0
-    entry_price: float = 0.0
-    pending_action: str | None = None
-    pending_scale: float = 1.0
-    trades: list[dict] = field(default_factory=list)
-    decisions: list[dict] = field(default_factory=list)
+    def __init__(self, profile: SignalProfile) -> None:
+        self.profile = replace(profile, hitl_required=False)
+
+    async def get(self) -> SignalProfile:
+        return self.profile
+
+
+class BacktestExecutor:
+    """Queue plans at signal close and fill them at the following bar open."""
+
+    def __init__(self, *, initial_capital: float, slippage_bps: float, fee_bps: float) -> None:
+        self.initial_capital = initial_capital
+        self.cash = initial_capital
+        self.slippage_bps = slippage_bps
+        self.fee_bps = fee_bps
+        self._signed_amount = 0.0
+        self._entry_price = 0.0
+        self._pending: ExecutionPlan | None = None
+        self._pair = ""
+        self.protection: tuple[float, float] | None = None
+        self.trades: list[dict[str, Any]] = []
+
+    @property
+    def position(self) -> PositionSnapshot:
+        if abs(self._signed_amount) < 1e-12:
+            return PositionSnapshot("flat", 0.0, 0.0)
+        return PositionSnapshot(
+            "long" if self._signed_amount > 0.0 else "short",
+            abs(self._signed_amount),
+            0.0,
+            self._entry_price,
+            0.0,
+        )
+
+    def position_at(self, price: float) -> PositionSnapshot:
+        position = self.position
+        if position.side == "flat":
+            return position
+        direction = 1.0 if position.side == "long" else -1.0
+        unrealized = (price - self._entry_price) * position.amount * direction
+        return replace(position, unrealized_pnl=unrealized)
+
+    def equity_at(self, price: float) -> float:
+        return self.cash + self.position_at(price).unrealized_pnl
+
+    async def execute(self, plan: ExecutionPlan, _context) -> ExecutionResult:
+        if self._pending is not None:
+            return ExecutionResult(False, (), None, "a backtest execution is already pending")
+        self._pending = plan
+        if plan.intents:
+            self._pair = plan.intents[-1].pair
+        orders = tuple(
+            ExecutionOrderResult(
+                intent=intent,
+                status="scheduled",
+                exchange_id=None,
+                raw={"execution": "next_bar_open"},
+            )
+            for intent in plan.intents
+        )
+        return ExecutionResult(True, orders, None, None)
+
+    def execute_pending_at(self, bar: list) -> None:
+        if self._pending is None:
+            return
+        plan = self._pending
+        self._pending = None
+        open_price = float(bar[1] or bar[4])
+        for intent in plan.intents:
+            self._fill(intent.side, intent.amount, open_price, int(bar[0]), reason="target_position")
+        if abs(self._signed_amount) < 1e-12:
+            self.protection = None
+        elif plan.stop_loss is not None and plan.take_profit is not None:
+            self.protection = (plan.stop_loss, plan.take_profit)
+        else:
+            raise ValueError("non-flat backtest position requires stop loss and take profit")
+
+    def process_protection(self, bar: list) -> None:
+        if self.protection is None or abs(self._signed_amount) < 1e-12:
+            return
+        stop_loss, take_profit = self.protection
+        high, low = float(bar[2]), float(bar[3])
+        trigger: float | None = None
+        reason = ""
+        if self._signed_amount > 0.0:
+            if low <= stop_loss:
+                trigger, reason = stop_loss, "stop_loss"
+            elif high >= take_profit:
+                trigger, reason = take_profit, "take_profit"
+        else:
+            if high >= stop_loss:
+                trigger, reason = stop_loss, "stop_loss"
+            elif low <= take_profit:
+                trigger, reason = take_profit, "take_profit"
+        if trigger is None:
+            return
+        self._fill(
+            "sell" if self._signed_amount > 0.0 else "buy",
+            abs(self._signed_amount),
+            trigger,
+            int(bar[0]),
+            reason=reason,
+        )
+        self.protection = None
+
+    def close_at(self, price: float, ts: int) -> None:
+        self._pending = None
+        if abs(self._signed_amount) < 1e-12:
+            return
+        self._fill(
+            "sell" if self._signed_amount > 0.0 else "buy",
+            abs(self._signed_amount),
+            price,
+            ts,
+            reason="backtest_end",
+        )
+        self.protection = None
+
+    def _fill(self, side: str, amount: float, price: float, ts: int, *, reason: str) -> None:
+        slippage = self.slippage_bps / 10_000
+        fill_price = price * (1.0 + slippage if side == "buy" else 1.0 - slippage)
+        fee = amount * fill_price * self.fee_bps / 10_000
+        before = self._signed_amount
+        delta = amount if side == "buy" else -amount
+        after = before + delta
+        closed_amount = min(abs(before), abs(delta)) if before * delta < 0.0 else 0.0
+        pnl = 0.0
+        if closed_amount > 0.0:
+            direction = 1.0 if before > 0.0 else -1.0
+            pnl = (fill_price - self._entry_price) * closed_amount * direction
+        self.cash += pnl - fee
+
+        if abs(after) < 1e-12:
+            self._entry_price = 0.0
+            after = 0.0
+        elif before == 0.0 or before * after <= 0.0:
+            self._entry_price = fill_price
+        elif before * delta > 0.0:
+            self._entry_price = (self._entry_price * abs(before) + fill_price * abs(delta)) / abs(after)
+        self._signed_amount = after
+        self.trades.append(
+            {
+                "pair": self._pair,
+                "side": side,
+                "amount": amount,
+                "price": fill_price,
+                "fee": fee,
+                "pnl": pnl,
+                "reason": reason,
+                "ts": ts,
+            }
+        )
 
 
 class BacktestEngine:
@@ -47,50 +196,46 @@ class BacktestEngine:
         end: str,
         interval: str = "4h",
         initial_capital: float | None = None,
-        use_llm: bool = True,
         slippage_bps: float | None = None,
         fee_bps: float | None = None,
-        position_pct: float | None = None,
         lookback: int | None = None,
-        graph_builder: Callable[[], Any] | None = None,
-        graph_metadata: dict[str, Any] | None = None,
         progress_callback: Callable[[float], None] | None = None,
-    ):
+        *,
+        profile_repository=None,
+        cycle_factory: Callable | None = None,
+        config=None,
+    ) -> None:
+        from cryptotrader.bootstrap import SeededProfileRepository
         from cryptotrader.config import load_config
 
-        bt_cfg = load_config().backtest
-
-        self.pair = pair
+        self.config = config or load_config()
+        backtest = self.config.backtest
+        self.pair = Pair.parse(pair)
         self.start = start
         self.end = end
         self.start_ms = int(datetime.fromisoformat(start).replace(tzinfo=UTC).timestamp() * 1000)
         self.end_ms = int(datetime.fromisoformat(end).replace(tzinfo=UTC).timestamp() * 1000)
         self.interval = interval
-        self.capital = initial_capital if initial_capital is not None else bt_cfg.initial_capital
-        self.use_llm = use_llm
-        self.slippage_bps = slippage_bps if slippage_bps is not None else bt_cfg.slippage_base * 10000
-        self.fee_bps = fee_bps if fee_bps is not None else bt_cfg.fee_bps
-        # Use risk.position.max_single_pct for consistency with live execution
-        risk_cfg = load_config().risk.position
-        self.position_pct = position_pct if position_pct is not None else risk_cfg.max_single_pct
-        self.lookback = lookback if lookback is not None else bt_cfg.lookback
-        self.graph_builder = graph_builder
-        self.graph_metadata = graph_metadata or {}
+        self.capital = initial_capital if initial_capital is not None else backtest.initial_capital
+        self.slippage_bps = slippage_bps if slippage_bps is not None else backtest.slippage_base * 10_000
+        self.fee_bps = fee_bps if fee_bps is not None else backtest.fee_bps
+        self.lookback = lookback if lookback is not None else backtest.lookback
         self.progress_callback = progress_callback
-        # Cache config once to avoid re-parsing TOML per candle
-        self._config = None
-        # LLM usage tracking
-        self._llm_calls = 0
-        self._llm_tokens = 0
-        # Historical data caches (populated in run())
+        self.cycle_factory = cycle_factory
+        database_url = self.config.infrastructure.database_url or None
+        self.profile_repository = profile_repository or SeededProfileRepository(
+            database_url,
+            self.config.signal_profile_defaults.to_profile(),
+        )
+        self.first_bar_processed = asyncio.Event()
+        self._candles_by_timeframe: dict[str, list[list]] = {}
+        self._candles: list[list] = []
         self._fng: dict[str, int] = {}
         self._funding: dict[str, float] = {}
         self._btc_dom: dict[str, float] = {}
         self._fed_rate: dict[str, float] = {}
         self._dxy: dict[str, float] = {}
         self._fut_vol: dict[str, dict] = {}
-        self._candles: list[list] = []
-        # Extended data from unified store
         self._etf_flows: dict[str, dict] = {}
         self._stablecoin_supply: dict[str, float] = {}
         self._btc_hashrate: dict[str, float] = {}
@@ -100,140 +245,183 @@ class BacktestEngine:
         self._oi: dict[str, dict] = {}
         self._ls_ratio: dict[str, dict] = {}
 
-    @property
-    def _cached_config(self):
-        if self._config is None:
-            from cryptotrader.config import load_config
+    async def run(self) -> BacktestResult:
+        selected = await self.profile_repository.get()
+        if selected is None:
+            raise RuntimeError("global signal profile is not initialized")
+        frozen_profiles = FrozenProfileRepository(selected)
+        registry, requirements = self._dependencies(frozen_profiles.profile)
+        await self._fetch_historical_data(requirements)
+        if not self._candles:
+            return BacktestResult()
 
-            self._config = load_config()
-        return self._config
+        from cryptotrader.journal.store import CycleJournalStore
+        from cryptotrader.signals.context import HistoricalSignalContextProvider
 
-    def _prepare_run(self) -> None:
-        """Pre-run setup: disable LLM cache in AI mode, clear stale exchange caches."""
-        from cryptotrader.nodes.execution import clear_paper_exchanges
-
-        clear_paper_exchanges(backtest_only=True)
-
-        if self.use_llm:
-            from cryptotrader.agents.base import disable_llm_cache
-
-            disable_llm_cache()
-
-    def _apply_costs(self, price: float, side: str) -> float:
-        """Apply slippage and fees to get realistic fill price."""
-        slip = price * self.slippage_bps / 10000
-        fee = price * self.fee_bps / 10000
-        if side == "buy":
-            return price + slip + fee
-        return price - slip - fee
-
-    def _close_position(
-        self, position: float, entry_price: float, equity: float, exec_price: float, ts: int
-    ) -> tuple[float, float, float, list[dict]]:
-        """Close current position and return updated state."""
-        trades = []
-        if position > 0:
-            fill = self._apply_costs(exec_price, "sell")
-            pnl = (fill - entry_price) * position
-            trades.append({"side": "ai_close_long", "price": fill, "pnl": pnl, "ts": ts})
-        elif position < 0:
-            fill = self._apply_costs(exec_price, "buy")
-            pnl = (entry_price - fill) * abs(position)
-            trades.append({"side": "ai_close_short", "price": fill, "pnl": pnl, "ts": ts})
+        executor = BacktestExecutor(
+            initial_capital=self.capital,
+            slippage_bps=self.slippage_bps,
+            fee_bps=self.fee_bps,
+        )
+        contexts = HistoricalSignalContextProvider(
+            self._snapshot_at,
+            default_timeframe=self.config.data.default_timeframe,
+            equity=self.capital,
+            max_single_pct=self.config.risk.position.max_single_pct,
+        )
+        journal = CycleJournalStore()
+        if self.cycle_factory is not None:
+            cycle = self.cycle_factory(frozen_profiles, contexts, executor, journal)
         else:
-            return 0.0, 0.0, equity, trades
-        return 0.0, 0.0, equity + pnl, trades
+            cycle = self._build_cycle(frozen_profiles, contexts, executor, journal, registry)
+        return await self._run_bars(cycle, contexts, executor, journal)
 
-    def _open_or_add_long(
-        self, position: float, entry_price: float, equity: float, exec_price: float, ts: int, scale: float
-    ) -> tuple[float, float, list[dict]]:
-        """Open new long or add to existing long position."""
-        fill = self._apply_costs(exec_price, "buy")
-        target_size = equity * self.position_pct * scale / fill
-        if target_size <= position + 1e-12:
-            return position, entry_price, []
-        delta = target_size - position
-        new_entry = (entry_price * position + fill * delta) / target_size if position > 0 else fill
-        return target_size, new_entry, [{"side": "buy", "price": fill, "amount": delta, "ts": ts}]
+    def _dependencies(self, profile: SignalProfile):
+        if self.cycle_factory is not None:
+            requirements = DataRequirements(
+                candles=(CandleRequirement(self.interval, max(20, self.lookback)),),
+            )
+            return None, requirements
 
-    def _open_or_add_short(
-        self, position: float, entry_price: float, equity: float, exec_price: float, ts: int, scale: float
-    ) -> tuple[float, float, list[dict]]:
-        """Open new short or add to existing short position."""
-        fill = self._apply_costs(exec_price, "sell")
-        target_size = equity * self.position_pct * scale / fill
-        abs_pos = abs(position)
-        if target_size <= abs_pos + 1e-12:
-            return position, entry_price, []
-        delta = target_size - abs_pos
-        new_entry = (entry_price * abs_pos + fill * delta) / target_size if position < 0 else fill
-        return -target_size, new_entry, [{"side": "sell", "price": fill, "amount": delta, "ts": ts}]
+        from cryptotrader.bootstrap import build_signal_registry
+        from cryptotrader.cycle_events import NullCycleEventSink
+        from cryptotrader.profiles.models import validate_signal_profile
 
-    def _execute_pending_action(
+        registry = build_signal_registry(self.config, NullCycleEventSink())
+        validate_signal_profile(profile, registry.ids())
+        components = registry.enabled(profile)
+        exit_requirement = DataRequirements(
+            candles=(
+                CandleRequirement(
+                    self.config.data.default_timeframe,
+                    max(20, self.config.data.ohlcv_limit),
+                ),
+            ),
+        )
+        requirements = DataRequirements.merge(
+            *(component.requirements() for component in components),
+            exit_requirement,
+            DataRequirements(candles=(CandleRequirement(self.interval, self.lookback),)),
+        )
+        return registry, requirements
+
+    def _build_cycle(
         self,
-        pending_action: str,
-        position: float,
-        entry_price: float,
-        equity: float,
-        exec_price: float,
-        ts: int,
-        position_scale: float = 1.0,
-    ) -> tuple[float, float, float, list[dict]]:
-        """Execute pending action and return updated position, entry_price, equity, and new trades.
+        profiles: FrozenProfileRepository,
+        contexts: HistoricalSignalContextProvider,
+        executor: BacktestExecutor,
+        journal,
+        registry,
+    ):
+        from cryptotrader.cycle_events import NullCycleEventSink
+        from cryptotrader.decision.engine import DecisionEngine
+        from cryptotrader.decision.exit_policy import AtrExitPolicy
+        from cryptotrader.execution.planner import ExecutionPlanner
+        from cryptotrader.hitl.store import ApprovalStore
+        from cryptotrader.risk.gate import RiskGate
+        from cryptotrader.risk.state import RedisStateManager
+        from cryptotrader.signals.fusion import WeightedSignalFusion
+        from cryptotrader.signals.runner import ComponentRunner
+        from cryptotrader.trading_cycle import TradingCycle
 
-        Supports: new entry, add to position (加仓), close, and reverse.
-        """
-        trades: list[dict] = []
-        if pending_action == "close" and position != 0:
-            position, entry_price, equity, trades = self._close_position(position, entry_price, equity, exec_price, ts)
-        elif pending_action == "long":
-            if position < 0:  # close short first
-                position, entry_price, equity, close_trades = self._close_position(
-                    position, entry_price, equity, exec_price, ts
+        events = NullCycleEventSink()
+        credentials = self.config.exchanges.get(self.config.scheduler.exchange_id or self.config.exchange_id)
+        leverage = credentials.leverage if credentials is not None else 1
+        return TradingCycle(
+            profiles=profiles,
+            registry=registry,
+            contexts=contexts,
+            runner=ComponentRunner(events),
+            fusion=WeightedSignalFusion(),
+            decisions=DecisionEngine(),
+            exits=AtrExitPolicy(),
+            approvals=ApprovalStore(),
+            risk=RiskGate(self.config.risk, RedisStateManager(None), leverage=leverage),
+            execution_planner=ExecutionPlanner(self.config.risk.position.max_single_pct),
+            executor=executor,
+            journal=journal,
+            events=events,
+            exit_requirement=DataRequirements(
+                candles=(
+                    CandleRequirement(
+                        self.config.data.default_timeframe,
+                        max(20, self.config.data.ohlcv_limit),
+                    ),
+                ),
+            ),
+        )
+
+    async def _run_bars(self, cycle, contexts, executor, journal) -> BacktestResult:
+        indexes = [
+            index for index, candle in enumerate(self._candles) if self.start_ms <= int(candle[0]) <= self.end_ms
+        ]
+        if len(indexes) < 2:
+            return BacktestResult(equity_curve=[self.capital])
+
+        outcomes: list[CycleOutcome] = []
+        curve = [self.capital]
+        peak = self.capital
+        for step, index in enumerate(indexes[:-1]):
+            candle = self._candles[index]
+            as_of = datetime.fromtimestamp(int(candle[0]) / 1000, UTC)
+            outcome = await cycle.run(
+                CycleRequest(
+                    pair=self.pair,
+                    mode="backtest",
+                    exchange_id=self.config.scheduler.exchange_id or self.config.exchange_id,
+                    as_of=as_of,
                 )
-                trades.extend(close_trades)
-            position, entry_price, open_trades = self._open_or_add_long(
-                position, entry_price, equity, exec_price, ts, position_scale
             )
-            trades.extend(open_trades)
-        elif pending_action == "short":
-            if position > 0:  # close long first
-                position, entry_price, equity, close_trades = self._close_position(
-                    position, entry_price, equity, exec_price, ts
-                )
-                trades.extend(close_trades)
-            position, entry_price, open_trades = self._open_or_add_short(
-                position, entry_price, equity, exec_price, ts, position_scale
+            outcomes.append(outcome)
+            if step == 0:
+                self.first_bar_processed.set()
+
+            next_bar = self._candles[indexes[step + 1]]
+            executor.execute_pending_at(next_bar)
+            executor.process_protection(next_bar)
+            close = float(next_bar[4])
+            equity = executor.equity_at(close)
+            peak = max(peak, equity)
+            drawdown = (peak - equity) / peak if peak > 0.0 else 0.0
+            contexts.set_execution_state(
+                equity=equity,
+                cash=executor.cash,
+                current_position=executor.position_at(close),
+                daily_pnl=equity - self.capital,
+                drawdown=drawdown,
             )
-            trades.extend(open_trades)
-        return position, entry_price, equity, trades
+            curve.append(equity)
+            if self.progress_callback is not None:
+                self.progress_callback((step + 1) / len(indexes[:-1]))
 
-    def _mark_to_market(self, position: float, equity: float, entry_price: float, current_price: float) -> float:
-        """Calculate mark-to-market equity."""
-        if position > 0:
-            return equity + (current_price - entry_price) * position
-        if position < 0:
-            return equity + (entry_price - current_price) * abs(position)
-        return equity
+        last = self._candles[indexes[-1]]
+        executor.close_at(float(last[4]), int(last[0]))
+        final_equity = executor.equity_at(float(last[4]))
+        curve[-1] = final_equity
+        records = list(journal.records)
+        return self._compute_result(
+            final_equity,
+            curve,
+            executor.trades,
+            records=records,
+            outcomes=outcomes,
+        )
 
-    def _close_final_position(
-        self, position: float, entry_price: float, equity: float, final_price: float, ts: int
-    ) -> tuple[float, list[dict]]:
-        """Close any open position at end of backtest."""
-        trades = []
-        if position != 0 and final_price and final_price > 0:
-            if position > 0:
-                fill = self._apply_costs(final_price, "sell")
-                pnl = (fill - entry_price) * position
-            else:
-                fill = self._apply_costs(final_price, "buy")
-                pnl = (entry_price - fill) * abs(position)
-            equity += pnl
-            trades.append({"side": "close", "price": fill, "pnl": pnl, "ts": ts})
-        return equity, trades
+    async def _fetch_historical_data(self, requirements: DataRequirements) -> None:
+        limits = {item.timeframe: item.limit for item in requirements.candles}
+        limits[self.interval] = max(limits.get(self.interval, 0), self.lookback)
+        for timeframe, limit in limits.items():
+            timeframe_ms = _TF_MS.get(timeframe)
+            if timeframe_ms is None:
+                raise ValueError(f"unsupported backtest timeframe {timeframe!r}")
+            self._candles_by_timeframe[timeframe] = await fetch_historical(
+                self.pair.canonical(),
+                timeframe,
+                self.start_ms - limit * timeframe_ms,
+                self.end_ms,
+            )
+        self._candles = self._candles_by_timeframe[self.interval]
 
-    async def _fetch_historical_data(self) -> None:
-        """Pre-fetch all historical data sources for the backtest period."""
         from cryptotrader.backtest.historical_data import (
             fetch_btc_dominance,
             fetch_fear_greed,
@@ -242,522 +430,192 @@ class BacktestEngine:
             fetch_futures_volume,
         )
 
-        # Fetch extra lookback candles before start so that the first bar in the trading
-        # range already has a full history window for SMA / snapshot construction.
-        tf_ms = _TF_MS.get(self.interval, 3_600_000)
-        lookback_ms = self.lookback * tf_ms
-        self._candles = await fetch_historical(self.pair, self.interval, self.start_ms - lookback_ms, self.end_ms)
-
-        symbol = Pair.parse(self.pair).base
-        logger.info("Fetching historical macro data for %s...", self.pair)
-
+        symbol = self.pair.base
         self._fng = await fetch_fear_greed(self.start, self.end)
         self._funding = await fetch_funding_rate(symbol, self.start, self.end)
-
-        try:
-            self._btc_dom = await fetch_btc_dominance(self.start, self.end)
-        except Exception:
-            logger.warning("BTC dominance fetch failed, using empty")
-
-        try:
-            self._fed_rate = await fetch_fred_series("DFF", self.start, self.end)
-        except Exception:
-            logger.warning("Fed rate fetch failed, using empty")
-
-        try:
-            self._dxy = await fetch_fred_series("DTWEXBGS", self.start, self.end)
-        except Exception:
-            logger.warning("DXY fetch failed, using empty")
-
-        try:
-            self._fut_vol = await fetch_futures_volume(symbol, self.start, self.end)
-        except Exception:
-            logger.warning("Futures volume fetch failed, using empty")
-
-        # Load extended data from unified store (pre-synced via `arena sync`)
+        for attribute, loader in (
+            ("_btc_dom", lambda: fetch_btc_dominance(self.start, self.end)),
+            ("_fed_rate", lambda: fetch_fred_series("DFF", self.start, self.end)),
+            ("_dxy", lambda: fetch_fred_series("DTWEXBGS", self.start, self.end)),
+            ("_fut_vol", lambda: fetch_futures_volume(symbol, self.start, self.end)),
+        ):
+            try:
+                setattr(self, attribute, await loader())
+            except Exception:
+                logger.warning("Historical source %s failed", attribute, exc_info=True)
         self._load_extended_data()
-
-        logger.info(
-            "Historical data: %d candles, %d fng, %d funding, %d btc_dom, %d fed, %d dxy, %d fut_vol",
-            len(self._candles),
-            len(self._fng),
-            len(self._funding),
-            len(self._btc_dom),
-            len(self._fed_rate),
-            len(self._dxy),
-            len(self._fut_vol),
-        )
-        logger.info(
-            "Extended data: %d etf_flows, %d stablecoin, %d hashrate, %d tvl, %d vix, %d sp500, %d oi, %d ls_ratio",
-            len(self._etf_flows),
-            len(self._stablecoin_supply),
-            len(self._btc_hashrate),
-            len(self._defi_tvl),
-            len(self._vix),
-            len(self._sp500),
-            len(self._oi),
-            len(self._ls_ratio),
-        )
 
     @staticmethod
     def _extract_numeric(data, key: str | None = None) -> float:
-        """Extract a float value from store data (dict with key, or scalar)."""
         if isinstance(data, dict):
-            return float(data.get(key, 0)) if key else 0.0
+            return float(data.get(key, 0.0)) if key else 0.0
         if isinstance(data, int | float):
             return float(data)
         return 0.0
 
     @staticmethod
     def _load_dict_range(source: str, start: str, end: str) -> dict:
-        """Load dict-valued records from store, filtering non-dict entries."""
         from cryptotrader.data.store import get_range
 
-        return {date: data for date, data in get_range(source, start, end).items() if isinstance(data, dict)}
+        return {date: value for date, value in get_range(source, start, end).items() if isinstance(value, dict)}
 
     def _load_extended_data(self) -> None:
-        """Load pre-synced data from unified SQLite store into memory caches."""
         from cryptotrader.data.store import get_range
 
-        start, end = self.start, self.end
-
-        symbol = Pair.parse(self.pair).base
-        self._etf_flows = self._load_dict_range("sosovalue_etf", start, end)
-        self._oi = self._load_dict_range(f"binance_oi_{symbol}", start, end)
-        self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", start, end)
-
-        for date, data in get_range("stablecoin_total_supply", start, end).items():
-            self._stablecoin_supply[date] = self._extract_numeric(data, "total_supply")
-
-        for date, data in get_range("defillama_tvl", start, end).items():
-            self._defi_tvl[date] = self._extract_numeric(data, "tvl")
-
-        for source, cache in [
+        symbol = self.pair.base
+        self._etf_flows = self._load_dict_range("sosovalue_etf", self.start, self.end)
+        self._oi = self._load_dict_range(f"binance_oi_{symbol}", self.start, self.end)
+        self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", self.start, self.end)
+        for date, value in get_range("stablecoin_total_supply", self.start, self.end).items():
+            self._stablecoin_supply[date] = self._extract_numeric(value, "total_supply")
+        for date, value in get_range("defillama_tvl", self.start, self.end).items():
+            self._defi_tvl[date] = self._extract_numeric(value, "tvl")
+        for source, target in (
             ("btc_hashrate", self._btc_hashrate),
             ("fred_VIXCLS", self._vix),
             ("fred_SP500", self._sp500),
-        ]:
-            for date, data in get_range(source, start, end).items():
-                cache[date] = self._extract_numeric(data)
+        ):
+            for date, value in get_range(source, self.start, self.end).items():
+                target[date] = self._extract_numeric(value)
 
-    async def run(self) -> BacktestResult:
-        self._prepare_run()
-        try:
-            return await self._run_backtest()
-        finally:
-            from cryptotrader.journal.store import JournalStore
-
-            JournalStore.clear_backtest_memory()
-            if self.use_llm:
-                from cryptotrader.agents.base import restore_llm_cache
-
-                restore_llm_cache()
-
-    async def _run_backtest(self) -> BacktestResult:
-        await self._fetch_historical_data()
-        candles = self._candles
+    def _snapshot_at(self, timeframe: str, as_of: datetime) -> DataSnapshot:
+        timestamp_ms = int(as_of.timestamp() * 1000)
+        candles = [item for item in self._candles_by_timeframe[timeframe] if int(item[0]) <= timestamp_ms]
         if not candles:
-            return BacktestResult()
-
-        st = _BacktestLoopState(
-            equity=self.capital,
-            equity_curve=[self.capital],
-            peak=self.capital,
-            graph=self._build_graph(),
-            max_stop_loss_pct=self._cached_config.risk.max_stop_loss_pct,
+            raise ValueError(f"no {timeframe} candles available at {as_of.isoformat()}")
+        frame = pd.DataFrame(
+            candles,
+            columns=["timestamp", "open", "high", "low", "close", "volume"],
         )
-
-        lookback = self.lookback
-        total_bars = len(candles) - lookback
-        for i in range(lookback, len(candles)):
-            if self.progress_callback and (i - lookback) % 10 == 0:
-                try:
-                    self.progress_callback((i - lookback) / max(total_bars, 1))
-                except Exception:
-                    logger.info("progress_callback raised", exc_info=True)
-            await self._process_backtest_bar(i, candles, st)
-
-        equity, final_trades = self._close_final_position(
-            st.position, st.entry_price, st.equity, candles[-1][4], candles[-1][0]
+        frame.index = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
+        current = candles[-1]
+        date_str = as_of.strftime("%Y-%m-%d")
+        completed_day = (as_of - timedelta(days=1)).strftime("%Y-%m-%d")
+        futures = self._fut_vol.get(completed_day, {})
+        past_volumes = [
+            float(value.get("volume", 0.0))
+            for date, value in sorted(self._fut_vol.items())
+            if date < completed_day and value.get("volume", 0.0) > 0.0
+        ][-20:]
+        average_volume = (
+            sum(past_volumes) / len(past_volumes) if past_volumes else max(float(futures.get("volume", 0.0)), 1.0)
         )
-        st.trades.extend(final_trades)
-        return self._compute_result(equity, st.equity_curve, st.trades, st.decisions)
+        futures_volume = float(futures.get("volume", 0.0))
+        oi = self._oi.get(completed_day, {})
+        long_short = self._ls_ratio.get(completed_day, {})
+        etf = self._etf_flows.get(date_str, {})
 
-    def _build_graph(self) -> Any:
-        if self.graph_builder is not None:
-            return self.graph_builder()
-        if not self.use_llm:
-            return None
-
-        from cryptotrader.graph import build_backtest_graph
-
-        return build_backtest_graph()
-
-    async def _process_backtest_bar(self, i: int, candles: list[list], st: _BacktestLoopState) -> None:
-        window = candles[max(0, i - self.lookback) : i + 1]
-        cur = candles[i]
-        ts, o, c = cur[0], cur[1], cur[4]
-        if c is None or c <= 0:
-            return
-
-        bar_decision: dict = {
-            "ts": ts,
-            "price": c,
-            "open": o,
-            "position_before": st.position,
-            "entry_price": st.entry_price,
-            "equity": st.equity,
-            "stop_loss_triggered": self._maybe_trigger_stop_loss(c, st),
-            "executed_action": self._execute_pending_if_any(o, c, ts, st),
-        }
-
-        signal = await self._evaluate_bar_signal(window, ts, i, st)
-        bar_decision.update(signal["bar_fields"])
-
-        if signal["action"] != "hold":
-            st.pending_action = signal["action"]
-            st.pending_scale = signal["position_scale"]
-
-        mtm = self._mark_to_market(st.position, st.equity, st.entry_price, c)
-        st.equity_curve.append(mtm)
-        st.peak = max(st.peak, mtm)
-        bar_decision["position_after"] = st.position
-        bar_decision["equity_after"] = mtm
-        bar_decision["pending_action"] = st.pending_action
-        st.decisions.append(bar_decision)
-
-    def _maybe_trigger_stop_loss(self, close: float, st: _BacktestLoopState) -> bool:
-        # Skip if AI already requested close (avoid redundant override + confusing logs)
-        if st.position == 0 or st.entry_price <= 0 or st.pending_action == "close":
-            return False
-        pnl_pct = (
-            (close - st.entry_price) / st.entry_price if st.position > 0 else (st.entry_price - close) / st.entry_price
-        )
-        if pnl_pct >= -st.max_stop_loss_pct:
-            return False
-        st.pending_action = "close"
-        st.pending_scale = 1.0
-        logger.info(
-            "Backtest stop-loss: %.2f%% loss (threshold: %.2f%%)",
-            pnl_pct * 100,
-            -st.max_stop_loss_pct * 100,
-        )
-        return True
-
-    def _execute_pending_if_any(
-        self, open_price: float | None, close: float, ts: int, st: _BacktestLoopState
-    ) -> str | None:
-        if st.pending_action is None:
-            return None
-        executed = st.pending_action
-        exec_price = open_price if (open_price is not None and open_price > 0) else close
-        st.position, st.entry_price, st.equity, new_trades = self._execute_pending_action(
-            st.pending_action, st.position, st.entry_price, st.equity, exec_price, ts, st.pending_scale
-        )
-        st.trades.extend(new_trades)
-        st.pending_action = None
-        st.pending_scale = 1.0
-        return executed
-
-    async def _evaluate_bar_signal(self, window: list[list], ts: int, i: int, st: _BacktestLoopState) -> dict:
-        analyses: dict = {}
-        verdict: dict = {}
-        risk_gate: dict = {}
-        debate_skipped = False
-        node_trace: list[dict] = []
-
-        if st.graph:
-            snapshot = self._build_snapshot(window, ts, i)
-            result = await self._run_graph(st.graph, snapshot, st.position, st.entry_price, st.equity, st.peak)
-            node_trace = result.pop("_node_trace", [])
-            data = result.get("data", {})
-            verdict = data.get("verdict", {})
-            analyses = data.get("analyses", {})
-            risk_gate = data.get("risk_gate", {})
-            debate_skipped = data.get("debate_skipped", False)
-            original_action = verdict.get("action", "hold")
-            action = original_action
-            if not risk_gate.get("passed", True) and action != "hold":
-                logger.info(
-                    "Backtest risk gate rejected: %s — %s",
-                    risk_gate.get("rejected_by", "unknown"),
-                    risk_gate.get("reason", ""),
-                )
-                action = "hold"
-        else:
-            action = self._simple_signal(window)
-            original_action = action
-
-        bar_fields = {
-            "analyses": {
-                k: {
-                    "direction": v.get("direction", ""),
-                    "confidence": v.get("confidence", 0),
-                    "data_sufficiency": v.get("data_sufficiency", ""),
-                }
-                for k, v in analyses.items()
-            },
-            "debate_skipped": debate_skipped,
-            "verdict": {
-                "action": verdict.get("action", "hold"),
-                "confidence": verdict.get("confidence", 0),
-                "position_scale": verdict.get("position_scale", 0),
-                "reasoning": verdict.get("reasoning", ""),
-                "thesis": verdict.get("thesis", ""),
-            },
-            "risk_gate": {
-                "passed": risk_gate.get("passed", True),
-                "rejected_by": risk_gate.get("rejected_by", ""),
-                "reason": risk_gate.get("reason", ""),
-            },
-            "final_action": action if action != "hold" else ("hold" if original_action == "hold" else "rejected"),
-            "node_trace": [
-                {"node": t["node"], "summary": t["summary"], "duration_ms": t["duration_ms"]} for t in node_trace
-            ],
-        }
-        return {
-            "action": action,
-            "position_scale": verdict.get("position_scale", 1.0),
-            "bar_fields": bar_fields,
-        }
-
-    def _simple_signal(self, window: list[list]) -> str:
-        closes = [c[4] for c in window]
-        sma_fast = self._cached_config.backtest.sma_fast
-        sma_slow = self._cached_config.backtest.sma_slow
-        if len(closes) < sma_fast:
-            return "hold"
-        fast_avg = sum(closes[-sma_fast:]) / sma_fast
-        slow_avg = sum(closes[-sma_slow:]) / sma_slow if len(closes) >= sma_slow else fast_avg
-        if closes[-1] > fast_avg > slow_avg:
-            return "long"
-        if closes[-1] < fast_avg < slow_avg:
-            return "short"
-        return "hold"
-
-    def _build_snapshot(self, window: list[list], ts: int, candle_idx: int) -> DataSnapshot:
         from cryptotrader.backtest.historical_data import derive_news_events
 
-        df = pd.DataFrame(window, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        cur = window[-1]
-        snapshot_dt = datetime.fromtimestamp(ts / 1000, UTC)
-        date_str = snapshot_dt.strftime("%Y-%m-%d")
-        # Daily aggregates are only complete after the UTC day closes. Lag
-        # funding, futures volume, OI, and long/short ratios by one day so an
-        # intraday backtest bar cannot see the rest of its own day.
-        completed_daily_date = (snapshot_dt - timedelta(days=1)).strftime("%Y-%m-%d")
-
-        # Historical funding rate
-        fr_val = self._funding.get(completed_daily_date, 0.0)
-
-        # Fear & Greed
-        fng_val = self._fng.get(date_str, 50)
-
-        # BTC dominance, Fed rate, DXY
-        dom_val = self._btc_dom.get(date_str, 0.0)
-        fed_val = self._fed_rate.get(date_str, 0.0)
-        dxy_val = self._dxy.get(date_str, 0.0)
-
-        # Futures volume
-        fv = self._fut_vol.get(completed_daily_date, {})
-        fut_volume = fv.get("volume", 0.0)
-        # 20-day average volume ratio
-        vol_20d = [
-            float(data.get("volume", 0.0))
-            for day, data in sorted(self._fut_vol.items())
-            if day < completed_daily_date and data.get("volume", 0.0) > 0
-        ][-20:]
-        avg_vol = sum(vol_20d) / len(vol_20d) if vol_20d else max(fut_volume, 1)
-        vol_ratio = fut_volume / avg_vol if avg_vol > 0 else 1.0
-
-        # Key events derived from price action (sentiment analysis delegated to LLM)
-        events = derive_news_events(self._candles, candle_idx)
-
-        # Extended data from unified store
-        etf = self._etf_flows.get(date_str, {})
-        oi_data = self._oi.get(completed_daily_date, {})
-        ls_data = self._ls_ratio.get(completed_daily_date, {})
-        oi_val = oi_data.get("openInterestValue", 0.0) if oi_data else 0.0
-        defi_tvl = self._defi_tvl.get(date_str, 0.0)
-        hashrate = self._btc_hashrate.get(date_str, 0.0)
-        stablecoin = self._stablecoin_supply.get(date_str, 0.0)
-        vix_val = self._vix.get(date_str, 0.0)
-        sp500_val = self._sp500.get(date_str, 0.0)
-
+        volatility = frame["close"].pct_change().std()
         return DataSnapshot(
-            timestamp=datetime.fromtimestamp(ts / 1000, tz=UTC),
-            pair=self.pair,
+            timestamp=as_of,
+            pair=self.pair.canonical(),
             market=MarketData(
-                pair=self.pair,
-                ohlcv=df,
-                ticker={"last": cur[4], "baseVolume": cur[5]},
-                funding_rate=fr_val,
+                pair=self.pair.canonical(),
+                ohlcv=frame,
+                ticker={"last": current[4], "baseVolume": current[5]},
+                funding_rate=float(self._funding.get(completed_day, 0.0)),
                 orderbook_imbalance=0.0,
-                volatility=float(vol) if not pd.isna(vol := df["close"].pct_change().std()) else 0.0,
+                volatility=float(volatility) if not pd.isna(volatility) else 0.0,
             ),
             onchain=OnchainData(
-                open_interest=oi_val,
+                open_interest=float(oi.get("openInterestValue", 0.0)) if oi else 0.0,
                 liquidations_24h={
-                    "volume_ratio": vol_ratio,
-                    "futures_volume": fut_volume,
-                    "long_short_ratio": ls_data.get("longShortRatio", 1.0) if ls_data else 1.0,
+                    "volume_ratio": futures_volume / average_volume if average_volume else 1.0,
+                    "futures_volume": futures_volume,
+                    "long_short_ratio": float(long_short.get("longShortRatio", 1.0)) if long_short else 1.0,
                 },
-                defi_tvl=defi_tvl,
+                defi_tvl=self._defi_tvl.get(date_str, 0.0),
                 data_quality={
-                    "has_oi": bool(oi_data),
-                    "has_ls_ratio": bool(ls_data),
+                    "has_oi": bool(oi),
+                    "has_ls_ratio": bool(long_short),
                     "has_etf": bool(etf),
-                    "has_hashrate": hashrate > 0,
-                    "has_stablecoin": stablecoin > 0,
                 },
             ),
             news=NewsSentiment(
-                key_events=events,
-                headlines=[f"BTC at ${cur[4]:,.0f}, Fear&Greed={fng_val}"],
+                key_events=derive_news_events(candles, len(candles) - 1),
+                headlines=[f"{self.pair.base} at ${float(current[4]):,.0f}, Fear&Greed={self._fng.get(date_str, 50)}"],
             ),
             macro=MacroData(
-                fear_greed_index=fng_val,
-                btc_dominance=dom_val,
-                fed_rate=fed_val,
-                dxy=dxy_val,
-                etf_daily_net_inflow=etf.get("totalNetInflow", 0.0) if etf else 0.0,
-                etf_total_net_assets=etf.get("totalNetAssets", 0.0) if etf else 0.0,
-                etf_cum_net_inflow=etf.get("cumNetInflow", 0.0) if etf else 0.0,
-                vix=vix_val,
-                sp500=sp500_val,
-                stablecoin_total_supply=stablecoin,
-                btc_hashrate=hashrate,
+                fear_greed_index=self._fng.get(date_str, 50),
+                btc_dominance=self._btc_dom.get(date_str, 0.0),
+                fed_rate=self._fed_rate.get(date_str, 0.0),
+                dxy=self._dxy.get(date_str, 0.0),
+                etf_daily_net_inflow=float(etf.get("totalNetInflow", 0.0)) if etf else 0.0,
+                etf_total_net_assets=float(etf.get("totalNetAssets", 0.0)) if etf else 0.0,
+                etf_cum_net_inflow=float(etf.get("cumNetInflow", 0.0)) if etf else 0.0,
+                vix=self._vix.get(date_str, 0.0),
+                sp500=self._sp500.get(date_str, 0.0),
+                stablecoin_total_supply=self._stablecoin_supply.get(date_str, 0.0),
+                btc_hashrate=self._btc_hashrate.get(date_str, 0.0),
             ),
         )
 
-    async def _run_graph(
-        self,
-        graph,
-        snapshot: DataSnapshot,
-        position: float = 0.0,
-        entry_price: float = 0.0,
-        equity: float = 0.0,
-        peak: float = 0.0,
-    ) -> dict:
-        from cryptotrader.state import build_initial_state
-
-        # Build position context so verdict has position awareness
-        # Mirror the format used by _build_position_from_portfolio() in live mode
-        current_price = snapshot.market.ticker.get("last", 0)
-        if position == 0:
-            pos_ctx = {"side": "flat"}
-        else:
-            pos_ctx = {
-                "side": "long" if position > 0 else "short",
-                "entry_price": entry_price,
-                "current_price": current_price,
-                "amount": abs(position),
-            }
-
-        # Construct risk constraints from backtest state variables
-        # (live mode queries PortfolioManager/Redis, but backtest has its own equity tracking)
-        risk_cfg = self._cached_config.risk
-        position_value = abs(position * entry_price) if position != 0 else 0.0
-        exposure_pct = position_value / equity if equity > 0 else 0.0
-        max_exp = risk_cfg.position.max_total_exposure_pct
-        drawdown_current = (peak - equity) / peak if peak > 0 else 0.0
-        backtest_constraints = {
-            "max_position_pct": risk_cfg.position.max_single_pct,
-            "max_drawdown_pct": risk_cfg.loss.max_drawdown_pct,
-            "remaining_exposure_pct": max(0.0, max_exp - exposure_pct),
-            "daily_loss_remaining_pct": risk_cfg.loss.max_daily_loss_pct,
-            "drawdown_current": drawdown_current,
-        }
-        # Add market conditions if available
-        summary = snapshot.market
-        if hasattr(summary, "funding_rate") and summary.funding_rate is not None:
-            backtest_constraints["funding_rate"] = summary.funding_rate
-        if hasattr(summary, "volatility") and summary.volatility is not None:
-            backtest_constraints["volatility"] = summary.volatility
-
-        # Build portfolio dict for risk gate (mirrors what risk_check() builds in live mode)
-        recent_closes = snapshot.market.ohlcv["close"].dropna().tolist() if snapshot.market.ohlcv is not None else []
-        positions = {self.pair: {"amount": position, "avg_price": entry_price}} if position != 0 else {}
-        portfolio = {
-            "total_value": equity,
-            "positions": positions,
-            "daily_pnl": 0.0,
-            "drawdown": drawdown_current,
-            "returns_60d": [],
-            "recent_prices": recent_closes[-60:],
-            "funding_rate": snapshot.market.funding_rate or 0,
-            "api_latency_ms": 100,
-            "pair": self.pair,
-        }
-
-        graph_metadata = {
-            "llm_verdict": self.use_llm,
-            "backtest_mode": True,
-            "redis_url": "DISABLED",
-            **self.graph_metadata,
-        }
-        initial = build_initial_state(
-            self.pair,
-            engine="paper",
-            snapshot=snapshot,
-            config=self._cached_config,
-            # Explicit sentinel — consumer must treat "DISABLED" as "no Redis".
-            # Prevents accidental fallback to live Redis if None is treated as "use default".
-            extra_metadata=graph_metadata,
-            extra_data={
-                "position_context": pos_ctx,
-                "backtest_constraints": backtest_constraints,
-                "portfolio": portfolio,
-            },
-        )
-        initial["max_debate_rounds"] = self._cached_config.debate.max_rounds
-
-        from cryptotrader.tracing import add_timing_to_trace, run_graph_traced
-
-        final_state, node_trace = await run_graph_traced(graph, initial)
-        add_timing_to_trace(node_trace)
-        # Attach trace to result for dashboard display
-        final_state["_node_trace"] = node_trace
-        return final_state
-
     def _compute_result(
-        self, equity: float, curve: list[float], trades: list[dict], decisions: list[dict] | None = None
+        self,
+        equity: float,
+        curve: list[float],
+        trades: list[dict],
+        *,
+        records: list[TradingCycleRecord] | None = None,
+        outcomes: list[CycleOutcome] | None = None,
     ) -> BacktestResult:
-        total_return = (equity - self.capital) / self.capital
-        # Sharpe
-        if len(curve) > 1:
-            returns = [(curve[i] - curve[i - 1]) / curve[i - 1] for i in range(1, len(curve)) if curve[i - 1] > 0]
-            if returns:
-                avg = sum(returns) / len(returns)
-                std = (sum((r - avg) ** 2 for r in returns) / len(returns)) ** 0.5
-                # Crypto trades 365 days/year; annualize based on interval
-                periods_per_day = 86_400_000 / _TF_MS.get(self.interval, 3_600_000)
-                annualization = math.sqrt(365 * periods_per_day)
-                sharpe = (avg / std * annualization) if std > 0 else 0.0
-            else:
-                sharpe = 0.0
+        returns = [
+            (curve[index] - curve[index - 1]) / curve[index - 1]
+            for index in range(1, len(curve))
+            if curve[index - 1] > 0.0
+        ]
+        if returns:
+            average = sum(returns) / len(returns)
+            deviation = math.sqrt(sum((item - average) ** 2 for item in returns) / len(returns))
+            periods_per_day = 86_400_000 / _TF_MS.get(self.interval, 3_600_000)
+            sharpe = average / deviation * math.sqrt(365 * periods_per_day) if deviation > 0.0 else 0.0
         else:
             sharpe = 0.0
-        # Max drawdown
-        peak = curve[0]
-        max_dd = 0.0
-        for v in curve:
-            peak = max(peak, v)
-            dd = (v - peak) / peak if peak > 0 else 0.0
-            max_dd = min(max_dd, dd)
-        # Win rate
-        pnl_trades = [t for t in trades if "pnl" in t]
-        wins = sum(1 for t in pnl_trades if t["pnl"] > 0)
-        win_rate = wins / len(pnl_trades) if pnl_trades else 0.0
-
+        peak = curve[0] if curve else self.capital
+        max_drawdown = 0.0
+        for value in curve:
+            peak = max(peak, value)
+            max_drawdown = min(max_drawdown, (value - peak) / peak if peak > 0.0 else 0.0)
+        closed = [trade for trade in trades if trade.get("pnl") is not None and trade.get("pnl") != 0.0]
+        wins = sum(1 for trade in closed if trade["pnl"] > 0.0)
+        records = records or []
+        outcomes = outcomes or []
+        decisions = [self._decision_payload(record) for record in records]
+        if not decisions:
+            decisions = [
+                {
+                    "cycle_id": outcome.cycle_id,
+                    "status": outcome.status,
+                    "profile_revision": outcome.profile_revision,
+                }
+                for outcome in outcomes
+            ]
         return BacktestResult(
-            total_return=total_return,
+            total_return=(equity - self.capital) / self.capital,
             sharpe_ratio=sharpe,
-            max_drawdown=max_dd,
-            win_rate=win_rate,
-            trades=trades,
-            equity_curve=curve,
-            decisions=decisions or [],
-            llm_calls=self._llm_calls,
-            llm_tokens=self._llm_tokens,
+            max_drawdown=max_drawdown,
+            win_rate=wins / len(closed) if closed else 0.0,
+            trades=list(trades),
+            equity_curve=list(curve),
+            decisions=decisions,
+            cycle_records=records,
+            cycle_ids=[outcome.cycle_id for outcome in outcomes],
+            profile_revisions=[outcome.profile_revision for outcome in outcomes],
         )
+
+    @staticmethod
+    def _decision_payload(record: TradingCycleRecord) -> dict[str, Any]:
+        return {
+            "cycle_id": record.cycle_id,
+            "ts": record.context_summary.get("as_of"),
+            "price": record.context_summary.get("current_price"),
+            "status": record.status,
+            "profile_revision": record.profile_revision,
+            "components": list(record.component_signals),
+            "fusion": record.fused_signal,
+            "target_position": record.target_position,
+            "risk_result": record.risk_result,
+            "execution_result": record.execution_result,
+        }

@@ -19,13 +19,12 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
   const [capital, setCapital] = useState(10000);
-  const [mode, setMode] = useState<'rules' | 'llm'>('rules');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!start || !end) return;
     startMutation.mutate(
-      { pair, start, end, initial_capital: capital, mode },
+      { pair, start, end, initial_capital: capital },
       { onSuccess: (data) => onRunStarted(data.run_id) },
     );
   };
@@ -54,11 +53,6 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
       </div>
 
       <div className="flex items-center gap-4">
-        <label className="flex items-center gap-2 text-xs">
-          <input type="checkbox" checked={mode === 'llm'} onChange={(e) => setMode(e.target.checked ? 'llm' : 'rules')} className="rounded" />
-          {t('form.use_llm')}
-        </label>
-
         {sessions.data && sessions.data.sessions.length > 0 && (
           <label className="space-y-1 text-xs">
             <span className="text-muted-foreground">{t('sessions.title')}</span>

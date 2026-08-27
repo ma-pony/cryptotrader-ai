@@ -245,7 +245,6 @@ export const BacktestParamsSchema = z.object({
   end: z.string(),
   pair: z.string(),
   initial_capital: z.number(),
-  mode: z.enum(['rules', 'llm']),
   session_name: z.string().nullable().optional(),
 });
 

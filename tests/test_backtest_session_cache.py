@@ -7,55 +7,15 @@ Uses tmp_path to isolate filesystem state from the real ~/.cryptotrader director
 from __future__ import annotations
 
 import json
-from datetime import datetime
 
 import pytest
 
-from cryptotrader._compat import UTC
 from cryptotrader.backtest.result import BacktestResult
-from cryptotrader.models import (
-    ConsensusMetrics,
-    DecisionCommit,
-    NodeTraceEntry,
-)
+from tests.factories.signal_fusion import cycle_record
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _make_commit(hash_val: str = "test_hash", pair: str = "BTC/USDT") -> DecisionCommit:
-    return DecisionCommit(
-        hash=hash_val,
-        parent_hash=None,
-        timestamp=datetime.now(UTC),
-        pair=pair,
-        snapshot_summary={"price": 50000.0},
-        analyses={},
-        debate_rounds=0,
-    )
-
-
-def _make_commit_with_observability(hash_val: str) -> DecisionCommit:
-    return DecisionCommit(
-        hash=hash_val,
-        parent_hash=None,
-        timestamp=datetime.now(UTC),
-        pair="BTC/USDT",
-        snapshot_summary={"price": 60000.0},
-        analyses={},
-        debate_rounds=1,
-        consensus_metrics=ConsensusMetrics(
-            strength=0.72,
-            mean_score=0.60,
-            dispersion=0.12,
-            skip_threshold=0.50,
-            confusion_threshold=0.05,
-        ),
-        verdict_source="weighted",
-        node_trace=[NodeTraceEntry(node="debate_gate", duration_ms=35, summary="skip")],
-        debate_skip_reason="consensus",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -126,84 +86,79 @@ class TestGetSessionDir:
         assert path == sessions_dir / "my_session"
 
 
-class TestSaveAndLoadCommits:
-    """save_commits() / load_commits() round-trip test."""
-
-    def test_save_commits_creates_jsonl_file(self, tmp_path, monkeypatch) -> None:
+class TestSaveAndLoadCycles:
+    def test_save_cycles_creates_jsonl_file(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module
 
         monkeypatch.setattr(session_module, "_SESSIONS_DIR", tmp_path / "sessions")
 
-        from cryptotrader.backtest.session import save_commits
+        from cryptotrader.backtest.session import save_cycles
 
-        commits = [_make_commit("hash_a"), _make_commit("hash_b")]
-        path = save_commits("test_session", commits)
+        records = [cycle_record(cycle_id="cycle-a"), cycle_record(cycle_id="cycle-b")]
+        path = save_cycles("test_session", records)
         assert path.exists()
-        assert path.name == "commits.jsonl"
+        assert path.name == "cycles.jsonl"
 
-    def test_load_commits_returns_empty_for_missing_session(self, tmp_path, monkeypatch) -> None:
+    def test_load_cycles_returns_empty_for_missing_session(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module
 
         monkeypatch.setattr(session_module, "_SESSIONS_DIR", tmp_path / "sessions")
 
-        from cryptotrader.backtest.session import load_commits
+        from cryptotrader.backtest.session import load_cycles
 
-        result = load_commits("nonexistent_session")
+        result = load_cycles("nonexistent_session")
         assert result == []
 
-    def test_save_and_load_roundtrip(self, tmp_path, monkeypatch) -> None:
+    def test_save_and_load_cycle_roundtrip(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module
 
         monkeypatch.setattr(session_module, "_SESSIONS_DIR", tmp_path / "sessions")
 
-        from cryptotrader.backtest.session import load_commits, save_commits
+        from cryptotrader.backtest.session import load_cycles, save_cycles
 
-        commits = [_make_commit("hash_x"), _make_commit("hash_y")]
-        save_commits("roundtrip_session", commits)
-        loaded = load_commits("roundtrip_session")
+        records = [
+            cycle_record(cycle_id="cycle-x", status="completed", profile_revision=3),
+            cycle_record(cycle_id="cycle-y", status="component_failed", profile_revision=3),
+        ]
+        save_cycles("roundtrip_session", records)
+        loaded = load_cycles("roundtrip_session")
 
         assert len(loaded) == 2
-        hashes = {r["hash"] for r in loaded}
-        assert "hash_x" in hashes
-        assert "hash_y" in hashes
+        assert {item["cycle_id"] for item in loaded} == {"cycle-x", "cycle-y"}
+        assert {item["profile_revision"] for item in loaded} == {3}
 
-    def test_save_commits_serializes_observability_fields(self, tmp_path, monkeypatch) -> None:
-        """Commits with all 5 new observability fields are serialized to JSONL."""
+    def test_save_cycles_serializes_component_contributions(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module
 
         monkeypatch.setattr(session_module, "_SESSIONS_DIR", tmp_path / "sessions")
 
-        from cryptotrader.backtest.session import load_commits, save_commits
+        from cryptotrader.backtest.session import load_cycles, save_cycles
 
-        commit = _make_commit_with_observability("obs_hash")
-        save_commits("obs_session", [commit])
-        loaded = load_commits("obs_session")
+        record = cycle_record(
+            cycle_id="cycle-components",
+            component_signals=({"component_id": "kronos", "confidence": 0.72},),
+            fused_signal={"score": 0.72, "contributions": []},
+        )
+        save_cycles("component_session", [record])
+        loaded = load_cycles("component_session")
 
         assert len(loaded) == 1
-        rec = loaded[0]
-        assert rec["hash"] == "obs_hash"
-        assert rec["verdict_source"] == "weighted"
-        assert rec["debate_skip_reason"] == "consensus"
-        assert rec["consensus_metrics"] is not None
-        assert rec["consensus_metrics"]["strength"] == pytest.approx(0.72)
-        assert len(rec["node_trace"]) == 1
-        assert rec["node_trace"][0]["node"] == "debate_gate"
+        assert loaded[0]["component_signals"][0]["component_id"] == "kronos"
+        assert loaded[0]["fused_signal"]["score"] == pytest.approx(0.72)
 
-    def test_load_commits_empty_file_returns_empty_list(self, tmp_path, monkeypatch) -> None:
-        """An empty commits.jsonl returns an empty list without errors."""
+    def test_load_cycles_empty_file_returns_empty_list(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module
 
         sessions_dir = tmp_path / "sessions"
         monkeypatch.setattr(session_module, "_SESSIONS_DIR", sessions_dir)
 
-        # Create empty file
         session_dir = sessions_dir / "empty_session"
         session_dir.mkdir(parents=True)
-        (session_dir / "commits.jsonl").write_text("")
+        (session_dir / "cycles.jsonl").write_text("")
 
-        from cryptotrader.backtest.session import load_commits
+        from cryptotrader.backtest.session import load_cycles
 
-        result = load_commits("empty_session")
+        result = load_cycles("empty_session")
         assert result == []
 
 
@@ -250,6 +205,7 @@ class TestSaveResult:
         path = save_result("equity_session", result)
         data = json.loads(path.read_text())
         assert "equity_curve" not in data
+        assert "cycle_records" not in data
 
     def test_save_result_contains_summary_stats(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module

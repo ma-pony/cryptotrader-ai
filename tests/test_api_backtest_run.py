@@ -1,7 +1,7 @@
 """Tests for POST /api/backtest/run — FR-805.
 
 Schedule a backtest as a background task; respond 202 with `run_id`.
-Param validation rejects (date order, capital floor, mode literal) with 400/422.
+Param validation rejects invalid dates, capital, and retired strategy selectors.
 """
 
 from __future__ import annotations
@@ -31,8 +31,7 @@ def _valid_payload() -> dict:
         "end": "2026-04-01",
         "pair": "BTC/USDT",
         "initial_capital": 10000,
-        "mode": "rules",
-        "session_name": "q1-rules-baseline",
+        "session_name": "q1-profile-revision-3",
     }
 
 
@@ -59,15 +58,15 @@ class TestBacktestRunHappyPath:
             resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code == 202
 
-    def test_llm_mode_accepted(self, client: TestClient) -> None:
+    def test_legacy_mode_selector_is_rejected(self, client: TestClient) -> None:
         payload = _valid_payload()
         payload["mode"] = "llm"
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("api.routes.backtest._spawn_run", return_value="run_llm1"),
+            patch("api.routes.backtest._spawn_run", return_value="run_unused"),
         ):
             resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code == 202
+        assert resp.status_code == 422
 
 
 class TestBacktestRunValidation:
@@ -82,13 +81,6 @@ class TestBacktestRunValidation:
     def test_400_when_capital_below_minimum(self, client: TestClient) -> None:
         payload = _valid_payload()
         payload["initial_capital"] = 50  # < 100 floor
-        with patch("cryptotrader.config.load_config", return_value=_mock_config()):
-            resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code in (400, 422)
-
-    def test_422_when_mode_not_literal(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        payload["mode"] = "machine_learning"
         with patch("cryptotrader.config.load_config", return_value=_mock_config()):
             resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code in (400, 422)

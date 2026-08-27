@@ -60,7 +60,6 @@ class TestSessionDetail:
                 "end": "2026-04-01",
                 "pair": "BTC/USDT",
                 "initial_capital": 10000,
-                "mode": "rules",
                 "session_name": "q1-rules-baseline",
             },
             "result": {

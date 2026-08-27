@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cryptotrader._compat import UTC
 
@@ -24,11 +24,12 @@ router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
 
 class BacktestParams(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     start: str
     end: str
     pair: str
     initial_capital: float = Field(ge=100)
-    mode: Literal["rules", "llm"]
     session_name: str | None = None
 
     @model_validator(mode="after")
@@ -112,7 +113,6 @@ async def _execute_backtest(run_id: str, params: BacktestParams) -> None:
             start=params.start,
             end=params.end,
             initial_capital=params.initial_capital,
-            use_llm=(params.mode == "llm"),
             progress_callback=_on_progress,
         )
         result = await engine.run()
@@ -122,8 +122,8 @@ async def _execute_backtest(run_id: str, params: BacktestParams) -> None:
                 from cryptotrader.backtest import session as session_mod
 
                 session_mod.save_result(params.session_name, result)
-                if hasattr(result, "commits") and result.commits:
-                    session_mod.save_commits(params.session_name, result.commits)
+                if result.cycle_records:
+                    session_mod.save_cycles(params.session_name, result.cycle_records)
             except Exception:
                 logger.warning("Failed to save backtest session %s", params.session_name, exc_info=True)
         _RUNS[run_id].update(

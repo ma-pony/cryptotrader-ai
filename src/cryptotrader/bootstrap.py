@@ -122,14 +122,7 @@ def _build_exchange(config: AppConfig, mode: str):
     )
 
 
-def build_trading_cycle(
-    config: AppConfig,
-    mode: str,
-    event_sink: CycleEventSink | None = None,
-) -> TradingCycle:
-    if mode == "backtest":
-        raise ValueError("BacktestEngine must provide historical context and executor")
-    events = event_sink or NullCycleEventSink()
+def build_signal_registry(config: AppConfig, events: CycleEventSink) -> SignalComponentRegistry:
     registry = SignalComponentRegistry()
 
     from cryptotrader.signals.components.kronos import KronosComponent
@@ -139,6 +132,18 @@ def build_trading_cycle(
     registry.register(LLMCommitteeComponent(config, sink=events))
     for factory in config.signal_plugins.factories:
         registry.load_factory(factory)
+    return registry
+
+
+def build_trading_cycle(
+    config: AppConfig,
+    mode: str,
+    event_sink: CycleEventSink | None = None,
+) -> TradingCycle:
+    if mode == "backtest":
+        raise ValueError("BacktestEngine must provide historical context and executor")
+    events = event_sink or NullCycleEventSink()
+    registry = build_signal_registry(config, events)
 
     default_profile = config.signal_profile_defaults.to_profile()
     exchange = _build_exchange(config, mode)

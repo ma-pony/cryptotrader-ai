@@ -54,7 +54,7 @@ export const BacktestProgress = ({ run }: Props) => {
           )}
           <div className="flex-1 min-w-0">
             <div className="text-sm font-semibold">
-              {pair} · {run.params.mode === 'llm' ? 'LLM 驱动' : 'SMA 对照组'}
+              {pair} · 组件融合策略
             </div>
             <div className="font-mono text-[11px] text-muted-foreground truncate">
               {run.run_id}

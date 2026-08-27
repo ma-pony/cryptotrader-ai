@@ -1,4 +1,4 @@
-"""Backtest session storage — serialize commits and results to session directories."""
+"""Backtest session storage for cycle records and aggregate results."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from cryptotrader._compat import UTC
 
 if TYPE_CHECKING:
     from cryptotrader.backtest.result import BacktestResult
-    from cryptotrader.models import DecisionCommit
+    from cryptotrader.journal.models import TradingCycleRecord
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +34,15 @@ def get_session_dir(session_id: str) -> Path:
     return path
 
 
-def save_commits(session_id: str, commits: list[DecisionCommit]) -> Path:
-    """Serialize backtest commits to JSONL file in session directory."""
+def save_cycles(session_id: str, records: list[TradingCycleRecord]) -> Path:
+    """Serialize immutable TradingCycle records to a session JSONL file."""
     session_dir = get_session_dir(session_id)
-    path = session_dir / "commits.jsonl"
+    path = session_dir / "cycles.jsonl"
     with open(path, "w") as f:
-        for dc in commits:
-            record = _serialize_commit(dc)
+        for cycle in records:
+            record = _serialize_cycle(cycle)
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
-    logger.info("Saved %d commits to %s", len(commits), path)
+    logger.info("Saved %d cycles to %s", len(records), path)
     return path
 
 
@@ -53,23 +53,24 @@ def save_result(session_id: str, result: BacktestResult) -> Path:
     data = asdict(result)
     # Remove large equity_curve from summary (keep only summary stats)
     data.pop("equity_curve", None)
+    data.pop("cycle_records", None)
     with open(path, "w") as f:
         json.dump(data, f, ensure_ascii=False, default=str, indent=2)
     return path
 
 
-def load_commits(session_id: str) -> list[dict]:
-    """Load commits from a session's JSONL file."""
-    path = _SESSIONS_DIR / session_id / "commits.jsonl"
+def load_cycles(session_id: str) -> list[dict]:
+    """Load cycle records from a session's JSONL file."""
+    path = _SESSIONS_DIR / session_id / "cycles.jsonl"
     if not path.exists():
         return []
-    commits = []
+    cycles = []
     with open(path) as f:
         for line in f:
             line = line.strip()
             if line:
-                commits.append(json.loads(line))
-    return commits
+                cycles.append(json.loads(line))
+    return cycles
 
 
 def list_sessions() -> list[str]:
@@ -79,10 +80,8 @@ def list_sessions() -> list[str]:
     return sorted(d.name for d in _SESSIONS_DIR.iterdir() if d.is_dir())
 
 
-def _serialize_commit(dc: DecisionCommit) -> dict:
-    """Convert DecisionCommit to a JSON-serializable dict."""
-    data = asdict(dc)
-    # Convert datetime objects to ISO strings
-    if "timestamp" in data and hasattr(data["timestamp"], "isoformat"):
-        data["timestamp"] = data["timestamp"].isoformat()
+def _serialize_cycle(cycle: TradingCycleRecord) -> dict:
+    data = asdict(cycle)
+    if hasattr(data["created_at"], "isoformat"):
+        data["created_at"] = data["created_at"].isoformat()
     return data

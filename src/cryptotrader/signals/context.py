@@ -10,7 +10,8 @@ from cryptotrader.data.market import clip_ohlcv_at
 from cryptotrader.signals.models import PositionSnapshot, SignalContext
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Callable, Mapping
+    from datetime import datetime
 
     from cryptotrader.decision.models import CycleRequest
     from cryptotrader.models import DataSnapshot, MarketData
@@ -180,7 +181,7 @@ class LiveSignalContextProvider:
 class HistoricalSignalContextProvider:
     def __init__(
         self,
-        history: Mapping[str, DataSnapshot],
+        history: Mapping[str, DataSnapshot] | Callable[[str, datetime], DataSnapshot],
         *,
         default_timeframe: str,
         equity: float = 10_000.0,
@@ -190,20 +191,44 @@ class HistoricalSignalContextProvider:
         self.history = history
         self.default_timeframe = default_timeframe
         self.equity = equity
+        self.cash = equity
         self.current_position = current_position or PositionSnapshot("flat", 0.0, 0.0)
         self.max_single_pct = max_single_pct
+        self.daily_pnl = 0.0
+        self.drawdown = 0.0
+
+    def set_execution_state(
+        self,
+        *,
+        equity: float,
+        cash: float,
+        current_position: PositionSnapshot,
+        daily_pnl: float = 0.0,
+        drawdown: float = 0.0,
+    ) -> None:
+        self.equity = equity
+        self.cash = cash
+        self.current_position = current_position
+        self.daily_pnl = daily_pnl
+        self.drawdown = drawdown
+
+    def _snapshot(self, timeframe: str, as_of: datetime) -> DataSnapshot:
+        if callable(self.history):
+            return self.history(timeframe, as_of)
+        return self.history[timeframe]
 
     async def collect(self, request: CycleRequest, requirements: DataRequirements) -> SignalContext:
         if request.as_of is None:
             raise ValueError("historical context requires request.as_of")
         snapshots = {
             requirement.timeframe: _materialize_snapshot(
-                self.history[requirement.timeframe],
-                self.history[requirement.timeframe].market,
+                snapshot,
+                snapshot.market,
                 request.as_of,
                 requirement.limit,
             )
             for requirement in requirements.candles
+            for snapshot in (self._snapshot(requirement.timeframe, request.as_of),)
         }
         if self.default_timeframe not in snapshots:
             raise ValueError(f"default timeframe {self.default_timeframe!r} is missing from requirements")
@@ -216,6 +241,19 @@ class HistoricalSignalContextProvider:
                 if self.current_position.side != "flat" and self.equity * self.max_single_pct > 0.0
                 else 0.0
             ),
+        )
+        recent_prices = [float(value) for value in market.ohlcv["close"].dropna().tolist()]
+        positions = (
+            {
+                request.pair.canonical(): {
+                    "amount": position.signed_amount,
+                    "side": position.side,
+                    "avg_price": position.avg_price or price,
+                    "unrealized_pnl": position.unrealized_pnl,
+                }
+            }
+            if position.side != "flat"
+            else {}
         )
         return SignalContext(
             pair=request.pair,
@@ -230,18 +268,16 @@ class HistoricalSignalContextProvider:
             snapshots=snapshots,
             portfolio={
                 "total_value": self.equity,
-                "cash": self.equity,
-                "free_cash": self.equity,
-                "positions": {
-                    request.pair.canonical(): {
-                        "amount": position.signed_amount,
-                        "side": position.side,
-                        "avg_price": position.avg_price or price,
-                        "unrealized_pnl": position.unrealized_pnl,
-                    }
-                }
-                if position.side != "flat"
-                else {},
+                "cash": self.cash,
+                "free_cash": self.cash,
+                "positions": positions,
+                "daily_pnl": self.daily_pnl,
+                "drawdown": self.drawdown,
+                "recent_prices": recent_prices,
+                "funding_rate": float(market.funding_rate or 0.0),
+                "api_latency_ms": 0.0,
+                "pair": request.pair.canonical(),
+                "symbol": request.pair.base,
             },
         )
 

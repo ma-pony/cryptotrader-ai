@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from cryptotrader.journal.models import TradingCycleRecord
 
 
 @dataclass
@@ -15,6 +19,9 @@ class BacktestResult:
     trades: list[dict] = field(default_factory=list)
     equity_curve: list[float] = field(default_factory=list)
     decisions: list[dict] = field(default_factory=list)
+    cycle_records: list[TradingCycleRecord] = field(default_factory=list)
+    cycle_ids: list[str] = field(default_factory=list)
+    profile_revisions: list[int] = field(default_factory=list)
     llm_calls: int = 0
     llm_tokens: int = 0
 
