@@ -273,6 +273,31 @@ export const BacktestRunStatusSchema = z.object({
   result: BacktestResultSchema.nullable().optional(),
 });
 
+// ── Signal strategy profile ──
+
+export const ComponentWeightSchema = z.object({
+  component_id: z.string(),
+  enabled: z.boolean(),
+  weight: z.number().min(0).max(1),
+});
+
+export const InstalledSignalComponentSchema = z.object({
+  component_id: z.string(),
+  display_name: z.string(),
+  description: z.string(),
+});
+
+export const SignalProfileSchema = z.object({
+  revision: z.number().int().positive(),
+  components: z.array(ComponentWeightSchema),
+  neutral_threshold: z.number().min(0).lt(1),
+  max_target_ratio: z.number().gt(0).max(1),
+  atr_stop_multiplier: z.number().positive(),
+  reward_ratio: z.number().positive(),
+  hitl_required: z.boolean(),
+  installed_components: z.array(InstalledSignalComponentSchema),
+});
+
 export const BacktestRunResponseSchema = z.object({
   run_id: z.string(),
 });

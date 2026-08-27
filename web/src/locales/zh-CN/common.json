@@ -5,6 +5,7 @@
   },
   "nav": {
     "dashboard": "总览",
+    "strategy": "策略配置",
     "decisions": "决策复盘",
     "debate": "辩论",
     "backtest": "回测",

@@ -40,6 +40,7 @@ import type {
   RiskThresholdsSchema,
   ScheduleRuleSchema,
   SchedulerStatusSchema,
+  SignalProfileSchema,
   TokenUsageSchema,
   TriggerEventSchema,
   TriggerTypeSchema,
@@ -82,6 +83,10 @@ export type BacktestMetrics = z.output<typeof BacktestMetricsSchema>;
 export type BacktestResult = z.output<typeof BacktestResultSchema>;
 export type BacktestRunStatus = z.output<typeof BacktestRunStatusSchema>;
 export type BacktestSessionDetail = z.output<typeof BacktestSessionDetailSchema>;
+
+// Signal strategy profile
+export type SignalProfile = z.output<typeof SignalProfileSchema>;
+export type SignalProfileUpdate = Omit<SignalProfile, 'installed_components'>;
 
 // §5 Risk
 export type CircuitBreakerStatus = z.output<typeof CircuitBreakerStatusSchema>;

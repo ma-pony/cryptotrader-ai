@@ -11,6 +11,7 @@ import chatZh from '@/locales/zh-CN/chat.json';
 import marketZh from '@/locales/zh-CN/market.json';
 import memoryZh from '@/locales/zh-CN/memory.json';
 import schedulerZh from '@/locales/zh-CN/scheduler.json';
+import strategyZh from '@/locales/zh-CN/strategy.json';
 
 import commonEn from '@/locales/en-US/common.json';
 import dashboardEn from '@/locales/en-US/dashboard.json';
@@ -22,6 +23,7 @@ import chatEn from '@/locales/en-US/chat.json';
 import marketEn from '@/locales/en-US/market.json';
 import memoryEn from '@/locales/en-US/memory.json';
 import schedulerEn from '@/locales/en-US/scheduler.json';
+import strategyEn from '@/locales/en-US/strategy.json';
 
 const STORAGE_KEY = 'cryptotrader-locale';
 
@@ -60,6 +62,7 @@ await i18next.use(initReactI18next).init({
       market: marketZh,
       memory: memoryZh,
       scheduler: schedulerZh,
+      strategy: strategyZh,
     },
     'en-US': {
       common: commonEn,
@@ -72,12 +75,13 @@ await i18next.use(initReactI18next).init({
       market: marketEn,
       memory: memoryEn,
       scheduler: schedulerEn,
+      strategy: strategyEn,
     },
   },
   lng: detectLocale(),
   fallbackLng: 'zh-CN',
   defaultNS: 'common',
-  ns: ['common', 'dashboard', 'decisions', 'backtest', 'risk', 'metrics', 'chat', 'market', 'memory', 'scheduler'],
+  ns: ['common', 'dashboard', 'decisions', 'backtest', 'risk', 'metrics', 'chat', 'market', 'memory', 'scheduler', 'strategy'],
   interpolation: { escapeValue: false },
   returnNull: false,
 });

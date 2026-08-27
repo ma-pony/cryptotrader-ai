@@ -8,6 +8,7 @@ import {
   MessageSquare,
   ScrollText,
   ShieldCheck,
+  SlidersHorizontal,
   TrendingUp,
   type LucideIcon,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ import { useUIStore } from '@/stores/use-ui-store';
 
 type NavLabelKey =
   | 'nav.dashboard'
+  | 'nav.strategy'
   | 'nav.decisions'
   | 'nav.debate'
   | 'nav.backtest'
@@ -55,6 +57,7 @@ const NAV_SECTIONS: NavSection[] = [
     defaultTitle: '交易',
     items: [
       { to: '/', labelKey: 'nav.dashboard', icon: Briefcase },
+      { to: '/strategy', labelKey: 'nav.strategy', icon: SlidersHorizontal },
       { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
       { to: '/debate', labelKey: 'nav.debate', icon: GitBranch },
     ],

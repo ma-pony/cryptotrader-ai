@@ -252,7 +252,7 @@ describe('Risk schema contract', () => {
       recent_blocks: [
         {
           ts: '2026-04-24T04:32:00+00:00',
-          commit_hash: '9f2c8e1',
+          cycle_id: '9f2c8e1',
           rule: 'CooldownCheck',
           detail: 'same-pair cooldown active',
         },

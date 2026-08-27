@@ -14,6 +14,7 @@ const MetricsPage = lazy(() => import('@/pages/metrics'));
 const ChatPage = lazy(() => import('@/pages/chat'));
 const MarketPage = lazy(() => import('@/pages/market'));
 const SchedulerPage = lazy(() => import('@/pages/scheduler'));
+const StrategyPage = lazy(() => import('@/pages/strategy'));
 const MemoryPage = lazy(() => import('@/pages/memory/MemoryPage'));
 const NotFoundPage = lazy(() => import('@/pages/not-found'));
 
@@ -23,6 +24,7 @@ export const App = () => (
       <Routes>
         <Route element={<AppShell />}>
           <Route index element={<DashboardPage />} />
+          <Route path="strategy" element={<StrategyPage />} />
           <Route path="decisions" element={<DecisionsPage />} />
           <Route path="decisions/:commitId" element={<DecisionsPage />} />
           <Route path="debate" element={<DebatePage />} />

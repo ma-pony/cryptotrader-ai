@@ -28,8 +28,9 @@ const LOCALE_OPTIONS: { value: Locale; labelKey: 'locale.zh-CN' | 'locale.en-US'
   { value: 'en-US', labelKey: 'locale.en-US' },
 ];
 
-const PATH_LABELS: Record<string, 'nav.dashboard' | 'nav.decisions' | 'nav.debate' | 'nav.backtest' | 'nav.risk' | 'nav.metrics' | 'nav.chat' | 'nav.market' | 'nav.scheduler'> = {
+const PATH_LABELS: Record<string, 'nav.dashboard' | 'nav.strategy' | 'nav.decisions' | 'nav.debate' | 'nav.backtest' | 'nav.risk' | 'nav.metrics' | 'nav.chat' | 'nav.market' | 'nav.scheduler'> = {
   '/': 'nav.dashboard',
+  '/strategy': 'nav.strategy',
   '/decisions': 'nav.decisions',
   '/debate': 'nav.debate',
   '/backtest': 'nav.backtest',
