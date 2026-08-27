@@ -40,3 +40,27 @@ def check_convergence(
     if abs(last) < 1e-9:
         return abs(current_divergence) < 1e-9
     return abs(current_divergence - last) / abs(last) < threshold
+
+
+def consensus_metrics(analyses: dict[str, dict]) -> dict[str, float]:
+    strength, mean_score = compute_consensus_strength(analyses)
+    return {
+        "strength": strength,
+        "mean_score": mean_score,
+        "dispersion": compute_divergence(analyses),
+    }
+
+
+def debate_gate_decision(analyses: dict[str, dict], config) -> tuple[bool, str, dict[str, float]]:
+    metrics = consensus_metrics(analyses)
+    if not config.skip_debate:
+        return False, "", metrics
+    if metrics["strength"] > config.consensus_skip_threshold:
+        return True, "consensus", metrics
+    shared_confusion = (
+        abs(metrics["mean_score"]) < config.confusion_skip_threshold
+        and metrics["dispersion"] < config.confusion_max_dispersion
+    )
+    if shared_confusion:
+        return True, "confusion", metrics
+    return False, "", metrics

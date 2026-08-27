@@ -1,156 +1,57 @@
-"""Tests for debate round parallelization."""
+"""委员会辩论门控与严格错误语义。"""
 
-from __future__ import annotations
+from types import SimpleNamespace
 
-import asyncio
-from unittest.mock import AsyncMock, patch
-
-import pytest
-from langchain_core.messages import AIMessage
-
-from cryptotrader.nodes.debate import _debate_one_agent, debate_round
+from cryptotrader.debate.convergence import debate_gate_decision
 
 
-def _make_analysis(direction="bullish", confidence=0.8):
-    return {
-        "direction": direction,
-        "confidence": confidence,
-        "reasoning": "test reasoning",
-        "key_factors": ["factor1"],
-        "risk_flags": ["risk1"],
-    }
+def _analysis(direction, confidence):
+    return {"direction": direction, "confidence": confidence}
 
 
-def _make_state():
-    return {
-        "messages": [],
-        "data": {
-            "analyses": {
-                "tech_agent": _make_analysis("bullish", 0.8),
-                "chain_agent": _make_analysis("bearish", 0.7),
-                "news_agent": _make_analysis("neutral", 0.5),
-                "macro_agent": _make_analysis("bullish", 0.6),
-            },
-        },
-        "metadata": {
-            "pair": "BTC/USDT",
-            "engine": "paper",
-            "debate_model": "test-model",
-        },
-        "debate_round": 0,
-        "max_debate_rounds": 2,
-        "divergence_scores": [],
-    }
-
-
-@pytest.mark.asyncio
-async def test_debate_one_agent_success():
-    """Single agent debate call returns updated analysis."""
-    analysis = _make_analysis()
-    others = {"chain_agent": _make_analysis("bearish")}
-    response_json = (
-        '{"direction": "bullish", "confidence": 0.85, "reasoning": "updated",'
-        ' "key_factors": ["f1"], "risk_flags": [],'
-        ' "new_findings": "[NEW] chain_agent funding rate 0.025% reinforces my long thesis"}'
+def test_gate_skips_strong_consensus_when_enabled():
+    config = SimpleNamespace(
+        skip_debate=True,
+        consensus_skip_threshold=0.5,
+        confusion_skip_threshold=0.05,
+        confusion_max_dispersion=0.2,
     )
-    mock_llm = AsyncMock()
-    mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content=response_json))
-    with patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm):
-        aid, result, _turn = await _debate_one_agent(
-            "tech_agent",
-            analysis,
-            others,
-            "BTC/USDT",
-            "test",
-            60,
-            1,
-        )
-    assert aid == "tech_agent"
-    # Confidence raise +0.05 with [NEW] prefix → anti-ratchet allows it.
-    assert result["confidence"] == 0.85
-    assert result["new_findings"].startswith("[NEW]")
+    analyses = {name: _analysis("bullish", 0.8) for name in ("tech", "chain", "news", "macro")}
+
+    skipped, reason, metrics = debate_gate_decision(analyses, config)
+
+    assert skipped is True
+    assert reason == "consensus"
+    assert metrics["strength"] == 0.8
 
 
-@pytest.mark.asyncio
-async def test_debate_one_agent_failure_returns_original():
-    """If LLM call fails, original analysis is preserved."""
-    analysis = _make_analysis()
-    others = {"chain_agent": _make_analysis("bearish")}
-    mock_llm = AsyncMock()
-    mock_llm.ainvoke = AsyncMock(side_effect=Exception("LLM timeout"))
-    with patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm):
-        aid, result, _turn = await _debate_one_agent(
-            "tech_agent",
-            analysis,
-            others,
-            "BTC/USDT",
-            "test",
-            60,
-            1,
-        )
-    assert aid == "tech_agent"
-    assert result == analysis
+def test_gate_keeps_debate_for_directional_disagreement():
+    config = SimpleNamespace(
+        skip_debate=True,
+        consensus_skip_threshold=0.5,
+        confusion_skip_threshold=0.05,
+        confusion_max_dispersion=0.2,
+    )
+    analyses = {
+        "tech": _analysis("bullish", 0.8),
+        "chain": _analysis("bearish", 0.8),
+        "news": _analysis("bullish", 0.7),
+        "macro": _analysis("bearish", 0.7),
+    }
+
+    skipped, reason, _ = debate_gate_decision(analyses, config)
+
+    assert skipped is False
+    assert reason == ""
 
 
-@pytest.mark.asyncio
-async def test_debate_round_runs_parallel():
-    """debate_round uses asyncio.gather for parallel execution."""
-    state = _make_state()
-    call_times = []
+def test_gate_can_be_configured_to_always_debate():
+    config = SimpleNamespace(
+        skip_debate=False,
+        consensus_skip_threshold=0.5,
+        confusion_skip_threshold=0.05,
+        confusion_max_dispersion=0.2,
+    )
+    analyses = {name: _analysis("bullish", 0.9) for name in ("tech", "chain", "news", "macro")}
 
-    async def mock_ainvoke(msgs):
-        call_times.append(asyncio.get_event_loop().time())
-        await asyncio.sleep(0.01)  # simulate async work
-        return AIMessage(
-            content='{"direction": "bullish", "confidence": 0.8, "reasoning": "r",'
-            ' "key_factors": [], "risk_flags": [], "new_findings": ""}'
-        )
-
-    mock_llm = AsyncMock()
-    mock_llm.ainvoke = mock_ainvoke
-    with (
-        patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm),
-        patch("cryptotrader.config.load_config") as mock_cfg,
-    ):
-        mock_cfg.return_value.models.debate = "test"
-        mock_cfg.return_value.models.fallback = "fallback"
-        mock_cfg.return_value.models.timeout_seconds = 60
-        result = await debate_round(state)
-
-    assert len(result["data"]["analyses"]) == 4
-    assert result["debate_round"] == 1
-    # All 4 calls should start at roughly the same time (parallel)
-    if len(call_times) == 4:
-        time_spread = max(call_times) - min(call_times)
-        assert time_spread < 0.05  # all started within 50ms
-
-
-@pytest.mark.asyncio
-async def test_debate_round_partial_failure():
-    """If one agent fails in gather, others still succeed."""
-    state = _make_state()
-    call_count = 0
-
-    async def mock_ainvoke(msgs):
-        nonlocal call_count
-        call_count += 1
-        if call_count == 2:
-            raise Exception("LLM error")
-        return AIMessage(
-            content='{"direction": "bullish", "confidence": 0.75, "reasoning": "ok",'
-            ' "key_factors": [], "risk_flags": [], "new_findings": ""}'
-        )
-
-    mock_llm = AsyncMock()
-    mock_llm.ainvoke = mock_ainvoke
-    with (
-        patch("cryptotrader.nodes.debate.create_llm", return_value=mock_llm),
-        patch("cryptotrader.config.load_config") as mock_cfg,
-    ):
-        mock_cfg.return_value.models.debate = "test"
-        mock_cfg.return_value.models.fallback = "fallback"
-        mock_cfg.return_value.models.timeout_seconds = 60
-        result = await debate_round(state)
-
-    # All 4 agents should have results (3 updated + 1 original)
-    assert len(result["data"]["analyses"]) == 4
+    assert debate_gate_decision(analyses, config)[0] is False
