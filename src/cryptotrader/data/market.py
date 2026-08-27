@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import TYPE_CHECKING
 
 import ccxt.async_support as ccxt
 import numpy as np
@@ -15,6 +16,9 @@ import pandas as pd
 from cryptotrader.ccxt_options import fetch_market_types
 from cryptotrader.data.store import cache_result, get_cached_or_none
 from cryptotrader.models import MarketData
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +37,28 @@ def _closed_ohlcv(rows: list, timeframe: str, now_ms: int) -> list:
     tf_ms = _timeframe_ms(timeframe)
     current_open_ms = now_ms - now_ms % tf_ms
     return [row for row in rows if row and row[0] < current_open_ms]
+
+
+def clip_ohlcv_at(frame: pd.DataFrame, as_of: datetime, limit: int | None = None) -> pd.DataFrame:
+    """Return a copy containing only bars at or before one decision timestamp."""
+    if isinstance(frame.index, pd.DatetimeIndex):
+        cutoff = pd.Timestamp(as_of)
+        if frame.index.tz is None and cutoff.tz is not None:
+            cutoff = cutoff.tz_localize(None)
+        elif frame.index.tz is not None and cutoff.tz is None:
+            cutoff = cutoff.tz_localize("UTC")
+        clipped = frame.loc[frame.index <= cutoff]
+    elif "timestamp" in frame.columns:
+        timestamps = pd.to_datetime(frame["timestamp"], utc=True)
+        cutoff = pd.Timestamp(as_of)
+        if cutoff.tz is None:
+            cutoff = cutoff.tz_localize("UTC")
+        clipped = frame.loc[timestamps <= cutoff]
+    else:
+        clipped = frame
+    if limit is not None:
+        clipped = clipped.tail(limit)
+    return clipped.copy()
 
 
 class MarketCollector:
