@@ -231,14 +231,14 @@ const RiskContent = () => {
               <div className="divide-y divide-border">
                 {data.recent_blocks.map((b) => (
                   <div
-                    key={b.commit_hash}
+                    key={b.cycle_id}
                     className="flex items-center gap-3 py-2.5 text-xs"
                   >
                     <span className="w-20 font-mono text-muted-foreground">
                       {formatDateTime(b.ts).slice(-8)}
                     </span>
                     <span className="w-20 font-mono text-muted-foreground">
-                      {b.commit_hash.slice(0, 8)}
+                      {b.cycle_id.slice(0, 8)}
                     </span>
                     <StatusPill tone="danger">{b.rule}</StatusPill>
                     <span className="flex-1 truncate text-muted-foreground">{b.detail}</span>

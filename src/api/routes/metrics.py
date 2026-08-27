@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
-from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import Response
@@ -349,15 +348,15 @@ def _pipeline_histogram_buckets() -> list[LatencyHistogramBucketOut]:
 
 
 async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float, float, float]:
-    """Aggregate llm_calls / llm_cost / cache_hit_rate / decisions_per_day from journal.
+    """Aggregate committee usage metadata from completed cycle records.
 
     Returns ``(calls_24h, cost_24h, cache_hit_rate, decisions_per_day_last_30d)``.
     """
-    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = JournalStore(database_url)
-        commits = await store.log(limit=2000)
+        store = CycleJournalStore(database_url)
+        cycles = await store.list(limit=2000, status="completed")
     except Exception:
         logger.info("metrics: journal read failed", exc_info=True)
         return 0, 0.0, 0.0, 0.0
@@ -366,17 +365,14 @@ async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float
     cutoff_24h = now - datetime.timedelta(hours=24)
     cutoff_30d = now - datetime.timedelta(days=30)
 
-    def _ts(c: Any) -> datetime.datetime | None:
-        return _metrics_coerce_ts(c.timestamp)
-
     calls = 0
     cost = 0.0
     cache_hits = 0
     in_last_24h = 0
     decisions_30d = 0
 
-    for c in commits:
-        ts = _ts(c)
+    for cycle in cycles:
+        ts = _metrics_coerce_ts(cycle.created_at)
         if ts is None:
             continue
         if ts >= cutoff_30d:
@@ -384,8 +380,11 @@ async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float
         if ts < cutoff_24h:
             continue
         in_last_24h += 1
-        usage = getattr(c, "token_usage", None) or {}
-        if isinstance(usage, dict):
+        for component in cycle.component_signals:
+            details = component.get("details") or {}
+            usage = details.get("token_usage") or {}
+            if not isinstance(usage, dict):
+                continue
             calls += int(usage.get("calls", 0) or 0)
             cost += float(usage.get("cost_usd", 0.0) or 0.0)
             cache_hits += int(usage.get("cache_hits", 0) or 0)
@@ -401,11 +400,11 @@ async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float
 
 async def _cost_14d_series(database_url: str | None) -> list[DailyCostPointOut]:
     """Per-day cost total for the last 14 calendar days (UTC), including zero-fill days."""
-    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = JournalStore(database_url)
-        commits = await store.log(limit=3000)
+        store = CycleJournalStore(database_url)
+        cycles = await store.list(limit=3000, status="completed")
     except Exception:
         logger.info("cost_14d: journal read failed", exc_info=True)
         return []
@@ -417,16 +416,18 @@ async def _cost_14d_series(database_url: str | None) -> list[DailyCostPointOut]:
         daily[day] = 0.0
 
     cutoff = now - datetime.timedelta(days=14)
-    for c in commits:
-        ts_dt = _metrics_coerce_ts(c.timestamp)
+    for cycle in cycles:
+        ts_dt = _metrics_coerce_ts(cycle.created_at)
         if ts_dt is None or ts_dt < cutoff:
             continue
         day = ts_dt.date().isoformat()
         if day not in daily:
             continue
-        usage = getattr(c, "token_usage", None) or {}
-        if isinstance(usage, dict):
-            daily[day] += float(usage.get("cost_usd", 0.0) or 0.0)
+        for component in cycle.component_signals:
+            details = component.get("details") or {}
+            usage = details.get("token_usage") or {}
+            if isinstance(usage, dict):
+                daily[day] += float(usage.get("cost_usd", 0.0) or 0.0)
 
     return [DailyCostPointOut(ts=d, cost_usd=round(v, 4)) for d, v in daily.items()]
 

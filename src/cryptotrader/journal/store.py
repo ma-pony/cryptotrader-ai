@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import JSON, BigInteger, DateTime, String, select, update
+from sqlalchemy import JSON, BigInteger, DateTime, String, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -163,10 +163,11 @@ class CycleJournalStore:
         self,
         *,
         limit: int = 100,
+        offset: int = 0,
         pair: str | None = None,
         status: CycleStatus | None = None,
     ) -> list[TradingCycleRecord]:
-        if limit < 1:
+        if limit < 1 or offset < 0:
             return []
         if self.database_url is None:
             records = self.records
@@ -174,7 +175,8 @@ class CycleJournalStore:
                 records = [item for item in records if item.pair == pair]
             if status is not None:
                 records = [item for item in records if item.status == status]
-            return sorted(records, key=lambda item: item.created_at, reverse=True)[:limit]
+            ordered = sorted(records, key=lambda item: item.created_at, reverse=True)
+            return ordered[offset : offset + limit]
 
         await self.ensure_table()
         query = select(_TradingCycleRow)
@@ -182,10 +184,36 @@ class CycleJournalStore:
             query = query.where(_TradingCycleRow.pair == pair)
         if status is not None:
             query = query.where(_TradingCycleRow.status == status)
-        query = query.order_by(_TradingCycleRow.created_at.desc()).limit(limit)
+        query = query.order_by(_TradingCycleRow.created_at.desc()).offset(offset).limit(limit)
         session = await get_async_session(self.database_url)
         try:
             rows = (await session.execute(query)).scalars().all()
             return [_record(row) for row in rows]
+        finally:
+            await session.close()
+
+    async def count(
+        self,
+        *,
+        pair: str | None = None,
+        status: CycleStatus | None = None,
+    ) -> int:
+        if self.database_url is None:
+            records = self.records
+            if pair is not None:
+                records = [item for item in records if item.pair == pair]
+            if status is not None:
+                records = [item for item in records if item.status == status]
+            return len(records)
+
+        await self.ensure_table()
+        query = select(func.count()).select_from(_TradingCycleRow)
+        if pair is not None:
+            query = query.where(_TradingCycleRow.pair == pair)
+        if status is not None:
+            query = query.where(_TradingCycleRow.status == status)
+        session = await get_async_session(self.database_url)
+        try:
+            return int((await session.execute(query)).scalar_one())
         finally:
             await session.close()

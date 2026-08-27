@@ -79,6 +79,29 @@ async def test_list_filters_pair_and_returns_newest_first(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_list_offset_and_count_share_the_same_filters(tmp_path):
+    from cryptotrader.journal.store import CycleJournalStore
+
+    store = CycleJournalStore(f"sqlite+aiosqlite:///{tmp_path / 'cycles.db'}")
+    first = cycle_record(cycle_id="first", status="completed")
+    second = replace(
+        cycle_record(cycle_id="second", status="completed"),
+        created_at=first.created_at.replace(microsecond=first.created_at.microsecond + 1),
+    )
+    failed = replace(
+        cycle_record(cycle_id="failed", status="component_failed"),
+        created_at=first.created_at.replace(microsecond=first.created_at.microsecond + 2),
+    )
+    for record in (first, second, failed):
+        await store.append(record)
+
+    page = await store.list(limit=1, offset=1, status="completed")
+
+    assert [record.cycle_id for record in page] == ["first"]
+    assert await store.count(status="completed") == 2
+
+
+@pytest.mark.asyncio
 async def test_memory_store_is_instance_local():
     from cryptotrader.journal.store import CycleJournalStore
 

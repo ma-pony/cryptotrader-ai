@@ -1,48 +1,43 @@
-"""Decisions list + detail endpoints (FR-803/FR-804)."""
+"""Cycle Journal list and detail endpoints."""
 
 from __future__ import annotations
 
-import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from cryptotrader.journal.models import TradingCycleRecord
+
+CycleStatusValue = Literal[
+    "completed",
+    "no_change",
+    "awaiting_approval",
+    "approval_rejected",
+    "component_failed",
+    "risk_rejected",
+    "execution_failed",
+    "cancelled",
+]
 
 router = APIRouter(prefix="/api/decisions", tags=["decisions"])
 
 
-# ── Response models ──
-
-
-class VerdictSlim(BaseModel):
-    action: str
-    size: float = 0.0
-    confidence: float = 0.0
-    reasoning: str = ""
-    source: str = "ai"
-    # P0#1 (2026-05-07): make invalidation visible — without it the operator
-    # can't tell where the LLM thinks the thesis breaks. thesis paired for
-    # symmetry; both already stored on the dataclass and DB JSONB blob.
-    thesis: str = ""
-    invalidation: str = ""
-
-
 class DecisionListItem(BaseModel):
-    commit_hash: str
+    cycle_id: str
     ts: str
-    pair: str  # ccxt canonical: "BTC/USDT" (spot) or "BTC/USDT:USDT" (perp)
-    pair_display: str  # spec 013: human form, e.g. "BTC/USDT (perp)"
-    market_type: str = "spot"  # "spot" | "swap" | "future" | "option"
+    pair: str
+    pair_display: str
+    market_type: str
+    status: CycleStatusValue
+    profile_revision: int
     price: float = 0.0
-    verdict: VerdictSlim
-    is_filled: bool = False
-    trace_id: str | None = None
-    # Alignment with frontend prototype (2026-04-24):
-    pnl: float | None = None
-    debate_status: str = ""  # "skipped-consensus" | "skipped-confusion" | "1-round" | "2-round"
-    reject_reason: str | None = None
+    fused_score: float | None = None
+    target_position: dict[str, Any] | None = None
+    component_error: dict[str, str] | None = None
+    risk_result: dict[str, Any] | None = None
+    execution_result: dict[str, Any] | None = None
 
 
 class PaginatedDecisions(BaseModel):
@@ -53,494 +48,110 @@ class PaginatedDecisions(BaseModel):
     has_next: bool
 
 
-class AgentAnalysisOut(BaseModel):
-    name: str
-    score: float
-    confidence: float
-    reasoning: str
-    is_mock: bool = False
-
-
-class DebateRoundOut(BaseModel):
-    round: int
-    bull_message: str
-    bear_message: str
-
-
-class DebateTurnOut(BaseModel):
-    """Single agent's utterance in a single round (matches frontend prototype)."""
-
-    round: int
-    from_agent: str = Field(alias="from")
-    to_agent: str | None = Field(default=None, alias="to")
-    before_direction: str
-    before_confidence: float
-    after_direction: str
-    after_confidence: float
-    move: str
-    reasoning: str = ""
-    new_findings: str = ""
-    errored: bool = False
-
-    model_config = {"populate_by_name": True}
-
-
-class DebateGateOut(BaseModel):
-    decision: str  # "debate" | "skipped-consensus" | "skipped-confusion"
-    reason: str = ""
-    strength: float = 0.0
-    mean_score: float = 0.0
-    dispersion: float = 0.0
-
-
-class ConsensusMetricsOut(BaseModel):
-    strength: float = 0.0
-    mean_score: float = 0.0
-    dispersion: float = 0.0
-    skip_threshold: float = 0.5
-    confusion_threshold: float = 0.05
-
-
-class LatencyBreakdownOut(BaseModel):
-    data_ms: float = 0.0
-    agents_ms: float = 0.0
-    debate_ms: float = 0.0
-    verdict_ms: float = 0.0
-    risk_ms: float = 0.0
-    execute_ms: float = 0.0
-    other_ms: float = 0.0
-    total_ms: float = 0.0
-
-
-class TokenUsageOut(BaseModel):
-    input_tokens: float = 0.0
-    output_tokens: float = 0.0
-    cache_hits: float = 0.0
-    calls: float = 0.0
-    cost_usd: float = 0.0
-    by_model: dict[str, dict[str, float]] = Field(default_factory=dict)
-
-
-class RiskCheckOut(BaseModel):
-    name: str
-    passed: bool
-    reason: str | None = None
-    threshold: float | str | None = None
-
-
-class RiskGateOut(BaseModel):
-    passed: bool
-    checks: list[RiskCheckOut] = Field(default_factory=list)
-
-
-class ExecutionOut(BaseModel):
-    order_id: str
-    status: str
-    fill_price: float = 0.0
-    fill_size: float = 0.0
-    fee: float = 0.0
-    slippage_bps: float = 0.0
-    exchange: str = "paper"
-
-
-class NodeTimelineEntryOut(BaseModel):
-    node: str
-    start_ms: int
-    duration_ms: int
-
-
 class DecisionDetailOut(BaseModel):
-    commit_hash: str
+    cycle_id: str
     ts: str
-    pair: str  # ccxt canonical
-    pair_display: str  # spec 013: human form
-    market_type: str = "spot"
-    price: float
-    agent_analyses: list[AgentAnalysisOut]
-    debate_rounds: list[DebateRoundOut]
-    verdict: VerdictSlim
-    risk_gate: RiskGateOut
-    execution: ExecutionOut | None
-    node_timeline: list[NodeTimelineEntryOut]
-    trace_id: str | None = None
-    # Alignment with frontend prototype (2026-04-24):
-    debate_turns: list[DebateTurnOut] = Field(default_factory=list)
-    debate_gate: DebateGateOut | None = None
-    consensus_metrics: ConsensusMetricsOut | None = None
-    latency_breakdown: LatencyBreakdownOut = Field(default_factory=LatencyBreakdownOut)
-    token_usage: TokenUsageOut = Field(default_factory=TokenUsageOut)
-    pnl: float | None = None
-    retrospective: str | None = None
-    debate_skip_reason: str = ""
+    pair: str
+    pair_display: str
+    market_type: str
+    status: CycleStatusValue
+    profile_revision: int
+    context: dict[str, Any]
+    components: list[dict[str, Any]]
+    component_error: dict[str, str] | None = None
+    fusion: dict[str, Any] | None = None
+    target_position: dict[str, Any] | None = None
+    trade_plan: dict[str, Any] | None = None
+    hitl_result: dict[str, Any] | None = None
+    risk_result: dict[str, Any] | None = None
+    execution_result: dict[str, Any] | None = None
+
+
+def _store():
+    from cryptotrader.config import load_config
+    from cryptotrader.journal.store import CycleJournalStore
+
+    database_url = load_config().infrastructure.database_url or None
+    return CycleJournalStore(database_url)
 
 
 def _pair_meta(pair: str) -> tuple[str, str]:
-    """Return (pair_display, market_type) for a canonical pair str (spec 013)."""
     from cryptotrader.pair import Pair
 
-    try:
-        p = Pair.parse(pair)
-        return p.display(), p.market_type
-    except (ValueError, NotImplementedError):
-        return pair, "spot"
+    parsed = Pair.parse(pair)
+    return parsed.display(), parsed.market_type
 
 
-def _verdict_to_slim(v: Any) -> VerdictSlim:
-    if v is None:
-        return VerdictSlim(action="hold")
-
-    def _as_str(val: Any) -> str:
-        # Coerce non-string sources (legacy ``None`` defaults, or MagicMock objects in tests)
-        # to a real ``str`` so pydantic's ``string_type`` validator accepts them.
-        if val is None:
-            return ""
-        return val if isinstance(val, str) else str(val)
-
-    return VerdictSlim(
-        action=getattr(v, "action", "hold"),
-        size=float(getattr(v, "position_scale", 0.0) or 0.0),
-        confidence=float(getattr(v, "confidence", 0.0) or 0.0),
-        reasoning=_as_str(getattr(v, "reasoning", "")),
-        source=getattr(v, "verdict_source", "ai") or "ai",
-        thesis=_as_str(getattr(v, "thesis", "")),
-        invalidation=_as_str(getattr(v, "invalidation", "")),
-    )
+def _mapping(value) -> dict[str, Any] | None:
+    return dict(value) if value is not None else None
 
 
-def _debate_status(c: Any) -> str:
-    """Derive the debate pipeline label for the list view."""
-    skip = (getattr(c, "debate_skip_reason", "") or "").strip()
-    rounds = int(getattr(c, "debate_rounds", 0) or 0)
-    if skip == "consensus":
-        return "skipped-consensus"
-    if skip == "confusion":
-        return "skipped-confusion"
-    if rounds <= 0:
-        return "skipped"
-    if rounds == 1:
-        return "1-round"
-    return f"{rounds}-round"
-
-
-def _commit_to_list_item(c: Any) -> DecisionListItem:
-    snapshot = c.snapshot_summary or {}
-    gate = getattr(c, "risk_gate", None)
-    reject_reason: str | None = None
-    if gate is not None and not getattr(gate, "passed", True):
-        rejected_by = getattr(gate, "rejected_by", "") or ""
-        reason = getattr(gate, "reason", "") or ""
-        reject_reason = f"{rejected_by} · {reason}" if rejected_by and reason else (rejected_by or reason or None)
-    else:
-        # Risk gate passed but execution may have skipped/failed (e.g.
-        # spot_short_no_inventory). Surface that as the reject reason.
-        es = getattr(c, "execution_status", None) or {}
-        if es and not es.get("succeeded", True):
-            stage = es.get("stage", "execution_unknown")
-            reason = es.get("reason", "")
-            reject_reason = f"{stage} · {reason}" if stage and reason else (stage or reason or None)
-    pair_display, market_type = _pair_meta(c.pair)
+def _list_item(record: TradingCycleRecord) -> DecisionListItem:
+    pair_display, market_type = _pair_meta(record.pair)
+    fusion = record.fused_signal or {}
+    score = fusion.get("score")
     return DecisionListItem(
-        commit_hash=c.hash,
-        ts=c.timestamp.isoformat() if hasattr(c.timestamp, "isoformat") else str(c.timestamp),
-        pair=c.pair,
+        cycle_id=record.cycle_id,
+        ts=record.created_at.isoformat(),
+        pair=record.pair,
         pair_display=pair_display,
         market_type=market_type,
-        price=float(snapshot.get("price", 0.0) or 0.0),
-        verdict=_verdict_to_slim(c.verdict),
-        is_filled=bool(c.fill_price is not None and c.fill_price > 0) or bool(c.order),
-        trace_id=c.trace_id,
-        pnl=float(c.pnl) if getattr(c, "pnl", None) is not None else None,
-        debate_status=_debate_status(c),
-        reject_reason=reject_reason,
+        status=record.status,
+        profile_revision=record.profile_revision,
+        price=float(record.context_summary.get("current_price", 0.0) or 0.0),
+        fused_score=float(score) if score is not None else None,
+        target_position=_mapping(record.target_position),
+        component_error=dict(record.component_error) if record.component_error is not None else None,
+        risk_result=_mapping(record.risk_result),
+        execution_result=_mapping(record.execution_result),
     )
 
 
-def _serialize_analyses(analyses: dict) -> list[AgentAnalysisOut]:
-    out = []
-    for name, a in (analyses or {}).items():
-        direction = getattr(a, "direction", "neutral")
-        # Map direction (string) → numeric score for the frontend
-        score = {"bullish": 0.6, "bearish": -0.6, "neutral": 0.0}.get(direction, 0.0)
-        out.append(
-            AgentAnalysisOut(
-                name=name,
-                score=score,
-                confidence=float(getattr(a, "confidence", 0.0) or 0.0),
-                reasoning=getattr(a, "reasoning", "") or "",
-                is_mock=bool(getattr(a, "is_mock", False)),
-            )
-        )
-    return out
-
-
-def _serialize_challenges(challenges: list) -> list[DebateRoundOut]:
-    """Legacy bull/bear rounds — kept for backwards compatibility.
-
-    The prototype now prefers per-agent turns (see ``_serialize_turns``).
-    """
-    out = []
-    for ch in challenges or []:
-        if not isinstance(ch, dict):
-            continue
-        # Skip new-format turn entries (they have from/to/before/after keys).
-        if "from" in ch and "before" in ch:
-            continue
-        out.append(
-            DebateRoundOut(
-                round=int(ch.get("round", 0) or 0),
-                bull_message=ch.get("bull", "") or "",
-                bear_message=ch.get("bear", "") or "",
-            )
-        )
-    return out
-
-
-def _serialize_turns(challenges: list) -> list[DebateTurnOut]:
-    """Serialize the new per-agent turn entries populated by nodes/debate.py."""
-    out: list[DebateTurnOut] = []
-    for ch in challenges or []:
-        if not isinstance(ch, dict):
-            continue
-        if not ("from" in ch and "before" in ch and "after" in ch):
-            # Legacy / bull-bear format — skip.
-            continue
-        before = ch.get("before") or {}
-        after = ch.get("after") or {}
-        out.append(
-            DebateTurnOut(
-                round=int(ch.get("round", 0) or 0),
-                **{"from": ch.get("from", ""), "to": ch.get("to")},
-                before_direction=str(before.get("direction", "neutral")),
-                before_confidence=float(before.get("confidence", 0.0) or 0.0),
-                after_direction=str(after.get("direction", "neutral")),
-                after_confidence=float(after.get("confidence", 0.0) or 0.0),
-                move=str(ch.get("move", "保持")),
-                reasoning=str(ch.get("reasoning", "") or ""),
-                new_findings=str(ch.get("new_findings", "") or ""),
-                errored=bool(ch.get("errored", False)),
-            )
-        )
-    return out
-
-
-def _serialize_debate_gate(c: Any) -> DebateGateOut:
-    """Build the gate card for the Debate UI from commit observability fields."""
-    cm = getattr(c, "consensus_metrics", None)
-    strength = float(getattr(cm, "strength", 0.0) or 0.0) if cm is not None else 0.0
-    mean_score = float(getattr(cm, "mean_score", 0.0) or 0.0) if cm is not None else 0.0
-    dispersion = float(getattr(cm, "dispersion", 0.0) or 0.0) if cm is not None else 0.0
-    skip = (getattr(c, "debate_skip_reason", "") or "").strip()
-    if skip == "consensus":
-        decision = "skipped-consensus"
-        reason = f"strong consensus (strength={strength:.2f})"
-    elif skip == "confusion":
-        decision = "skipped-confusion"
-        reason = f"shared confusion (|mean|={abs(mean_score):.2f}, dispersion={dispersion:.2f})"
-    else:
-        decision = "debate"
-        reason = f"divergence triggered debate (dispersion={dispersion:.2f})"
-    return DebateGateOut(
-        decision=decision,
-        reason=reason,
-        strength=strength,
-        mean_score=mean_score,
-        dispersion=dispersion,
+def _detail(record: TradingCycleRecord) -> DecisionDetailOut:
+    pair_display, market_type = _pair_meta(record.pair)
+    return DecisionDetailOut(
+        cycle_id=record.cycle_id,
+        ts=record.created_at.isoformat(),
+        pair=record.pair,
+        pair_display=pair_display,
+        market_type=market_type,
+        status=record.status,
+        profile_revision=record.profile_revision,
+        context=dict(record.context_summary),
+        components=[dict(item) for item in record.component_signals],
+        component_error=dict(record.component_error) if record.component_error is not None else None,
+        fusion=_mapping(record.fused_signal),
+        target_position=_mapping(record.target_position),
+        trade_plan=_mapping(record.trade_plan),
+        hitl_result=_mapping(record.hitl_result),
+        risk_result=_mapping(record.risk_result),
+        execution_result=_mapping(record.execution_result),
     )
-
-
-def _serialize_consensus(cm: Any) -> ConsensusMetricsOut | None:
-    if cm is None:
-        return None
-    return ConsensusMetricsOut(
-        strength=float(getattr(cm, "strength", 0.0) or 0.0),
-        mean_score=float(getattr(cm, "mean_score", 0.0) or 0.0),
-        dispersion=float(getattr(cm, "dispersion", 0.0) or 0.0),
-        skip_threshold=float(getattr(cm, "skip_threshold", 0.5) or 0.5),
-        confusion_threshold=float(getattr(cm, "confusion_threshold", 0.05) or 0.05),
-    )
-
-
-def _serialize_latency(breakdown: Any) -> LatencyBreakdownOut:
-    d = breakdown if isinstance(breakdown, dict) else {}
-
-    def _f(k: str) -> float:
-        v = d.get(k, 0.0)
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return 0.0
-
-    return LatencyBreakdownOut(
-        data_ms=_f("data"),
-        agents_ms=_f("agents"),
-        debate_ms=_f("debate"),
-        verdict_ms=_f("verdict"),
-        risk_ms=_f("risk"),
-        execute_ms=_f("execute"),
-        other_ms=_f("other"),
-        total_ms=_f("total"),
-    )
-
-
-def _serialize_tokens(usage: Any) -> TokenUsageOut:
-    d = usage if isinstance(usage, dict) else {}
-
-    def _f(k: str) -> float:
-        v = d.get(k, 0.0)
-        try:
-            return float(v)
-        except (TypeError, ValueError):
-            return 0.0
-
-    by_model_raw = d.get("by_model") or {}
-    by_model: dict[str, dict[str, float]] = {}
-    if isinstance(by_model_raw, dict):
-        for model_name, stats in by_model_raw.items():
-            if isinstance(stats, dict):
-                by_model[model_name] = {str(k): float(v) for k, v in stats.items() if isinstance(v, int | float)}
-    return TokenUsageOut(
-        input_tokens=_f("input_tokens"),
-        output_tokens=_f("output_tokens"),
-        cache_hits=_f("cache_hits"),
-        calls=_f("calls"),
-        cost_usd=_f("cost_usd"),
-        by_model=by_model,
-    )
-
-
-def _serialize_risk_gate(gate: Any) -> RiskGateOut:
-    if gate is None:
-        return RiskGateOut(passed=False, checks=[])
-    checks: list[RiskCheckOut] = []
-    rejected_by = getattr(gate, "rejected_by", "") or ""
-    reason = getattr(gate, "reason", "") or ""
-    if rejected_by:
-        checks.append(RiskCheckOut(name=rejected_by, passed=False, reason=reason or None))
-    return RiskGateOut(passed=bool(gate.passed), checks=checks)
-
-
-def _serialize_execution(commit: Any) -> ExecutionOut | None:
-    order = getattr(commit, "order", None)
-    if order is None:
-        return None
-    return ExecutionOut(
-        order_id=getattr(order, "exchange_id", "") or order.__class__.__name__,
-        status=str(getattr(order, "status", "")),
-        fill_price=float(commit.fill_price or order.price or 0.0),
-        fill_size=float(getattr(order, "amount", 0.0) or 0.0),
-        slippage_bps=float((commit.slippage or 0.0) * 10000),
-        exchange=getattr(order, "exchange_id", "") or "paper",
-    )
-
-
-def _serialize_node_trace(entries: list) -> list[NodeTimelineEntryOut]:
-    out: list[NodeTimelineEntryOut] = []
-    cumulative = 0
-    for e in entries or []:
-        # Entries may be plain dicts (JSONB roundtrip from Postgres / registry)
-        # or dataclass instances (in-process callers). Support both.
-        if isinstance(e, dict):
-            node = e.get("node") or "unknown"
-            duration = int(e.get("duration_ms") or 0)
-        else:
-            node = getattr(e, "node", None) or "unknown"
-            duration = int(getattr(e, "duration_ms", 0) or 0)
-        out.append(
-            NodeTimelineEntryOut(
-                node=node,
-                start_ms=cumulative,
-                duration_ms=duration,
-            )
-        )
-        cumulative += duration
-    return out
-
-
-# ── Routes ──
 
 
 @router.get("", response_model=PaginatedDecisions)
 async def list_decisions(
-    pair: str | None = Query(default=None),
-    page: int = Query(default=1, ge=1),
-    size: int = Query(default=20, ge=1, le=100),
-    from_: str | None = Query(default=None, alias="from"),
-    to: str | None = Query(default=None),
+    page: int = Query(1, ge=1),
+    size: int = Query(20, ge=1, le=100),
+    pair: str | None = None,
+    status: CycleStatusValue | None = None,
 ) -> PaginatedDecisions:
-    from cryptotrader.config import load_config
-    from cryptotrader.journal.store import JournalStore
-
-    config = load_config()
-    store = JournalStore(config.infrastructure.database_url)
-
-    # JournalStore.log returns most-recent-first up to `limit`. We oversample
-    # by `page * size + 1` so we can detect whether more rows exist.
-    limit = page * size + 1
-    commits = await store.log(limit=limit, pair=pair)
-    # Defensive: from/to filters are not applied at store level; do it here.
-    # Use coerce_timestamp from _utils to guarantee both sides are tz-aware before
-    # compare — naive ISO strings (e.g. "2026-04-01") get promoted to UTC.
-    if from_ or to:
-        from api.routes._utils import coerce_timestamp
-
-        from_dt = coerce_timestamp(from_) if from_ else None
-        to_dt = coerce_timestamp(to) if to else None
-        commits = [
-            c
-            for c in commits
-            if (
-                (from_dt is None or (coerce_timestamp(c.timestamp) or from_dt) >= from_dt)
-                and (to_dt is None or (coerce_timestamp(c.timestamp) or to_dt) <= to_dt)
-            )
-        ]
-
+    store = _store()
     offset = (page - 1) * size
-    page_commits = commits[offset : offset + size]
-    # Full page is the cue for "more may exist"; short page is the last page.
-    has_next = len(page_commits) == size
-
+    records = await store.list(limit=size, offset=offset, pair=pair, status=status)
+    total = await store.count(pair=pair, status=status)
     return PaginatedDecisions(
-        items=[_commit_to_list_item(c) for c in page_commits],
-        total=offset + len(page_commits),
+        items=[_list_item(record) for record in records],
+        total=total,
         page=page,
         size=size,
-        has_next=has_next,
+        has_next=offset + len(records) < total,
     )
 
 
-@router.get("/{commit_hash}", response_model=DecisionDetailOut)
-async def get_decision(commit_hash: str) -> DecisionDetailOut:
-    from cryptotrader.config import load_config
-    from cryptotrader.journal.store import JournalStore
-
-    config = load_config()
-    store = JournalStore(config.infrastructure.database_url)
-    commit = await store.show(commit_hash)
-    if commit is None:
-        raise HTTPException(status_code=404, detail=f"Commit {commit_hash} not found")
-
-    snapshot = commit.snapshot_summary or {}
-    pair_display, market_type = _pair_meta(commit.pair)
-    return DecisionDetailOut(
-        commit_hash=commit.hash,
-        ts=commit.timestamp.isoformat() if hasattr(commit.timestamp, "isoformat") else str(commit.timestamp),
-        pair=commit.pair,
-        pair_display=pair_display,
-        market_type=market_type,
-        price=float(snapshot.get("price", 0.0) or 0.0),
-        agent_analyses=_serialize_analyses(commit.analyses),
-        debate_rounds=_serialize_challenges(commit.challenges),
-        verdict=_verdict_to_slim(commit.verdict),
-        risk_gate=_serialize_risk_gate(commit.risk_gate),
-        execution=_serialize_execution(commit),
-        node_timeline=_serialize_node_trace(commit.node_trace),
-        trace_id=commit.trace_id,
-        debate_turns=_serialize_turns(commit.challenges),
-        debate_gate=_serialize_debate_gate(commit),
-        consensus_metrics=_serialize_consensus(commit.consensus_metrics),
-        latency_breakdown=_serialize_latency(getattr(commit, "latency_breakdown", {})),
-        token_usage=_serialize_tokens(getattr(commit, "token_usage", {})),
-        pnl=(float(commit.pnl) if commit.pnl is not None else None),
-        retrospective=getattr(commit, "retrospective", None),
-        debate_skip_reason=getattr(commit, "debate_skip_reason", "") or "",
-    )
+@router.get("/{cycle_id}", response_model=DecisionDetailOut)
+async def get_decision(cycle_id: str) -> DecisionDetailOut:
+    record = await _store().get(cycle_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Trading cycle {cycle_id} not found")
+    return _detail(record)

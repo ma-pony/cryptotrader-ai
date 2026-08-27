@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cryptotrader._compat import UTC
+from tests.factories.signal_fusion import cycle_record
 
 
 @pytest.fixture
@@ -207,6 +208,33 @@ def test_24h_pnl_pct_is_proportional() -> None:
     assert _compute_pnl_pct(equity=0.0, pnl_24h=0.0) == 0.0
     # Negative baseline guard
     assert _compute_pnl_pct(equity=100.0, pnl_24h=200.0) == 0.0
+
+
+def test_trade_statistics_use_completed_cycle_execution_results() -> None:
+    from api.routes.portfolio_v2 import _cycle_pnl_stats
+
+    now = datetime.now(UTC)
+    closing_order = {
+        "intent": {"pair": "BTC/USDT:USDT", "side": "sell", "amount": 1.0, "reduce_only": True},
+        "status": "filled",
+        "raw": {"realized_pnl": 125.0},
+    }
+    record = cycle_record(
+        created_at=now,
+        status="completed",
+        execution_result={"succeeded": True, "orders": [closing_order]},
+    )
+
+    total, win_rate, realized_30d, average, cumulative = _cycle_pnl_stats(
+        [record],
+        now.replace(year=now.year - 1),
+    )
+
+    assert total == 1
+    assert win_rate == 1.0
+    assert realized_30d == pytest.approx(125.0)
+    assert average == pytest.approx(125.0)
+    assert cumulative == pytest.approx(125.0)
 
 
 # Avoid unused-import lint

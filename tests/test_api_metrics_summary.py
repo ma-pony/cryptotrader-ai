@@ -26,12 +26,14 @@ the React Metrics page:
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from datetime import UTC, datetime
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
 from api.main import app
+from tests.factories.signal_fusion import cycle_record
 
 
 @pytest.fixture
@@ -128,3 +130,29 @@ class TestMetricsSummaryV2:
         data = resp.json()
         assert data["counters"]["trades_total"] == 0
         assert data["percentiles"]["pipeline_p95_ms"] == 0
+
+
+@pytest.mark.asyncio
+async def test_llm_accounting_reads_usage_from_completed_cycle_components() -> None:
+    from api.routes.metrics import _llm_accounting_last_24h
+
+    record = cycle_record(
+        created_at=datetime.now(UTC),
+        status="completed",
+        component_signals=(
+            {
+                "component_id": "llm_committee",
+                "details": {"token_usage": {"calls": 5, "cost_usd": 0.12, "cache_hits": 2}},
+            },
+        ),
+    )
+    store = MagicMock()
+    store.list = AsyncMock(return_value=[record])
+    with patch("cryptotrader.journal.store.CycleJournalStore", return_value=store):
+        calls, cost, hit_rate, decisions_per_day = await _llm_accounting_last_24h(None)
+
+    assert calls == 5
+    assert cost == pytest.approx(0.12)
+    assert hit_rate == pytest.approx(0.4)
+    assert decisions_per_day == pytest.approx(1 / 30, abs=0.01)
+    store.list.assert_awaited_once_with(limit=2000, status="completed")

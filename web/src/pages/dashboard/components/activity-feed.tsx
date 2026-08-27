@@ -126,7 +126,7 @@ export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
 
     for (const b of risk.data?.recent_blocks ?? []) {
       out.push({
-        id: `block-${b.commit_hash}-${b.rule}`,
+        id: `block-${b.cycle_id}-${b.rule}`,
         ts: b.ts,
         kind: 'block',
         primary: (

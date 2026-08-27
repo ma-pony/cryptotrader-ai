@@ -54,7 +54,7 @@ class CooldownOut(BaseModel):
 
 class RecentBlockOut(BaseModel):
     ts: str
-    commit_hash: str
+    cycle_id: str
     rule: str
     detail: str
 
@@ -125,7 +125,7 @@ async def _known_pairs(
     *,
     portfolio: dict | None = None,
 ) -> list[str]:
-    """Union of currently-open pairs and pairs active in the last 30 journal commits.
+    """Union of currently-open pairs and pairs active in recent completed cycles.
 
     This is the candidate set we probe for Redis cooldown TTLs — avoiding a scan.
     """
@@ -147,13 +147,13 @@ async def _known_pairs(
             logger.info("known pairs: portfolio read failed", exc_info=True)
 
     try:
-        from cryptotrader.journal.store import JournalStore
+        from cryptotrader.journal.store import CycleJournalStore
 
-        store = JournalStore(database_url)
-        commits = await store.log(limit=30)
-        for c in commits:
-            if c.pair:
-                pairs.add(c.pair)
+        store = CycleJournalStore(database_url)
+        cycles = await store.list(limit=30, status="completed")
+        for cycle in cycles:
+            if cycle.pair:
+                pairs.add(cycle.pair)
     except Exception:
         logger.info("known pairs: journal read failed", exc_info=True)
 
@@ -197,28 +197,28 @@ async def _build_cooldowns(
 
 async def _build_recent_blocks(database_url: str | None) -> list[RecentBlockOut]:
     """Last 10 risk-gate rejections."""
-    from cryptotrader.journal.store import JournalStore
+    from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = JournalStore(database_url)
-        commits = await store.log(limit=200)
+        store = CycleJournalStore(database_url)
+        cycles = await store.list(limit=10, status="risk_rejected")
     except Exception:
         logger.info("recent blocks: journal read failed", exc_info=True)
         return []
 
     blocks: list[RecentBlockOut] = []
-    for c in commits:
-        gate = c.risk_gate
-        if gate is None or gate.passed:
+    for cycle in cycles:
+        gate = cycle.risk_result or {}
+        if gate.get("passed", True):
             continue
-        ts = c.timestamp
+        ts = cycle.created_at
         ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
         blocks.append(
             RecentBlockOut(
                 ts=ts_str,
-                commit_hash=c.hash,
-                rule=getattr(gate, "rejected_by", "") or "unknown",
-                detail=getattr(gate, "reason", "") or "",
+                cycle_id=cycle.cycle_id,
+                rule=str(gate.get("rejected_by") or "unknown"),
+                detail=str(gate.get("reason") or ""),
             )
         )
         if len(blocks) >= 10:

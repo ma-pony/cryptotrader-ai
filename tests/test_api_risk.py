@@ -11,6 +11,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from fastapi.testclient import TestClient
 
+from tests.factories.signal_fusion import cycle_record
+
 
 @pytest.fixture
 def client() -> TestClient:
@@ -169,3 +171,22 @@ class TestCircuitBreakerReset:
             resp = client.post("/api/risk/circuit-breaker/reset")
 
         assert resp.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_recent_blocks_are_read_from_risk_rejected_cycles() -> None:
+    from api.routes.risk import _build_recent_blocks
+
+    record = cycle_record(
+        cycle_id="cycle-risk",
+        status="risk_rejected",
+        risk_result={"passed": False, "rejected_by": "max_position", "reason": "too large"},
+    )
+    store = MagicMock()
+    store.list = AsyncMock(return_value=[record])
+    with patch("cryptotrader.journal.store.CycleJournalStore", return_value=store):
+        blocks = await _build_recent_blocks(None)
+
+    assert blocks[0].cycle_id == "cycle-risk"
+    assert blocks[0].rule == "max_position"
+    store.list.assert_awaited_once_with(limit=10, status="risk_rejected")

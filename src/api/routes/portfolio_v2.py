@@ -202,74 +202,61 @@ async def _load_snapshots(database_url: str | None) -> list[dict]:
         return []
 
 
-async def _load_commits(database_url: str | None) -> list:
-    from cryptotrader.journal.store import JournalStore
+async def _load_cycles(database_url: str | None) -> list:
+    from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = JournalStore(database_url)
-        return await store.log(limit=1000)
+        store = CycleJournalStore(database_url)
+        return await store.list(limit=1000, status="completed")
     except Exception:
-        logger.info("journal log read failed for pnl stats", exc_info=True)
+        logger.info("cycle journal read failed for pnl stats", exc_info=True)
         return []
 
 
-def _commit_pnl_stats(
-    commits: list,
+def _cycle_realized_pnl(cycle: Any) -> float:
+    execution = cycle.execution_result or {}
+    realized = float(execution.get("realized_pnl", 0.0) or 0.0)
+    for order in execution.get("orders", []) or []:
+        raw = order.get("raw") or {}
+        realized += float(raw.get("realized_pnl", raw.get("pnl", 0.0)) or 0.0)
+    return realized
+
+
+def _cycle_reduces_position(cycle: Any) -> bool:
+    execution = cycle.execution_result or {}
+    return any(bool((order.get("intent") or {}).get("reduce_only")) for order in execution.get("orders", []) or [])
+
+
+def _cycle_pnl_stats(
+    cycles: list,
     cutoff_30d: datetime,
     inception_cutoff: datetime | None = None,
 ) -> tuple[int, float | None, float, float | None, float]:
-    """Return (total_trades, win_rate, realized_pnl_30d, avg_trade_pnl, realized_cumulative).
-
-    Two filters applied so the trade-level metrics align with the snapshot-
-    based ``total_return`` instead of double-counting (2026-05-07 design):
-
-    (B) ``inception_cutoff``: drop commits older than the first portfolio
-        snapshot. Pre-snapshot trades are already absorbed into the equity
-        baseline used by ``total_return``; counting them again here
-        creates a phantom "every trade is negative but total is positive"
-        paradox.
-
-    (C) ``action == "close"`` only: open-action commits get their ``pnl``
-        column polluted by ``_update_one_commit_pnl`` with an unrealized
-        snapshot at the cycle right after open. That value is calibration
-        feedback for the LLM, NOT realized round-trip P&L. Real realized
-        P&L lives on the matching close-action commit. Counting both
-        double-counts each round-trip.
-
-    ``cutoff_30d`` still applies on top for the 30-day realized window.
-    """
+    """Aggregate realized PnL from completed cycle execution results."""
     eligible = []
-    for c in commits:
-        if getattr(c, "order", None) is None:
-            continue
-        ts_dt = _coerce_timestamp(c.timestamp)
+    for cycle in cycles:
+        ts_dt = _coerce_timestamp(cycle.created_at)
         if inception_cutoff is not None and (ts_dt is None or ts_dt < inception_cutoff):
             continue
-        action = ((c.verdict.action if c.verdict else "") or "").lower()
-        if action != "close":
+        if not _cycle_reduces_position(cycle):
             continue
-        eligible.append(c)
+        eligible.append(cycle)
 
     total = len(eligible)
     win_rate: float | None = None
     avg_trade_pnl: float | None = None
     if eligible:
-        settled = [c for c in eligible if c.pnl is not None]
-        if settled:
-            wins = [c for c in settled if c.pnl > 0]
-            win_rate = round(len(wins) / len(settled), 4)
-            avg_trade_pnl = round(sum(float(c.pnl) for c in settled) / len(settled), 2)
+        pnl_values = [_cycle_realized_pnl(cycle) for cycle in eligible]
+        wins = [value for value in pnl_values if value > 0.0]
+        win_rate = round(len(wins) / len(pnl_values), 4)
+        avg_trade_pnl = round(sum(pnl_values) / len(pnl_values), 2)
 
     realized = 0.0
     realized_cumulative = 0.0
-    for c in eligible:
-        if c.pnl is None:
-            continue
-        pnl_val = float(c.pnl)
-        # Inception-to-date trading PnL (used by total_return).
+    for cycle in eligible:
+        pnl_val = _cycle_realized_pnl(cycle)
         realized_cumulative += pnl_val
-        # 30d-window realized PnL (legacy field).
-        ts_dt = _coerce_timestamp(c.timestamp)
+        ts_dt = _coerce_timestamp(cycle.created_at)
         if ts_dt is None or ts_dt < cutoff_30d:
             continue
         realized += pnl_val
@@ -308,13 +295,9 @@ async def _compute_extras(
 
     - **sharpe_90d**: mean/std of daily equity returns over last 90 days, annualised
       by sqrt(365). ``None`` when fewer than 30 daily samples.
-    - **win_rate**: share of close-action commits since inception with positive
-      realized ``pnl``. ``None`` when no closes recorded.
-    - **total_trades**: count of close-action (round-trip-completing) commits
-      since inception. Open-action commits are excluded — their ``pnl`` is an
-      unrealized snapshot, not a realized trade outcome.
-    - **realized_pnl_30d**: sum of close-action realized ``pnl`` in the last
-      30 days, also subject to the inception cutoff.
+    - **win_rate**: share of reducing execution cycles with positive realized PnL.
+    - **total_trades**: count of completed cycles that reduce an existing position.
+    - **realized_pnl_30d**: realized PnL from their execution result payloads.
     - **total_return / total_return_pct**: *realized* trading PnL since
       inception — sum of all closed-trade ``pnl`` since the first portfolio
       snapshot. **Does not include unrealized PnL on open positions** to avoid
@@ -340,10 +323,10 @@ async def _compute_extras(
     snaps = await _load_snapshots(database_url)
     sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
 
-    commits = await _load_commits(database_url)
+    cycles = await _load_cycles(database_url)
     inception_ts = _inception_timestamp(snaps)
-    total, win_rate, realized_30d, avg_trade_pnl, realized_cumulative = _commit_pnl_stats(
-        commits, now - timedelta(days=30), inception_cutoff=inception_ts
+    total, win_rate, realized_30d, avg_trade_pnl, realized_cumulative = _cycle_pnl_stats(
+        cycles, now - timedelta(days=30), inception_cutoff=inception_ts
     )
 
     # Realized-only trading PnL (excludes deposits / withdrawals and excludes
@@ -520,24 +503,20 @@ def _first_eq_at_or_after(snaps: list[dict], cutoff: datetime) -> float | None:
     return None
 
 
-def _sum_realized_pnl_since(commits: list[Any], cutoff: datetime) -> float:
-    """Sum close-action realized pnl since `cutoff`."""
+def _sum_realized_pnl_since(cycles: list[Any], cutoff: datetime) -> float:
+    """Sum realized execution PnL since ``cutoff``."""
     realized = 0.0
-    for c in commits:
-        ts = _coerce_timestamp(getattr(c, "timestamp", None))
+    for cycle in cycles:
+        ts = _coerce_timestamp(cycle.created_at)
         if not ts:
             continue
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=UTC)
         if ts < cutoff:
             continue
-        action = (getattr(getattr(c, "verdict", None), "action", "") or "").lower()
-        if action != "close":
+        if not _cycle_reduces_position(cycle):
             continue
-        pnl_val = getattr(c, "pnl", None)
-        if pnl_val is None:
-            continue
-        realized += float(pnl_val)
+        realized += _cycle_realized_pnl(cycle)
     return realized
 
 
@@ -545,11 +524,11 @@ async def _compute_pnl_breakdowns(database_url: str | None, current_equity: floa
     """Build 24h / 7d / 30d attribution with 4 buckets:
     realized / funding / fees / unrealized_delta.
 
-    realized comes from the local journal; funding + fees from OKX history
+    realized comes from completed Cycle Journal execution results; funding + fees from OKX history
     (cached 60s). unrealized_delta is derived to make the identity hold.
     """
     snaps = await _load_snapshots(database_url)
-    commits = await _load_commits(database_url)
+    cycles = await _load_cycles(database_url)
     now = datetime.now(UTC)
     ex_hist = await _fetch_exchange_history(now)
     exchange_ok = bool(ex_hist and ex_hist.get("_available"))
@@ -562,7 +541,7 @@ async def _compute_pnl_breakdowns(database_url: str | None, current_equity: floa
             continue
 
         delta = current_equity - eq_start
-        realized = _sum_realized_pnl_since(commits, cutoff)
+        realized = _sum_realized_pnl_since(cycles, cutoff)
         funding = float(ex_hist.get(f"{window}:funding", 0.0)) if ex_hist else 0.0
         fees = float(ex_hist.get(f"{window}:fees", 0.0)) if ex_hist else 0.0
         unrealized_delta = delta - realized - funding - fees

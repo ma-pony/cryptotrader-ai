@@ -325,7 +325,7 @@ export const CooldownSchema = z.object({
 
 export const RecentBlockSchema = z.object({
   ts: z.string(),
-  commit_hash: z.string(),
+  cycle_id: z.string(),
   rule: z.string(),
   detail: z.string(),
 });
