@@ -1932,6 +1932,7 @@ git commit -m "refactor(web): render cycle fusion decisions"
 - Delete: `src/cryptotrader/state.py`
 - Delete: `src/cryptotrader/nodes/`
 - Delete: `src/cryptotrader/debate/verdict.py`
+- Delete: `src/cryptotrader/debate/researchers.py`
 - Modify: `src/cryptotrader/models.py`
 - Modify: `src/cryptotrader/config.py`
 - Modify: `config/default.toml`
@@ -1997,6 +1998,8 @@ tests/test_observability_nodes.py
 ```
 
 使用 `rg` 找出其余旧符号测试；如果测试只验证被删除接口则删除，如果验证仍存在的业务规则则改为新领域模型测试。
+
+从 `tests/test_data_collectors.py` 删除只覆盖 `run_debate()`、`judge_debate()` 和 `_format_reports()` 的旧 researcher 测试，保留 Market/Onchain/Macro/Snapshot collector 测试。四智能体内部辩论由 Task 9 的 `tests/test_llm_committee_component.py`、`tests/test_debate_anti_ratchet.py` 和 `tests/test_debate_turn_capture.py` 接替覆盖。
 
 - [ ] **Step 4: 更新项目文档为单一 TradingCycle 架构**
 
