@@ -4,8 +4,5 @@
   "send": "Send",
   "stop": "Stop",
   "new_session": "New session",
-  "empty": "Start a new conversation",
-  "tool_call": "Tool call",
-  "tool_result": "Tool result",
-  "verdict": "Verdict"
+  "empty": "Start a new conversation"
 }

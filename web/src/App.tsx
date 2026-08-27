@@ -26,9 +26,9 @@ export const App = () => (
           <Route index element={<DashboardPage />} />
           <Route path="strategy" element={<StrategyPage />} />
           <Route path="decisions" element={<DecisionsPage />} />
-          <Route path="decisions/:commitId" element={<DecisionsPage />} />
+          <Route path="decisions/:cycleId" element={<DecisionsPage />} />
           <Route path="debate" element={<DebatePage />} />
-          <Route path="debate/:commitId" element={<DebatePage />} />
+          <Route path="debate/:cycleId" element={<DebatePage />} />
           <Route path="backtest" element={<BacktestPage />} />
           <Route path="risk" element={<RiskPage />} />
           <Route path="metrics" element={<MetricsPage />} />

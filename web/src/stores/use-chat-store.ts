@@ -12,7 +12,6 @@ export interface ChatSession {
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
-  // P2 phase 9 implements full message stream; foundational layer only persists sessions.
   pendingMessage: ChatMessage | null;
   setActiveSession: (id: string | null) => void;
   upsertSession: (session: ChatSession) => void;
@@ -29,7 +28,7 @@ export const useChatStore = create<ChatState>((set) => ({
     set((s) => {
       const next = s.sessions.filter((x) => x.id !== session.id);
       next.unshift(session);
-      return { sessions: next };
+      return { sessions: next, activeSessionId: session.id };
     }),
   removeSession: (id) =>
     set((s) => ({

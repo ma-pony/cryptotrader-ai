@@ -9,14 +9,14 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/cn';
 import { useDecisionDetail } from '@/hooks/use-decision-detail';
 import { useDecisions } from '@/hooks/use-decisions';
-import type { DebateTurn, DecisionDetail } from '@/types/api';
+import type { CommitteeDebateTurn, DecisionDetail } from '@/types/api';
 
 import { DirChip } from '@/components/ui/dir-chip';
 
 import { AgentBadge } from './components/agent-badge';
 import { DebateTurnCard } from './components/debate-turn';
 import { DivergenceMeter } from './components/divergence-meter';
-import { AGENTS, type AgentKind, type DebateScenario, scoreToDirection } from './constants';
+import { AGENTS, type AgentKind, type DebateScenario } from './constants';
 
 // Debate visual cleanup (FE-2026-05-06): collapse the violet/warning/amber
 // inline-style palette down to Tailwind utility classes. The whole page leans
@@ -51,8 +51,11 @@ const normalizeDir = (raw: string): NormalizedDir => {
   return 'neutral';
 };
 
-const toScenario = (d: DecisionDetail): DebateScenario => {
-  const turnsApi = d.debate_turns ?? [];
+const toScenario = (d: DecisionDetail): DebateScenario | null => {
+  const committee = d.components.find((component) => component.component_id === 'llm_committee');
+  if (!committee) return null;
+  const turnsApi = committee.details.debate_turns ?? [];
+  const analyses = committee.details.analyses ? Object.values(committee.details.analyses) : [];
   const groupedInitial = new Map<AgentKind, { dir: NormalizedDir; conf: number }>();
 
   // Initial positions = before-state of each agent's first-round turn; fall
@@ -62,23 +65,20 @@ const toScenario = (d: DecisionDetail): DebateScenario => {
     const kind = normalizeKind(t.from);
     if (!groupedInitial.has(kind)) {
       groupedInitial.set(kind, {
-        dir: normalizeDir(t.before_direction),
-        conf: t.before_confidence,
+        dir: normalizeDir(t.before.direction),
+        conf: t.before.confidence,
       });
     }
   }
   if (groupedInitial.size === 0) {
-    for (const a of d.agent_analyses) {
-      const kind = normalizeKind(a.name);
-      // Uses shared AGENT_SCORE_DIRECTION_THRESHOLD (±0.3) so this matches the
-      // detail grid's scoreToDirection — FE-I11 fixes a label-drift bug where the
-      // same score rendered as "bullish" here but "neutral" in agent-analysis-grid.
-      const dir: NormalizedDir = scoreToDirection(a.score);
+    for (const a of analyses) {
+      const kind = normalizeKind(a.agent_id);
+      const dir = normalizeDir(a.direction);
       groupedInitial.set(kind, { dir, conf: a.confidence });
     }
   }
 
-  const roundsMap = new Map<number, DebateTurn[]>();
+  const roundsMap = new Map<number, CommitteeDebateTurn[]>();
   for (const t of turnsApi) {
     const arr = roundsMap.get(t.round) ?? [];
     arr.push(t);
@@ -92,15 +92,14 @@ const toScenario = (d: DecisionDetail): DebateScenario => {
         from: normalizeKind(t.from),
         to: t.to ? normalizeKind(t.to) : null,
         critique: t.reasoning || t.new_findings || '（无论点文本）',
-        dir: normalizeDir(t.after_direction),
-        conf: t.after_confidence,
+        dir: normalizeDir(t.after.direction),
+        conf: t.after.confidence,
         move: t.move,
       })),
     }));
 
-  const gate = d.debate_gate;
-  const cm = d.consensus_metrics;
-  const before = cm?.dispersion ?? gate?.dispersion ?? 0;
+  const cm = committee.details.consensus_metrics;
+  const before = cm?.dispersion ?? 0;
   // FE-I12: default afterDispersion to ``before`` rather than 0. Previously a single-
   // turn final round (e.g. one agent errored out) skipped recomputation and displayed
   // a false perfect convergence (0). Now the UI shows "no change" when the final
@@ -122,7 +121,7 @@ const toScenario = (d: DecisionDetail): DebateScenario => {
     conf: v.conf,
   }));
 
-  const actionLow = d.verdict.action.toLowerCase();
+  const actionLow = committee.direction.toLowerCase();
   const finalDir: NormalizedDir =
     actionLow === 'long' || actionLow === 'buy'
       ? 'bullish'
@@ -131,25 +130,24 @@ const toScenario = (d: DecisionDetail): DebateScenario => {
         : 'neutral';
 
   return {
-    id: d.commit_hash,
+    id: d.cycle_id,
     pair: d.pair,
-    price: d.price,
+    price: d.context.current_price,
     gate: {
-      decision: gate?.decision === 'debate' ? 'debate' : 'skipped',
-      reason: gate?.reason ?? d.debate_skip_reason ?? '',
+      decision: committee.details.debate_skipped ? 'skipped' : 'debate',
+      reason: committee.details.debate_skip_reason ?? '',
     },
     initial,
     rounds,
     convergence: {
       before: Number(before.toFixed(3)),
       after: Number(afterDispersion.toFixed(3)),
-      target: cm?.confusion_threshold ?? 0.5,
+      target: 0.5,
     },
-    final_verdict: {
-      action: finalDir,
-      confidence: d.verdict.confidence,
-      scale: d.verdict.size,
-      thesis: d.verdict.reasoning || '（无裁决文本）',
+    final_signal: {
+      direction: finalDir,
+      confidence: committee.confidence,
+      reasoning: committee.reasoning,
     },
   };
 };
@@ -160,18 +158,16 @@ const DebateEmpty = ({ message }: { message: string }) => (
 
 const DebateContent = () => {
   const navigate = useNavigate();
-  const { commitId } = useParams<{ commitId?: string }>();
+  const { cycleId } = useParams<{ cycleId?: string }>();
   const decisions = useDecisions({ page: 1, size: 20 });
 
-  // Prefer URL commitId; else fall back to most-recent decision that had a debate.
-  const targetHash = useMemo(() => {
-    if (commitId) return commitId;
+  const targetCycleId = useMemo(() => {
+    if (cycleId) return cycleId;
     const items = decisions.data?.items ?? [];
-    const withDebate = items.find((i) => i.debate_status && !i.debate_status.startsWith('skipped'));
-    return withDebate?.commit_hash ?? items[0]?.commit_hash;
-  }, [commitId, decisions.data]);
+    return items[0]?.cycle_id;
+  }, [cycleId, decisions.data]);
 
-  const detail = useDecisionDetail(targetHash);
+  const detail = useDecisionDetail(targetCycleId);
 
   // FE-I7: memoize the scenario normalisation so toScenario does not re-run on
   // every ancestor re-render (React Query polling, URL param changes, etc.).
@@ -185,12 +181,12 @@ const DebateContent = () => {
     return <Skeleton className="h-96 w-full" />;
   }
 
-  if (!targetHash) {
+  if (!targetCycleId) {
     return <DebateEmpty message="暂无决策记录，新决策将自动出现在此" />;
   }
 
   if (detail.isError || !detail.data || d === null) {
-    return <DebateEmpty message={`无法加载决策 ${targetHash} 的辩论详情`} />;
+    return <DebateEmpty message={`无法加载周期 ${targetCycleId} 的辩论详情`} />;
   }
   const hasDebate = d.rounds.length > 0;
 
@@ -205,8 +201,8 @@ const DebateContent = () => {
       tone: 'pivot',
     },
     {
-      label: '裁决',
-      sub: `${d.final_verdict.action === 'bullish' ? '看多' : d.final_verdict.action === 'bearish' ? '看空' : '中性'} ${(d.final_verdict.scale * 100).toFixed(0)}%`,
+      label: '总结',
+      sub: `${d.final_signal.direction === 'bullish' ? '看多' : d.final_signal.direction === 'bearish' ? '看空' : '中性'} ${(d.final_signal.confidence * 100).toFixed(0)}%`,
       Icon: Zap,
       tone: 'final',
     },
@@ -216,7 +212,7 @@ const DebateContent = () => {
     <div className="flex flex-col gap-6">
       <PageHeader
         onBack={() => void navigate(-1)}
-        eyebrow={`辩论可视化 · 决策 ${d.id.slice(0, 10)}`}
+        eyebrow={`辩论可视化 · 周期 ${d.id.slice(0, 10)}`}
         title={hasDebate ? `${d.rounds.length} 轮交叉挑战辩论` : '无辩论（门控跳过）'}
         subtitle={
           <>
@@ -326,18 +322,15 @@ const DebateContent = () => {
       )}
 
       <div className="flex items-start gap-4 rounded-xl border border-amber-500/35 bg-gradient-to-br from-amber-500/10 to-card p-5 shadow-glow-amber">
-        <AgentBadge kind="verdict" size={48} />
+        <AgentBadge kind="other" size={48} />
         <div className="flex-1">
           <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-amber-500">
-            AI 首席决策者 · {hasDebate ? '辩论后裁决' : '直接裁决'}
+            四智能体委员会 · {hasDebate ? '辩论后总结' : '直接总结'}
           </div>
           <div className="flex items-center gap-2.5 mb-2.5">
-            <DirChip dir={d.final_verdict.action} confidence={d.final_verdict.confidence} />
-            <span className="text-[11px] text-muted-foreground">
-              仓位 {(d.final_verdict.scale * 100).toFixed(0)}%
-            </span>
+            <DirChip dir={d.final_signal.direction} confidence={d.final_signal.confidence} />
           </div>
-          <div className="text-sm leading-relaxed font-medium">{d.final_verdict.thesis}</div>
+          <div className="text-sm leading-relaxed font-medium">{d.final_signal.reasoning}</div>
         </div>
       </div>
     </div>

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Badge } from '@/components/ui/badge';
@@ -6,121 +6,67 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ui/dialog';
 import { useHitlRespond } from '@/hooks/use-hitl-approvals';
-import type { ApprovalRequest } from '@/types/api';
+import { cn } from '@/lib/cn';
+import { formatCurrency, formatDateTime } from '@/lib/format';
+import type { ApprovalRequest, TargetPosition } from '@/types/api';
 
 interface Props {
   approval: ApprovalRequest;
 }
 
-const actionColor: Record<string, string> = {
-  long: 'text-success',
-  short: 'text-destructive',
-  close: 'text-warning',
-};
-
-const directionIcon: Record<string, string> = {
-  bullish: '\u25B2',
-  bearish: '\u25BC',
-  neutral: '\u25CF',
+const targetLabel = (target: TargetPosition) => {
+  const ratio = `${(target.size_ratio * 100).toFixed(0)}%`;
+  if (target.side === 'long') return `目标多仓 ${ratio}`;
+  if (target.side === 'short') return `目标空仓 ${ratio}`;
+  return '目标清仓';
 };
 
 export const ApprovalItem = ({ approval }: Props) => {
   const { t } = useTranslation('risk');
   const respond = useHitlRespond();
   const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | null>(null);
-  const [remaining, setRemaining] = useState('');
-
-  useEffect(() => {
-    if (!approval.expires_at) return;
-    const tick = () => {
-      const diff = new Date(approval.expires_at!).getTime() - Date.now();
-      if (diff <= 0) {
-        setRemaining(t('hitl.expired'));
-        return;
-      }
-      const m = Math.floor(diff / 60_000);
-      const s = Math.floor((diff % 60_000) / 1000);
-      setRemaining(`${m}:${s.toString().padStart(2, '0')}`);
-    };
-    tick();
-    const id = setInterval(tick, 1000);
-    return () => clearInterval(id);
-  }, [approval.expires_at, t]);
-
-  const isUrgent = (() => {
-    if (!approval.expires_at) return false;
-    return new Date(approval.expires_at).getTime() - Date.now() < 60_000;
-  })();
-
-  const { verdict_snapshot: v, agent_analyses_snapshot: agents } = approval;
-
-  const reasonKey = `hitl.reason.${approval.trigger_reason}` as const;
+  const { trade_plan: plan } = approval;
 
   return (
     <>
-      <Card className="border-warning/40">
+      <Card className="overflow-hidden border-amber-500/40">
+        <div className="h-1 bg-amber-500" />
         <CardHeader className="p-4 pb-2">
-          <CardTitle className="text-sm flex items-center justify-between">
-            <span className="flex items-center gap-2">
+          <CardTitle className="flex flex-wrap items-start justify-between gap-3 text-sm">
+            <span>
               <span className="font-semibold">{approval.pair}</span>
-              <Badge variant="outline">{t(reasonKey)}</Badge>
+              <span className="ml-2 font-mono text-[10px] text-muted-foreground">{approval.cycle_id}</span>
             </span>
-            <span className={`text-xs tabular-nums font-mono ${isUrgent ? 'text-destructive animate-pulse' : 'text-muted-foreground'}`}>
-              {remaining}
+            <span className="flex items-center gap-2">
+              <Badge variant="secondary">Revision {approval.profile_revision}</Badge>
+              <span className="font-mono text-[10px] text-muted-foreground">{formatDateTime(approval.created_at)}</span>
             </span>
           </CardTitle>
         </CardHeader>
-        <CardContent className="p-4 pt-0 space-y-3">
-          <div className="flex items-center gap-4 text-sm">
-            <span className={`font-semibold uppercase ${actionColor[v.action] ?? 'text-foreground'}`}>
-              {v.action}
-            </span>
-            {v.position_scale != null && (
-              <span className="text-muted-foreground">
-                {t('hitl.position_scale')}: <span className="font-medium tabular-nums">{(v.position_scale * 100).toFixed(0)}%</span>
-              </span>
-            )}
-            {v.confidence != null && (
-              <span className="text-muted-foreground">
-                {t('hitl.confidence')}: <span className="font-medium tabular-nums">{(v.confidence * 100).toFixed(0)}%</span>
-              </span>
-            )}
+        <CardContent className="space-y-4 p-4 pt-1">
+          <div className="flex flex-wrap items-end justify-between gap-4 rounded-lg bg-muted/40 p-3">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">冻结交易计划</div>
+              <div className={cn('mt-1 text-lg font-semibold', plan.target.side === 'long' ? 'text-trade-long' : plan.target.side === 'short' ? 'text-trade-short' : 'text-muted-foreground')}>
+                {targetLabel(plan.target)}
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">融合分数</div>
+              <div className="font-mono text-lg font-semibold">{plan.fused_signal.score >= 0 ? '+' : ''}{plan.fused_signal.score.toFixed(2)}</div>
+            </div>
           </div>
 
-          {agents.length > 0 && (
-            <div className="flex gap-3 text-xs text-muted-foreground">
-              {agents.map((a) => (
-                <span key={a.agent} className="flex items-center gap-1">
-                  <span>{directionIcon[a.direction] ?? '?'}</span>
-                  <span className="capitalize">{a.agent}</span>
-                  <span className="tabular-nums">{(a.confidence * 100).toFixed(0)}%</span>
-                </span>
-              ))}
-            </div>
-          )}
+          <dl className="grid grid-cols-2 gap-3 text-xs">
+            <div className="rounded-md border border-border p-3"><dt className="text-muted-foreground">ATR 止损</dt><dd className="mt-1 font-mono font-medium">{plan.stop_loss === null ? '—' : formatCurrency(plan.stop_loss)}</dd></div>
+            <div className="rounded-md border border-border p-3"><dt className="text-muted-foreground">目标止盈</dt><dd className="mt-1 font-mono font-medium">{plan.take_profit === null ? '—' : formatCurrency(plan.take_profit)}</dd></div>
+          </dl>
 
-          {v.reasoning && (
-            <p className="text-xs text-muted-foreground line-clamp-2">{v.reasoning}</p>
-          )}
+          <p className="text-xs leading-5 text-muted-foreground">批准后会用最新账户状态重新执行风控，再按这份冻结目标计划下单。</p>
 
           <div className="flex gap-2">
-            <Button
-              size="sm"
-              variant="primary"
-              className="bg-success hover:bg-success/90 text-success-foreground"
-              onClick={() => setConfirmAction('approve')}
-              disabled={respond.isPending}
-            >
-              {t('hitl.approve')}
-            </Button>
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() => setConfirmAction('reject')}
-              disabled={respond.isPending}
-            >
-              {t('hitl.reject')}
-            </Button>
+            <Button size="sm" variant="primary" className="bg-success text-success-foreground hover:bg-success/90" onClick={() => setConfirmAction('approve')} disabled={respond.isPending}>{t('hitl.approve')}</Button>
+            <Button size="sm" variant="destructive" onClick={() => setConfirmAction('reject')} disabled={respond.isPending}>{t('hitl.reject')}</Button>
           </div>
         </CardContent>
       </Card>

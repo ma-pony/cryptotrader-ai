@@ -89,22 +89,25 @@ describe('Portfolio schema contract', () => {
 });
 
 describe('Decision list + detail schemas', () => {
-  it('parses list item with Phase-1 extras', () => {
+  it('parses a cycle list item', () => {
     const item = {
-      commit_hash: 'c5a8f2e39b1a4b2c',
-      ts: '2026-04-24T10:32:08+00:00',
+      cycle_id: 'cycle-1',
+      ts: '2026-08-28T10:32:08+00:00',
       pair: 'BTC/USDT',
+      pair_display: 'BTC/USDT',
+      market_type: 'spot',
+      status: 'completed',
+      profile_revision: 7,
       price: 92810.22,
-      verdict: { action: 'long', size: 0.6, confidence: 0.78, reasoning: '', source: 'ai' },
-      is_filled: true,
-      trace_id: 'abc-123',
-      pnl: 1831.2,
-      debate_status: 'skipped-consensus',
-      reject_reason: null,
+      fused_score: 0.48,
+      target_position: { side: 'long', size_ratio: 0.3 },
+      component_error: null,
+      risk_result: { passed: true, rejected_by: '', reason: '', target: { side: 'long', size_ratio: 0.3 } },
+      execution_result: { succeeded: true, algo_id: 'oco-1', error: null, orders: [] },
     };
     const parsed = DecisionListItemSchema.parse(item);
-    expect(parsed.debate_status).toBe('skipped-consensus');
-    expect(parsed.pnl).toBe(1831.2);
+    expect(parsed.cycle_id).toBe('cycle-1');
+    expect(parsed.fused_score).toBe(0.48);
   });
 
   it('parses paginated list envelope', () => {
@@ -119,102 +122,99 @@ describe('Decision list + detail schemas', () => {
     ).not.toThrow();
   });
 
-  it('parses full detail with all new-field groups', () => {
+  it('parses component, debate, fusion, target, risk, and execution groups', () => {
     const detail = {
-      commit_hash: 'c5a8f2e39b1a',
-      ts: '2026-04-24T10:32:08+00:00',
+      cycle_id: 'cycle-1',
+      ts: '2026-08-28T10:32:08+00:00',
       pair: 'BTC/USDT',
-      price: 92810.22,
-      agent_analyses: [
-        { name: 'tech_agent', score: 0.6, confidence: 0.82, reasoning: 'bull case', is_mock: false },
-      ],
-      debate_rounds: [],
-      verdict: {
-        action: 'long',
-        size: 0.6,
-        confidence: 0.78,
-        reasoning: 'strong consensus',
-        source: 'ai',
+      pair_display: 'BTC/USDT',
+      market_type: 'spot',
+      status: 'completed',
+      profile_revision: 7,
+      context: {
+        pair: 'BTC/USDT',
+        as_of: '2026-08-28T10:32:08+00:00',
+        mode: 'paper',
+        exchange_id: 'binance',
+        market_type: 'spot',
+        equity: 10_000,
+        current_price: 92810.22,
+        atr: 1_200,
+        current_position: { side: 'flat', amount: 0, size_ratio: 0, avg_price: null, unrealized_pnl: 0 },
+        portfolio: {},
       },
-      risk_gate: { passed: true, checks: [] },
-      execution: null,
-      node_timeline: [{ node: 'tech_agent', start_ms: 0, duration_ms: 150 }],
-      trace_id: 'trace-abc',
-      debate_turns: [
-        {
-          round: 1,
-          from: 'tech_agent',
-          to: 'chain_agent',
-          before_direction: 'bullish',
-          before_confidence: 0.6,
-          after_direction: 'bullish',
-          after_confidence: 0.85,
-          move: '强化',
-          reasoning: 'new finding',
-          new_findings: 'whale alert',
-          errored: false,
+      components: [{
+        component_id: 'llm_committee',
+        direction: 'long',
+        confidence: 0.75,
+        reasoning: 'committee summary',
+        details: {
+          analyses: {
+            tech_agent: { agent_id: 'tech_agent', direction: 'bullish', confidence: 0.82, reasoning: 'bull case' },
+          },
+          debate_turns: [{
+            round: 1,
+            from: 'tech_agent',
+            to: 'chain_agent',
+            before: { direction: 'bullish', confidence: 0.6 },
+            after: { direction: 'bullish', confidence: 0.85 },
+            move: '强化',
+            reasoning: 'new finding',
+            new_findings: 'whale alert',
+            errored: false,
+          }],
+          consensus_metrics: { strength: 0.7, mean_score: 0.5, dispersion: 0.15 },
+          debate_skipped: false,
+          debate_skip_reason: '',
         },
-      ],
-      debate_gate: {
-        decision: 'skipped-consensus',
-        reason: 'strong consensus',
-        strength: 0.7,
-        mean_score: 0.5,
-        dispersion: 0.15,
+      }],
+      component_error: null,
+      fusion: {
+        score: 0.48,
+        reasoning: 'weighted',
+        contributions: [
+          { component_id: 'llm_committee', weight: 0.4, signed_score: 0.75, weighted_score: 0.3 },
+        ],
       },
-      consensus_metrics: {
-        strength: 0.7,
-        mean_score: 0.5,
-        dispersion: 0.15,
-        skip_threshold: 0.5,
-        confusion_threshold: 0.05,
+      target_position: { side: 'long', size_ratio: 0.3 },
+      trade_plan: {
+        target: { side: 'long', size_ratio: 0.3 },
+        stop_loss: 90_000,
+        take_profit: 98_000,
+        component_signals: [],
+        fused_signal: { score: 0.48, reasoning: 'weighted', contributions: [] },
       },
-      latency_breakdown: {
-        data_ms: 820,
-        agents_ms: 4210,
-        debate_ms: 0,
-        verdict_ms: 1340,
-        risk_ms: 95,
-        execute_ms: 182,
-        other_ms: 0,
-        total_ms: 6647,
+      hitl_result: null,
+      risk_result: { passed: true, rejected_by: '', reason: '', target: { side: 'long', size_ratio: 0.3 } },
+      execution_result: {
+        succeeded: true,
+        algo_id: 'oco-1',
+        error: null,
+        orders: [
+        {
+          intent: { pair: 'BTC/USDT', side: 'buy', amount: 0.1, reduce_only: false },
+          status: 'filled',
+          exchange_id: 'order-1',
+          raw: {},
+        },
+        ],
       },
-      token_usage: {
-        input_tokens: 12840,
-        output_tokens: 3210,
-        cache_hits: 2,
-        calls: 5,
-        cost_usd: 0.168,
-        by_model: { 'claude-sonnet-4-6': { input: 10000, output: 2500, calls: 3, cost_usd: 0.075 } },
-      },
-      pnl: 1831.2,
-      retrospective: null,
-      debate_skip_reason: 'consensus',
     };
     const parsed = DecisionDetailSchema.parse(detail);
-    expect(parsed.debate_turns).toHaveLength(1);
-    expect(parsed.debate_gate?.decision).toBe('skipped-consensus');
-    expect(parsed.latency_breakdown.total_ms).toBe(6647);
-    expect(parsed.token_usage.cost_usd).toBe(0.168);
+    expect(parsed.components[0]?.details.debate_turns).toHaveLength(1);
+    expect(parsed.fusion?.score).toBe(0.48);
+    expect(parsed.target_position?.side).toBe('long');
   });
 
-  it('tolerates missing optional groups (old commits before Phase 1)', () => {
-    const minimal = {
+  it('rejects the removed legacy verdict contract', () => {
+    const legacy = {
       commit_hash: 'abc',
       ts: '2026-01-01T00:00:00+00:00',
       pair: 'BTC/USDT',
       price: 50000,
-      agent_analyses: [],
-      debate_rounds: [],
       verdict: { action: 'hold', size: 0, confidence: 0, reasoning: '', source: 'ai' },
-      risk_gate: { passed: true, checks: [] },
-      execution: null,
-      node_timeline: [],
     };
-    const parsed = DecisionDetailSchema.parse(minimal);
-    expect(parsed.debate_turns).toEqual([]);
-    expect(parsed.latency_breakdown.total_ms).toBe(0);
-    expect(parsed.token_usage.calls).toBe(0);
+    expect(DecisionDetailSchema.safeParse(legacy).success).toBe(false);
   });
 });
 

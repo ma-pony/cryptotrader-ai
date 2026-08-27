@@ -82,30 +82,141 @@ export const SchedulerStatusSchema = z.object({
   redis_available: z.boolean(),
 });
 
-// ── §3 Decisions (matches DecisionListItem / DecisionDetailOut) ──
+// ── §3 Trading cycle decisions ──
 
-export const VerdictSlimSchema = z.object({
-  action: z.string(),
-  size: z.number().default(0),
-  confidence: z.number().default(0),
-  reasoning: z.string().default(''),
-  source: z.string().default('ai'),
+export const CycleStatusSchema = z.enum([
+  'completed',
+  'no_change',
+  'awaiting_approval',
+  'approval_rejected',
+  'component_failed',
+  'risk_rejected',
+  'execution_failed',
+  'cancelled',
+]);
+
+export const SignalDirectionSchema = z.enum(['long', 'short', 'neutral']);
+
+export const TargetPositionSchema = z.object({
+  side: z.enum(['long', 'short', 'flat']),
+  size_ratio: z.number(),
+});
+
+export const CommitteeAgentAnalysisSchema = z.object({
+  agent_id: z.string(),
+  pair: z.string().optional(),
+  direction: z.enum(['bullish', 'bearish', 'neutral']),
+  confidence: z.number(),
+  reasoning: z.string(),
+  key_factors: z.array(z.string()).default([]),
+  risk_flags: z.array(z.string()).default([]),
+  data_points: z.record(z.unknown()).default({}),
+  data_sufficiency: z.enum(['high', 'medium', 'low']).optional(),
+  timestamp: z.string().optional(),
+  new_findings: z.string().optional(),
+}).passthrough();
+
+export const CommitteeDebateTurnSchema = z.object({
+  round: z.number(),
+  from: z.string(),
+  to: z.string().nullable(),
+  before: z.object({
+    direction: z.string(),
+    confidence: z.number(),
+  }),
+  after: z.object({
+    direction: z.string(),
+    confidence: z.number(),
+  }),
+  move: z.string(),
+  reasoning: z.string(),
+  new_findings: z.string().default(''),
+  errored: z.boolean().default(false),
+});
+
+export const ConsensusMetricsSchema = z.object({
+  strength: z.number().default(0),
+  mean_score: z.number().default(0),
+  dispersion: z.number().default(0),
+}).passthrough();
+
+export const ComponentDetailsSchema = z.object({
+  analyses: z.record(CommitteeAgentAnalysisSchema).optional(),
+  debate_turns: z.array(CommitteeDebateTurnSchema).optional(),
+  consensus_metrics: ConsensusMetricsSchema.optional(),
+  debate_skipped: z.boolean().optional(),
+  debate_skip_reason: z.string().optional(),
+}).passthrough();
+
+export const ComponentSignalSchema = z.object({
+  component_id: z.string(),
+  direction: SignalDirectionSchema,
+  confidence: z.number(),
+  reasoning: z.string(),
+  details: ComponentDetailsSchema.default({}),
+});
+
+export const ComponentContributionSchema = z.object({
+  component_id: z.string(),
+  weight: z.number(),
+  signed_score: z.number(),
+  weighted_score: z.number(),
+});
+
+export const FusedSignalSchema = z.object({
+  score: z.number(),
+  reasoning: z.string(),
+  contributions: z.array(ComponentContributionSchema),
+});
+
+export const TradePlanSchema = z.object({
+  target: TargetPositionSchema,
+  stop_loss: z.number().nullable(),
+  take_profit: z.number().nullable(),
+  component_signals: z.array(ComponentSignalSchema),
+  fused_signal: FusedSignalSchema,
+});
+
+export const CycleRiskResultSchema = z.object({
+  passed: z.boolean(),
+  rejected_by: z.string(),
+  reason: z.string(),
+  target: TargetPositionSchema,
+});
+
+export const ExecutionOrderResultSchema = z.object({
+  intent: z.object({
+    pair: z.string(),
+    side: z.enum(['buy', 'sell']),
+    amount: z.number(),
+    reduce_only: z.boolean(),
+  }),
+  status: z.string(),
+  exchange_id: z.string().nullable(),
+  raw: z.record(z.unknown()),
+});
+
+export const CycleExecutionResultSchema = z.object({
+  succeeded: z.boolean(),
+  algo_id: z.string().nullable(),
+  error: z.string().nullable(),
+  orders: z.array(ExecutionOrderResultSchema),
 });
 
 export const DecisionListItemSchema = z.object({
-  commit_hash: z.string(),
+  cycle_id: z.string(),
   ts: z.string(),
-  pair: z.string(), // ccxt canonical
-  pair_display: z.string().optional(), // spec 013 — fallback to `pair` if absent
-  market_type: MarketTypeSchema.default('spot'),
-  price: z.number().default(0),
-  verdict: VerdictSlimSchema,
-  is_filled: z.boolean().default(false),
-  trace_id: z.string().nullable().optional(),
-  // Alignment with prototype (2026-04-24):
-  pnl: z.number().nullable().optional(),
-  debate_status: z.string().default(''),
-  reject_reason: z.string().nullable().optional(),
+  pair: z.string(),
+  pair_display: z.string(),
+  market_type: MarketTypeSchema,
+  status: CycleStatusSchema,
+  profile_revision: z.number(),
+  price: z.number(),
+  fused_score: z.number().nullable(),
+  target_position: TargetPositionSchema.nullable(),
+  component_error: z.record(z.string()).nullable(),
+  risk_result: CycleRiskResultSchema.nullable(),
+  execution_result: CycleExecutionResultSchema.nullable(),
 });
 
 export const PaginatedDecisionsSchema = z.object({
@@ -116,126 +227,44 @@ export const PaginatedDecisionsSchema = z.object({
   has_next: z.boolean(),
 });
 
-export const AgentAnalysisSchema = z.object({
-  name: z.string(),
-  score: z.number(),
-  confidence: z.number(),
-  reasoning: z.string().default(''),
-  is_mock: z.boolean().default(false),
-});
-
-export const DebateRoundSchema = z.object({
-  round: z.number(),
-  bull_message: z.string().default(''),
-  bear_message: z.string().default(''),
-});
-
-export const DebateTurnSchema = z.object({
-  round: z.number(),
-  from: z.string(),
-  to: z.string().nullable().optional(),
-  before_direction: z.string(),
-  before_confidence: z.number(),
-  after_direction: z.string(),
-  after_confidence: z.number(),
-  move: z.string(),
-  reasoning: z.string().default(''),
-  new_findings: z.string().default(''),
-  errored: z.boolean().default(false),
-});
-
-export const DebateGateSchema = z.object({
-  decision: z.string(),
-  reason: z.string().default(''),
-  strength: z.number().default(0),
-  mean_score: z.number().default(0),
-  dispersion: z.number().default(0),
-});
-
-export const ConsensusMetricsSchema = z.object({
-  strength: z.number().default(0),
-  mean_score: z.number().default(0),
-  dispersion: z.number().default(0),
-  skip_threshold: z.number().default(0.5),
-  confusion_threshold: z.number().default(0.05),
-});
-
-export const LatencyBreakdownSchema = z.object({
-  data_ms: z.number().default(0),
-  agents_ms: z.number().default(0),
-  debate_ms: z.number().default(0),
-  verdict_ms: z.number().default(0),
-  risk_ms: z.number().default(0),
-  execute_ms: z.number().default(0),
-  other_ms: z.number().default(0),
-  total_ms: z.number().default(0),
-});
-
-export const TokenUsageSchema = z.object({
-  input_tokens: z.number().default(0),
-  output_tokens: z.number().default(0),
-  cache_hits: z.number().default(0),
-  calls: z.number().default(0),
-  cost_usd: z.number().default(0),
-  by_model: z.record(z.record(z.number())).default({}),
-});
-
-export const RiskCheckSchema = z.object({
-  name: z.string(),
-  passed: z.boolean(),
-  reason: z.string().nullable().optional(),
-  threshold: z.union([z.number(), z.string()]).nullable().optional(),
-});
-
-export const RiskGateSchema = z.object({
-  passed: z.boolean(),
-  checks: z.array(RiskCheckSchema).default([]),
-});
-
-export const ExecutionSchema = z.object({
-  order_id: z.string(),
-  status: z.string(),
-  fill_price: z.number().default(0),
-  fill_size: z.number().default(0),
-  fee: z.number().default(0),
-  slippage_bps: z.number().default(0),
-  exchange: z.string().default('paper'),
-});
-
-export const NodeTimelineEntrySchema = z.object({
-  node: z.string(),
-  start_ms: z.number(),
-  duration_ms: z.number(),
-});
-
 export const DecisionDetailSchema = z.object({
-  commit_hash: z.string(),
+  cycle_id: z.string(),
   ts: z.string(),
-  pair: z.string(), // ccxt canonical
-  pair_display: z.string().optional(), // spec 013
-  market_type: MarketTypeSchema.default('spot'),
-  price: z.number(),
-  agent_analyses: z.array(AgentAnalysisSchema),
-  debate_rounds: z.array(DebateRoundSchema),
-  verdict: VerdictSlimSchema,
-  risk_gate: RiskGateSchema,
-  execution: ExecutionSchema.nullable(),
-  node_timeline: z.array(NodeTimelineEntrySchema),
-  trace_id: z.string().nullable().optional(),
-  // Alignment with prototype (2026-04-24):
-  debate_turns: z.array(DebateTurnSchema).default([]),
-  debate_gate: DebateGateSchema.nullable().optional(),
-  consensus_metrics: ConsensusMetricsSchema.nullable().optional(),
-  latency_breakdown: LatencyBreakdownSchema.default({
-    data_ms: 0, agents_ms: 0, debate_ms: 0, verdict_ms: 0,
-    risk_ms: 0, execute_ms: 0, other_ms: 0, total_ms: 0,
+  pair: z.string(),
+  pair_display: z.string(),
+  market_type: MarketTypeSchema,
+  status: CycleStatusSchema,
+  profile_revision: z.number(),
+  context: z.object({
+    pair: z.string(),
+    as_of: z.string(),
+    mode: z.enum(['live', 'paper', 'backtest']),
+    exchange_id: z.string(),
+    market_type: MarketTypeSchema,
+    equity: z.number(),
+    current_price: z.number(),
+    atr: z.number(),
+    current_position: z.object({
+      side: z.enum(['long', 'short', 'flat']),
+      amount: z.number(),
+      size_ratio: z.number(),
+      avg_price: z.number().nullable(),
+      unrealized_pnl: z.number(),
+    }),
+    portfolio: z.record(z.unknown()),
   }),
-  token_usage: TokenUsageSchema.default({
-    input_tokens: 0, output_tokens: 0, cache_hits: 0, calls: 0, cost_usd: 0, by_model: {},
-  }),
-  pnl: z.number().nullable().optional(),
-  retrospective: z.string().nullable().optional(),
-  debate_skip_reason: z.string().default(''),
+  components: z.array(ComponentSignalSchema),
+  component_error: z.record(z.string()).nullable(),
+  fusion: FusedSignalSchema.nullable(),
+  target_position: TargetPositionSchema.nullable(),
+  trade_plan: TradePlanSchema.nullable(),
+  hitl_result: z.object({
+    approval_id: z.string(),
+    status: z.enum(['pending', 'approved', 'rejected']),
+    decision_by: z.string().optional(),
+  }).nullable(),
+  risk_result: CycleRiskResultSchema.nullable(),
+  execution_result: CycleExecutionResultSchema.nullable(),
 });
 
 // ── §4 Backtest (matches BacktestParams / BacktestRunStatus / sessions) ──
@@ -455,27 +484,15 @@ export const PaginatedTriggerEventsSchema = z.object({
 
 // ── §8 HITL Approvals ──
 
-export const AgentAnalysisSummarySchema = z.object({
-  agent: z.string(),
-  direction: z.string(),
-  confidence: z.number(),
-});
-
 export const ApprovalRequestSchema = z.object({
   approval_id: z.string(),
+  cycle_id: z.string(),
   pair: z.string(),
-  created_at: z.string().nullable(),
-  expires_at: z.string().nullable(),
-  trigger_reason: z.string(),
-  verdict_snapshot: z.object({
-    action: z.string(),
-    position_scale: z.number().optional(),
-    confidence: z.number().optional(),
-    reasoning: z.string().optional(),
-  }),
-  agent_analyses_snapshot: z.array(AgentAnalysisSummarySchema),
-  status: z.enum(['pending', 'approved', 'rejected', 'expired']),
+  profile_revision: z.number(),
+  trade_plan: TradePlanSchema,
+  status: z.enum(['pending', 'approved', 'rejected']),
   decision_by: z.string().nullable(),
+  created_at: z.string(),
   decided_at: z.string().nullable(),
 });
 
@@ -483,6 +500,7 @@ export const HitlPendingListSchema = z.array(ApprovalRequestSchema);
 
 export const HitlRespondSchema = z.object({
   approval_id: z.string(),
+  cycle_id: z.string(),
   status: z.string(),
-  message: z.string(),
+  cycle_status: z.string(),
 });

@@ -29,16 +29,8 @@
   "redis_warning": "Redis 不可达：风控状态可能不准确",
   "hitl": {
     "title": "待审批交易",
-    "position_scale": "仓位比例",
-    "confidence": "置信度",
     "approve": "批准",
     "reject": "拒绝",
-    "expired": "已过期",
-    "reason": {
-      "position_scale": "大额仓位",
-      "divergence": "Agent 分歧",
-      "cold_start": "冷启动保护"
-    },
     "confirm_approve_title": "确认批准交易？",
     "confirm_approve_body": "批准后该交易将继续执行风控检查并下单。",
     "confirm_approve_action": "确认批准",

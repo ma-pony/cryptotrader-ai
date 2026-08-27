@@ -1,7 +1,7 @@
 import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
-import type { DecisionListFilter } from '@/types/api';
+import type { CycleStatus, DecisionListFilter } from '@/types/api';
 
 interface Props {
   filter: DecisionListFilter;
@@ -11,6 +11,16 @@ interface Props {
 
 export const DecisionsFilterBar = ({ filter, onFilterChange, pairs }: Props) => {
   const { t } = useTranslation('decisions');
+  const statuses: CycleStatus[] = [
+    'completed',
+    'no_change',
+    'awaiting_approval',
+    'approval_rejected',
+    'component_failed',
+    'risk_rejected',
+    'execution_failed',
+    'cancelled',
+  ];
 
   return (
     <div className="flex flex-wrap items-end gap-3">
@@ -31,28 +41,21 @@ export const DecisionsFilterBar = ({ filter, onFilterChange, pairs }: Props) => 
         </select>
       </label>
       <label className="space-y-1 text-xs">
-        <span className="text-muted-foreground">{t('filter.from')}</span>
-        <input
-          type="date"
+        <span className="text-muted-foreground">{t('filter.status')}</span>
+        <select
           className="block h-8 rounded-md border border-input bg-background px-2 text-sm"
-          value={filter.from ?? ''}
+          value={filter.status ?? ''}
           onChange={(e) => {
-            const { from: _, ...rest } = filter;
-            onFilterChange(e.target.value ? { ...rest, from: e.target.value, page: 1 } : { ...rest, page: 1 });
+            const { status: _, ...rest } = filter;
+            const status = e.target.value as CycleStatus;
+            onFilterChange(status ? { ...rest, status, page: 1 } : { ...rest, page: 1 });
           }}
-        />
-      </label>
-      <label className="space-y-1 text-xs">
-        <span className="text-muted-foreground">{t('filter.to')}</span>
-        <input
-          type="date"
-          className="block h-8 rounded-md border border-input bg-background px-2 text-sm"
-          value={filter.to ?? ''}
-          onChange={(e) => {
-            const { to: _, ...rest } = filter;
-            onFilterChange(e.target.value ? { ...rest, to: e.target.value, page: 1 } : { ...rest, page: 1 });
-          }}
-        />
+        >
+          <option value="">{t('filter.all_statuses')}</option>
+          {statuses.map((status) => (
+            <option key={status} value={status}>{t(`status.${status}`)}</option>
+          ))}
+        </select>
       </label>
       <Button
         variant="ghost"

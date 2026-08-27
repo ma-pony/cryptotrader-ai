@@ -35,5 +35,5 @@ export interface DebateScenario {
   initial: { kind: AgentKind; dir: Direction; conf: number }[];
   rounds: DebateRound[];
   convergence: { before: number; after: number; target: number };
-  final_verdict: { action: Direction; confidence: number; scale: number; thesis: string };
+  final_signal: { direction: Direction; confidence: number; reasoning: string };
 }

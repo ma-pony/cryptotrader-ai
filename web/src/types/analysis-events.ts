@@ -1,33 +1,31 @@
+import type { ComponentSignal, FusedSignal } from './api';
+
 export type AnalysisEventType =
   | 'session_start'
-  | 'session_replaced'
-  | 'node_started'
-  | 'node_done'
-  | 'agent_thinking'
-  | 'agent_analysis'
-  | 'debate_started'
-  | 'debate_round_done'
-  | 'verdict_ready'
-  | 'verdict_partial'
-  | 'risk_checked'
-  | 'checkpoint_saved'
+  | 'cycle_started'
+  | 'component_started'
+  | 'component_completed'
+  | 'component_failed'
+  | 'committee_agent_started'
+  | 'committee_agent_completed'
+  | 'committee_agent_failed'
+  | 'debate_round_started'
+  | 'debate_round_completed'
+  | 'committee_summary_completed'
+  | 'fusion_completed'
+  | 'cycle_awaiting_approval'
+  | 'cycle_completed'
+  | 'cycle_failed'
+  | 'cycle_cancelled'
+  | 'stream_resume'
+  | 'stream_done'
+  | 'stream_error'
   | 'interrupt_received'
   | 'interrupt_noop'
   | 'interrupt_rejected'
   | 'steer_queued'
   | 'steer_too_late'
-  | 'steer_truncated'
-  | 'stream_resume'
-  | 'stream_done'
-  | 'stream_error';
-
-export type LegacyEventType =
-  | 'session'
-  | 'message_start'
-  | 'content_delta'
-  | 'tool_call'
-  | 'message_end'
-  | 'done';
+  | 'steer_truncated';
 
 export interface SSEEnvelope<T = Record<string, unknown>> {
   event_id: number;
@@ -37,56 +35,48 @@ export interface SSEEnvelope<T = Record<string, unknown>> {
   data: T;
 }
 
-export interface NodeStartedData {
-  node_name: string;
+export interface CycleStartedData {
+  cycle_id: string;
+  pair: string;
+  mode: 'live' | 'paper' | 'backtest';
 }
 
-export interface NodeDoneData {
-  node_name: string;
-  duration_ms: number;
+export interface ComponentStartedData {
+  component_id: string;
 }
 
-export interface AgentThinkingData {
+export interface ComponentCompletedData {
+  component_id: string;
+  signal: ComponentSignal;
+}
+
+export interface ComponentFailedData {
+  component_id: string;
+  error_type: string;
+  error: string;
+}
+
+export interface CommitteeAgentCompletedData {
   agent_id: string;
+  analysis: {
+    direction: string;
+    confidence: number;
+  };
 }
 
-export interface AgentAnalysisData {
-  agent_id: string;
-  direction: string;
-  confidence: number;
-  steered: boolean;
-}
-
-export interface DebateStartedData {
+export interface DebateRoundData {
   round_number: number;
 }
 
-export interface DebateRoundDoneData {
-  round_number: number;
-  updated_positions: Record<string, { direction: string; confidence: number }>;
+export interface FusionCompletedData {
+  cycle_id: string;
+  fusion: FusedSignal;
 }
 
-export interface VerdictReadyData {
-  action: string;
-  confidence: number;
-  position_scale: number;
-  reasoning: string;
-}
-
-export interface VerdictPartialData {
-  action: string;
-  confidence: number;
-  position_scale: number;
-  reasoning: string;
-  is_partial: true;
-  completed_agents: string[];
-  missing_agents: string[];
-}
-
-export interface RiskCheckedData {
-  allowed: boolean;
-  flags: string[];
-  reason: string;
+export interface CycleFinishedData {
+  cycle_id: string;
+  status: string;
+  error?: string | null;
 }
 
 export interface SteerQueuedData {

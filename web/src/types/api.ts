@@ -4,50 +4,48 @@ import type { z } from 'zod';
 // instead of z.infer (input type where .default() fields are optional).
 
 import type {
-  AgentAnalysisSchema,
+  ApprovalRequestSchema,
   BacktestMetricsSchema,
   BacktestParamsSchema,
   BacktestResultSchema,
   BacktestRunStatusSchema,
   BacktestSessionDetailSchema,
   CircuitBreakerStatusSchema,
+  CommitteeAgentAnalysisSchema,
+  CommitteeDebateTurnSchema,
+  ComponentContributionSchema,
+  ComponentSignalSchema,
   ConsensusMetricsSchema,
   CooldownSchema,
   CorrelationGroupSchema,
+  CycleExecutionResultSchema,
+  CycleRiskResultSchema,
+  CycleStatusSchema,
   DailyCostPointSchema,
-  DebateGateSchema,
-  DebateRoundSchema,
-  DebateTurnSchema,
   DecisionDetailSchema,
   DecisionListItemSchema,
   EquityCurveSchema,
   EquityPointSchema,
-  ExecutionSchema,
-  LatencyBreakdownSchema,
+  FusedSignalSchema,
+  HitlRespondSchema,
   LatencyHistogramBucketSchema,
   MetricsCountersSchema,
   MetricsPercentilesSchema,
   MetricsSummarySchema,
-  NodeTimelineEntrySchema,
   PaginatedDecisionsSchema,
   PaginatedTriggerEventsSchema,
   PortfolioSchema,
   PositionSchema,
   RecentBlockSchema,
-  RiskCheckSchema,
-  RiskGateSchema,
   RiskStatusSchema,
   RiskThresholdsSchema,
   ScheduleRuleSchema,
   SchedulerStatusSchema,
   SignalProfileSchema,
-  TokenUsageSchema,
+  TargetPositionSchema,
+  TradePlanSchema,
   TriggerEventSchema,
   TriggerTypeSchema,
-  VerdictSlimSchema,
-  AgentAnalysisSummarySchema,
-  ApprovalRequestSchema,
-  HitlRespondSchema,
 } from './api.schema';
 
 // §1 Portfolio
@@ -61,20 +59,19 @@ export type RangeWindow = '24h' | '7d' | '30d' | 'all';
 export type SchedulerStatus = z.output<typeof SchedulerStatusSchema>;
 
 // §3 Decisions
-export type VerdictSlim = z.output<typeof VerdictSlimSchema>;
+export type CycleStatus = z.output<typeof CycleStatusSchema>;
 export type DecisionListItem = z.output<typeof DecisionListItemSchema>;
 export type PaginatedDecisions = z.output<typeof PaginatedDecisionsSchema>;
-export type AgentAnalysis = z.output<typeof AgentAnalysisSchema>;
-export type DebateRound = z.output<typeof DebateRoundSchema>;
-export type DebateTurn = z.output<typeof DebateTurnSchema>;
-export type DebateGate = z.output<typeof DebateGateSchema>;
+export type CommitteeAgentAnalysis = z.output<typeof CommitteeAgentAnalysisSchema>;
+export type CommitteeDebateTurn = z.output<typeof CommitteeDebateTurnSchema>;
 export type ConsensusMetrics = z.output<typeof ConsensusMetricsSchema>;
-export type LatencyBreakdown = z.output<typeof LatencyBreakdownSchema>;
-export type TokenUsage = z.output<typeof TokenUsageSchema>;
-export type RiskCheck = z.output<typeof RiskCheckSchema>;
-export type RiskGate = z.output<typeof RiskGateSchema>;
-export type Execution = z.output<typeof ExecutionSchema>;
-export type NodeTimelineEntry = z.output<typeof NodeTimelineEntrySchema>;
+export type ComponentSignal = z.output<typeof ComponentSignalSchema>;
+export type ComponentContribution = z.output<typeof ComponentContributionSchema>;
+export type FusedSignal = z.output<typeof FusedSignalSchema>;
+export type TargetPosition = z.output<typeof TargetPositionSchema>;
+export type TradePlan = z.output<typeof TradePlanSchema>;
+export type CycleRiskResult = z.output<typeof CycleRiskResultSchema>;
+export type CycleExecutionResult = z.output<typeof CycleExecutionResultSchema>;
 export type DecisionDetail = z.output<typeof DecisionDetailSchema>;
 
 // §4 Backtest
@@ -110,7 +107,6 @@ export type TriggerEvent = z.output<typeof TriggerEventSchema>;
 export type PaginatedTriggerEvents = z.output<typeof PaginatedTriggerEventsSchema>;
 
 // §8 HITL Approvals
-export type AgentAnalysisSummary = z.output<typeof AgentAnalysisSummarySchema>;
 export type ApprovalRequest = z.output<typeof ApprovalRequestSchema>;
 export type HitlRespond = z.output<typeof HitlRespondSchema>;
 
@@ -121,16 +117,12 @@ export interface ChatMessage {
   role: ChatRole;
   ts: string;
   content_md?: string;
-  tool_calls?: Array<{ id: string; name: string; args: Record<string, unknown> }>;
-  tool_results?: Array<{ tool_call_id: string; output_md: string }>;
-  inline_widgets?: Array<{ widget_id: string; html: string; height_px?: number }>;
 }
 
 // Filters
 export interface DecisionListFilter {
   pair?: string;
-  from?: string;
-  to?: string;
+  status?: CycleStatus;
   page?: number;
   size?: number;
 }

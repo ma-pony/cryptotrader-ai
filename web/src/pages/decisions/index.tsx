@@ -16,7 +16,7 @@ const PAGE_SIZE = 20;
 const DecisionsContent = () => {
   const { t } = useTranslation('decisions');
   const navigate = useNavigate();
-  const { commitId } = useParams<{ commitId?: string }>();
+  const { cycleId } = useParams<{ cycleId?: string }>();
   const [filter, setFilter] = useState<DecisionListFilter>({ page: 1, size: PAGE_SIZE });
 
   const { data, isLoading } = useDecisions(filter);
@@ -27,10 +27,10 @@ const DecisionsContent = () => {
   }, [data]);
 
   const handleSelect = useCallback(
-    (hash: string) => {
-      void navigate(hash === commitId ? '/decisions' : `/decisions/${hash}`, { replace: true });
+    (selectedCycleId: string) => {
+      void navigate(selectedCycleId === cycleId ? '/decisions' : `/decisions/${selectedCycleId}`, { replace: true });
     },
-    [navigate, commitId],
+    [navigate, cycleId],
   );
 
   const handlePageChange = useCallback(
@@ -48,13 +48,13 @@ const DecisionsContent = () => {
           <DecisionsTable
             data={data}
             isLoading={isLoading}
-            selectedHash={commitId}
+            selectedCycleId={cycleId}
             onSelect={handleSelect}
             onPageChange={handlePageChange}
           />
         </div>
         <div className="overflow-hidden rounded-md border lg:col-span-3">
-          <DecisionDetailPanel commitHash={commitId} />
+          <DecisionDetailPanel cycleId={cycleId} />
         </div>
       </div>
     </div>

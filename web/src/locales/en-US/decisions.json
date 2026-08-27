@@ -2,8 +2,8 @@
   "title": "Decisions",
   "filter": {
     "pair": "Pair",
-    "from": "From",
-    "to": "To",
+    "status": "Cycle status",
+    "all_statuses": "All statuses",
     "all_pairs": "All pairs",
     "reset": "Reset"
   },
@@ -13,37 +13,24 @@
     "price": "Price",
     "action": "Action",
     "size": "Size",
-    "confidence": "Confidence",
+    "fused_score": "Fused score",
     "empty": "No decisions match the filter",
     "page_info": "Page {{page}} / {{total}} total",
     "prev_page": "Previous page",
     "next_page": "Next page"
   },
+  "status": {
+    "completed": "Completed",
+    "no_change": "No change",
+    "awaiting_approval": "Awaiting approval",
+    "approval_rejected": "Approval rejected",
+    "component_failed": "Component failed",
+    "risk_rejected": "Risk rejected",
+    "execution_failed": "Execution failed",
+    "cancelled": "Cancelled"
+  },
   "detail": {
     "select_hint": "Select a decision to view details",
-    "load_error": "Failed to load",
-    "node_timeline": "Node Timeline",
-    "round": "Round {{n}}",
-    "agents": "Agent Analysis",
-    "confidence": "Confidence",
-    "debate": "Bull/Bear Debate",
-    "verdict": "Verdict",
-    "action": "Action",
-    "size": "Size",
-    "risk_gate": "Risk Gate",
-    "execution": "Execution",
-    "order_id": "Order ID",
-    "fill_price": "Fill Price",
-    "fill_size": "Fill Size",
-    "fee": "Fee",
-    "slippage": "Slippage",
-    "no_execution": "No execution (HOLD or REJECT)",
-    "header": {
-      "trace_link": "Open in Jaeger"
-    },
-    "verdict_source": {
-      "AI": "AI",
-      "WEIGHTED_DOWNGRADE": "Weighted Downgrade"
-    }
+    "load_error": "Failed to load"
   }
 }

@@ -11,8 +11,8 @@ import type { DecisionListItem, PaginatedDecisions } from '@/types/api';
 interface Props {
   data: PaginatedDecisions | undefined;
   isLoading: boolean;
-  selectedHash: string | undefined;
-  onSelect: (hash: string) => void;
+  selectedCycleId: string | undefined;
+  onSelect: (cycleId: string) => void;
   onPageChange: (page: number) => void;
 }
 
@@ -25,8 +25,10 @@ const Row = ({
   isSelected: boolean;
   onSelect: () => void;
 }) => {
-  const conf = item.verdict.confidence;
-  const action = item.verdict.action?.toLowerCase() ?? 'hold';
+  const { t } = useTranslation('decisions');
+  const score = item.fused_score;
+  const action = item.target_position?.side ?? 'flat';
+  const scoreMagnitude = Math.abs(score ?? 0);
   return (
     <button
       type="button"
@@ -35,7 +37,7 @@ const Row = ({
         if (e.key === 'Enter') onSelect();
       }}
       aria-pressed={isSelected}
-      aria-label={`Decision ${item.commit_hash.slice(0, 8)} ${item.pair}`}
+      aria-label={`Cycle ${item.cycle_id.slice(0, 8)} ${item.pair}`}
       className={cn(
         'grid w-full items-center gap-3 border-b border-border px-4 py-3 text-left transition-colors',
         'grid-cols-[minmax(110px,110px)_minmax(92px,92px)_minmax(84px,84px)_minmax(72px,72px)_minmax(96px,96px)_1fr_minmax(96px,96px)]',
@@ -43,68 +45,35 @@ const Row = ({
       )}
     >
       <div className="font-mono text-[11px] text-muted-foreground">{formatDateTime(item.ts)}</div>
-      <div className="font-mono text-[11px] text-muted-foreground">{item.commit_hash.slice(0, 8)}</div>
+      <div className="font-mono text-[11px] text-muted-foreground">{item.cycle_id.slice(0, 8)}</div>
       <div className="font-mono text-xs font-medium">{item.pair}</div>
       <DirChip dir={action} />
       <div className="flex items-center gap-2">
         <div className="h-1 w-10 overflow-hidden rounded bg-muted">
           <div
-            className={cn('h-full rounded', conf > 0.6 ? 'bg-amber-500' : 'bg-muted-foreground')}
-            style={{ width: `${conf * 100}%` }}
+            className={cn('h-full rounded', score !== null && score > 0 ? 'bg-trade-long' : score !== null && score < 0 ? 'bg-trade-short' : 'bg-muted-foreground')}
+            style={{ width: `${scoreMagnitude * 100}%` }}
           />
         </div>
         <span className="font-mono text-[11px] text-muted-foreground">
-          {(conf * 100).toFixed(0)}%
+          {score === null ? '—' : `${score >= 0 ? '+' : ''}${score.toFixed(2)}`}
         </span>
       </div>
       <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
         <span className="font-mono tabular-nums">{formatCurrency(item.price)}</span>
-        <span className="truncate">仓位 {(item.verdict.size * 100).toFixed(0)}%</span>
-        {item.debate_status ? (
-          <span
-            className={cn(
-              'truncate text-[10px]',
-              item.debate_status.startsWith('skipped') ? 'text-muted-foreground' : 'text-violet-500',
-            )}
-          >
-            {item.debate_status === 'skipped-consensus'
-              ? '跳过·强共识'
-              : item.debate_status === 'skipped-confusion'
-                ? '跳过·共同困惑'
-                : item.debate_status}
-          </span>
-        ) : null}
-        {item.reject_reason ? (
-          <span className="truncate text-[10px] text-trade-short">{item.reject_reason}</span>
-        ) : null}
+        <span className="truncate">{item.target_position ? `${(item.target_position.size_ratio * 100).toFixed(0)}%` : '—'}</span>
+        <span className="truncate font-mono text-[10px]">R{item.profile_revision}</span>
       </div>
       <div className="flex flex-col items-end gap-0.5">
-        {item.pnl != null ? (
-          <span
-            className={cn(
-              'font-mono text-[11px] font-medium tabular-nums',
-              item.pnl >= 0 ? 'text-trade-long' : 'text-trade-short',
-            )}
-          >
-            {item.pnl >= 0 ? '+' : '-'}${Math.abs(item.pnl).toLocaleString('en-US', { maximumFractionDigits: 0 })}
-          </span>
-        ) : action === 'hold' ? (
-          <StatusPill tone="default">观望</StatusPill>
-        ) : item.reject_reason ? (
-          <StatusPill tone="danger">拒</StatusPill>
-        ) : item.is_filled ? (
-          <StatusPill tone="default">持仓</StatusPill>
-        ) : (
-          <StatusPill tone={action === 'long' || action === 'buy' ? 'success' : 'danger'}>
-            {action.toUpperCase()}
-          </StatusPill>
-        )}
+        <StatusPill tone={item.status === 'completed' || item.status === 'no_change' ? 'success' : item.status === 'awaiting_approval' ? 'warning' : item.status === 'cancelled' ? 'default' : 'danger'}>
+          {t(`status.${item.status}`)}
+        </StatusPill>
       </div>
     </button>
   );
 };
 
-export const DecisionsTable = ({ data, isLoading, selectedHash, onSelect, onPageChange }: Props) => {
+export const DecisionsTable = ({ data, isLoading, selectedCycleId, onSelect, onPageChange }: Props) => {
   const { t } = useTranslation('decisions');
 
   if (isLoading) {
@@ -130,10 +99,10 @@ export const DecisionsTable = ({ data, isLoading, selectedHash, onSelect, onPage
         )}
       >
         <div>{t('list.ts', { defaultValue: '时间' })}</div>
-        <div>Commit</div>
+        <div>Cycle</div>
         <div>{t('list.pair', { defaultValue: '交易对' })}</div>
         <div>{t('list.action', { defaultValue: '动作' })}</div>
-        <div>{t('list.confidence', { defaultValue: '置信度' })}</div>
+        <div>{t('list.fused_score')}</div>
         <div>{t('list.price', { defaultValue: '价格 · 仓位' })}</div>
         <div className="text-right">状态</div>
       </div>
@@ -141,10 +110,10 @@ export const DecisionsTable = ({ data, isLoading, selectedHash, onSelect, onPage
       <div className="flex-1 overflow-y-auto">
         {data.items.map((item) => (
           <Row
-            key={item.commit_hash}
+            key={item.cycle_id}
             item={item}
-            isSelected={item.commit_hash === selectedHash}
-            onSelect={() => onSelect(item.commit_hash)}
+            isSelected={item.cycle_id === selectedCycleId}
+            onSelect={() => onSelect(item.cycle_id)}
           />
         ))}
       </div>

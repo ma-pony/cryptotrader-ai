@@ -24,8 +24,8 @@ const ChatPage = () => {
 
   const { sessions, activeSessionId, setActiveSession, removeSession } = useChatStore();
   const currentSessionId = sessionId ?? activeSessionId;
-  const { messages, status, error, sendMessage, stopStream, clearMessages } = useChatMessages(currentSessionId);
-  const { progress, sendInterrupt, sendSteer } = useAnalysisProgress();
+  const { progress, handleProgressEvent, reset: resetProgress, sendInterrupt, sendSteer } = useAnalysisProgress();
+  const { messages, status, error, sendMessage, stopStream, clearMessages } = useChatMessages(currentSessionId, handleProgressEvent);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
 
   const initialContextRef = useRef(false);
@@ -54,19 +54,21 @@ const ChatPage = () => {
   const handleNewSession = useCallback(() => {
     setActiveSession(null);
     clearMessages();
+    resetProgress();
     void navigate('/chat');
     setMobileSessionsOpen(false);
-  }, [setActiveSession, clearMessages, navigate]);
+  }, [setActiveSession, clearMessages, navigate, resetProgress]);
 
   const handleRemoveSession = useCallback(
     (id: string) => {
       removeSession(id);
       if (currentSessionId === id) {
         clearMessages();
+        resetProgress();
         void navigate('/chat');
       }
     },
-    [removeSession, currentSessionId, clearMessages, navigate],
+    [removeSession, currentSessionId, clearMessages, navigate, resetProgress],
   );
 
   return (

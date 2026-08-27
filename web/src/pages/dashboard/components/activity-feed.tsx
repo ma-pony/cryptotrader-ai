@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useDecisions } from '@/hooks/use-decisions';
 import { useRiskStatus } from '@/hooks/use-risk-status';
 import { cn } from '@/lib/cn';
-import { formatCurrency, formatDateTime } from '@/lib/format';
+import { formatDateTime } from '@/lib/format';
 
 interface FeedItem {
   id: string;
@@ -30,12 +30,8 @@ const ICONS: Record<FeedItem['kind'], { Icon: typeof CheckCircle2; tone: string 
 
 const ActionBadge = ({
   action,
-  pnl,
 }: {
   action: string;
-  // exactOptionalPropertyTypes: caller may pass an explicit ``undefined``
-  // when the field is absent on the API payload.
-  pnl?: number | null | undefined;
 }) => {
   const lower = action.toLowerCase();
   if (lower === 'long' || lower === 'buy') {
@@ -43,12 +39,6 @@ const ActionBadge = ({
       <span className="inline-flex items-center gap-1 font-mono text-trade-long">
         <TrendingUp className="h-3 w-3" />
         LONG
-        {Number.isFinite(pnl ?? NaN) ? (
-          <span className="ml-1 text-[10px] tabular-nums">
-            {(pnl ?? 0) >= 0 ? '+' : ''}
-            {formatCurrency(pnl ?? 0)}
-          </span>
-        ) : null}
       </span>
     );
   }
@@ -57,26 +47,14 @@ const ActionBadge = ({
       <span className="inline-flex items-center gap-1 font-mono text-trade-short">
         <TrendingDown className="h-3 w-3" />
         SHORT
-        {Number.isFinite(pnl ?? NaN) ? (
-          <span className="ml-1 text-[10px] tabular-nums">
-            {(pnl ?? 0) >= 0 ? '+' : ''}
-            {formatCurrency(pnl ?? 0)}
-          </span>
-        ) : null}
       </span>
     );
   }
-  if (lower === 'close') {
+  if (lower === 'flat') {
     return (
       <span className="inline-flex items-center gap-1 font-mono text-amber-500">
         <MinusCircle className="h-3 w-3" />
-        CLOSE
-        {Number.isFinite(pnl ?? NaN) ? (
-          <span className="ml-1 text-[10px] tabular-nums">
-            {(pnl ?? 0) >= 0 ? '+' : ''}
-            {formatCurrency(pnl ?? 0)}
-          </span>
-        ) : null}
+        FLAT
       </span>
     );
   }
@@ -102,25 +80,26 @@ export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
     const out: FeedItem[] = [];
 
     for (const d of decisions.data?.items ?? []) {
-      const action = d.verdict.action;
-      const isHold = action.toLowerCase() === 'hold' || action.toLowerCase() === 'close';
-      const kind: FeedItem['kind'] = d.is_filled
+      const action = d.target_position?.side ?? 'flat';
+      const kind: FeedItem['kind'] = d.execution_result?.succeeded
         ? 'filled'
-        : isHold
+        : d.status === 'no_change'
           ? 'hold'
-          : 'skipped';
+          : d.status === 'component_failed' || d.status === 'risk_rejected' || d.status === 'execution_failed'
+            ? 'block'
+            : 'skipped';
       out.push({
-        id: `decision-${d.commit_hash}`,
+        id: `cycle-${d.cycle_id}`,
         ts: d.ts,
         kind,
         primary: (
           <span className="flex items-center gap-2">
-            <ActionBadge action={action} pnl={d.pnl} />
-            <span className="font-mono text-foreground">{d.pair_display ?? d.pair}</span>
+            <ActionBadge action={action} />
+            <span className="font-mono text-foreground">{d.pair_display}</span>
           </span>
         ),
-        secondary: d.is_filled ? null : t('activity.not_filled', { defaultValue: '未成交' }),
-        onClick: () => void navigate(`/decisions/${d.commit_hash}`),
+        secondary: d.execution_result?.succeeded ? null : d.status,
+        onClick: () => void navigate(`/decisions/${d.cycle_id}`),
       });
     }
 
@@ -141,7 +120,7 @@ export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
 
     out.sort((a, b) => (a.ts < b.ts ? 1 : -1));
     return out.slice(0, limit);
-  }, [decisions.data, risk.data, limit, navigate, t]);
+  }, [decisions.data, risk.data, limit, navigate]);
 
   const isLoading = decisions.isLoading || risk.isLoading;
 

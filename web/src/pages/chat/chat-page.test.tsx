@@ -1,10 +1,13 @@
 import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import i18n from '@/lib/i18n';
+
 const mockSendMessage = vi.fn();
 const mockStopStream = vi.fn();
 const mockClearMessages = vi.fn();
 const mockNavigate = vi.fn();
+let mockCancelled = false;
 
 vi.mock('react-router', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
@@ -26,6 +29,27 @@ vi.mock('@/hooks/use-chat-messages', () => ({
     sendMessage: mockSendMessage,
     stopStream: mockStopStream,
     clearMessages: mockClearMessages,
+  }),
+}));
+
+vi.mock('@/hooks/use-analysis-progress', () => ({
+  useAnalysisProgress: () => ({
+    progress: {
+      cycleId: null,
+      status: mockCancelled ? 'cancelled' : 'idle',
+      components: {},
+      agents: {},
+      debateRound: 0,
+      fusion: null,
+      target: null,
+      riskCheck: null,
+      cancelled: mockCancelled,
+      lastEventId: 0,
+    },
+    handleProgressEvent: vi.fn(),
+    reset: vi.fn(),
+    sendInterrupt: vi.fn(),
+    sendSteer: vi.fn(),
   }),
 }));
 
@@ -51,8 +75,10 @@ vi.mock('./components/session-list', () => ({
 }));
 
 describe('ChatPage', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    await i18n.changeLanguage('zh-CN');
     vi.clearAllMocks();
+    mockCancelled = false;
     vi.useFakeTimers();
   });
 
@@ -114,5 +140,14 @@ describe('ChatPage', () => {
     expect(screen.getByText(/4h/)).toBeInTheDocument();
 
     __setLocationState(null);
+  });
+
+  it('shows cancellation without constructing a partial verdict', async () => {
+    mockCancelled = true;
+    const ChatPage = (await import('./index')).default;
+    render(<ChatPage />);
+
+    expect(screen.getByText('本轮分析已取消')).toBeInTheDocument();
+    expect(screen.queryByText('部分裁决')).not.toBeInTheDocument();
   });
 });

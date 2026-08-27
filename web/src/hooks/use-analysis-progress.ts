@@ -1,171 +1,131 @@
-/**
- * useAnalysisProgress — tracks structured analysis events for the progress panel.
- */
 import { useCallback, useRef, useState } from 'react';
 
 import { env } from '@/lib/env';
 import type { SSEEvent } from '@/lib/stream-fetch';
 import { useSettingsStore } from '@/stores/use-settings-store';
+import type { ComponentSignal, FusedSignal } from '@/types/api';
 import type {
-  AgentAnalysisData,
-  DebateRoundDoneData,
-  NodeDoneData,
-  RiskCheckedData,
-  VerdictPartialData,
-  VerdictReadyData,
+  CommitteeAgentCompletedData,
+  ComponentCompletedData,
+  ComponentFailedData,
+  ComponentStartedData,
+  CycleFinishedData,
+  CycleStartedData,
+  DebateRoundData,
+  FusionCompletedData,
+  SSEEnvelope,
 } from '@/types/analysis-events';
 
-export interface NodeProgress {
-  status: 'pending' | 'running' | 'done';
-  duration_ms: number;
+export interface ComponentProgress {
+  status: 'running' | 'done' | 'failed';
+  signal?: ComponentSignal;
+  error?: string;
 }
 
 export interface AgentProgress {
-  status: 'pending' | 'thinking' | 'done';
+  status: 'thinking' | 'done' | 'failed';
   direction: string;
   confidence: number;
   steered: boolean;
 }
 
 export interface AnalysisProgressState {
-  nodes: Record<string, NodeProgress>;
+  cycleId: string | null;
+  status: 'idle' | 'running' | 'awaiting_approval' | 'completed' | 'failed' | 'cancelled';
+  components: Record<string, ComponentProgress>;
   agents: Record<string, AgentProgress>;
   debateRound: number;
-  verdict: VerdictReadyData | VerdictPartialData | null;
-  riskCheck: RiskCheckedData | null;
-  interrupted: boolean;
+  fusion: FusedSignal | null;
+  cancelled: boolean;
   lastEventId: number;
 }
 
 const INITIAL_STATE: AnalysisProgressState = {
-  nodes: {},
+  cycleId: null,
+  status: 'idle',
+  components: {},
   agents: {},
   debateRound: 0,
-  verdict: null,
-  riskCheck: null,
-  interrupted: false,
+  fusion: null,
+  cancelled: false,
   lastEventId: 0,
 };
 
-export interface UseAnalysisProgressReturn {
-  progress: AnalysisProgressState;
-  handleProgressEvent: (event: SSEEvent) => void;
-  reset: () => void;
-  sendInterrupt: (sessionId: string) => Promise<void>;
-  sendSteer: (sessionId: string, target: string, instruction: string) => Promise<void>;
-}
-
-export function useAnalysisProgress(): UseAnalysisProgressReturn {
+export function useAnalysisProgress() {
   const [progress, setProgress] = useState<AnalysisProgressState>(INITIAL_STATE);
   const lastEventIdRef = useRef(0);
 
   const handleProgressEvent = useCallback((event: SSEEvent) => {
-    const envelope = event.data as { event_id?: number };
-    if (typeof envelope.event_id === 'number') {
-      lastEventIdRef.current = envelope.event_id;
-    }
+    const envelope = event.data as SSEEnvelope;
+    lastEventIdRef.current = envelope.event_id;
+    const lastEventId = lastEventIdRef.current;
+    const payload = envelope.data;
 
     switch (event.event) {
-      case 'node_started': {
-        const { node_name } = event.data as { node_name: string };
-        setProgress((prev) => ({
-          ...prev,
-          nodes: { ...prev.nodes, [node_name]: { status: 'running', duration_ms: 0 } },
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'cycle_started': {
+        const data = payload as unknown as CycleStartedData;
+        setProgress({ ...INITIAL_STATE, cycleId: data.cycle_id, status: 'running', lastEventId });
         break;
       }
-
-      case 'node_done': {
-        const d = event.data as NodeDoneData;
-        setProgress((prev) => ({
-          ...prev,
-          nodes: { ...prev.nodes, [d.node_name]: { status: 'done', duration_ms: d.duration_ms } },
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'component_started': {
+        const data = payload as unknown as ComponentStartedData;
+        setProgress((current) => ({ ...current, components: { ...current.components, [data.component_id]: { status: 'running' } }, lastEventId }));
         break;
       }
-
-      case 'agent_thinking': {
-        const { agent_id } = event.data as { agent_id: string };
-        setProgress((prev) => ({
-          ...prev,
-          agents: {
-            ...prev.agents,
-            [agent_id]: { status: 'thinking', direction: '', confidence: 0, steered: false },
-          },
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'component_completed': {
+        const data = payload as unknown as ComponentCompletedData;
+        setProgress((current) => ({ ...current, components: { ...current.components, [data.component_id]: { status: 'done', signal: data.signal } }, lastEventId }));
         break;
       }
-
-      case 'agent_analysis': {
-        const a = event.data as AgentAnalysisData;
-        setProgress((prev) => ({
-          ...prev,
-          agents: {
-            ...prev.agents,
-            [a.agent_id]: {
-              status: 'done',
-              direction: a.direction,
-              confidence: a.confidence,
-              steered: a.steered,
-            },
-          },
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'component_failed': {
+        const data = payload as unknown as ComponentFailedData;
+        setProgress((current) => ({ ...current, components: { ...current.components, [data.component_id]: { status: 'failed', error: data.error } }, lastEventId }));
         break;
       }
-
-      case 'debate_started':
-      case 'debate_round_done': {
-        const dr = event.data as DebateRoundDoneData;
-        setProgress((prev) => ({
-          ...prev,
-          debateRound: dr.round_number,
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'committee_agent_started': {
+        const { agent_id } = payload as { agent_id: string };
+        setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'thinking', direction: '', confidence: 0, steered: false } }, lastEventId }));
         break;
       }
-
-      case 'verdict_ready': {
-        const v = event.data as VerdictReadyData;
-        setProgress((prev) => ({
-          ...prev,
-          verdict: v,
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'committee_agent_completed': {
+        const data = payload as unknown as CommitteeAgentCompletedData;
+        setProgress((current) => ({ ...current, agents: { ...current.agents, [data.agent_id]: { status: 'done', direction: data.analysis.direction, confidence: data.analysis.confidence, steered: false } }, lastEventId }));
         break;
       }
-
-      case 'verdict_partial': {
-        const vp = event.data as VerdictPartialData;
-        setProgress((prev) => ({
-          ...prev,
-          verdict: vp,
-          interrupted: true,
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'committee_agent_failed': {
+        const { agent_id } = payload as { agent_id: string };
+        setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'failed', direction: '', confidence: 0, steered: false } }, lastEventId }));
         break;
       }
-
-      case 'risk_checked': {
-        const rc = event.data as RiskCheckedData;
-        setProgress((prev) => ({
-          ...prev,
-          riskCheck: rc,
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'debate_round_started':
+      case 'debate_round_completed': {
+        const data = payload as unknown as DebateRoundData;
+        setProgress((current) => ({ ...current, debateRound: data.round_number, lastEventId }));
         break;
       }
-
-      case 'checkpoint_saved':
-      case 'interrupt_received': {
-        setProgress((prev) => ({
-          ...prev,
-          interrupted: true,
-          lastEventId: lastEventIdRef.current,
-        }));
+      case 'fusion_completed': {
+        const data = payload as unknown as FusionCompletedData;
+        setProgress((current) => ({ ...current, cycleId: data.cycle_id, fusion: data.fusion, lastEventId }));
+        break;
+      }
+      case 'cycle_awaiting_approval': {
+        const data = payload as unknown as CycleFinishedData;
+        setProgress((current) => ({ ...current, cycleId: data.cycle_id, status: 'awaiting_approval', lastEventId }));
+        break;
+      }
+      case 'cycle_completed': {
+        const data = payload as unknown as CycleFinishedData;
+        setProgress((current) => ({ ...current, cycleId: data.cycle_id, status: 'completed', lastEventId }));
+        break;
+      }
+      case 'cycle_failed': {
+        const data = payload as unknown as CycleFinishedData;
+        setProgress((current) => ({ ...current, cycleId: data.cycle_id, status: 'failed', lastEventId }));
+        break;
+      }
+      case 'cycle_cancelled': {
+        const data = payload as Partial<CycleFinishedData>;
+        setProgress((current) => ({ ...current, cycleId: data.cycle_id ?? current.cycleId, status: 'cancelled', cancelled: true, lastEventId }));
         break;
       }
     }
@@ -178,20 +138,14 @@ export function useAnalysisProgress(): UseAnalysisProgressReturn {
 
   const sendInterrupt = useCallback(async (sessionId: string) => {
     const apiKey = useSettingsStore.getState().apiKey;
-    await fetch(`${env.VITE_API_BASE_URL}/api/chat/interrupt/${encodeURIComponent(sessionId)}`, {
-      method: 'POST',
-      headers: { 'X-API-Key': apiKey },
-    });
+    await fetch(`${env.VITE_API_BASE_URL}/api/chat/interrupt/${encodeURIComponent(sessionId)}`, { method: 'POST', headers: { 'X-API-Key': apiKey } });
   }, []);
 
   const sendSteer = useCallback(async (sessionId: string, target: string, instruction: string) => {
     const apiKey = useSettingsStore.getState().apiKey;
     await fetch(`${env.VITE_API_BASE_URL}/api/chat/steer/${encodeURIComponent(sessionId)}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': apiKey,
-      },
+      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
       body: JSON.stringify({ target, instruction }),
     });
   }, []);

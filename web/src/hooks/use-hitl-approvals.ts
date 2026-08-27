@@ -13,8 +13,8 @@ export const useHitlPending = () =>
 export const useHitlRespond = () => {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ approvalId, decision, comment }: { approvalId: string; decision: 'approve' | 'reject'; comment?: string }) =>
-      apiClient.post(`/api/hitl/${approvalId}/respond`, { decision, comment: comment ?? '' }, HitlRespondSchema),
+    mutationFn: ({ approvalId, decision }: { approvalId: string; decision: 'approve' | 'reject' }) =>
+      apiClient.post(`/api/hitl/${approvalId}/respond`, { decision }, HitlRespondSchema),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['hitl-pending'] });
     },
