@@ -18,11 +18,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from cryptotrader.models import CheckResult
+from cryptotrader.risk.models import RiskCheckResult
 
 if TYPE_CHECKING:
     from cryptotrader.config import PositionConfig
-    from cryptotrader.models import TradeVerdict
+    from cryptotrader.risk.models import RiskRequest
 
 
 logger = logging.getLogger(__name__)
@@ -45,10 +45,16 @@ class AvailableMargin:
         # eval and matching engine.
         self._safety_buffer = safety_buffer
 
-    async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
-        # Closing or flat — no new margin required.
-        if verdict.action in ("hold", "close") or verdict.position_scale <= 0:
-            return CheckResult(passed=True)
+    async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
+        target = request.target
+        current = request.context.current_position
+        if target.side == "flat":
+            return RiskCheckResult(passed=True)
+        same_direction = current.side == target.side
+        current_ratio = current.size_ratio if same_direction else 0.0
+        incremental_ratio = max(0.0, target.size_ratio - current_ratio)
+        if incremental_ratio == 0.0:
+            return RiskCheckResult(passed=True)
 
         # `free_cash` is preferred (OKX-reported free USDT). Fall back to `cash`
         # when the portfolio shape predates the field (paper / older code).
@@ -57,7 +63,7 @@ class AvailableMargin:
             free_cash = portfolio.get("cash", 0.0)
         free_cash = float(free_cash or 0.0)
         if free_cash <= 0:
-            return CheckResult(
+            return RiskCheckResult(
                 passed=False,
                 reason="No free USDT margin available on exchange.",
             )
@@ -66,30 +72,28 @@ class AvailableMargin:
         if total <= 0:
             # Without equity we cannot translate position_scale to notional —
             # be conservative and pass through (other checks will catch it).
-            return CheckResult(passed=True)
+            return RiskCheckResult(passed=True)
 
-        target_notional = total * self._max_single_pct * verdict.position_scale
-        required_margin = target_notional / self._leverage
+        incremental_notional = total * self._max_single_pct * incremental_ratio
+        required_margin = incremental_notional / self._leverage
         usable = free_cash * self._safety_buffer
 
         if required_margin > usable:
-            # Try to clamp scale so required_margin == usable.
-            shrink = usable / required_margin if required_margin > 0 else 0.0
-            proposed = max(0.0, min(1.0, verdict.position_scale * shrink))
-            # Only meaningful if proposed > 0 (otherwise hard reject).
-            if proposed > 0.01:
-                return CheckResult(
+            allowed_increment = usable * self._leverage / (total * self._max_single_pct)
+            proposed = min(target.size_ratio, current_ratio + allowed_increment)
+            if proposed > current_ratio + 0.01:
+                return RiskCheckResult(
                     passed=True,
-                    scale_adjustment=proposed,
+                    size_ratio_cap=proposed,
                     reason=(
-                        f"Scale clamped to fit free margin: "
+                        f"Target ratio clamped to fit free margin: "
                         f"required {required_margin:.2f} USDT > "
                         f"usable {usable:.2f} (free={free_cash:.2f}, "
                         f"buffer={self._safety_buffer:.0%}). "
-                        f"New scale={proposed:.2%}."
+                        f"New target ratio={proposed:.2%}."
                     ),
                 )
-            return CheckResult(
+            return RiskCheckResult(
                 passed=False,
                 reason=(
                     f"Insufficient free USDT margin: required {required_margin:.2f} > "
@@ -97,4 +101,4 @@ class AvailableMargin:
                 ),
             )
 
-        return CheckResult(passed=True)
+        return RiskCheckResult(passed=True)

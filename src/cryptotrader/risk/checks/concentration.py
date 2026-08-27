@@ -19,10 +19,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cryptotrader.models import CheckResult, TradeVerdict
+from cryptotrader.risk.models import RiskCheckResult
 
 if TYPE_CHECKING:
     from cryptotrader.config import PositionConfig
+    from cryptotrader.risk.models import RiskRequest
 
 
 def _amount_of(pos_data) -> float:
@@ -40,13 +41,13 @@ class MacroConcentrationCheck:
     def __init__(self, config: PositionConfig) -> None:
         self._max_same_direction = config.max_same_direction_positions
 
-    async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
-        # Only directional adds count — closes / holds always pass.
-        if verdict.action not in ("long", "short"):
-            return CheckResult(passed=True)
+    async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
+        target_side = request.target.side
+        if target_side == "flat":
+            return RiskCheckResult(passed=True)
 
         positions = portfolio.get("positions", {}) or {}
-        my_pair = portfolio.get("pair", "")
+        my_pair = request.context.pair.canonical()
 
         # Count DISTINCT pairs that will be in the target direction *after*
         # this trade. Three cases that consume a slot:
@@ -63,7 +64,7 @@ class MacroConcentrationCheck:
             if pos_pair == my_pair:
                 continue
             amount = _amount_of(pos_data)
-            if (verdict.action == "long" and amount > 0) or (verdict.action == "short" and amount < 0):
+            if (target_side == "long" and amount > 0) or (target_side == "short" and amount < 0):
                 target_pairs.add(pos_pair)
 
         # The trade always lands my_pair in the target direction
@@ -75,12 +76,12 @@ class MacroConcentrationCheck:
             # Existing-direction count for the operator-facing reason
             # (so the rejection log still says "Already N short positions").
             existing_same_dir = len(target_pairs - {my_pair}) if my_pair else len(target_pairs)
-            return CheckResult(
+            return RiskCheckResult(
                 passed=False,
                 reason=(
-                    f"Already {existing_same_dir} {verdict.action} positions; opening {my_pair or 'this pair'} "
+                    f"Already {existing_same_dir} {target_side} positions; opening {my_pair or 'this pair'} "
                     f"would make {len(target_pairs)} > max_same_direction_positions="
                     f"{self._max_same_direction} (synchronous stop-loss cascade risk)"
                 ),
             )
-        return CheckResult(passed=True)
+        return RiskCheckResult(passed=True)

@@ -5,10 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from cryptotrader.models import CheckResult, TradeVerdict
+from cryptotrader.risk.models import RiskCheckResult
 
 if TYPE_CHECKING:
     from cryptotrader.config import LossConfig
+    from cryptotrader.risk.models import RiskRequest
     from cryptotrader.risk.state import RedisStateManager
 
 logger = logging.getLogger(__name__)
@@ -25,23 +26,23 @@ class DailyLossLimit:
         self._post_loss_minutes = post_loss_minutes
         self.circuit_breaker = False
 
-    async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
+    async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
         # Check Redis-backed circuit breaker first (survives restarts)
         if self._redis and self._redis.available and await self._redis.is_circuit_breaker_active():
             self.circuit_breaker = True
-            return CheckResult(passed=False, reason="Circuit breaker active (persistent)")
+            return RiskCheckResult(passed=False, reason="Circuit breaker active (persistent)")
         if self.circuit_breaker:
-            return CheckResult(passed=False, reason="Circuit breaker active")
+            return RiskCheckResult(passed=False, reason="Circuit breaker active")
         total = portfolio.get("total_value", 0)
         if total <= 0:
-            return CheckResult(passed=False, reason="Invalid portfolio value")
+            return RiskCheckResult(passed=False, reason="Invalid portfolio value")
         daily_pnl = portfolio.get("daily_pnl")
         # None == "no snapshot in today's UTC window" — cannot compute loss.
         # Pass conservatively; other checks (drawdown, exposure, breaker) still gate.
         # Blocking here would lock out every fresh install / post-restart cycle.
         if daily_pnl is None:
             logger.info("daily_pnl unknown (no snapshot in today's UTC window) -- skipping daily-loss check")
-            return CheckResult(passed=True, reason="daily_pnl unknown")
+            return RiskCheckResult(passed=True, reason="daily_pnl unknown")
         loss_pct = abs(daily_pnl) / total if daily_pnl < 0 else 0
         if loss_pct > self._max_pct:
             self.circuit_breaker = True
@@ -52,8 +53,8 @@ class DailyLossLimit:
             logger.warning(
                 "Circuit breaker triggered: daily loss %.2f%% exceeds max %.2f%%", loss_pct * 100, self._max_pct * 100
             )
-            return CheckResult(passed=False, reason=f"Daily loss {loss_pct:.2%} exceeds max {self._max_pct:.2%}")
-        return CheckResult(passed=True)
+            return RiskCheckResult(passed=False, reason=f"Daily loss {loss_pct:.2%} exceeds max {self._max_pct:.2%}")
+        return RiskCheckResult(passed=True)
 
 
 class DrawdownLimit:
@@ -63,7 +64,7 @@ class DrawdownLimit:
         self._max_pct = config.max_drawdown_pct
         self._redis = redis_state
 
-    async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
+    async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
         # Drawdown is a slow-moving condition (peak-to-trough), not a fast-loss
         # event. We gate the trade but DO NOT auto-trip the circuit breaker —
         # that would conflate the user-facing "trading paused" signal with a
@@ -73,5 +74,5 @@ class DrawdownLimit:
         drawdown = abs(portfolio.get("drawdown", 0))
         if drawdown > self._max_pct:
             logger.warning("Drawdown %.2f%% exceeds max %.2f%%", drawdown * 100, self._max_pct * 100)
-            return CheckResult(passed=False, reason=f"Drawdown {drawdown:.2%} exceeds max {self._max_pct:.2%}")
-        return CheckResult(passed=True)
+            return RiskCheckResult(passed=False, reason=f"Drawdown {drawdown:.2%} exceeds max {self._max_pct:.2%}")
+        return RiskCheckResult(passed=True)

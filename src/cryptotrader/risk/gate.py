@@ -1,11 +1,11 @@
-"""Risk gate that runs all checks."""
+"""依次运行全部目标仓位风险检查并聚合最严格 cap。"""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
-from cryptotrader.models import GateResult, TradeVerdict
 from cryptotrader.risk.checks.available_margin import AvailableMargin
 from cryptotrader.risk.checks.concentration import MacroConcentrationCheck
 from cryptotrader.risk.checks.cooldown import CooldownCheck
@@ -17,8 +17,11 @@ from cryptotrader.risk.checks.position import MaxPositionSize, MaxTotalExposure
 from cryptotrader.risk.checks.rate_limit import RateLimitCheck
 from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 from cryptotrader.risk.checks.volatility import FundingRateGate, VolatilityGate
+from cryptotrader.risk.models import RiskDecision, RiskRequest
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from cryptotrader.config import RiskConfig
     from cryptotrader.risk.state import RedisStateManager
 
@@ -32,15 +35,13 @@ class RiskGate:
         redis_state: RedisStateManager,
         *,
         leverage: int = 1,
+        checks: Iterable[Any] | None = None,
     ) -> None:
         self.redis_state = redis_state
         self._redis_was_configured = getattr(redis_state, "_redis", None) is not None
-        self._checks = [
+        default_checks = [
             MaxPositionSize(config.position),
             MaxTotalExposure(config.position, leverage=leverage),
-            # spec 021 D1: OKX sCode=51008 prevention — verify free USDT
-            # margin BEFORE submitting order. Runs after MaxTotalExposure
-            # so it sees any scale clamp that may already have happened.
             AvailableMargin(config.position, leverage=leverage),
             DailyLossLimit(config.loss, redis_state, post_loss_minutes=config.cooldown.post_loss_minutes),
             DrawdownLimit(config.loss, redis_state),
@@ -54,59 +55,76 @@ class RiskGate:
             ExchangeHealthCheck(config.exchange),
             TokenSecurityCheck(),
         ]
+        self._checks = list(checks) if checks is not None else default_checks
 
-    async def check(self, verdict: TradeVerdict, portfolio: dict) -> GateResult:
-        # Close actions always pass — reducing risk should never be blocked.
-        # This whitelist intentionally runs BEFORE every infrastructure check
-        # (redis, exchange health, etc) below: a close is the only safe move
-        # when infrastructure is degraded, and forcing the operator to ride
-        # out a losing position because the cache layer is flaky is exactly
-        # the failure mode risk gating should prevent. The execute step still
-        # gets to fail if the exchange is genuinely unreachable; we just
-        # don't pre-empt it at the gate.
-        if verdict.action == "close":
-            return GateResult(passed=True)
+    async def check(self, request: RiskRequest, portfolio: dict) -> RiskDecision:
+        if request.reduces_exposure:
+            return RiskDecision(passed=True, plan=request.plan)
 
-        # If Redis was configured but is now unavailable, reject conservatively.
-        # Note: this only blocks NEW positions — close is already whitelisted above.
-        if self._redis_was_configured and not await self.redis_state.ping():
-            err = getattr(self.redis_state, "_last_ping_error", None) or {}
-            err_suffix = f" [{err['type']}: {err['msg']}]" if err else ""
-            logger.warning("Redis configured but unreachable — rejecting trade conservatively%s", err_suffix)
-            return GateResult(
-                passed=False,
-                rejected_by="redis_unavailable",
-                reason=f"Redis configured but unreachable — cannot verify risk state{err_suffix}",
-            )
+        redis_rejection = await self._redis_rejection(request)
+        if redis_rejection is not None:
+            return redis_rejection
 
-        failed: GateResult | None = None
+        failed, proposals = await self._evaluate_checks(request, portfolio)
+        if failed is not None:
+            return failed
+        return self._apply_cap(request, proposals)
+
+    async def _redis_rejection(self, request: RiskRequest) -> RiskDecision | None:
+        if not self._redis_was_configured or await self.redis_state.ping():
+            return None
+        error = getattr(self.redis_state, "_last_ping_error", None) or {}
+        error_suffix = f" [{error['type']}: {error['msg']}]" if error else ""
+        logger.warning("Redis configured but unreachable; rejecting trade conservatively%s", error_suffix)
+        return RiskDecision(
+            passed=False,
+            plan=request.plan,
+            rejected_by="redis_unavailable",
+            reason=f"Redis configured but unreachable; cannot verify risk state{error_suffix}",
+        )
+
+    async def _evaluate_checks(
+        self,
+        request: RiskRequest,
+        portfolio: dict,
+    ) -> tuple[RiskDecision | None, list[float]]:
+        failed: RiskDecision | None = None
         proposals: list[float] = []
-        for c in self._checks:
+        for check in self._checks:
             try:
-                result = await c.evaluate(verdict, portfolio)
+                result = await check.evaluate(request, portfolio)
             except Exception:
                 logger.warning(
                     "Risk check %s raised an unexpected exception; treating as check_error",
-                    c.name,
+                    check.name,
                     exc_info=True,
                 )
                 if failed is None:
-                    failed = GateResult(
+                    failed = RiskDecision(
                         passed=False,
-                        rejected_by=c.name,
-                        reason=f"check_error: {c.name} raised an unexpected exception",
+                        plan=request.plan,
+                        rejected_by=check.name,
+                        reason=f"check_error: {check.name} raised an unexpected exception",
                     )
                 continue
 
             if not result.passed and failed is None:
-                failed = GateResult(passed=False, rejected_by=c.name, reason=result.reason)
+                failed = RiskDecision(
+                    passed=False,
+                    plan=request.plan,
+                    rejected_by=check.name,
+                    reason=result.reason,
+                )
+            if result.passed and result.size_ratio_cap is not None:
+                proposals.append(result.size_ratio_cap)
+        return failed, proposals
 
-            # PROD-I3: collect scale proposals from passed checks; the strictest
-            # (min) wins. Failed checks short-circuit so their proposals don't apply.
-            if result.passed and result.scale_adjustment is not None:
-                proposals.append(result.scale_adjustment)
-
-        if failed is not None:
-            return failed
-        agg = min(proposals) if proposals else None
-        return GateResult(passed=True, scale_adjustment=agg)
+    @staticmethod
+    def _apply_cap(request: RiskRequest, proposals: list[float]) -> RiskDecision:
+        if proposals:
+            cap = min(proposals)
+            if cap < request.target.size_ratio:
+                capped_target = replace(request.target, size_ratio=cap)
+                capped_plan = replace(request.plan, target=capped_target)
+                return RiskDecision(passed=True, plan=capped_plan)
+        return RiskDecision(passed=True, plan=request.plan)

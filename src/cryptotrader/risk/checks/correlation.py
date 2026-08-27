@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cryptotrader.models import CheckResult, TradeVerdict
+from cryptotrader.risk.models import RiskCheckResult
 
 if TYPE_CHECKING:
     from cryptotrader.config import PositionConfig
+    from cryptotrader.risk.models import RiskRequest
 
 # Known high-correlation pairs (>0.85 historical correlation)
 _CORRELATED_GROUPS: list[set[str]] = [
@@ -33,25 +34,24 @@ class CorrelationCheck:
     def __init__(self, config: PositionConfig) -> None:
         self._max_correlated = config.max_correlated_positions
 
-    async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
-        if verdict.action == "hold":
-            return CheckResult(passed=True)
+    async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
+        if request.target.side == "flat":
+            return RiskCheckResult(passed=True)
 
         from cryptotrader.pair import Pair
 
-        pair = getattr(verdict, "pair", "") or ""
-        try:
-            symbol = Pair.parse(pair).base
-        except (ValueError, NotImplementedError):
-            symbol = pair
+        pair = request.context.pair.canonical()
+        symbol = request.context.pair.base
         group = _find_group(symbol)
         if not group:
-            return CheckResult(passed=True)
+            return RiskCheckResult(passed=True)
 
         # Count existing positions in the same correlation group
         positions = portfolio.get("positions", {})
         correlated_count = 0
         for pos_pair, pos_data in positions.items():
+            if pos_pair == pair:
+                continue
             try:
                 pos_symbol = Pair.parse(pos_pair).base
             except (ValueError, NotImplementedError):
@@ -61,8 +61,8 @@ class CorrelationCheck:
                 correlated_count += 1
 
         if correlated_count >= self._max_correlated:
-            return CheckResult(
+            return RiskCheckResult(
                 passed=False,
                 reason=f"Already {correlated_count} correlated positions in group {group}",
             )
-        return CheckResult(passed=True)
+        return RiskCheckResult(passed=True)

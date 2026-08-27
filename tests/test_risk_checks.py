@@ -1,4 +1,6 @@
-"""Tests for risk checks with edge cases."""
+"""各硬风控检查器对目标仓位的业务契约。"""
+
+from __future__ import annotations
 
 import pytest
 
@@ -10,7 +12,8 @@ from cryptotrader.config import (
     RateLimitConfig,
     VolatilityConfig,
 )
-from cryptotrader.models import TradeVerdict
+from cryptotrader.decision.models import TargetPosition
+from cryptotrader.risk.checks.available_margin import AvailableMargin
 from cryptotrader.risk.checks.cooldown import CooldownCheck
 from cryptotrader.risk.checks.cvar import CVaRCheck
 from cryptotrader.risk.checks.exchange import ExchangeHealthCheck
@@ -19,19 +22,22 @@ from cryptotrader.risk.checks.position import MaxPositionSize, MaxTotalExposure
 from cryptotrader.risk.checks.rate_limit import RateLimitCheck
 from cryptotrader.risk.checks.volatility import FundingRateGate, VolatilityGate
 from cryptotrader.risk.state import RedisStateManager
+from tests.factories.signal_fusion import position, risk_request
 
 
 @pytest.fixture
-def verdict():
-    return TradeVerdict(action="long", confidence=0.7, position_scale=0.05)
+def risk_input():
+    return risk_request(target=TargetPosition("long", 0.5))
 
 
 @pytest.fixture
 def portfolio():
     return {
-        "total_value": 10000,
-        "positions": {"BTC/USDT": 2000},
-        "daily_pnl": -100,
+        "total_value": 10_000.0,
+        "cash": 8_000.0,
+        "free_cash": 8_000.0,
+        "positions": {"ETH/USDT:USDT": {"amount": 1.0, "avg_price": 2_000.0}},
+        "daily_pnl": -100.0,
         "drawdown": 0.05,
         "returns_60d": [
             -0.02,
@@ -66,403 +72,208 @@ def portfolio():
     }
 
 
-# ── Position checks ──
+@pytest.mark.asyncio
+async def test_max_position_accepts_valid_target_ratio(risk_input, portfolio):
+    result = await MaxPositionSize(PositionConfig(max_single_pct=0.1)).evaluate(risk_input, portfolio)
+
+    assert result.passed is True
 
 
 @pytest.mark.asyncio
-async def test_max_position_pass(verdict, portfolio):
-    c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
+async def test_total_exposure_passes_when_projected_target_fits(risk_input, portfolio):
+    check = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.5, max_margin_used_pct=1.0))
+
+    result = await check.evaluate(risk_input, portfolio)
+
+    assert result.passed is True
+    assert result.size_ratio_cap is None
 
 
 @pytest.mark.asyncio
-async def test_max_position_always_passes(portfolio):
-    """MaxPositionSize always passes — scale is clamped to [0,1] by TradeVerdict,
-    so target can never exceed max_pct. Execution layer handles delta."""
-    portfolio_with_pair = {**portfolio, "pair": "BTC/USDT"}
-    v = TradeVerdict(action="long", position_scale=1.0)
-    c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
-    r = await c.evaluate(v, portfolio_with_pair)
-    assert r.passed
+async def test_total_exposure_rejects_when_no_notional_budget(risk_input):
+    check = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.3, max_margin_used_pct=1.0))
+    portfolio = {"total_value": 10_000.0, "positions": {"ETH/USDT": 4_000.0}}
+
+    result = await check.evaluate(risk_input, portfolio)
+
+    assert result.passed is False
+    assert "No remaining notional budget" in result.reason
 
 
 @pytest.mark.asyncio
-async def test_max_position_zero_portfolio(verdict):
-    """Cold start: zero portfolio should allow first trade (not reject)."""
-    c = MaxPositionSize(PositionConfig())
-    r = await c.evaluate(verdict, {"total_value": 0})
-    assert r.passed
+async def test_total_exposure_proposes_absolute_target_cap_without_mutating_request():
+    check = MaxTotalExposure(PositionConfig(max_single_pct=0.5, max_total_exposure_pct=0.5, max_margin_used_pct=1.0))
+    risk_input = risk_request(target=TargetPosition("long", 0.9))
+    portfolio = {"total_value": 10_000.0, "positions": {"ETH/USDT": 2_000.0}}
+
+    result = await check.evaluate(risk_input, portfolio)
+
+    assert result.passed is True
+    assert result.size_ratio_cap == pytest.approx(0.6)
+    assert risk_input.target == TargetPosition("long", 0.9)
 
 
 @pytest.mark.asyncio
-async def test_total_exposure_pass(verdict, portfolio):
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_fail(verdict):
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30, max_margin_used_pct=1.0))
-    r = await c.evaluate(verdict, {"total_value": 10000, "positions": {"A": 4000}})
-    assert not r.passed
-    assert "No remaining notional budget" in r.reason
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_hold_always_passes():
-    """Hold action should pass even with high exposure (no new position added)."""
-    hold = TradeVerdict(action="hold", confidence=0.7, position_scale=0.0)
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30, max_margin_used_pct=1.0))
-    r = await c.evaluate(hold, {"total_value": 10000, "positions": {"A": 9000}})
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_close_always_passes():
-    """Close action should pass even with high exposure (reducing position)."""
-    close = TradeVerdict(action="close", confidence=0.7, position_scale=0.0)
-    c = MaxTotalExposure(PositionConfig(max_total_exposure_pct=0.30, max_margin_used_pct=1.0))
-    r = await c.evaluate(close, {"total_value": 10000, "positions": {"A": 9000}})
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_projected_clamps():
-    """PROD-I3: Over-budget trade returns a scale_adjustment proposal (no in-place mutation)."""
-    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.90)
-    # max_single_pct=0.50, scale=0.90 → projected_new=0.45
-    # existing=0.20, projected_total=0.65 > max=0.50
-    # remaining=0.30 → proposed scale_adjustment=0.30/0.50=0.60
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
-    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
-    assert r.passed
-    # Verdict MUST NOT be mutated — the check only proposes via CheckResult.
-    assert v.position_scale == pytest.approx(0.90)
-    assert r.scale_adjustment == pytest.approx(0.60)
-    assert "Scale clamped" in r.reason
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_projected_passes():
-    """New trade within budget should pass."""
-    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.10)
-    # max_single_pct=0.10, scale=0.10 → projected_new=0.01
-    # existing=0.20, projected_total=0.21 < max=0.50
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
-    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 2000}})
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_skips_unparseable_position_value(verdict):
-    """Non-numeric position values must not crash the risk gate."""
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.10, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
-    # Mixed shapes: dict with None fields, bare string, bare None, normal float.
+async def test_total_exposure_replaces_current_pair_instead_of_double_counting():
+    check = MaxTotalExposure(PositionConfig(max_single_pct=0.5, max_total_exposure_pct=0.6, max_margin_used_pct=1.0))
+    risk_input = risk_request(
+        current=position("long", amount=0.04, size_ratio=0.4),
+        target=TargetPosition("long", 0.5),
+    )
     portfolio = {
-        "total_value": 10000,
+        "total_value": 10_000.0,
         "positions": {
-            "BAD_DICT": {"amount": None, "avg_price": None},
-            "BAD_STR": "pending",
-            "BAD_NONE": None,
-            "GOOD": 1000,
+            "BTC/USDT:USDT": {"amount": 0.04, "avg_price": 100_000.0},
+            "ETH/USDT:USDT": {"amount": 1.0, "avg_price": 2_000.0},
         },
     }
-    r = await c.evaluate(verdict, portfolio)
-    # Only "GOOD" (1000) and "BAD_DICT" (0*0=0) should be summed → 10% existing.
-    # verdict scale=0.05, max_single_pct=0.10 → projected_new=0.5%; total < max.
-    assert r.passed
+
+    result = await check.evaluate(risk_input, portfolio)
+
+    assert result.passed is True
+    assert result.size_ratio_cap is None
 
 
 @pytest.mark.asyncio
-async def test_total_exposure_at_limit_rejects_with_no_budget():
-    """TEST-I1: when remaining ≤ 0.01 the check rejects, doesn't propose tiny scale."""
-    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
-    # existing=4995/10000=49.95%, max=50% → remaining=0.05% (<= 0.01 threshold).
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
-    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 4995}})
-    assert not r.passed
-    assert r.scale_adjustment is None
-    assert "No remaining notional budget" in r.reason
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_just_above_threshold_clamps():
-    """TEST-I1: remaining slightly above 0.01 → scale clamping kicks in (boundary above)."""
-    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
-    # existing=4880/10000=48.8%, max=50% → remaining=1.2% (> 1% threshold).
-    # proposed = 1.2% / 50% = 0.024 → still very small but legal.
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
-    r = await c.evaluate(v, {"total_value": 10000, "positions": {"A": 4880}})
-    assert r.passed
-    assert r.scale_adjustment is not None
-    assert 0 < r.scale_adjustment < 0.05
-
-
-@pytest.mark.asyncio
-async def test_total_exposure_dict_positions_summed_correctly():
-    """TEST-M1: dict-format positions (production shape) accumulate exposure correctly."""
-    v = TradeVerdict(action="long", confidence=0.7, position_scale=0.50)
-    # Two dict positions: 0.1 BTC @ $30k = $3000 + 1 ETH @ $2000 = $2000 → $5000 / $10000 = 50%.
-    # max=50% → remaining=0 → reject.
-    c = MaxTotalExposure(PositionConfig(max_single_pct=0.50, max_total_exposure_pct=0.50, max_margin_used_pct=1.0))
+async def test_total_exposure_rejects_when_margin_budget_is_full(risk_input):
+    check = MaxTotalExposure(
+        PositionConfig(max_single_pct=0.5, max_total_exposure_pct=2.0, max_margin_used_pct=0.4),
+        leverage=2,
+    )
     portfolio = {
-        "total_value": 10000,
-        "positions": {
-            "BTC/USDT": {"amount": 0.1, "avg_price": 30000},
-            "ETH/USDT": {"amount": 1, "avg_price": 2000},
-        },
+        "total_value": 10_000.0,
+        "positions": {"ETH/USDT:USDT": {"amount": 4.0, "avg_price": 2_000.0}},
     }
-    r = await c.evaluate(v, portfolio)
-    assert not r.passed
-    assert "50.00%" in r.reason
 
+    result = await check.evaluate(risk_input, portfolio)
 
-# ── Loss checks ──
-
-
-@pytest.mark.asyncio
-async def test_daily_loss_pass(verdict, portfolio):
-    c = DailyLossLimit(LossConfig(max_daily_loss_pct=0.03))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
+    assert result.passed is False
+    assert "No remaining margin budget" in result.reason
 
 
 @pytest.mark.asyncio
-async def test_daily_loss_fail(verdict):
-    c = DailyLossLimit(LossConfig(max_daily_loss_pct=0.03))
-    r = await c.evaluate(verdict, {"total_value": 10000, "daily_pnl": -400})
-    assert not r.passed
+async def test_available_margin_caps_only_incremental_same_direction_exposure():
+    check = AvailableMargin(PositionConfig(max_single_pct=0.5), leverage=2, safety_buffer=1.0)
+    risk_input = risk_request(
+        current=position("long", amount=1.0, size_ratio=0.2),
+        target=TargetPosition("long", 0.8),
+    )
+    portfolio = {"total_value": 10_000.0, "free_cash": 750.0}
+
+    result = await check.evaluate(risk_input, portfolio)
+
+    assert result.passed is True
+    assert result.size_ratio_cap == pytest.approx(0.5)
 
 
 @pytest.mark.asyncio
-async def test_circuit_breaker_stays_active(verdict):
-    c = DailyLossLimit(LossConfig(max_daily_loss_pct=0.03))
-    await c.evaluate(verdict, {"total_value": 10000, "daily_pnl": -400})
-    r = await c.evaluate(verdict, {"total_value": 10000, "daily_pnl": 0})
-    assert not r.passed  # breaker still active
+async def test_available_margin_rejects_when_no_margin_is_available(risk_input):
+    check = AvailableMargin(PositionConfig(max_single_pct=0.5), leverage=2)
+
+    result = await check.evaluate(risk_input, {"total_value": 10_000.0, "free_cash": 0.0})
+
+    assert result.passed is False
+    assert "No free USDT" in result.reason
 
 
 @pytest.mark.asyncio
-async def test_drawdown_pass(verdict, portfolio):
-    c = DrawdownLimit(LossConfig(max_drawdown_pct=0.10))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
+async def test_daily_loss_limit_trips_and_stays_active(risk_input):
+    check = DailyLossLimit(LossConfig(max_daily_loss_pct=0.03))
+
+    first = await check.evaluate(risk_input, {"total_value": 10_000.0, "daily_pnl": -400.0})
+    second = await check.evaluate(risk_input, {"total_value": 10_000.0, "daily_pnl": 0.0})
+
+    assert first.passed is False
+    assert second.passed is False
+    assert "Circuit breaker" in second.reason
 
 
 @pytest.mark.asyncio
-async def test_drawdown_fail(verdict):
-    c = DrawdownLimit(LossConfig(max_drawdown_pct=0.10))
-    r = await c.evaluate(verdict, {"drawdown": 0.15})
-    assert not r.passed
+async def test_daily_loss_limit_allows_unknown_daily_pnl(risk_input):
+    check = DailyLossLimit(LossConfig(max_daily_loss_pct=0.03))
 
+    result = await check.evaluate(risk_input, {"total_value": 10_000.0, "daily_pnl": None})
 
-# ── CVaR ──
-
-
-@pytest.mark.asyncio
-async def test_cvar_pass(verdict, portfolio):
-    c = CVaRCheck(LossConfig(max_cvar_95=0.10))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
+    assert result.passed is True
+    assert result.reason == "daily_pnl unknown"
 
 
 @pytest.mark.asyncio
-async def test_cvar_fail(verdict):
-    c = CVaRCheck(LossConfig(max_cvar_95=0.01))
-    bad_returns = [
-        -0.05,
-        -0.06,
-        -0.07,
-        -0.08,
-        -0.02,
-        0.01,
-        -0.09,
-        -0.04,
-        -0.06,
-        -0.03,
-        -0.07,
-        -0.05,
-        -0.08,
-        -0.02,
-        -0.06,
-        0.01,
-        -0.04,
-        -0.09,
-        -0.03,
-        -0.07,
-        -0.05,
-        -0.08,
-        -0.06,
-        -0.04,
-        -0.09,
-    ]
-    r = await c.evaluate(verdict, {"returns_60d": bad_returns})
-    assert not r.passed
+async def test_drawdown_limit_rejects_excess_drawdown(risk_input):
+    result = await DrawdownLimit(LossConfig(max_drawdown_pct=0.1)).evaluate(risk_input, {"drawdown": 0.15})
+
+    assert result.passed is False
 
 
 @pytest.mark.asyncio
-async def test_cvar_insufficient_data(verdict):
-    c = CVaRCheck(LossConfig())
-    r = await c.evaluate(verdict, {"returns_60d": [0.01]})
-    assert r.passed
+async def test_cvar_rejects_excess_tail_loss(risk_input):
+    returns = [-0.09, -0.08, -0.07, -0.06, -0.05] * 5
+    result = await CVaRCheck(LossConfig(max_cvar_95=0.01)).evaluate(risk_input, {"returns_60d": returns})
 
-
-# ── Volatility ──
-
-
-@pytest.mark.asyncio
-async def test_volatility_pass(verdict, portfolio):
-    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
+    assert result.passed is False
 
 
 @pytest.mark.asyncio
-async def test_volatility_flash_crash_blocks_long(verdict):
-    """Flash crash blocks long (catching falling knife)."""
-    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
-    r = await c.evaluate(verdict, {"recent_prices": [100, 99, 98, 97, 93]})
-    assert not r.passed
-    assert "blocking long" in r.reason
+@pytest.mark.parametrize(
+    ("target", "prices", "passed", "message"),
+    [
+        (TargetPosition("long", 0.5), [100, 99, 98, 97, 93], False, "blocking long"),
+        (TargetPosition("short", 0.5), [100, 99, 98, 97, 93], True, ""),
+        (TargetPosition("short", 0.5), [93, 94, 95, 97, 100], False, "blocking short"),
+        (TargetPosition("long", 0.5), [93, 94, 95, 97, 100], True, ""),
+    ],
+)
+async def test_volatility_gate_is_directional(target, prices, passed, message):
+    check = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
+
+    result = await check.evaluate(risk_request(target=target), {"recent_prices": prices})
+
+    assert result.passed is passed
+    assert message in result.reason
 
 
 @pytest.mark.asyncio
-async def test_volatility_flash_crash_allows_short():
-    """Flash crash allows short (going with the trend)."""
-    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
-    short_verdict = TradeVerdict(action="short", confidence=0.7, position_scale=0.05)
-    r = await c.evaluate(short_verdict, {"recent_prices": [100, 99, 98, 97, 93]})
-    assert r.passed
+async def test_funding_rate_gate_rejects_extreme_rate(risk_input):
+    result = await FundingRateGate(VolatilityConfig(funding_rate_threshold=0.001)).evaluate(
+        risk_input,
+        {"funding_rate": 0.002},
+    )
+
+    assert result.passed is False
 
 
 @pytest.mark.asyncio
-async def test_volatility_flash_crash_allows_close():
-    """Flash crash allows close (risk-reducing action)."""
-    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
-    close_verdict = TradeVerdict(action="close", confidence=0.7, position_scale=0.0)
-    r = await c.evaluate(close_verdict, {"recent_prices": [100, 99, 98, 97, 93]})
-    assert r.passed
+async def test_exchange_health_rejects_latency_and_trade_cooldown(risk_input):
+    check = ExchangeHealthCheck(ExchangeCheckConfig(max_api_latency_ms=2_000))
+
+    latency = await check.evaluate(risk_input, {"api_latency_ms": 3_000})
+    unavailable = await check.evaluate(risk_input, {"trade_unavailable_remaining_s": 45.0})
+
+    assert latency.passed is False
+    assert unavailable.passed is False
+    assert "45s" in unavailable.reason
 
 
 @pytest.mark.asyncio
-async def test_volatility_spike_blocks_short():
-    """Rapid spike blocks short (shorting into a spike)."""
-    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
-    short_verdict = TradeVerdict(action="short", confidence=0.7, position_scale=0.05)
-    r = await c.evaluate(short_verdict, {"recent_prices": [93, 94, 95, 97, 100]})
-    assert not r.passed
-    assert "blocking short" in r.reason
+async def test_cooldown_check_uses_request_pair(risk_input):
+    redis = RedisStateManager(None)
+    await redis.set_cooldown("BTC/USDT:USDT", 5)
+    check = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), redis)
+
+    result = await check.evaluate(risk_input, {})
+
+    assert result.passed is False
+    assert "BTC/USDT:USDT" in result.reason
 
 
 @pytest.mark.asyncio
-async def test_volatility_spike_allows_long():
-    """Rapid spike allows long (going with the trend)."""
-    c = VolatilityGate(VolatilityConfig(flash_crash_threshold=0.05))
-    long_verdict = TradeVerdict(action="long", confidence=0.7, position_scale=0.05)
-    r = await c.evaluate(long_verdict, {"recent_prices": [93, 94, 95, 97, 100]})
-    assert r.passed
+async def test_rate_limit_rejects_hourly_limit(risk_input):
+    redis = RedisStateManager(None)
+    for _ in range(2):
+        await redis.incr_trade_count()
+    check = RateLimitCheck(RateLimitConfig(max_trades_per_hour=2, max_trades_per_day=50), redis)
 
+    result = await check.evaluate(risk_input, {})
 
-@pytest.mark.asyncio
-async def test_funding_rate_pass(verdict, portfolio):
-    c = FundingRateGate(VolatilityConfig(funding_rate_threshold=0.001))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_funding_rate_fail(verdict):
-    c = FundingRateGate(VolatilityConfig(funding_rate_threshold=0.001))
-    r = await c.evaluate(verdict, {"funding_rate": 0.002})
-    assert not r.passed
-
-
-# ── Exchange health ──
-
-
-@pytest.mark.asyncio
-async def test_exchange_health_pass(verdict, portfolio):
-    c = ExchangeHealthCheck(ExchangeCheckConfig(max_api_latency_ms=2000))
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_exchange_health_fail(verdict):
-    c = ExchangeHealthCheck(ExchangeCheckConfig(max_api_latency_ms=2000))
-    r = await c.evaluate(verdict, {"api_latency_ms": 3000})
-    assert not r.passed
-
-
-# ── Cooldown checks (in-memory fallback) ──
-
-
-@pytest.mark.asyncio
-async def test_cooldown_pass_no_active(verdict):
-    """No cooldown set — should pass."""
-    rsm = RedisStateManager(None)  # No Redis, uses memory fallback
-    c = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), rsm)
-    r = await c.evaluate(verdict, {"pair": "BTC/USDT"})
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_cooldown_fail_pair_active(verdict):
-    """Per-pair cooldown active — should block."""
-    rsm = RedisStateManager(None)
-    await rsm.set_cooldown("BTC/USDT", 5)
-    c = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), rsm)
-    r = await c.evaluate(verdict, {"pair": "BTC/USDT"})
-    assert not r.passed
-    assert "Cooldown active" in r.reason
-
-
-@pytest.mark.asyncio
-async def test_cooldown_fail_post_loss(verdict):
-    """Post-loss cooldown active — should block."""
-    rsm = RedisStateManager(None)
-    await rsm.set_post_loss_cooldown(10)
-    c = CooldownCheck(CooldownConfig(same_pair_minutes=5, post_loss_minutes=10), rsm)
-    r = await c.evaluate(verdict, {"pair": "ETH/USDT"})
-    assert not r.passed
-    assert "Post-loss" in r.reason
-
-
-# ── Rate limit checks (in-memory fallback) ──
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_pass(verdict):
-    rsm = RedisStateManager(None)
-    c = RateLimitCheck(RateLimitConfig(max_trades_per_hour=10, max_trades_per_day=50), rsm)
-    r = await c.evaluate(verdict, {})
-    assert r.passed
-
-
-@pytest.mark.asyncio
-async def test_rate_limit_fail_hourly(verdict):
-    rsm = RedisStateManager(None)
-    for _ in range(10):
-        await rsm.incr_trade_count()
-    c = RateLimitCheck(RateLimitConfig(max_trades_per_hour=10, max_trades_per_day=50), rsm)
-    r = await c.evaluate(verdict, {})
-    assert not r.passed
-    assert "Hourly" in r.reason
-
-
-# ── MaxPositionSize with dict-format positions ──
-
-
-@pytest.mark.asyncio
-async def test_max_position_dict_format(verdict):
-    """MaxPositionSize always passes — delta logic is in execution layer."""
-    c = MaxPositionSize(PositionConfig(max_single_pct=0.10))
-    portfolio = {
-        "total_value": 10000,
-        "positions": {"BTC/USDT": {"amount": 0.02, "avg_price": 50000}},
-        "pair": "BTC/USDT",
-    }
-    r = await c.evaluate(verdict, portfolio)
-    assert r.passed
+    assert result.passed is False
+    assert "Hourly" in result.reason

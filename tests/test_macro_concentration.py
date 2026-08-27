@@ -16,13 +16,23 @@ from __future__ import annotations
 import pytest
 
 from cryptotrader.config import PositionConfig
-from cryptotrader.models import TradeVerdict
+from cryptotrader.decision.models import TargetPosition
+from cryptotrader.pair import Pair
 from cryptotrader.risk.checks.concentration import MacroConcentrationCheck
+from tests.factories.signal_fusion import risk_request
 
 
 def _make_check(max_same_direction: int = 3) -> MacroConcentrationCheck:
     cfg = PositionConfig(max_same_direction_positions=max_same_direction)
     return MacroConcentrationCheck(cfg)
+
+
+def _request(pair: str, side: str):
+    size_ratio = 0.0 if side == "flat" else 0.5
+    return risk_request(
+        pair=Pair.parse(pair),
+        target=TargetPosition(side, size_ratio),
+    )
 
 
 @pytest.mark.asyncio
@@ -36,7 +46,7 @@ async def test_hold_always_passes():
             "LINK/USDT:USDT": {"amount": -10},
         },
     }
-    res = await check.evaluate(TradeVerdict(action="hold"), portfolio)
+    res = await check.evaluate(_request("BTC/USDT:USDT", "flat"), portfolio)
     assert res.passed
 
 
@@ -52,7 +62,7 @@ async def test_close_always_passes():
             "SOL/USDT:USDT": {"amount": -10},
         },
     }
-    res = await check.evaluate(TradeVerdict(action="close"), portfolio)
+    res = await check.evaluate(_request("BTC/USDT:USDT", "flat"), portfolio)
     assert res.passed
 
 
@@ -69,7 +79,7 @@ async def test_open_new_short_at_cap_rejected():
             # DOGE not in positions → flat
         },
     }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
+    res = await check.evaluate(_request("DOGE/USDT:USDT", "short"), portfolio)
     assert not res.passed
     assert "macro_concentration" not in (res.reason or "")  # uses operator-friendly text
     assert "max_same_direction_positions=3" in (res.reason or "")
@@ -87,7 +97,7 @@ async def test_add_to_existing_same_direction_passes():
             "LINK/USDT:USDT": {"amount": -800},  # our pair, already short
         },
     }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
+    res = await check.evaluate(_request("LINK/USDT:USDT", "short"), portfolio)
     assert res.passed, res.reason
     # After-trade distinct pairs in target direction = {ETH, SOL, LINK} = 3 ≤ 3 ✓
 
@@ -106,7 +116,7 @@ async def test_flip_from_long_to_short_at_cap_rejected():
             "DOGE/USDT:USDT": {"amount": +1000},  # currently LONG
         },
     }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
+    res = await check.evaluate(_request("DOGE/USDT:USDT", "short"), portfolio)
     assert not res.passed
 
 
@@ -121,7 +131,7 @@ async def test_open_new_short_below_cap_passes():
             "ETH/USDT:USDT": {"amount": -10},
         },
     }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
+    res = await check.evaluate(_request("SOL/USDT:USDT", "short"), portfolio)
     assert res.passed
 
 
@@ -138,7 +148,7 @@ async def test_long_direction_independent_from_short_count():
             # No existing longs.
         },
     }
-    res = await check.evaluate(TradeVerdict(action="long"), portfolio)
+    res = await check.evaluate(_request("BTC/USDT:USDT", "long"), portfolio)
     assert res.passed
 
 
@@ -154,7 +164,7 @@ async def test_zero_amount_position_does_not_count():
             "SOL/USDT:USDT": {"amount": 0},  # dust — should not count
         },
     }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
+    res = await check.evaluate(_request("DOGE/USDT:USDT", "short"), portfolio)
     assert res.passed  # 2 actual shorts + DOGE = 3 ≤ 3 ✓
 
 
@@ -170,27 +180,5 @@ async def test_position_stored_as_raw_number_handled():
             "SOL/USDT:USDT": -100.0,
         },
     }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
+    res = await check.evaluate(_request("DOGE/USDT:USDT", "short"), portfolio)
     assert not res.passed  # 3 existing shorts + DOGE = 4 > 3
-
-
-@pytest.mark.asyncio
-async def test_no_pair_in_portfolio_falls_back_to_count_only():
-    """Defensive: when ``portfolio['pair']`` is missing, treat the trade as
-    opening a new (unknown) pair so concentration cap still applies."""
-    check = _make_check(max_same_direction=3)
-    portfolio = {
-        # no "pair" key
-        "positions": {
-            "BTC/USDT:USDT": {"amount": -1},
-            "ETH/USDT:USDT": {"amount": -10},
-            "SOL/USDT:USDT": {"amount": -100},
-        },
-    }
-    res = await check.evaluate(TradeVerdict(action="short"), portfolio)
-    # Without pair info we count all 3 existing same-dir; result depends on
-    # whether the unknown trade adds a 4th. Current implementation does NOT
-    # add an unknown pair to target_pairs (we only add my_pair if it's a
-    # truthy string). So the count stays at 3 ≤ 3 ⇒ passes. This is a
-    # benign degradation: the safer downstream check is MaxPositionSize.
-    assert res.passed

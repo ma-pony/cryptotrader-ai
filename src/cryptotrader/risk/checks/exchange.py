@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from cryptotrader.models import CheckResult, TradeVerdict
+from cryptotrader.risk.models import RiskCheckResult
 
 if TYPE_CHECKING:
     from cryptotrader.config import ExchangeCheckConfig
+    from cryptotrader.risk.models import RiskRequest
 
 
 class ExchangeHealthCheck:
@@ -16,7 +17,7 @@ class ExchangeHealthCheck:
     def __init__(self, config: ExchangeCheckConfig) -> None:
         self._max_latency = config.max_api_latency_ms
 
-    async def evaluate(self, verdict: TradeVerdict, portfolio: dict) -> CheckResult:
+    async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
         # spec 021 H3 (option 2): trade endpoint cooldown. When an earlier
         # pair in the same cycle string exhausted retries on OKX
         # sCode=50013, the exchange module stamps a 5-min unavailability
@@ -24,14 +25,13 @@ class ExchangeHealthCheck:
         # ~24s per pair re-probing a known-down endpoint. Hold verdicts
         # don't issue orders so the cooldown is irrelevant for them.
         cooldown_remaining = portfolio.get("trade_unavailable_remaining_s", 0.0)
-        action = getattr(verdict, "action", "hold")
-        if cooldown_remaining > 0 and action not in ("hold", "close"):
-            return CheckResult(
+        if cooldown_remaining > 0 and not request.reduces_exposure:
+            return RiskCheckResult(
                 passed=False,
                 reason=f"Exchange trade endpoint unavailable, cooldown {cooldown_remaining:.0f}s remaining",
             )
 
         latency = portfolio.get("api_latency_ms", 0)
         if latency > self._max_latency:
-            return CheckResult(passed=False, reason=f"API latency {latency}ms exceeds max {self._max_latency}ms")
-        return CheckResult(passed=True)
+            return RiskCheckResult(passed=False, reason=f"API latency {latency}ms exceeds max {self._max_latency}ms")
+        return RiskCheckResult(passed=True)
