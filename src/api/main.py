@@ -37,6 +37,7 @@ from api.routes import (
     portfolio_v2,
     risk,
     scheduler,
+    signal_profile,
     skills,
 )
 from cryptotrader.tracing import set_trace_id
@@ -58,6 +59,8 @@ async def lifespan(_app: FastAPI):
     from cryptotrader.otel import setup_otel
 
     setup_otel()
+
+    await _init_signal_profile(_app)
 
     # Initialize trigger engine if enabled
     await _init_trigger_engine(_app)
@@ -87,6 +90,30 @@ async def lifespan(_app: FastAPI):
 
     await close_live_exchanges()
     logger.info("Shutting down")
+
+
+async def _init_signal_profile(app_instance: FastAPI) -> None:
+    from cryptotrader.config import load_config
+    from cryptotrader.profiles.models import validate_signal_profile
+    from cryptotrader.profiles.repository import SignalProfileRepository
+    from cryptotrader.signals.components.kronos import KronosComponent
+    from cryptotrader.signals.components.llm_committee import LLMCommitteeComponent
+    from cryptotrader.signals.registry import SignalComponentRegistry
+
+    config = load_config()
+    registry = SignalComponentRegistry((KronosComponent(config.kronos), LLMCommitteeComponent(config)))
+    for factory in config.signal_plugins.factories:
+        registry.load_factory(factory)
+    default = validate_signal_profile(config.signal_profile_defaults.to_profile(), registry.ids())
+
+    app_instance.state.signal_registry = registry
+    app_instance.state.signal_profile_repository = None
+    if not config.infrastructure.database_url:
+        logger.info("No database configured; global signal profile persistence is unavailable")
+        return
+    repository = SignalProfileRepository(config.infrastructure.database_url)
+    await repository.get_or_create(default)
+    app_instance.state.signal_profile_repository = repository
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:
@@ -447,3 +474,4 @@ app.include_router(market.router, dependencies=[Depends(verify_api_key)])
 app.include_router(memory.router, prefix="/api/memory", dependencies=[Depends(verify_api_key)])
 app.include_router(events.router, dependencies=[Depends(verify_api_key)])
 app.include_router(skills.router, dependencies=[Depends(verify_api_key)])
+app.include_router(signal_profile.router, dependencies=[Depends(verify_api_key)])
