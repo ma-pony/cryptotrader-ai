@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from cryptotrader.decision.models import CycleRequest, TargetPosition, TradePlan
 from cryptotrader.pair import Pair
@@ -97,3 +98,25 @@ def risk_request(current=None, target=None, **context_overrides):
     target = target or TargetPosition("long", 0.5)
     signal_context = context(position=current or position(), **context_overrides)
     return RiskRequest(context=signal_context, plan=trade_plan(target))
+
+
+def cycle_record(**overrides):
+    from cryptotrader.journal.models import TradingCycleRecord
+
+    values = {
+        "cycle_id": str(uuid4()),
+        "created_at": datetime.now(UTC),
+        "pair": "BTC/USDT:USDT",
+        "status": "no_change",
+        "profile_revision": 1,
+        "context_summary": {"current_price": 100.0, "as_of": "2026-01-01T00:00:00+00:00"},
+        "component_signals": (),
+        "component_error": None,
+        "fused_signal": None,
+        "target_position": None,
+        "trade_plan": None,
+        "hitl_result": None,
+        "risk_result": None,
+        "execution_result": None,
+    }
+    return TradingCycleRecord(**(values | overrides))
