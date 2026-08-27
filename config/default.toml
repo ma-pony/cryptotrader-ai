@@ -24,6 +24,26 @@ aux_symbol = "BTCUSDT"
 timeframe = "4h"
 ohlcv_limit = 512
 
+[signal_plugins]
+factories = []
+
+[signal_profile]
+neutral_threshold = 0.20
+max_target_ratio = 1.0
+atr_stop_multiplier = 2.0
+reward_ratio = 2.0
+hitl_required = false
+
+[[signal_profile.components]]
+component_id = "kronos"
+enabled = true
+weight = 0.60
+
+[[signal_profile.components]]
+component_id = "llm_committee"
+enabled = true
+weight = 0.40
+
 [llm]
 # Unified LLM API endpoint — all models go through the same gateway
 api_key = ""

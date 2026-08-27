@@ -19,6 +19,7 @@ except ModuleNotFoundError:
 
 from cryptotrader.mcp.config import MCPConfig, MCPServerConfig
 from cryptotrader.pair import Pair
+from cryptotrader.profiles.models import ComponentWeight, SignalProfile, validate_signal_profile
 
 logger = logging.getLogger(__name__)
 
@@ -555,6 +556,40 @@ class KronosConfig:
 
 
 @dataclass
+class SignalPluginsConfig:
+    factories: list[str] = field(default_factory=list)
+
+
+def _default_component_weights() -> list[ComponentWeight]:
+    return [
+        ComponentWeight("kronos", True, 0.6),
+        ComponentWeight("llm_committee", True, 0.4),
+    ]
+
+
+@dataclass
+class SignalProfileDefaultsConfig:
+    components: list[ComponentWeight] = field(default_factory=_default_component_weights)
+    neutral_threshold: float = 0.2
+    max_target_ratio: float = 1.0
+    atr_stop_multiplier: float = 2.0
+    reward_ratio: float = 2.0
+    hitl_required: bool = False
+
+    def to_profile(self, revision: int = 1) -> SignalProfile:
+        profile = SignalProfile(
+            revision=revision,
+            components=tuple(self.components),
+            neutral_threshold=self.neutral_threshold,
+            max_target_ratio=self.max_target_ratio,
+            atr_stop_multiplier=self.atr_stop_multiplier,
+            reward_ratio=self.reward_ratio,
+            hitl_required=self.hitl_required,
+        )
+        return validate_signal_profile(profile, {item.component_id for item in self.components})
+
+
+@dataclass
 class AppConfig:
     mode: str = "standalone"
     engine: str = "paper"
@@ -582,6 +617,8 @@ class AppConfig:
     agents: AgentsConfig = field(default_factory=AgentsConfig)
     mcp: MCPConfig = field(default_factory=MCPConfig)
     kronos: KronosConfig = field(default_factory=KronosConfig)
+    signal_plugins: SignalPluginsConfig = field(default_factory=SignalPluginsConfig)
+    signal_profile_defaults: SignalProfileDefaultsConfig = field(default_factory=SignalProfileDefaultsConfig)
 
 
 # ── Configuration validation ──
@@ -633,6 +670,7 @@ def validate_config(cfg: AppConfig) -> None:
                 field_path=f"agents.{ac.agent_id}.timeout_seconds",
                 expected=f"positive integer, got {ac.timeout_seconds}",
             )
+    cfg.signal_profile_defaults.to_profile()
 
 
 def _check_open_unit_interval(value: float, field_path: str) -> None:
@@ -943,6 +981,13 @@ def _build_config(toml_data: dict) -> AppConfig:
             exchange_creds[ex_id] = ExchangeCredentials(**ex_data)
     exchanges = ExchangesConfig(_exchanges=exchange_creds)
 
+    signal_profile_raw = dict(toml_data.get("signal_profile", {}))
+    component_rows = signal_profile_raw.pop("components", [])
+    signal_profile_defaults = SignalProfileDefaultsConfig(
+        components=[ComponentWeight(**row) for row in component_rows] or _default_component_weights(),
+        **signal_profile_raw,
+    )
+
     return AppConfig(
         mode=app.get("mode", "standalone"),
         engine=app.get("engine", "paper"),
@@ -969,6 +1014,8 @@ def _build_config(toml_data: dict) -> AppConfig:
         agents=_build_agents_config(toml_data),
         mcp=_build_mcp_config(toml_data),
         kronos=KronosConfig(**toml_data.get("kronos", {})),
+        signal_plugins=SignalPluginsConfig(**toml_data.get("signal_plugins", {})),
+        signal_profile_defaults=signal_profile_defaults,
     )
 
 
