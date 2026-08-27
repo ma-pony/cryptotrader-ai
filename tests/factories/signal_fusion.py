@@ -1,0 +1,91 @@
+"""信号融合测试共用的完整领域对象工厂。"""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from cryptotrader.decision.models import CycleRequest, TargetPosition, TradePlan
+from cryptotrader.pair import Pair
+from cryptotrader.profiles.models import ComponentWeight, SignalProfile
+from cryptotrader.signals.models import ComponentSignal, PositionSnapshot, SignalContext
+
+
+def position(side="flat", amount=0.0, size_ratio=0.0, **overrides) -> PositionSnapshot:
+    values = {"side": side, "amount": amount, "size_ratio": size_ratio}
+    return PositionSnapshot(**(values | overrides))
+
+
+def context(
+    price=100.0,
+    equity=10_000.0,
+    position=None,
+    atr=5.0,
+    market_type="swap",
+    **overrides,
+) -> SignalContext:
+    values = {
+        "pair": Pair.parse("BTC/USDT:USDT" if market_type == "swap" else "BTC/USDT"),
+        "as_of": datetime(2026, 1, 1, tzinfo=UTC),
+        "mode": "paper",
+        "exchange_id": "okx",
+        "market_type": market_type,
+        "equity": equity,
+        "current_price": price,
+        "atr": atr,
+        "current_position": position or PositionSnapshot("flat", 0.0, 0.0),
+        "snapshots": {},
+    }
+    return SignalContext(**(values | overrides))
+
+
+def profile(
+    *components,
+    kronos=0.6,
+    llm=0.4,
+    revision=1,
+    neutral_threshold=0.2,
+    max_target_ratio=1.0,
+    atr_stop_multiplier=2.0,
+    reward_ratio=2.0,
+    hitl=False,
+) -> SignalProfile:
+    configured = components or (
+        ComponentWeight("kronos", kronos > 0.0, kronos),
+        ComponentWeight("llm_committee", llm > 0.0, llm),
+    )
+    return SignalProfile(
+        revision=revision,
+        components=configured,
+        neutral_threshold=neutral_threshold,
+        max_target_ratio=max_target_ratio,
+        atr_stop_multiplier=atr_stop_multiplier,
+        reward_ratio=reward_ratio,
+        hitl_required=hitl,
+    )
+
+
+def signal(component_id="kronos", direction="long", confidence=0.8, **overrides) -> ComponentSignal:
+    values = {
+        "component_id": component_id,
+        "direction": direction,
+        "confidence": confidence,
+        "reasoning": "fixture",
+    }
+    return ComponentSignal(**(values | overrides))
+
+
+def trade_plan(target: TargetPosition, **overrides) -> TradePlan:
+    from cryptotrader.signals.fusion import FusedSignal
+
+    values = {
+        "target": target,
+        "stop_loss": None,
+        "take_profit": None,
+        "component_signals": (),
+        "fused_signal": FusedSignal(score=0.0, contributions=(), reasoning="fixture"),
+    }
+    return TradePlan(**(values | overrides))
+
+
+def request(pair="BTC/USDT:USDT", mode="paper", exchange_id="okx", as_of=None) -> CycleRequest:
+    return CycleRequest(Pair.parse(pair), mode, exchange_id, as_of)
