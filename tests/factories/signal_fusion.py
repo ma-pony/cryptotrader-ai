@@ -35,6 +35,12 @@ def context(
         "atr": atr,
         "current_position": position or PositionSnapshot("flat", 0.0, 0.0),
         "snapshots": {},
+        "portfolio": {
+            "total_value": equity,
+            "cash": equity,
+            "free_cash": equity,
+            "positions": {},
+        },
     }
     return SignalContext(**(values | overrides))
 

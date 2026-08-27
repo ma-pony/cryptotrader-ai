@@ -102,3 +102,31 @@ async def test_append_rejects_duplicate_cycle_id():
 
     with pytest.raises(ValueError, match="already exists"):
         await store.append(record)
+
+
+@pytest.mark.asyncio
+async def test_replace_moves_pending_cycle_to_its_terminal_state():
+    from cryptotrader.journal.store import CycleJournalStore
+
+    store = CycleJournalStore()
+    pending = cycle_record(status="awaiting_approval")
+    completed = replace(pending, status="completed", hitl_result={"status": "approved"})
+    await store.append(pending)
+
+    await store.replace(completed)
+
+    assert store.records == [completed]
+
+
+@pytest.mark.asyncio
+async def test_database_replace_moves_pending_cycle_to_its_terminal_state(tmp_path):
+    from cryptotrader.journal.store import CycleJournalStore
+
+    store = CycleJournalStore(f"sqlite+aiosqlite:///{tmp_path / 'cycles.db'}")
+    pending = cycle_record(status="awaiting_approval")
+    completed = replace(pending, status="completed", hitl_result={"status": "approved"})
+    await store.append(pending)
+
+    await store.replace(completed)
+
+    assert await store.get(pending.cycle_id) == completed

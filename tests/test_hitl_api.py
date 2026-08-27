@@ -1,165 +1,139 @@
-"""Tests for HITL API endpoints — pending, detail, respond."""
+"""HITL API 通过 TradingCycle 原子恢复或拒绝冻结计划。"""
 
 from __future__ import annotations
 
-import json
-import tempfile
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from fastapi import HTTPException
 
-from cryptotrader._compat import UTC
-from cryptotrader.hitl.store import ApprovalStore, _table_ready
-
-
-@pytest.fixture(autouse=True)
-def _clear_table_cache():
-    _table_ready.clear()
-    yield
-    _table_ready.clear()
+from cryptotrader.decision.models import CycleOutcome, TargetPosition
+from cryptotrader.hitl.store import ApprovalStateError, ApprovalStore
+from tests.factories.signal_fusion import context, request, trade_plan
 
 
-@pytest.fixture
-def db_url():
-    with tempfile.NamedTemporaryFile(suffix=".db") as f:
-        yield f"sqlite+aiosqlite:///{f.name}"
+class _Cycle:
+    def __init__(self) -> None:
+        self.approvals = ApprovalStore()
+        self.resume_approved = AsyncMock()
+        self.reject_approval = AsyncMock()
 
 
-async def _seed(db_url: str, approval_id: str = "test-001", **kwargs):
-    defaults = {
-        "pair": "BTC/USDT",
-        "expires_at": datetime.now(UTC) + timedelta(seconds=300),
-        "trigger_reason": "position_scale",
-        "verdict_snapshot": json.dumps(
-            {"action": "long", "position_scale": 0.8, "confidence": 0.7, "reasoning": "test"}
-        ),
-        "agent_analyses_snapshot": json.dumps([{"agent": "tech", "direction": "bullish", "confidence": 0.8}]),
-        "thread_id": "thread-1",
-    }
-    defaults.update(kwargs)
-    await ApprovalStore.create(db_url, approval_id=approval_id, **defaults)
+def _request_for(cycle):
+    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(trading_cycle=cycle)))
+
+
+async def _seed(cycle, approval_id="approval-1"):
+    return await cycle.approvals.create(
+        cycle_id="cycle-1",
+        cycle_request=request(),
+        profile_revision=3,
+        signal_context=context(),
+        plan=trade_plan(TargetPosition("long", 0.4), stop_loss=90.0, take_profit=120.0),
+        approval_id=approval_id,
+    )
 
 
 @pytest.mark.asyncio
-async def test_get_pending_empty(db_url):
+async def test_pending_api_exposes_frozen_target_plan():
     from api.routes.hitl import list_pending
 
-    with patch("api.routes.hitl._get_db_url", return_value=db_url):
-        await ApprovalStore.ensure_table(db_url)
-        result = await list_pending()
-    assert result == []
+    cycle = _Cycle()
+    await _seed(cycle)
 
+    result = await list_pending(_request_for(cycle))
 
-@pytest.mark.asyncio
-async def test_get_pending_returns_full_snapshot(db_url):
-    from api.routes.hitl import list_pending
-
-    await _seed(db_url)
-    with patch("api.routes.hitl._get_db_url", return_value=db_url):
-        result = await list_pending()
     assert len(result) == 1
-    item = result[0]
-    assert item.verdict_snapshot["action"] == "long"
-    assert item.verdict_snapshot["position_scale"] == 0.8
-    assert item.verdict_snapshot["confidence"] == 0.7
-    assert item.verdict_snapshot["reasoning"] == "test"
+    assert result[0].cycle_id == "cycle-1"
+    assert result[0].profile_revision == 3
+    assert result[0].trade_plan["target"] == {"side": "long", "size_ratio": 0.4}
 
 
 @pytest.mark.asyncio
-async def test_get_by_id_found(db_url):
+async def test_approve_api_resumes_cycle_instead_of_only_flipping_database_status():
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    await _seed(cycle)
+    cycle.resume_approved.return_value = CycleOutcome("cycle-1", "completed", 3)
+
+    result = await respond_approval(
+        "approval-1",
+        HitlRespondIn(decision="approve"),
+        _request_for(cycle),
+    )
+
+    cycle.resume_approved.assert_awaited_once_with("approval-1", decision_by="web")
+    assert result.cycle_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_reject_api_terminates_cycle_without_resume():
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    await _seed(cycle)
+    cycle.reject_approval.return_value = CycleOutcome("cycle-1", "approval_rejected", 3)
+
+    result = await respond_approval(
+        "approval-1",
+        HitlRespondIn(decision="reject"),
+        _request_for(cycle),
+    )
+
+    cycle.reject_approval.assert_awaited_once_with("approval-1", decision_by="web")
+    cycle.resume_approved.assert_not_awaited()
+    assert result.cycle_status == "approval_rejected"
+
+
+@pytest.mark.asyncio
+async def test_already_decided_approval_returns_conflict():
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    await _seed(cycle)
+    cycle.resume_approved.side_effect = ApprovalStateError("approval is not pending")
+
+    with pytest.raises(HTTPException) as error:
+        await respond_approval(
+            "approval-1",
+            HitlRespondIn(decision="approve"),
+            _request_for(cycle),
+        )
+
+    assert error.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_unknown_approval_returns_not_found():
     from api.routes.hitl import get_approval
 
-    await _seed(db_url)
-    with patch("api.routes.hitl._get_db_url", return_value=db_url):
-        result = await get_approval("test-001")
-    assert result.approval_id == "test-001"
-    assert result.status == "pending"
+    cycle = _Cycle()
+
+    with pytest.raises(HTTPException) as error:
+        await get_approval("missing", _request_for(cycle))
+
+    assert error.value.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_get_by_id_not_found(db_url):
-    from fastapi import HTTPException
+async def test_database_store_round_trips_typed_snapshot_and_claims_once(tmp_path):
+    store = ApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'approvals.db'}")
+    original = await store.create(
+        cycle_id="cycle-1",
+        cycle_request=request(),
+        profile_revision=3,
+        signal_context=context(),
+        plan=trade_plan(TargetPosition("short", 0.4), stop_loss=110.0, take_profit=80.0),
+        approval_id="approval-1",
+    )
 
-    from api.routes.hitl import get_approval
+    loaded = await store.get("approval-1")
+    approved = await store.approve("approval-1", decision_by="web")
 
-    await ApprovalStore.ensure_table(db_url)
-    with (
-        patch("api.routes.hitl._get_db_url", return_value=db_url),
-        pytest.raises(HTTPException) as exc_info,
-    ):
-        await get_approval("nonexistent")
-    assert exc_info.value.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_respond_approve(db_url):
-    from api.routes.hitl import HitlRespondIn, respond_approval
-
-    await _seed(db_url)
-    body = HitlRespondIn(decision="approve")
-    with (
-        patch("api.routes.hitl._get_db_url", return_value=db_url),
-        patch("cryptotrader.hitl.notifier.notify_hitl_decision", new_callable=AsyncMock),
-    ):
-        result = await respond_approval("test-001", body)
-    assert result.status == "approved"
-
-    record = await ApprovalStore.get(db_url, "test-001")
-    assert record["status"] == "approved"
-    assert record["decision_by"] == "web"
-
-
-@pytest.mark.asyncio
-async def test_respond_reject(db_url):
-    from api.routes.hitl import HitlRespondIn, respond_approval
-
-    await _seed(db_url)
-    body = HitlRespondIn(decision="reject", comment="too risky")
-    with (
-        patch("api.routes.hitl._get_db_url", return_value=db_url),
-        patch("cryptotrader.hitl.notifier.notify_hitl_decision", new_callable=AsyncMock),
-    ):
-        result = await respond_approval("test-001", body)
-    assert result.status == "rejected"
-
-    record = await ApprovalStore.get(db_url, "test-001")
-    assert record["status"] == "rejected"
-    assert record["comment"] == "too risky"
-
-
-@pytest.mark.asyncio
-async def test_respond_conflict_409(db_url):
-    from fastapi import HTTPException
-
-    from api.routes.hitl import HitlRespondIn, respond_approval
-
-    await _seed(db_url)
-    body = HitlRespondIn(decision="approve")
-    with (
-        patch("api.routes.hitl._get_db_url", return_value=db_url),
-        patch("cryptotrader.hitl.notifier.notify_hitl_decision", new_callable=AsyncMock),
-    ):
-        await respond_approval("test-001", body)
-        with pytest.raises(HTTPException) as exc_info:
-            await respond_approval("test-001", HitlRespondIn(decision="reject"))
-    assert exc_info.value.status_code == 409
-
-
-@pytest.mark.asyncio
-async def test_respond_expired_409(db_url):
-    from fastapi import HTTPException
-
-    from api.routes.hitl import HitlRespondIn, respond_approval
-
-    past = datetime.now(UTC) - timedelta(seconds=60)
-    await _seed(db_url, expires_at=past)
-    await ApprovalStore.expire_stale(db_url)
-
-    body = HitlRespondIn(decision="approve")
-    with (
-        patch("api.routes.hitl._get_db_url", return_value=db_url),
-        pytest.raises(HTTPException) as exc_info,
-    ):
-        await respond_approval("test-001", body)
-    assert exc_info.value.status_code == 409
+    assert loaded == original
+    assert approved.status == "approved"
+    assert approved.plan.target.side == "short"
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await store.approve("approval-1", decision_by="web")

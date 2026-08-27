@@ -99,6 +99,21 @@ class ExchangeAdapter(Protocol):
 
     async def fetch_open_orders(self) -> list[dict[str, Any]]: ...
 
+    async def place_algo_oco(
+        self,
+        pair: str,
+        *,
+        side: str,
+        amount: float,
+        sl_trigger_px: float,
+        tp_trigger_px: float,
+        pos_side: str,
+    ) -> str: ...
+
+    async def cancel_algo(self, algo_id: str, pair: str) -> None: ...
+
+    async def list_pending_algos(self, pair: str | None = None) -> list[dict[str, Any]]: ...
+
     async def close(self) -> None: ...
 
 
@@ -363,6 +378,8 @@ class LiveExchange:
         params: dict[str, Any] = {}
         if pair.market_type != "spot":
             params["posSide"] = await self._derive_pos_side(order)
+            if order.reduce_only:
+                params["reduceOnly"] = True
             # spec 021 H1: pass tdMode so OKX uses the configured margin mode
             # (isolated / cross) on this order. Without it, OKX defaults to
             # the account-default tdMode which may NOT match the mgnMode we
@@ -778,8 +795,8 @@ class LiveExchange:
             side: Closing direction: ``"buy"`` to close a short, ``"sell"`` to
                 close a long. Caller is responsible for picking the inverse of
                 the open position.
-            amount: Size in **contracts** (already converted from base units;
-                same convention as ``place_order``).
+            amount: Base-currency size. The adapter converts it to contracts
+                with the market's ``contractSize``, matching ``place_order``.
             sl_trigger_px: Stop-loss trigger price (last-price reference).
             tp_trigger_px: Take-profit trigger price (last-price reference).
             pos_side: ``"long"`` or ``"short"`` — the position being protected.
@@ -798,7 +815,18 @@ class LiveExchange:
         # Snap sz to OKX lotSz and trigger prices to tickSz via ccxt market
         # metadata. Without this, OKX rejects with code 51121 "Order quantity
         # must be a multiple of the lot size" — see audit 2026-05-14 DOGE.
-        sz_str = self._exchange.amount_to_precision(pair, amount)
+        market = self._exchange.markets.get(pair, {})
+        contract_size = 1.0
+        raw_contract_size = market.get("contractSize")
+        if raw_contract_size is not None:
+            try:
+                parsed_contract_size = float(raw_contract_size)
+                if parsed_contract_size > 0.0:
+                    contract_size = parsed_contract_size
+            except (TypeError, ValueError):
+                pass
+        contract_amount = amount / contract_size
+        sz_str = self._exchange.amount_to_precision(pair, contract_amount)
         if float(sz_str) <= 0:
             raise ValueError(f"place_algo_oco: amount {amount} rounds to 0 at lotSz for {pair}")
         sl_str = self._exchange.price_to_precision(pair, sl_trigger_px)

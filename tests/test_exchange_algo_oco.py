@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from cryptotrader.execution.exchange import LiveExchange
+from cryptotrader.models import Order
 
 
 def _make_okx_exchange() -> LiveExchange:
@@ -33,6 +34,28 @@ def _make_okx_exchange() -> LiveExchange:
             passphrase="p",
             margin_mode="isolated",
         )
+
+
+@pytest.mark.asyncio
+async def test_reduce_only_order_reaches_exchange_params():
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    ex.get_balance = AsyncMock(return_value={"USDT": 10_000.0})
+    ex._derive_pos_side = AsyncMock(return_value="long")
+    ex._exchange.create_order = AsyncMock(return_value={"id": "close-1", "status": "closed"})
+
+    await ex.place_order(
+        Order(
+            pair="BTC/USDT:USDT",
+            side="sell",
+            amount=0.1,
+            price=100.0,
+            reduce_only=True,
+        )
+    )
+
+    params = ex._exchange.create_order.await_args.args[-1]
+    assert params["reduceOnly"] is True
 
 
 # ── place_algo_oco ──────────────────────────────────────────────────────
@@ -106,6 +129,29 @@ async def test_place_algo_oco_snaps_sz_to_lot_size():
     assert params["sz"] == "4562"
     assert params["slTriggerPx"] == "0.108"
     assert params["tpTriggerPx"] == "0.12"
+
+
+@pytest.mark.asyncio
+async def test_place_algo_oco_converts_base_amount_to_contracts():
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    ex._exchange.markets["BTC/USDT:USDT"]["contractSize"] = 0.01
+    ex._exchange.private_post_trade_order_algo = AsyncMock(
+        return_value={"code": "0", "data": [{"algoId": "ok", "sCode": "0", "sMsg": ""}]}
+    )
+
+    await ex.place_algo_oco(
+        "BTC/USDT:USDT",
+        side="sell",
+        amount=0.1,
+        sl_trigger_px=90_000,
+        tp_trigger_px=120_000,
+        pos_side="long",
+    )
+
+    ex._exchange.amount_to_precision.assert_called_once_with("BTC/USDT:USDT", 10.0)
+    params = ex._exchange.private_post_trade_order_algo.await_args.args[0]
+    assert params["sz"] == "10.0"
 
 
 @pytest.mark.asyncio

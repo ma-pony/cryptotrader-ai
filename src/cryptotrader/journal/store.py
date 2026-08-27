@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from sqlalchemy import JSON, BigInteger, DateTime, String, select
+from sqlalchemy import JSON, BigInteger, DateTime, String, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -125,6 +125,37 @@ class CycleJournalStore:
         try:
             row = await session.get(_TradingCycleRow, cycle_id)
             return _record(row) if row is not None else None
+        finally:
+            await session.close()
+
+    async def replace(self, record: TradingCycleRecord) -> None:
+        """替换同一周期的暂停状态。供 HITL 终态迁移使用。"""
+        if self.database_url is None:
+            for index, current in enumerate(self.records):
+                if current.cycle_id == record.cycle_id:
+                    self.records[index] = record
+                    return
+            raise LookupError(f"cycle {record.cycle_id!r} does not exist")
+
+        await self.ensure_table()
+        statement = (
+            update(_TradingCycleRow)
+            .where(_TradingCycleRow.cycle_id == record.cycle_id)
+            .values(
+                created_at=record.created_at,
+                pair=record.pair,
+                status=record.status,
+                profile_revision=record.profile_revision,
+                payload=_payload(record),
+            )
+        )
+        session = await get_async_session(self.database_url)
+        try:
+            result = await session.execute(statement)
+            if result.rowcount != 1:
+                await session.rollback()
+                raise LookupError(f"cycle {record.cycle_id!r} does not exist")
+            await session.commit()
         finally:
             await session.close()
 

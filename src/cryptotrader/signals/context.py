@@ -144,6 +144,7 @@ class LiveSignalContextProvider:
             atr=_atr_value(snapshots[self.default_timeframe]),
             current_position=current_position,
             snapshots=snapshots,
+            portfolio=portfolio,
         )
 
     async def refresh_execution_state(self, context: SignalContext) -> SignalContext:
@@ -160,7 +161,13 @@ class LiveSignalContextProvider:
             equity,
             self.max_single_pct,
         )
-        return replace(context, current_price=price, equity=equity, current_position=current_position)
+        return replace(
+            context,
+            current_price=price,
+            equity=equity,
+            current_position=current_position,
+            portfolio=portfolio,
+        )
 
 
 class HistoricalSignalContextProvider:
@@ -214,6 +221,21 @@ class HistoricalSignalContextProvider:
             atr=_atr_value(snapshots[self.default_timeframe]),
             current_position=position,
             snapshots=snapshots,
+            portfolio={
+                "total_value": self.equity,
+                "cash": self.equity,
+                "free_cash": self.equity,
+                "positions": {
+                    request.pair.canonical(): {
+                        "amount": position.signed_amount,
+                        "side": position.side,
+                        "avg_price": position.avg_price or price,
+                        "unrealized_pnl": position.unrealized_pnl,
+                    }
+                }
+                if position.side != "flat"
+                else {},
+            },
         )
 
     async def refresh_execution_state(self, context: SignalContext) -> SignalContext:

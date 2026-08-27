@@ -89,6 +89,7 @@ class SignalContext:
     atr: float
     current_position: PositionSnapshot
     snapshots: Mapping[str, DataSnapshot]
+    portfolio: Mapping[str, Any]
 
 
 @dataclass(frozen=True)

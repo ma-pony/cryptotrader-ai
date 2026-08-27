@@ -1,236 +1,257 @@
-"""HITL approval request persistence — SQLite/PostgreSQL via shared db.py."""
+"""目标仓位计划的人工审批快照与原子状态迁移。"""
 
 from __future__ import annotations
 
-import logging
-from datetime import datetime
+import asyncio
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import uuid4
 
-from cryptotrader._compat import UTC
+from sqlalchemy import JSON, BigInteger, DateTime, String, select, update
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from cryptotrader.cycle_serialization import (
+    cycle_request_from_payload,
+    cycle_request_payload,
+    signal_context_from_payload,
+    signal_context_payload,
+    trade_plan_from_payload,
+    trade_plan_payload,
+)
 from cryptotrader.db import get_async_session, get_engine
 
-logger = logging.getLogger(__name__)
+if TYPE_CHECKING:
+    from cryptotrader.decision.models import CycleRequest, TradePlan
+    from cryptotrader.signals.models import SignalContext
 
-_table_ready: set[str] = set()
-_sa_cache: tuple | None = None
+ApprovalStatus = Literal["pending", "approved", "rejected"]
+_ready: set[str] = set()
 
 
-def _sa_models():
-    global _sa_cache
-    if _sa_cache is not None:
-        return _sa_cache
+class ApprovalStateError(RuntimeError):
+    pass
 
-    from sqlalchemy import Column, DateTime, Integer, String, Text
-    from sqlalchemy.orm import DeclarativeBase
 
-    class _Base(DeclarativeBase):
-        pass
+@dataclass(frozen=True)
+class ApprovalRecord:
+    approval_id: str
+    cycle_id: str
+    pair: str
+    profile_revision: int
+    cycle_request: CycleRequest
+    signal_context: SignalContext
+    plan: TradePlan
+    status: ApprovalStatus
+    decision_by: str | None
+    created_at: datetime
+    decided_at: datetime | None
 
-    class _ApprovalRow(_Base):
-        __tablename__ = "hitl_approvals"
-        approval_id = Column(String(36), primary_key=True)
-        pair = Column(String(20), nullable=False, index=True)
-        created_at = Column(DateTime(timezone=True), nullable=False)
-        expires_at = Column(DateTime(timezone=True), nullable=False)
-        trigger_reason = Column(String(50), nullable=False)
-        verdict_snapshot = Column(Text, nullable=False)
-        agent_analyses_snapshot = Column(Text, nullable=False)
-        status = Column(String(20), nullable=False, default="pending", index=True)
-        decision_by = Column(String(20), nullable=True)
-        decided_at = Column(DateTime(timezone=True), nullable=True)
-        comment = Column(Text, nullable=True)
-        thread_id = Column(String(100), nullable=False)
-        telegram_message_id = Column(Integer, nullable=True)
 
-    _sa_cache = (_Base, _ApprovalRow)
-    return _sa_cache
+class _Base(DeclarativeBase):
+    pass
+
+
+class _ApprovalRow(_Base):
+    __tablename__ = "trade_plan_approvals"
+
+    approval_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    cycle_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    pair: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    profile_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    request_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+    )
+    context_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+    )
+    trade_plan_payload: Mapped[dict[str, Any]] = mapped_column(
+        JSON().with_variant(JSONB(), "postgresql"),
+        nullable=False,
+    )
+    status: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    decision_by: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+def _normalize_datetime(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _row_to_record(row: _ApprovalRow) -> ApprovalRecord:
+    return ApprovalRecord(
+        approval_id=row.approval_id,
+        cycle_id=row.cycle_id,
+        pair=row.pair,
+        profile_revision=row.profile_revision,
+        cycle_request=cycle_request_from_payload(row.request_payload),
+        signal_context=signal_context_from_payload(row.context_payload),
+        plan=trade_plan_from_payload(row.trade_plan_payload),
+        status=cast("ApprovalStatus", row.status),
+        decision_by=row.decision_by,
+        created_at=_normalize_datetime(row.created_at),
+        decided_at=_normalize_datetime(row.decided_at) if row.decided_at is not None else None,
+    )
 
 
 class ApprovalStore:
-    @staticmethod
-    async def ensure_table(db_url: str) -> None:
-        if db_url in _table_ready:
+    def __init__(self, database_url: str | None = None) -> None:
+        self.database_url = database_url
+        self.records: list[ApprovalRecord] = []
+        self._lock = asyncio.Lock()
+
+    async def ensure_table(self) -> None:
+        if self.database_url is None or self.database_url in _ready:
             return
-        base, _ = _sa_models()
-        engine = await get_engine(db_url)
-        async with engine.begin() as conn:
-            await conn.run_sync(base.metadata.create_all)
-        _table_ready.add(db_url)
+        engine = await get_engine(self.database_url)
+        async with engine.begin() as connection:
+            await connection.run_sync(_Base.metadata.create_all)
+        _ready.add(self.database_url)
 
-    @staticmethod
     async def create(
-        db_url: str,
+        self,
         *,
-        approval_id: str,
-        pair: str,
-        expires_at: datetime,
-        trigger_reason: str,
-        verdict_snapshot: str,
-        agent_analyses_snapshot: str,
-        thread_id: str,
-    ) -> dict:
-        await ApprovalStore.ensure_table(db_url)
-        _, row_cls = _sa_models()
-        now = datetime.now(UTC)
-        session = await get_async_session(db_url)
+        cycle_id: str,
+        cycle_request: CycleRequest,
+        profile_revision: int,
+        signal_context: SignalContext,
+        plan: TradePlan,
+        approval_id: str | None = None,
+        created_at: datetime | None = None,
+    ) -> ApprovalRecord:
+        approval_id = approval_id or str(uuid4())
+        created_at = created_at or datetime.now(UTC)
+        request_data = cycle_request_payload(cycle_request)
+        context_data = signal_context_payload(signal_context)
+        plan_data = trade_plan_payload(plan)
+        record = ApprovalRecord(
+            approval_id=approval_id,
+            cycle_id=cycle_id,
+            pair=cycle_request.pair.canonical(),
+            profile_revision=profile_revision,
+            cycle_request=cycle_request_from_payload(request_data),
+            signal_context=signal_context_from_payload(context_data),
+            plan=trade_plan_from_payload(plan_data),
+            status="pending",
+            decision_by=None,
+            created_at=created_at,
+            decided_at=None,
+        )
+        if self.database_url is None:
+            async with self._lock:
+                if any(item.approval_id == approval_id for item in self.records):
+                    raise ValueError(f"approval {approval_id!r} already exists")
+                self.records.append(record)
+            return record
+
+        await self.ensure_table()
+        session = await get_async_session(self.database_url)
         try:
-            row = row_cls(
-                approval_id=approval_id,
-                pair=pair,
-                created_at=now,
-                expires_at=expires_at,
-                trigger_reason=trigger_reason,
-                verdict_snapshot=verdict_snapshot,
-                agent_analyses_snapshot=agent_analyses_snapshot,
-                status="pending",
-                thread_id=thread_id,
+            session.add(
+                _ApprovalRow(
+                    approval_id=record.approval_id,
+                    cycle_id=record.cycle_id,
+                    pair=record.pair,
+                    profile_revision=record.profile_revision,
+                    request_payload=request_data,
+                    context_payload=context_data,
+                    trade_plan_payload=plan_data,
+                    status=record.status,
+                    decision_by=None,
+                    created_at=record.created_at,
+                    decided_at=None,
+                )
             )
-            session.add(row)
             await session.commit()
-        finally:
-            await session.close()
-        return {
-            "approval_id": approval_id,
-            "pair": pair,
-            "created_at": now.isoformat(),
-            "expires_at": expires_at.isoformat(),
-            "trigger_reason": trigger_reason,
-            "status": "pending",
-            "thread_id": thread_id,
-        }
-
-    @staticmethod
-    async def get(db_url: str, approval_id: str) -> dict | None:
-        await ApprovalStore.ensure_table(db_url)
-        _, row_cls = _sa_models()
-        from sqlalchemy import select
-
-        session = await get_async_session(db_url)
-        try:
-            result = await session.execute(select(row_cls).where(row_cls.approval_id == approval_id))
-            row = result.scalar_one_or_none()
-            if row is None:
-                return None
-            return _row_to_dict(row)
+            return record
         finally:
             await session.close()
 
-    @staticmethod
-    async def list_pending(db_url: str) -> list[dict]:
-        await ApprovalStore.ensure_table(db_url)
-        _, row_cls = _sa_models()
-        from sqlalchemy import select
-
-        session = await get_async_session(db_url)
+    async def get(self, approval_id: str) -> ApprovalRecord | None:
+        if self.database_url is None:
+            return next((item for item in self.records if item.approval_id == approval_id), None)
+        await self.ensure_table()
+        session = await get_async_session(self.database_url)
         try:
-            result = await session.execute(
-                select(row_cls).where(row_cls.status == "pending").order_by(row_cls.created_at)
+            row = await session.get(_ApprovalRow, approval_id)
+            return _row_to_record(row) if row is not None else None
+        finally:
+            await session.close()
+
+    async def list_pending(self) -> list[ApprovalRecord]:
+        if self.database_url is None:
+            return sorted(
+                (item for item in self.records if item.status == "pending"),
+                key=lambda item: item.created_at,
+                reverse=True,
             )
-            return [_row_to_dict(r) for r in result.scalars().all()]
+        await self.ensure_table()
+        statement = (
+            select(_ApprovalRow).where(_ApprovalRow.status == "pending").order_by(_ApprovalRow.created_at.desc())
+        )
+        session = await get_async_session(self.database_url)
+        try:
+            rows = (await session.execute(statement)).scalars().all()
+            return [_row_to_record(row) for row in rows]
         finally:
             await session.close()
 
-    @staticmethod
-    async def decide(
-        db_url: str,
+    async def approve(self, approval_id: str, *, decision_by: str) -> ApprovalRecord:
+        return await self._decide(approval_id, "approved", decision_by)
+
+    async def reject(self, approval_id: str, *, decision_by: str) -> ApprovalRecord:
+        return await self._decide(approval_id, "rejected", decision_by)
+
+    async def _decide(
+        self,
         approval_id: str,
-        *,
-        status: str,
+        status: Literal["approved", "rejected"],
         decision_by: str,
-        comment: str = "",
-    ) -> bool:
-        """CAS update: returns True if update succeeded, False if concurrent conflict."""
-        await ApprovalStore.ensure_table(db_url)
-        _, row_cls = _sa_models()
-        from sqlalchemy import update
+    ) -> ApprovalRecord:
+        decided_at = datetime.now(UTC)
+        if self.database_url is None:
+            async with self._lock:
+                for index, record in enumerate(self.records):
+                    if record.approval_id != approval_id:
+                        continue
+                    if record.status != "pending":
+                        raise ApprovalStateError(f"approval {approval_id!r} is not pending")
+                    decided = replace(
+                        record,
+                        status=status,
+                        decision_by=decision_by,
+                        decided_at=decided_at,
+                    )
+                    self.records[index] = decided
+                    return decided
+            raise LookupError(f"approval {approval_id!r} does not exist")
 
-        now = datetime.now(UTC)
-        session = await get_async_session(db_url)
-        try:
-            result = await session.execute(
-                update(row_cls)
-                .where(row_cls.approval_id == approval_id, row_cls.status == "pending")
-                .values(
-                    status=status,
-                    decision_by=decision_by,
-                    decided_at=now,
-                    comment=comment,
-                )
+        await self.ensure_table()
+        statement = (
+            update(_ApprovalRow)
+            .where(
+                _ApprovalRow.approval_id == approval_id,
+                _ApprovalRow.status == "pending",
             )
+            .values(status=status, decision_by=decision_by, decided_at=decided_at)
+        )
+        session = await get_async_session(self.database_url)
+        try:
+            result = await session.execute(statement)
+            if result.rowcount != 1:
+                await session.rollback()
+                existing = await self.get(approval_id)
+                if existing is None:
+                    raise LookupError(f"approval {approval_id!r} does not exist")
+                raise ApprovalStateError(f"approval {approval_id!r} is not pending")
             await session.commit()
-            return result.rowcount > 0
         finally:
             await session.close()
-
-    @staticmethod
-    async def set_telegram_message_id(db_url: str, approval_id: str, message_id: int) -> None:
-        await ApprovalStore.ensure_table(db_url)
-        _, row_cls = _sa_models()
-        from sqlalchemy import update
-
-        session = await get_async_session(db_url)
-        try:
-            await session.execute(
-                update(row_cls).where(row_cls.approval_id == approval_id).values(telegram_message_id=message_id)
-            )
-            await session.commit()
-        finally:
-            await session.close()
-
-    @staticmethod
-    async def expire_stale(db_url: str) -> int:
-        """Mark overdue pending approvals as expired. Returns count."""
-        await ApprovalStore.ensure_table(db_url)
-        _, row_cls = _sa_models()
-        from sqlalchemy import update
-
-        now = datetime.now(UTC)
-        session = await get_async_session(db_url)
-        try:
-            result = await session.execute(
-                update(row_cls)
-                .where(row_cls.status == "pending", row_cls.expires_at < now)
-                .values(
-                    status="expired",
-                    decision_by="timeout",
-                    decided_at=now,
-                )
-            )
-            await session.commit()
-            count = result.rowcount
-            if count > 0:
-                logger.warning("Expired %d stale HITL approvals on startup", count)
-            return count
-        finally:
-            await session.close()
-
-    @staticmethod
-    async def get_completed_trades_count(db_url: str) -> int:
-        """Count completed trades (non-hold) from journal for cold-start detection."""
-        from sqlalchemy import text
-
-        session = await get_async_session(db_url)
-        try:
-            result = await session.execute(
-                text("SELECT COUNT(*) FROM decision_commits WHERE verdict->>'action' != 'hold'")
-            )
-            return result.scalar_one()
-        finally:
-            await session.close()
-
-
-def _row_to_dict(row: object) -> dict:
-    return {
-        "approval_id": row.approval_id,
-        "pair": row.pair,
-        "created_at": row.created_at.isoformat() if row.created_at else None,
-        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
-        "trigger_reason": row.trigger_reason,
-        "verdict_snapshot": row.verdict_snapshot,
-        "agent_analyses_snapshot": row.agent_analyses_snapshot,
-        "status": row.status,
-        "decision_by": row.decision_by,
-        "decided_at": row.decided_at.isoformat() if row.decided_at else None,
-        "comment": row.comment,
-        "thread_id": row.thread_id,
-        "telegram_message_id": row.telegram_message_id,
-    }
+        decided = await self.get(approval_id)
+        if decided is None:
+            raise LookupError(f"approval {approval_id!r} does not exist")
+        return decided
