@@ -36,6 +36,7 @@ class DataRequirements:
     onchain: bool = False
     news: bool = False
     macro: bool = False
+    kronos_aux: bool = False
 
     @classmethod
     def merge(cls, *requirements: DataRequirements) -> DataRequirements:
@@ -51,6 +52,7 @@ class DataRequirements:
             onchain=any(item.onchain for item in requirements),
             news=any(item.news for item in requirements),
             macro=any(item.macro for item in requirements),
+            kronos_aux=any(item.kronos_aux for item in requirements),
         )
 
 

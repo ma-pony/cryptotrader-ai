@@ -25,7 +25,7 @@ def test_data_requirements_merge_uses_largest_limit_per_timeframe():
     from cryptotrader.signals.models import CandleRequirement, DataRequirements
 
     merged = DataRequirements.merge(
-        DataRequirements(candles=(CandleRequirement("1h", 100),), news=True),
+        DataRequirements(candles=(CandleRequirement("1h", 100),), news=True, kronos_aux=True),
         DataRequirements(
             candles=(CandleRequirement("1h", 200), CandleRequirement("4h", 512)),
             onchain=True,
@@ -39,6 +39,7 @@ def test_data_requirements_merge_uses_largest_limit_per_timeframe():
     assert merged.onchain is True
     assert merged.news is True
     assert merged.macro is False
+    assert merged.kronos_aux is True
 
 
 @pytest.mark.parametrize(

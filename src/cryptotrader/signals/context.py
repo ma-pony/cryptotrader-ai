@@ -86,12 +86,14 @@ class LiveSignalContextProvider:
         *,
         default_timeframe: str,
         max_single_pct: float = 1.0,
+        kronos_aux_symbol: str = "BTCUSDT",
     ) -> None:
         self.aggregator = aggregator
         self.market = market
         self.portfolio = portfolio
         self.default_timeframe = default_timeframe
         self.max_single_pct = max_single_pct
+        self.kronos_aux_symbol = kronos_aux_symbol
 
     async def collect(self, request: CycleRequest, requirements: DataRequirements) -> SignalContext:
         if not requirements.candles:
@@ -103,6 +105,8 @@ class LiveSignalContextProvider:
             timeframe=primary.timeframe,
             limit=primary.limit,
             backtest_mode=False,
+            kronos_aux=requirements.kronos_aux,
+            kronos_aux_symbol=self.kronos_aux_symbol,
         )
         as_of = base.timestamp
         snapshots = {

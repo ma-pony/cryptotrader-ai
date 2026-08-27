@@ -38,6 +38,8 @@ class SnapshotAggregator:
         *,
         adapter: MCPAdapter | None = None,
         backtest_mode: bool = False,
+        kronos_aux: bool = False,
+        kronos_aux_symbol: str = "BTCUSDT",
     ) -> DataSnapshot:
         logger.info("Collecting snapshot: pair=%s exchange=%s tf=%s limit=%d", pair, exchange_id, timeframe, limit)
         market_data, news_data, macro_data = await asyncio.gather(
@@ -53,6 +55,17 @@ class SnapshotAggregator:
         )
 
         onchain_data = await self.onchain.collect(pair, market_data.funding_rate)
+
+        if kronos_aux:
+            from cryptotrader.data.kronos_aux import fetch_kronos_aux
+
+            auxiliary = await fetch_kronos_aux(kronos_aux_symbol)
+            if auxiliary["lsr_top_count"] is not None:
+                onchain_data.lsr_top_count = auxiliary["lsr_top_count"]
+            if auxiliary["premium_close_5d"] is not None:
+                market_data.premium_index_5d = auxiliary["premium_close_5d"]
+            if auxiliary["spy_btc_corr"] is not None:
+                macro_data.spy_btc_corr_30d = auxiliary["spy_btc_corr"]
 
         if adapter is not None:
             from cryptotrader.pair import Pair

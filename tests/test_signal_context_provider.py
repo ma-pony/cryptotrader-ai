@@ -88,6 +88,7 @@ def _requirements() -> DataRequirements:
         onchain=True,
         news=True,
         macro=True,
+        kronos_aux=True,
     )
 
 
@@ -108,6 +109,7 @@ async def test_live_provider_materializes_each_required_timeframe_once():
     assert {snapshot.timestamp for snapshot in context.snapshots.values()} == {context.as_of}
     assert market.calls == [("BTC/USDT:USDT", "4h", 30)]
     assert len(aggregator.calls) == 1
+    assert aggregator.calls[0]["kronos_aux"] is True
     assert context.current_price == 100.0
     assert context.atr == pytest.approx(2.0)
 
