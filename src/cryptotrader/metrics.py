@@ -21,12 +21,6 @@ _ct_debate_skipped_total = Counter(
     "辩论环节被跳过的总次数",
 )
 
-_ct_verdict_total = Counter(
-    "ct_verdict_total",
-    "裁决结果总次数",
-    ["action"],
-)
-
 _ct_risk_rejected_total = Counter(
     "ct_risk_rejected_total",
     "风控拒绝总次数",
@@ -80,13 +74,6 @@ class MetricsCollector:
             _ct_debate_skipped_total.inc()
         except Exception:
             logger.warning("递增 ct_debate_skipped_total 失败", exc_info=True)
-
-    def inc_verdict(self, *, action: str) -> None:
-        """递增裁决计数器。"""
-        try:
-            _ct_verdict_total.labels(action=action).inc()
-        except Exception:
-            logger.warning("递增 ct_verdict_total 失败", exc_info=True)
 
     def inc_risk_rejected(self, *, check_name: str) -> None:
         """递增风控拒绝计数器。"""

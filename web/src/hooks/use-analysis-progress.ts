@@ -5,7 +5,7 @@ import type { SSEEvent } from '@/lib/stream-fetch';
 import { useSettingsStore } from '@/stores/use-settings-store';
 import type { ComponentSignal, FusedSignal } from '@/types/api';
 import type {
-  CommitteeAgentCompletedData,
+  AgentAnalysisCompletedData,
   ComponentCompletedData,
   ComponentFailedData,
   ComponentStartedData,
@@ -87,8 +87,8 @@ export function useAnalysisProgress() {
         setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'thinking', direction: '', confidence: 0, steered: false } }, lastEventId }));
         break;
       }
-      case 'committee_agent_completed': {
-        const data = payload as unknown as CommitteeAgentCompletedData;
+      case 'agent_analysis_completed': {
+        const data = payload as unknown as AgentAnalysisCompletedData;
         setProgress((current) => ({ ...current, agents: { ...current.agents, [data.agent_id]: { status: 'done', direction: data.analysis.direction, confidence: data.analysis.confidence, steered: false } }, lastEventId }));
         break;
       }

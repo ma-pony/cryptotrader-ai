@@ -36,14 +36,19 @@ def _valid_payload() -> dict:
 
 
 class TestBacktestRunHappyPath:
-    def test_returns_202_with_run_id(self, client: TestClient) -> None:
+    def test_returns_202_with_run_id(self, client: TestClient, monkeypatch) -> None:
+        from api.main import app
+
+        shared_profiles = object()
+        monkeypatch.setattr(app.state, "signal_profile_repository", shared_profiles, raising=False)
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("api.routes.backtest._spawn_run", return_value="run_a1b2c3"),
+            patch("api.routes.backtest._spawn_run", return_value="run_a1b2c3") as spawn_run,
         ):
             resp = client.post("/api/backtest/run", json=_valid_payload())
 
         assert resp.status_code == 202
+        assert spawn_run.call_args.args[1] is shared_profiles
         body = resp.json()
         assert "run_id" in body
         assert body["run_id"].startswith("run_")

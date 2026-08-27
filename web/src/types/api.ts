@@ -83,7 +83,7 @@ export type BacktestSessionDetail = z.output<typeof BacktestSessionDetailSchema>
 
 // Signal strategy profile
 export type SignalProfile = z.output<typeof SignalProfileSchema>;
-export type SignalProfileUpdate = Omit<SignalProfile, 'installed_components'>;
+export type SignalProfileUpdate = Omit<SignalProfile, 'installed_components' | 'revision' | 'updated_at'>;
 
 // §5 Risk
 export type CircuitBreakerStatus = z.output<typeof CircuitBreakerStatusSchema>;

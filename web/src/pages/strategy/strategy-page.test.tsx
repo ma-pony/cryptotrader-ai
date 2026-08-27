@@ -9,6 +9,7 @@ import StrategyPage from './index';
 
 const profile = (revision = 3) => ({
   revision,
+  updated_at: '2026-08-28T01:23:45+00:00',
   components: [
     { component_id: 'kronos', enabled: true, weight: 0.6 },
     { component_id: 'llm_committee', enabled: true, weight: 0.4 },
@@ -65,6 +66,7 @@ describe('StrategyPage', () => {
     renderPage();
 
     expect(await screen.findByText('Revision 3')).toBeInTheDocument();
+    expect(screen.getByText(/最后更新/)).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: '保存并从下一周期生效' }));
 
     expect(await screen.findByText('Revision 4')).toBeInTheDocument();
@@ -72,13 +74,15 @@ describe('StrategyPage', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const [, request] = fetchMock.mock.calls[1] as [RequestInfo | URL, RequestInit];
     expect(typeof request.body).toBe('string');
-    expect(JSON.parse(request.body as string)).toEqual(
+    const payload = JSON.parse(request.body as string);
+    expect(payload).toEqual(
       expect.objectContaining({
-        revision: 3,
         components: expect.arrayContaining([
           expect.objectContaining({ component_id: 'kronos', weight: 0.6 }),
         ]),
       }),
     );
+    expect(payload).not.toHaveProperty('revision');
+    expect(payload).not.toHaveProperty('updated_at');
   });
 });

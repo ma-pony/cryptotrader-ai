@@ -33,12 +33,13 @@
     "reward_ratio": "Reward-to-risk ratio",
     "reward_ratio_hint": "Take-profit distance relative to the stop distance.",
     "hitl": "Require approval for trade plans",
-    "hitl_hint": "Live plans enter the approval queue. Paper and backtest runs remain automatic."
+    "hitl_hint": "Paper and live plans enter the approval queue. Backtests always remain automatic."
   },
   "save": {
     "button": "Save for the next cycle",
     "saving": "Saving…",
     "next_cycle": "The current cycle is immutable; the next cycle reads the new profile.",
+    "updated_at": "Last updated {{time}}",
     "success": "Saved and active from the next cycle",
     "error": "Save failed. The active runtime profile is unchanged; check the values and retry."
   },

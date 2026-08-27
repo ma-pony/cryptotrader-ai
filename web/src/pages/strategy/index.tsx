@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { useSaveSignalProfile, useSignalProfile } from '@/hooks/use-signal-profile';
+import { formatDateTime } from '@/lib/format';
 import type { SignalProfile, SignalProfileUpdate } from '@/types/api';
 
 import {
@@ -73,7 +74,6 @@ const StrategyEditor = ({ profile }: { profile: SignalProfile }) => {
 
   const submit = () => {
     const payload: SignalProfileUpdate = {
-      revision: savedRevision,
       components: draft.components.map((component) => ({
         ...component,
         weight: component.enabled ? component.weight : 0,
@@ -99,8 +99,15 @@ const StrategyEditor = ({ profile }: { profile: SignalProfile }) => {
         title={t('title')}
         subtitle={t('subtitle')}
         actions={
-          <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs font-semibold text-amber-500">
-            Revision {savedRevision}
+          <div className="flex flex-col items-start gap-1 sm:items-end">
+            <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs font-semibold text-amber-500">
+              Revision {savedRevision}
+            </div>
+            {profile.updated_at ? (
+              <time dateTime={profile.updated_at} className="text-[11px] text-muted-foreground">
+                {t('save.updated_at', { time: formatDateTime(profile.updated_at) })}
+              </time>
+            ) : null}
           </div>
         }
       />

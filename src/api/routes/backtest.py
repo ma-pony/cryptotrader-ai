@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from cryptotrader._compat import UTC
@@ -79,7 +79,7 @@ def _new_run_id() -> str:
     return f"run_{secrets.token_hex(4)}"
 
 
-def _spawn_run(params: BacktestParams) -> str:
+def _spawn_run(params: BacktestParams, profile_repository=None) -> str:
     """Schedule a backtest in the background. Returns the new run_id."""
     from cryptotrader.task_registry import add_background_task
 
@@ -95,12 +95,15 @@ def _spawn_run(params: BacktestParams) -> str:
         "result": None,
     }
 
-    task = add_background_task(_execute_backtest(run_id, params), name=f"backtest:{run_id}")
+    task = add_background_task(
+        _execute_backtest(run_id, params, profile_repository),
+        name=f"backtest:{run_id}",
+    )
     _TASKS[run_id] = task
     return run_id
 
 
-async def _execute_backtest(run_id: str, params: BacktestParams) -> None:
+async def _execute_backtest(run_id: str, params: BacktestParams, profile_repository=None) -> None:
     from cryptotrader.backtest.engine import BacktestEngine
 
     def _on_progress(p: float) -> None:
@@ -114,6 +117,7 @@ async def _execute_backtest(run_id: str, params: BacktestParams) -> None:
             end=params.end,
             initial_capital=params.initial_capital,
             progress_callback=_on_progress,
+            profile_repository=profile_repository,
         )
         result = await engine.run()
         # Persist named session so /api/backtest/sessions can list/load it.
@@ -239,8 +243,9 @@ def _load_session(name: str) -> dict | None:
 
 
 @router.post("/run", response_model=BacktestRunResponse, status_code=202)
-async def run_backtest(params: BacktestParams) -> BacktestRunResponse:
-    run_id = _spawn_run(params)
+async def run_backtest(params: BacktestParams, request: Request) -> BacktestRunResponse:
+    profiles = getattr(request.app.state, "signal_profile_repository", None)
+    run_id = _spawn_run(params, profiles)
     return BacktestRunResponse(run_id=run_id)
 
 

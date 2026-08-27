@@ -1,7 +1,7 @@
 """Prometheus metrics endpoints.
 
-GET /metrics  — Prometheus text format (existing, unchanged)
-GET /metrics/summary — JSON snapshot of key metrics for Dashboard consumption
+GET /metrics — Prometheus text format
+GET /api/metrics/summary — Metrics page contract
 """
 
 from __future__ import annotations
@@ -49,27 +49,6 @@ EXTERNAL_SKILL_FETCH_COUNT_GAUGE = Gauge(
     "external_skill_fetch_count_24h",
     "Number of external /skill/<name> fetch requests in the last 24h sliding window",
 )
-
-# ---------------------------------------------------------------------------
-# Response model
-# ---------------------------------------------------------------------------
-
-
-class MetricsSummaryResponse(BaseModel):
-    """JSON snapshot of key MetricsCollector counters and histogram percentiles."""
-
-    llm_calls_total: int
-    debate_skipped_total: int
-    verdict_distribution: dict[str, int]
-    risk_rejected_total: int
-    risk_rejected_by_check: dict[str, int]
-    trade_executed_total: int
-    pipeline_duration_p50_ms: float
-    pipeline_duration_p95_ms: float
-    execution_latency_p50_ms: float
-    execution_latency_p95_ms: float
-    snapshot_time: datetime.datetime
-
 
 # ---------------------------------------------------------------------------
 # Internal helpers: read prometheus-client registry
@@ -237,60 +216,6 @@ async def prometheus_metrics() -> Response:
     except Exception:
         logger.warning("Failed to generate Prometheus metrics", exc_info=True)
         return Response(content=b"", media_type=CONTENT_TYPE_LATEST, status_code=500)
-
-
-# ---------------------------------------------------------------------------
-# New endpoint: /metrics/summary
-# ---------------------------------------------------------------------------
-
-
-@router.get("/metrics/summary", response_model=MetricsSummaryResponse)
-async def metrics_summary() -> MetricsSummaryResponse:
-    """Return a JSON snapshot of key metrics for Dashboard consumption.
-
-    Reads current values from the process-local prometheus-client registry.
-    Counter values are monotonically increasing since process start.
-    Histogram percentiles use linear bucket interpolation (same as Prometheus
-    ``histogram_quantile()``).
-    """
-    try:
-        # Ensure the singleton is initialized so all metrics are registered
-        get_metrics_collector()
-
-        llm_calls_total = _sum_counter_samples("ct_llm_calls_total")
-        debate_skipped_total = _sum_counter_samples("ct_debate_skipped_total")
-        risk_rejected_total = _sum_counter_samples("ct_risk_rejected_total")
-        trade_executed_total = _sum_counter_samples("ct_trade_executed_total")
-
-        verdict_distribution = _collect_labeled_counter("ct_verdict_total")
-        risk_rejected_by_check = _collect_labeled_counter("ct_risk_rejected_total")
-
-        pipeline_p50 = _histogram_quantile("ct_pipeline_duration_ms", 0.50)
-        pipeline_p95 = _histogram_quantile("ct_pipeline_duration_ms", 0.95)
-        execution_p50 = _histogram_quantile("ct_execution_latency_ms", 0.50)
-        execution_p95 = _histogram_quantile("ct_execution_latency_ms", 0.95)
-
-        return MetricsSummaryResponse(
-            llm_calls_total=llm_calls_total,
-            debate_skipped_total=debate_skipped_total,
-            verdict_distribution=verdict_distribution,
-            risk_rejected_total=risk_rejected_total,
-            risk_rejected_by_check=risk_rejected_by_check,
-            trade_executed_total=trade_executed_total,
-            pipeline_duration_p50_ms=float(pipeline_p50),
-            pipeline_duration_p95_ms=float(pipeline_p95),
-            execution_latency_p50_ms=float(execution_p50),
-            execution_latency_p95_ms=float(execution_p95),
-            snapshot_time=datetime.datetime.now(UTC),
-        )
-    except Exception:
-        logger.warning("Failed to build metrics summary", exc_info=True)
-        raise
-
-
-# ---------------------------------------------------------------------------
-# Contract endpoint — /api/metrics/summary (FR-808)
-# ---------------------------------------------------------------------------
 
 
 class MetricsCounters(BaseModel):

@@ -14,20 +14,25 @@ from tests.factories.signal_fusion import context, request, trade_plan
 
 
 class _Cycle:
-    def __init__(self) -> None:
-        self.approvals = ApprovalStore()
+    def __init__(self, mode="paper", approvals=None) -> None:
+        self.mode = mode
+        self.approvals = approvals or ApprovalStore()
         self.resume_approved = AsyncMock()
         self.reject_approval = AsyncMock()
 
 
-def _request_for(cycle):
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(trading_cycle=cycle)))
+def _request_for(cycle, *, cycles=None):
+    state = SimpleNamespace(
+        trading_cycle=cycle,
+        trading_cycles=cycles or {cycle.mode: cycle},
+    )
+    return SimpleNamespace(app=SimpleNamespace(state=state))
 
 
-async def _seed(cycle, approval_id="approval-1"):
+async def _seed(cycle, approval_id="approval-1", mode="paper"):
     return await cycle.approvals.create(
         cycle_id="cycle-1",
-        cycle_request=request(),
+        cycle_request=request(mode=mode),
         profile_revision=3,
         signal_context=context(),
         plan=trade_plan(TargetPosition("long", 0.4), stop_loss=90.0, take_profit=120.0),
@@ -65,6 +70,27 @@ async def test_approve_api_resumes_cycle_instead_of_only_flipping_database_statu
     )
 
     cycle.resume_approved.assert_awaited_once_with("approval-1", decision_by="web")
+    assert result.cycle_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_approve_api_resumes_with_the_cycle_matching_the_frozen_request_mode():
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    approvals = ApprovalStore()
+    live_cycle = _Cycle("live", approvals)
+    paper_cycle = _Cycle("paper", approvals)
+    await _seed(live_cycle, mode="paper")
+    paper_cycle.resume_approved.return_value = CycleOutcome("cycle-1", "completed", 3)
+
+    result = await respond_approval(
+        "approval-1",
+        HitlRespondIn(decision="approve"),
+        _request_for(live_cycle, cycles={"live": live_cycle, "paper": paper_cycle}),
+    )
+
+    paper_cycle.resume_approved.assert_awaited_once_with("approval-1", decision_by="web")
+    live_cycle.resume_approved.assert_not_awaited()
     assert result.cycle_status == "completed"
 
 

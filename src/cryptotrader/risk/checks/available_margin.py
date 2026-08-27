@@ -70,7 +70,7 @@ class AvailableMargin:
 
         total = float(portfolio.get("total_value", 0.0) or 0.0)
         if total <= 0:
-            # Without equity we cannot translate position_scale to notional —
+            # Without equity we cannot translate the target ratio to notional —
             # be conservative and pass through (other checks will catch it).
             return RiskCheckResult(passed=True)
 

@@ -215,18 +215,16 @@ def backtest(
     end: str = typer.Option(..., "--end", "-e"),
     interval: str = typer.Option("4h", "--interval", "-i"),
     capital: float = typer.Option(10000, "--capital"),
-    use_llm: bool = typer.Option(True, "--use-llm/--no-llm", help="Use AI agents (default) or SMA crossover"),
 ):
     """Run backtest on historical data."""
-    asyncio.run(_backtest(pair, start, end, interval, capital, use_llm))
+    asyncio.run(_backtest(pair, start, end, interval, capital))
 
 
-async def _backtest(pair: str, start: str, end: str, interval: str, capital: float, use_llm: bool):
+async def _backtest(pair: str, start: str, end: str, interval: str, capital: float):
     from cryptotrader.backtest.engine import BacktestEngine
 
-    mode = "AI agents" if use_llm else "SMA crossover"
-    console.print(f"[bold]Backtest[/bold] {pair} from {start} to {end} ({interval}) [{mode}]")
-    engine = BacktestEngine(pair, start, end, interval, capital, use_llm=use_llm)
+    console.print(f"[bold]Backtest[/bold] {pair} from {start} to {end} ({interval})")
+    engine = BacktestEngine(pair, start, end, interval, capital)
     result = await engine.run()
     table = Table(title="Backtest Results")
     table.add_column("Metric", style="cyan")

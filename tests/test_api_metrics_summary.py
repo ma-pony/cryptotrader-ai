@@ -1,8 +1,7 @@
-"""Tests for GET /api/metrics/summary (contract shape, FR-808).
+"""Tests for the Metrics page API contract.
 
-The legacy ``/metrics/summary`` returns a flat field list. The contract
-endpoint at ``/api/metrics/summary`` returns the data-model shape used by
-the React Metrics page:
+``/api/metrics/summary`` returns the data-model shape used by the React
+Metrics page:
 
 ```
 {

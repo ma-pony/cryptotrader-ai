@@ -28,7 +28,7 @@ from cryptotrader.signals.runner import ComponentRunError
 if TYPE_CHECKING:
     from cryptotrader.decision.models import CycleRequest, CycleStatus, TargetPosition, TradePlan
     from cryptotrader.signals.fusion import FusedSignal
-    from cryptotrader.signals.models import ComponentSignal, PositionSnapshot, SignalContext
+    from cryptotrader.signals.models import ComponentSignal, PositionSnapshot, SignalContext, TradingMode
 
 
 def target_matches_position(target: TargetPosition, position: PositionSnapshot) -> bool:
@@ -74,6 +74,7 @@ class TradingCycle:
     def __init__(
         self,
         *,
+        mode: TradingMode,
         profiles,
         registry,
         contexts,
@@ -89,6 +90,7 @@ class TradingCycle:
         events,
         exit_requirement: DataRequirements | None = None,
     ) -> None:
+        self.mode = mode
         self.profiles = profiles
         self.registry = registry
         self.contexts = contexts
@@ -105,6 +107,7 @@ class TradingCycle:
         self.exit_requirement = exit_requirement or DataRequirements()
 
     async def run(self, request: CycleRequest) -> CycleOutcome:
+        self._require_mode(request.mode)
         cycle_id = str(uuid4())
         created_at = datetime.now(UTC)
         await self.events.publish(
@@ -123,6 +126,12 @@ class TradingCycle:
             self.exit_requirement,
         )
         context = await self.contexts.collect(request, requirements)
+        await self.events.publish(
+            CycleEvent(
+                "context_ready",
+                {"cycle_id": cycle_id, "context": signal_context_payload(context)},
+            )
+        )
         try:
             signals = await self.runner.run(components, context)
         except asyncio.CancelledError:
@@ -156,6 +165,12 @@ class TradingCycle:
         )
         target = self.decisions.target_for(fused, profile)
         plan = self.exits.build_plan(context, target, signals, fused, profile)
+        await self.events.publish(
+            CycleEvent(
+                "decision_created",
+                {"cycle_id": cycle_id, "trade_plan": trade_plan_payload(plan)},
+            )
+        )
         if target_matches_position(plan.target, context.current_position):
             return await self._finish(
                 cycle_id=cycle_id,
@@ -175,6 +190,16 @@ class TradingCycle:
                 signal_context=context,
                 plan=plan,
                 created_at=created_at,
+            )
+            await self.events.publish(
+                CycleEvent(
+                    "approval_required",
+                    {
+                        "cycle_id": cycle_id,
+                        "approval_id": approval.approval_id,
+                        "trade_plan": trade_plan_payload(plan),
+                    },
+                )
             )
             return await self._finish(
                 cycle_id=cycle_id,
@@ -199,6 +224,10 @@ class TradingCycle:
         )
 
     async def resume_approved(self, approval_id: str, *, decision_by: str = "web") -> CycleOutcome:
+        pending = await self.approvals.get(approval_id)
+        if pending is None:
+            raise LookupError(f"approval {approval_id!r} does not exist")
+        self._require_mode(pending.cycle_request.mode)
         approval = await self.approvals.approve(approval_id, decision_by=decision_by)
         context = await self.contexts.refresh_execution_state(approval.signal_context)
         return await self._risk_plan_execute(
@@ -218,6 +247,10 @@ class TradingCycle:
         )
 
     async def reject_approval(self, approval_id: str, *, decision_by: str = "web") -> CycleOutcome:
+        pending = await self.approvals.get(approval_id)
+        if pending is None:
+            raise LookupError(f"approval {approval_id!r} does not exist")
+        self._require_mode(pending.cycle_request.mode)
         approval = await self.approvals.reject(approval_id, decision_by=decision_by)
         return await self._finish(
             cycle_id=approval.cycle_id,
@@ -236,6 +269,12 @@ class TradingCycle:
             approval_id=approval.approval_id,
             replace_journal=True,
         )
+
+    def _require_mode(self, requested_mode: TradingMode) -> None:
+        if requested_mode != self.mode:
+            raise RuntimeError(
+                f"trading cycle mode {self.mode!r} cannot handle {requested_mode!r} request",
+            )
 
     async def _risk_plan_execute(
         self,
@@ -274,6 +313,12 @@ class TradingCycle:
                 rejected_by="risk_gate",
                 reason=f"{type(error).__name__}: {error}",
             )
+        await self.events.publish(
+            CycleEvent(
+                "risk_checked",
+                {"cycle_id": cycle_id, "risk_result": _risk_payload(risk_result)},
+            )
+        )
         if not risk_result.passed:
             return await self._finish(
                 cycle_id=cycle_id,
@@ -314,6 +359,12 @@ class TradingCycle:
         except Exception as error:
             execution_result = ExecutionResult(False, (), None, f"{type(error).__name__}: {error}")
 
+        await self.events.publish(
+            CycleEvent(
+                "execution_completed",
+                {"cycle_id": cycle_id, "execution_result": _execution_payload(execution_result)},
+            )
+        )
         status: CycleStatus = "completed" if execution_result.succeeded else "execution_failed"
         return await self._finish(
             cycle_id=cycle_id,

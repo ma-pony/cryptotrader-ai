@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -71,6 +73,7 @@ async def test_get_profile_returns_registry_metadata(api_client):
     assert response.status_code == 200
     body = response.json()
     assert body["revision"] == 1
+    assert datetime.fromisoformat(body["updated_at"]).tzinfo is not None
     assert {item["component_id"] for item in body["installed_components"]} == {"kronos", "llm_committee"}
 
 
@@ -98,6 +101,7 @@ async def test_put_profile_replaces_all_fields_and_increments_revision(api_clien
     assert response.status_code == 200
     body = response.json()
     assert body["revision"] == 2
+    assert datetime.fromisoformat(body["updated_at"]).tzinfo is not None
     assert body["neutral_threshold"] == 0.3
     assert body["max_target_ratio"] == 0.8
     assert body["hitl_required"] is True
@@ -112,3 +116,55 @@ async def test_put_profile_rejects_uninstalled_component(api_client):
 
     assert response.status_code == 422
     assert "uninstalled" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_put_profile_rejects_read_only_response_fields(api_client):
+    response = await api_client.put(
+        "/api/signal-profile",
+        json=_payload() | {"revision": 99, "updated_at": "2026-08-28T00:00:00Z"},
+    )
+
+    assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_app_exposes_seeded_profile_repository_without_database(monkeypatch):
+    from fastapi import FastAPI
+
+    from api.main import _init_signal_profile
+    from cryptotrader.config import AppConfig
+
+    built = []
+
+    def fake_builder(
+        config,
+        mode,
+        event_sink=None,
+        *,
+        profile_repository=None,
+        approval_store=None,
+    ):
+        cycle = type(
+            "Cycle",
+            (),
+            {
+                "mode": mode,
+                "profiles": profile_repository,
+                "approvals": approval_store,
+                "registry": object(),
+            },
+        )()
+        built.append(cycle)
+        return cycle
+
+    monkeypatch.setattr("cryptotrader.config.load_config", lambda: AppConfig())
+    monkeypatch.setattr("cryptotrader.bootstrap.build_trading_cycle", fake_builder)
+    isolated_app = FastAPI()
+
+    await _init_signal_profile(isolated_app)
+
+    second = isolated_app.state.trading_cycle_builder("paper")
+    assert isolated_app.state.signal_profile_repository is built[0].profiles
+    assert second.profiles is built[0].profiles
+    assert second.approvals is built[0].approvals

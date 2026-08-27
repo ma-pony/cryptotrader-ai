@@ -66,7 +66,7 @@ class _Executor:
         return ExecutionResult(True, (), None, None)
 
 
-def _cycle() -> TradingCycle:
+def _cycle(mode: str) -> TradingCycle:
     active_profile = profile(kronos=0.6, llm=0.4)
     signals = (
         signal("kronos", "long", 0.8),
@@ -74,6 +74,7 @@ def _cycle() -> TradingCycle:
     )
     registry = SignalComponentRegistry((_Component("kronos"), _Component("llm_committee")))
     return TradingCycle(
+        mode=mode,
         profiles=_Profiles(active_profile),
         registry=registry,
         contexts=_Contexts(),
@@ -92,8 +93,8 @@ def _cycle() -> TradingCycle:
 
 @pytest.mark.asyncio
 async def test_live_and_backtest_build_identical_trade_plan_from_same_inputs():
-    live = _cycle()
-    backtest = _cycle()
+    live = _cycle("paper")
+    backtest = _cycle("backtest")
 
     live_outcome = await live.run(request(mode="paper"))
     backtest_outcome = await backtest.run(request(mode="backtest"))

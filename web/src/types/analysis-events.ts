@@ -3,16 +3,21 @@ import type { ComponentSignal, FusedSignal } from './api';
 export type AnalysisEventType =
   | 'session_start'
   | 'cycle_started'
+  | 'context_ready'
   | 'component_started'
   | 'component_completed'
   | 'component_failed'
   | 'committee_agent_started'
-  | 'committee_agent_completed'
+  | 'agent_analysis_completed'
   | 'committee_agent_failed'
   | 'debate_round_started'
   | 'debate_round_completed'
   | 'committee_summary_completed'
   | 'fusion_completed'
+  | 'decision_created'
+  | 'approval_required'
+  | 'risk_checked'
+  | 'execution_completed'
   | 'cycle_awaiting_approval'
   | 'cycle_completed'
   | 'cycle_failed'
@@ -56,7 +61,7 @@ export interface ComponentFailedData {
   error: string;
 }
 
-export interface CommitteeAgentCompletedData {
+export interface AgentAnalysisCompletedData {
   agent_id: string;
   analysis: {
     direction: string;

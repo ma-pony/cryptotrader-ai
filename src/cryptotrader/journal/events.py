@@ -1,6 +1,7 @@
 """spec 022 FR-022-15 — Lightweight event journal write helpers.
 
-These helpers write to the `journal` table (separate from `decision_commits`).
+These helpers write operational events to `journal`; trading decisions use
+the separate `trading_cycles` journal.
 The `journal` table is an append-only event log:
 
     id BIGSERIAL PRIMARY KEY,
@@ -13,9 +14,8 @@ The `journal` table is an append-only event log:
 The SQL view `events_heartbeat` projects a filtered subset of this table,
 consumed by GET /api/events/heartbeat.
 
-Callers:
-  - nodes/journal.py re-exports record_phase1_rejection / record_evolution_event
-  - ops/daemon.py calls record_evolution_event at 3 hooks
+The evolution daemon writes its operational hooks here. TradingCycle does not
+use this table for decision records.
 """
 
 from __future__ import annotations

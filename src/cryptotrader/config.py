@@ -66,7 +66,7 @@ class LLMConfig:
 class ModelConfig:
     analysis: str = "gemini-3-flash"
     debate: str = "gemini-3-flash"
-    verdict: str = "gpt-5.4"
+    committee_summary: str = "gpt-5.4"
     tech_agent: str = "gemini-3-flash"
     chain_agent: str = "gemini-3.1-pro"
     news_agent: str = "gemini-3.1-pro"
@@ -177,22 +177,11 @@ class RiskConfig:
 
 
 @dataclass
-class BacktestPositionSizingConfig:
-    high_confidence_pct: float = 0.20
-    medium_confidence_pct: float = 0.12
-    low_confidence_pct: float = 0.06
-
-
-@dataclass
 class BacktestConfig:
     initial_capital: float = 10000
     slippage_base: float = 0.0005
     fee_bps: float = 10.0
-    sma_fast: int = 20
-    sma_slow: int = 50
     lookback: int = 60
-    default_position_pct: float = 0.1
-    position_sizing: BacktestPositionSizingConfig = field(default_factory=BacktestPositionSizingConfig)
 
 
 # ── Portfolio (live trading inception baseline) ──
@@ -931,12 +920,7 @@ def _build_config(toml_data: dict) -> AppConfig:
         rate_limit=RateLimitConfig(**risk_raw.get("rate_limit", {})),
     )
 
-    backtest_raw = dict(toml_data.get("backtest", {}))  # copy to avoid mutating original
-    backtest_ps_raw = backtest_raw.pop("position_sizing", {})
-    backtest = BacktestConfig(
-        **backtest_raw,
-        position_sizing=BacktestPositionSizingConfig(**backtest_ps_raw),
-    )
+    backtest = BacktestConfig(**toml_data.get("backtest", {}))
 
     providers_raw = toml_data.get("providers", {})
     providers = ProvidersConfig(**providers_raw)

@@ -148,7 +148,7 @@ class LLMCommitteeComponent:
                 )
             )
             raise
-        await self.events.publish(CycleEvent("committee_agent_completed", {"agent_id": name, "analysis": analysis}))
+        await self.events.publish(CycleEvent("agent_analysis_completed", {"agent_id": name, "analysis": analysis}))
         return analysis
 
     async def _debate_gate(self, state: CommitteeState) -> dict:
@@ -257,7 +257,7 @@ class LLMCommitteeComponent:
         from cryptotrader.agents.base import create_llm, extract_content
         from cryptotrader.llm.json_retry import extract_json_with_retry
 
-        model = self.config.models.verdict or self.config.models.debate or self.config.models.fallback
+        model = self.config.models.committee_summary or self.config.models.debate or self.config.models.fallback
         llm = create_llm(model=model, temperature=0.1, json_mode=True)
         system = SystemMessage(
             content=(

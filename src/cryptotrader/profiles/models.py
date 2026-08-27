@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Collection
+    from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class SignalProfile:
     atr_stop_multiplier: float
     reward_ratio: float
     hitl_required: bool
+    updated_at: datetime | None = None
 
 
 def validate_signal_profile(profile: SignalProfile, installed_component_ids: Collection[str]) -> SignalProfile:

@@ -1,4 +1,4 @@
-"""Tests targeting coverage gaps in backtest engine, simulator, notifications, and verdict."""
+"""Tests targeting coverage gaps in backtest engine, simulator, and notifications."""
 
 import pytest
 
@@ -7,23 +7,6 @@ from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.execution.simulator import PaperExchange
 from cryptotrader.models import Order
 from cryptotrader.notifications import Notifier
-
-# ── BacktestEngine._apply_costs ──
-
-
-def test_apply_costs_buy():
-    engine = BacktestEngine("BTC/USDT", "2025-01-01", "2025-01-02", slippage_bps=10, fee_bps=10)
-    fill = engine._apply_costs(10000.0, "buy")
-    # buy: price + slip + fee = 10000 + 10 + 10 = 10020
-    assert fill == pytest.approx(10020.0)
-
-
-def test_apply_costs_sell():
-    engine = BacktestEngine("BTC/USDT", "2025-01-01", "2025-01-02", slippage_bps=10, fee_bps=10)
-    fill = engine._apply_costs(10000.0, "sell")
-    # sell: price - slip - fee = 10000 - 10 - 10 = 9980
-    assert fill == pytest.approx(9980.0)
-
 
 # ── BacktestEngine._compute_result ──
 

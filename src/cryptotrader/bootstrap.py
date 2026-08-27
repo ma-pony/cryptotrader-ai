@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from cryptotrader.config import AppConfig
     from cryptotrader.cycle_events import CycleEventSink
     from cryptotrader.profiles.models import SignalProfile
+    from cryptotrader.signals.models import TradingMode
 
 
 class SeededProfileRepository:
@@ -50,7 +51,7 @@ class SeededProfileRepository:
         return await self.repository.replace(profile)
 
 
-def _build_exchange(config: AppConfig, mode: str):
+def _build_exchange(config: AppConfig, mode: TradingMode):
     if mode == "paper":
         from cryptotrader.execution.simulator import PaperExchange
 
@@ -90,8 +91,11 @@ def build_signal_registry(config: AppConfig, events: CycleEventSink) -> SignalCo
 
 def build_trading_cycle(
     config: AppConfig,
-    mode: str,
+    mode: TradingMode,
     event_sink: CycleEventSink | None = None,
+    *,
+    profile_repository=None,
+    approval_store=None,
 ) -> TradingCycle:
     if mode == "backtest":
         raise ValueError("BacktestEngine must provide historical context and executor")
@@ -117,15 +121,20 @@ def build_trading_cycle(
     credentials = config.exchanges.get(config.scheduler.exchange_id or config.exchange_id)
     leverage = credentials.leverage if credentials is not None else 1
     database_url = config.infrastructure.database_url or None
+    profiles = (
+        profile_repository if profile_repository is not None else SeededProfileRepository(database_url, default_profile)
+    )
+    approvals = approval_store if approval_store is not None else ApprovalStore(database_url)
     return TradingCycle(
-        profiles=SeededProfileRepository(database_url, default_profile),
+        mode=mode,
+        profiles=profiles,
         registry=registry,
         contexts=contexts,
         runner=ComponentRunner(events),
         fusion=WeightedSignalFusion(),
         decisions=DecisionEngine(),
         exits=AtrExitPolicy(),
-        approvals=ApprovalStore(database_url),
+        approvals=approvals,
         risk=RiskGate(config.risk, redis_state, leverage=leverage),
         execution_planner=ExecutionPlanner(config.risk.position.max_single_pct),
         executor=ExecutionService(OrderManager(), exchange, manage_protection=True),

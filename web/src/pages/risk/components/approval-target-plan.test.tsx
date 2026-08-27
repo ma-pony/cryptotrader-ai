@@ -40,6 +40,5 @@ describe('target plan approval', () => {
 
     expect(screen.getByText('目标空仓 40%')).toBeInTheDocument();
     expect(screen.getByText('Revision 8')).toBeInTheDocument();
-    expect(screen.queryByText('position_scale')).not.toBeInTheDocument();
   });
 });

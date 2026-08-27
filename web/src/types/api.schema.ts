@@ -318,6 +318,7 @@ export const InstalledSignalComponentSchema = z.object({
 
 export const SignalProfileSchema = z.object({
   revision: z.number().int().positive(),
+  updated_at: z.string().nullable(),
   components: z.array(ComponentWeightSchema),
   neutral_threshold: z.number().min(0).lt(1),
   max_target_ratio: z.number().gt(0).max(1),

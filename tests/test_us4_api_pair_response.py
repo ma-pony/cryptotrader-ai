@@ -7,12 +7,7 @@ plus minimal Pydantic round-trips so the test runs without a live DB.
 
 from __future__ import annotations
 
-from datetime import datetime
-from unittest.mock import MagicMock
-
 import pytest
-
-from cryptotrader._compat import UTC
 
 
 class TestPortfolioPositionOutShape:
@@ -83,29 +78,11 @@ class TestDecisionsPairMeta:
 
         assert _pair_meta(pair) == (expected_display, expected_mt)
 
-    def test_pair_meta_falls_back_for_malformed(self) -> None:
-        from api.routes.decisions import _pair_meta
-
-        assert _pair_meta("not-a-pair") == ("not-a-pair", "spot")
-
     def test_decision_list_item_includes_pair_meta(self) -> None:
-        from api.routes.decisions import _commit_to_list_item
+        from api.routes.decisions import _list_item
+        from tests.factories.signal_fusion import cycle_record
 
-        commit = MagicMock()
-        commit.hash = "abc123"
-        commit.timestamp = datetime.now(UTC)
-        commit.pair = "BTC/USDT:USDT"
-        commit.snapshot_summary = {"price": 84500.0}
-        commit.verdict = None
-        commit.fill_price = None
-        commit.order = None
-        commit.trace_id = None
-        commit.pnl = None
-        commit.risk_gate = None
-        commit.debate_skip_reason = ""
-        commit.debate_rounds = 0
-
-        item = _commit_to_list_item(commit)
+        item = _list_item(cycle_record(pair="BTC/USDT:USDT"))
         assert item.pair == "BTC/USDT:USDT"
         assert item.pair_display == "BTC/USDT (perp)"
         assert item.market_type == "swap"

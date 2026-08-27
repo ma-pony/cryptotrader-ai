@@ -43,6 +43,24 @@ def _cycle(request: Request):
     return cycle
 
 
+def _cycle_for_mode(request: Request, mode: str):
+    state = request.app.state
+    cycles = getattr(state, "trading_cycles", None)
+    if cycles is None:
+        primary = _cycle(request)
+        cycles = {getattr(primary, "mode", mode): primary}
+        state.trading_cycles = cycles
+    selected = cycles.get(mode)
+    if selected is not None:
+        return selected
+    builder = getattr(state, "trading_cycle_builder", None)
+    if builder is None:
+        raise HTTPException(status_code=503, detail=f"Trading cycle for mode {mode!r} is not initialized")
+    selected = builder(mode)
+    cycles[mode] = selected
+    return selected
+
+
 def _response(record: ApprovalRecord) -> ApprovalRequestOut:
     return ApprovalRequestOut(
         approval_id=record.approval_id,
@@ -77,9 +95,11 @@ async def respond_approval(
     body: HitlRespondIn,
     request: Request,
 ) -> HitlRespondOut:
-    cycle = _cycle(request)
-    if await cycle.approvals.get(approval_id) is None:
+    primary_cycle = _cycle(request)
+    approval = await primary_cycle.approvals.get(approval_id)
+    if approval is None:
         raise HTTPException(status_code=404, detail="Approval request not found")
+    cycle = _cycle_for_mode(request, approval.cycle_request.mode)
     try:
         if body.decision == "approve":
             outcome = await cycle.resume_approved(approval_id, decision_by="web")

@@ -18,7 +18,7 @@ from cryptotrader.signals.fusion import WeightedSignalFusion
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
 from cryptotrader.signals.registry import SignalComponentRegistry
 from cryptotrader.signals.runner import ComponentRunError
-from tests.factories.signal_fusion import context, position, profile, request, signal
+from tests.factories.signal_fusion import context, position, profile, request, signal, trade_plan
 
 if TYPE_CHECKING:
     from cryptotrader.cycle_events import CycleEvent
@@ -149,6 +149,7 @@ def build_test_cycle(
     selected_profile = selected_profile or profile(kronos=0.6, llm=0.4)
     registry = SignalComponentRegistry((_Component("kronos"), _Component("llm_committee")))
     return TradingCycle(
+        mode="paper",
         profiles=_Profiles(selected_profile),
         registry=registry,
         contexts=_Contexts(),
@@ -166,6 +167,35 @@ def build_test_cycle(
 
 
 @pytest.mark.asyncio
+async def test_cycle_rejects_requests_for_a_different_execution_mode():
+    cycle = build_test_cycle()
+
+    with pytest.raises(RuntimeError, match="mode"):
+        await cycle.run(request(mode="live"))
+
+    assert cycle.executor.executed == []
+
+
+@pytest.mark.asyncio
+async def test_approval_mode_mismatch_is_rejected_before_claim_or_execution():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+    approval = await cycle.approvals.create(
+        cycle_id="paper-cycle",
+        cycle_request=request(mode="live"),
+        profile_revision=1,
+        signal_context=context(),
+        plan=trade_plan(TargetPosition("long", 0.4)),
+        approval_id="live-approval",
+    )
+
+    with pytest.raises(RuntimeError, match="mode"):
+        await cycle.resume_approved(approval.approval_id)
+
+    assert (await cycle.approvals.get(approval.approval_id)).status == "pending"
+    assert cycle.executor.executed == []
+
+
+@pytest.mark.asyncio
 async def test_cycle_runs_components_fusion_risk_execution_and_journal():
     cycle = build_test_cycle()
 
@@ -177,6 +207,25 @@ async def test_cycle_runs_components_fusion_risk_execution_and_journal():
     assert cycle.executor.executed[0].intents
     assert cycle.journal.records[0].profile_revision == outcome.profile_revision
     assert cycle.journal.records[0].fused_signal["score"] == pytest.approx(0.72)
+
+
+@pytest.mark.asyncio
+async def test_successful_cycle_emits_each_business_stage_in_order():
+    cycle = build_test_cycle()
+
+    await cycle.run(request())
+
+    names = [event.name for event in cycle.events.events]
+    expected = [
+        "cycle_started",
+        "context_ready",
+        "fusion_completed",
+        "decision_created",
+        "risk_checked",
+        "execution_completed",
+        "cycle_completed",
+    ]
+    assert [name for name in names if name in expected] == expected
 
 
 @pytest.mark.asyncio
@@ -197,6 +246,7 @@ async def test_hitl_stores_target_plan_and_approval_replans_from_current_positio
     cycle = build_test_cycle(selected_profile=profile(hitl=True))
     pending = await cycle.run(request())
     assert pending.status == "awaiting_approval"
+    assert any(event.name == "approval_required" for event in cycle.events.events)
 
     cycle.contexts.current_position = position("long", 0.2, 0.2)
     approved = await cycle.resume_approved(pending.approval_id)

@@ -6,13 +6,14 @@ import asyncio
 from typing import TYPE_CHECKING, cast
 
 from cryptotrader.cycle_events import CycleEvent
+from cryptotrader.signals.models import ComponentSignal
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
     from cryptotrader.cycle_events import CycleEventSink
     from cryptotrader.signals.component import SignalComponent
-    from cryptotrader.signals.models import ComponentSignal, SignalContext
+    from cryptotrader.signals.models import SignalContext
 
 
 class ComponentRunError(RuntimeError):
@@ -55,6 +56,12 @@ class ComponentRunner:
         await self.events.publish(CycleEvent("component_started", {"component_id": component.id}))
         try:
             result = await component.evaluate(context)
+            if not isinstance(result, ComponentSignal):
+                raise TypeError("component must return ComponentSignal")
+            if result.component_id != component.id:
+                raise ValueError(
+                    f"component {component.id!r} returned signal for {result.component_id!r}",
+                )
         except asyncio.CancelledError:
             raise
         except Exception as error:

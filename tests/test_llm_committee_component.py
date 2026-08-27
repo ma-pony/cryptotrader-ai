@@ -131,6 +131,7 @@ async def test_committee_runs_four_agents_and_debate_before_summary():
     assert len(result.details["analyses"]) == 4
     assert len(result.details["debate_turns"]) == 4
     assert order[-1][0] == "summary"
+    assert len([event for event in sink.events if event.name == "agent_analysis_completed"]) == 4
     assert any(event.name == "debate_round_completed" for event in sink.events)
 
 

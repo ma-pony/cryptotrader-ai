@@ -6,7 +6,7 @@ import asyncio
 import json
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -79,15 +79,18 @@ async def _sse_consumer_gen(session_id: str, last_event_id: int | None = None):
 
 
 @router.post("/stream")
-async def chat_stream(request: ChatStreamRequest):
-    session_id = request.session_id or str(uuid.uuid4())
-    if request.last_event_id is not None:
-        return await _handle_reconnect(session_id, request.last_event_id)
-    return await _handle_new_analysis(session_id, request)
+async def chat_stream(payload: ChatStreamRequest, request: Request):
+    session_id = payload.session_id or str(uuid.uuid4())
+    if payload.last_event_id is not None:
+        return await _handle_reconnect(session_id, payload.last_event_id)
+    return await _handle_new_analysis(session_id, payload, request)
 
 
-async def _handle_new_analysis(session_id: str, request: ChatStreamRequest) -> StreamingResponse:
-    from cryptotrader.bootstrap import build_trading_cycle
+async def _handle_new_analysis(
+    session_id: str,
+    payload: ChatStreamRequest,
+    request: Request,
+) -> StreamingResponse:
     from cryptotrader.chat.analysis_runner import run_analysis_and_buffer
     from cryptotrader.chat.event_buffer import EventBuffer
     from cryptotrader.chat.event_bus import EventBus, EventBusCycleSink
@@ -97,8 +100,8 @@ async def _handle_new_analysis(session_id: str, request: ChatStreamRequest) -> S
 
     config = load_config()
     pair = (
-        request.message.strip().upper()
-        if "/" in request.message
+        payload.message.strip().upper()
+        if "/" in payload.message
         else (config.scheduler.pairs[0].canonical() if config.scheduler.pairs else "BTC/USDT")
     )
     state = RedisStateManager(config.infrastructure.redis_url or None)
@@ -109,7 +112,10 @@ async def _handle_new_analysis(session_id: str, request: ChatStreamRequest) -> S
         config.chat.event_buffer_max_size,
     )
     bus = EventBus(session_id, buffer)
-    cycle = build_trading_cycle(config, "paper", EventBusCycleSink(bus))
+    builder = getattr(request.app.state, "trading_cycle_builder", None)
+    if builder is None:
+        raise HTTPException(status_code=503, detail="Trading cycle is not initialized")
+    cycle = builder("paper", EventBusCycleSink(bus))
 
     async def run_cycle(interrupt_event: asyncio.Event) -> None:
         await run_analysis_and_buffer(

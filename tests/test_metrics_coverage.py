@@ -14,10 +14,6 @@ class TestMetricsCollector:
         mc = MetricsCollector()
         mc.inc_debate_skipped()
 
-    def test_inc_verdict(self):
-        mc = MetricsCollector()
-        mc.inc_verdict(action="long")
-
     def test_inc_risk_rejected(self):
         mc = MetricsCollector()
         mc.inc_risk_rejected(check_name="daily_loss")

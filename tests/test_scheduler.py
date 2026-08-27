@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from apscheduler.triggers.cron import CronTrigger
@@ -306,9 +307,8 @@ def test_add_job_trading_cycle_has_max_instances_and_misfire():
 # ---------------------------------------------------------------------------
 
 
-def test_write_cycle_snapshot_paper_uses_pm_get_portfolio():
-    """In paper mode, cycle snapshot reads PortfolioManager.get_portfolio
-    (no exchange call) and writes via pm.snapshot."""
+def test_write_cycle_snapshot_falls_back_to_portfolio_manager():
+    """Without a cycle portfolio reader, persist the DB-known portfolio."""
     s = Scheduler(["BTC/USDT"], interval_minutes=60)
 
     pm_mock = AsyncMock()
@@ -323,22 +323,21 @@ def test_write_cycle_snapshot_paper_uses_pm_get_portfolio():
     with (
         patch("cryptotrader.config.load_config", return_value=cfg_mock),
         patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
-        patch("cryptotrader.portfolio.manager.read_portfolio_from_exchange", new_callable=AsyncMock),
     ):
         asyncio.run(s._write_cycle_snapshot())
 
     pm_mock.snapshot.assert_awaited_once_with("default", 12345.67, 1000.0)
 
 
-def test_write_cycle_snapshot_live_uses_exchange_read():
-    """In live mode, cycle snapshot prefers read_portfolio_from_exchange."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
+def test_write_cycle_snapshot_uses_trading_cycle_portfolio_reader():
+    """The snapshot reads through the portfolio component owned by TradingCycle."""
+    read_mock = AsyncMock(return_value={"total_value": 9876.5, "cash": 4321.0, "positions": {}})
+    cycle = SimpleNamespace(contexts=SimpleNamespace(portfolio=SimpleNamespace(read=read_mock)))
+    s = Scheduler(["BTC/USDT"], interval_minutes=60, cycle=cycle, mode="live", exchange_id="okx")
 
     pm_mock = AsyncMock()
     pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 0.0, "cash": 0.0})
     pm_mock.snapshot = AsyncMock()
-
-    read_mock = AsyncMock(return_value={"total_value": 9876.5, "cash": 4321.0, "positions": {}})
 
     cfg_mock = MagicMock()
     cfg_mock.engine = "live"
@@ -348,10 +347,15 @@ def test_write_cycle_snapshot_live_uses_exchange_read():
     with (
         patch("cryptotrader.config.load_config", return_value=cfg_mock),
         patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
-        patch("cryptotrader.portfolio.manager.read_portfolio_from_exchange", read_mock),
     ):
         asyncio.run(s._write_cycle_snapshot())
 
+    request, price = read_mock.await_args.args
+    assert request.pair.canonical() == "BTC/USDT"
+    assert request.mode == "live"
+    assert request.exchange_id == "okx"
+    assert price == 0.0
+    pm_mock.get_portfolio.assert_not_awaited()
     pm_mock.snapshot.assert_awaited_once_with("default", 9876.5, 4321.0)
 
 
@@ -371,7 +375,6 @@ def test_write_cycle_snapshot_zero_total_skips_write():
     with (
         patch("cryptotrader.config.load_config", return_value=cfg_mock),
         patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
-        patch("cryptotrader.portfolio.manager.read_portfolio_from_exchange", new_callable=AsyncMock),
     ):
         asyncio.run(s._write_cycle_snapshot())
 

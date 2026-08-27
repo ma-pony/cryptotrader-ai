@@ -20,7 +20,10 @@ async def test_repository_creates_default_and_increments_revision(tmp_path):
     second = await repository.replace(replace(first, neutral_threshold=0.3))
 
     assert first.revision == 1
+    assert first.updated_at is not None
     assert second.revision == 2
+    assert second.updated_at is not None
+    assert second.updated_at >= first.updated_at
     assert (await repository.get()).neutral_threshold == 0.3
 
 
@@ -41,8 +44,13 @@ async def test_repository_round_trips_all_component_and_policy_fields(tmp_path):
         hitl=True,
     )
 
-    assert await repository.get_or_create(expected) == expected
-    assert await SignalProfileRepository(url).get() == expected
+    created = await repository.get_or_create(expected)
+    loaded = await SignalProfileRepository(url).get()
+
+    assert created.updated_at is not None
+    assert replace(created, updated_at=None) == expected
+    assert loaded is not None
+    assert replace(loaded, updated_at=None) == expected
 
 
 @pytest.mark.asyncio

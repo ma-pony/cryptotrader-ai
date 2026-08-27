@@ -57,7 +57,7 @@ retry_jitter = true
 [models]
 analysis = "glm-5"
 debate = "glm-5"
-verdict = "glm-5"
+committee_summary = "glm-5"
 tech_agent = "glm-5"
 chain_agent = "glm-5"
 news_agent = "glm-5"
@@ -137,15 +137,7 @@ max_trades_per_day = 20
 initial_capital = 10000
 slippage_base = 0.0005
 fee_bps = 10.0
-sma_fast = 20
-sma_slow = 50
 lookback = 60
-default_position_pct = 0.1
-
-[backtest.position_sizing]
-high_confidence_pct = 0.35    # ceiling for position_scale mapping
-medium_confidence_pct = 0.12  # legacy fallback (confidence >= 0.6)
-low_confidence_pct = 0.06     # floor for position_scale mapping
 
 [experience.regime_thresholds]
 high_funding = 0.0003
@@ -207,8 +199,7 @@ order_wait_seconds = 120
 retry_attempts = 3
 # cycle_timeout_s 600s 留 margin：5-pair 并发 + 组件慢调用
 # in prod，与 spec 018 IVE classify_case 串行 LLM 有关）。300s 时观察到大量
-# Scheduler timed out 导致 graph 在 evaluate_node 后 cancel，execute/journal
-# 节点未触发 → 累计 17 actionable verdicts missed @ 8h live（2026-05-11 诊断）。
+# Scheduler 超时会取消当前 TradingCycle，预留足够的组件调用和收尾时间。
 cycle_timeout_s = 600
 
 [notifications]

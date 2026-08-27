@@ -5,7 +5,6 @@
     "start_date": "起始日期",
     "end_date": "结束日期",
     "initial_capital": "初始资金（USDT）",
-    "use_llm": "使用 LLM 决策",
     "submit": "运行回测",
     "cancel": "取消运行"
   },

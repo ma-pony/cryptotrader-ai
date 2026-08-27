@@ -16,6 +16,7 @@ def test_legacy_trading_architecture_is_absent():
         "build_backtest_graph",
         "build_initial_state",
         "verdict_partial",
+        "position_scale",
     )
     runtime = "\n".join(path.read_text(errors="ignore") for path in (root / "src").rglob("*.py"))
     for symbol in forbidden:

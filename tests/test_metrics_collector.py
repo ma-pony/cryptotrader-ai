@@ -39,19 +39,6 @@ def test_inc_debate_skipped():
     assert after == (before or 0) + 1
 
 
-def test_inc_verdict():
-    """ct_verdict_total 计数器按 action 标签递增。"""
-    from prometheus_client import REGISTRY
-
-    from cryptotrader.metrics import get_metrics_collector
-
-    mc = get_metrics_collector()
-    before = _sample_value(REGISTRY, "ct_verdict_total", {"action": "buy"})
-    mc.inc_verdict(action="buy")
-    after = _sample_value(REGISTRY, "ct_verdict_total", {"action": "buy"})
-    assert after == (before or 0) + 1
-
-
 def test_inc_risk_rejected():
     """ct_risk_rejected_total 计数器按 check_name 标签递增。"""
     from prometheus_client import REGISTRY
@@ -114,7 +101,6 @@ def test_generate_latest_contains_metric_names():
     # 确保各指标至少被调用一次, 使其出现在输出中
     mc.inc_llm_calls(model="test", node="test")
     mc.inc_debate_skipped()
-    mc.inc_verdict(action="hold")
     mc.inc_risk_rejected(check_name="drawdown")
     mc.inc_trade_executed(engine="live", side="sell")
     mc.observe_execution_latency(engine="live", ms=10.0)
@@ -123,7 +109,6 @@ def test_generate_latest_contains_metric_names():
     output = generate_latest().decode("utf-8")
     assert "ct_llm_calls_total" in output
     assert "ct_debate_skipped_total" in output
-    assert "ct_verdict_total" in output
     assert "ct_risk_rejected_total" in output
     assert "ct_trade_executed_total" in output
     assert "ct_execution_latency_ms" in output

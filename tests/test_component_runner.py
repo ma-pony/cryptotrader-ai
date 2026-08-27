@@ -22,10 +22,18 @@ class FakeComponent:
     display_name = "Fake"
     description = "test component"
 
-    def __init__(self, component_id: str, *, delay=0.0, error: BaseException | None = None) -> None:
+    def __init__(
+        self,
+        component_id: str,
+        *,
+        delay=0.0,
+        error: BaseException | None = None,
+        result=None,
+    ) -> None:
         self.id = component_id
         self.delay = delay
         self.error = error
+        self.result = result
 
     def requirements(self):
         return DataRequirements()
@@ -34,6 +42,8 @@ class FakeComponent:
         await asyncio.sleep(self.delay)
         if self.error is not None:
             raise self.error
+        if self.result is not None:
+            return self.result
         return signal(self.id)
 
 
@@ -106,3 +116,30 @@ async def test_event_payload_identifies_component_and_signal():
     completed = next(event for event in sink.events if event.name == "component_completed")
     assert completed.data["component_id"] == "kronos"
     assert completed.data["signal"].component_id == "kronos"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_result",
+    [signal("wrong-id"), {"direction": "long", "confidence": 0.8}],
+)
+async def test_invalid_plugin_output_is_reported_as_component_failure(invalid_result):
+    from cryptotrader.signals.runner import ComponentRunError, ComponentRunner
+
+    sink = RecordingSink()
+    with pytest.raises(ComponentRunError) as caught:
+        await ComponentRunner(sink).run(
+            (FakeComponent("custom", result=invalid_result),),
+            context(),
+        )
+
+    assert set(caught.value.errors) == {"custom"}
+    failed = next(event for event in sink.events if event.name == "component_failed")
+    assert failed.data["component_id"] == "custom"
+
+
+def test_component_signal_rejects_unknown_direction_at_runtime():
+    from cryptotrader.signals.models import ComponentSignal
+
+    with pytest.raises(ValueError, match="direction"):
+        ComponentSignal("custom", "up", 0.8, "invalid")

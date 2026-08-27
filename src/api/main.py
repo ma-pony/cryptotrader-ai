@@ -14,6 +14,7 @@ import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
+from functools import partial
 from typing import Any
 
 import structlog
@@ -78,25 +79,45 @@ async def lifespan(_app: FastAPI):
     if trigger_engine is not None:
         await trigger_engine.stop()
 
-    cycle = getattr(_app.state, "trading_cycle", None)
-    exchange = getattr(getattr(cycle, "executor", None), "exchange", None)
-    if exchange is not None:
-        await exchange.close()
+    cycles = getattr(_app.state, "trading_cycles", None)
+    if cycles is None:
+        primary = getattr(_app.state, "trading_cycle", None)
+        cycles = {} if primary is None else {getattr(primary, "mode", "primary"): primary}
+    closed: set[int] = set()
+    for cycle in cycles.values():
+        exchange = getattr(getattr(cycle, "executor", None), "exchange", None)
+        if exchange is not None and id(exchange) not in closed:
+            await exchange.close()
+            closed.add(id(exchange))
     logger.info("Shutting down")
 
 
 async def _init_signal_profile(app_instance: FastAPI) -> None:
-    from cryptotrader.bootstrap import build_trading_cycle
+    from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle
     from cryptotrader.config import load_config
+    from cryptotrader.hitl.store import ApprovalStore
 
     config = load_config()
-    cycle = build_trading_cycle(config, config.engine)
+    database_url = config.infrastructure.database_url or None
+    profiles = SeededProfileRepository(database_url, config.signal_profile_defaults.to_profile())
+    approvals = ApprovalStore(database_url)
+    cycle = build_trading_cycle(
+        config,
+        config.engine,
+        profile_repository=profiles,
+        approval_store=approvals,
+    )
     await cycle.profiles.get()
     app_instance.state.trading_cycle = cycle
+    app_instance.state.trading_cycles = {config.engine: cycle}
+    app_instance.state.trading_cycle_builder = partial(
+        build_trading_cycle,
+        config,
+        profile_repository=profiles,
+        approval_store=approvals,
+    )
     app_instance.state.signal_registry = cycle.registry
-    app_instance.state.signal_profile_repository = cycle.profiles.repository
-    if cycle.profiles.repository is None:
-        logger.info("No database configured; global signal profile persistence is unavailable")
+    app_instance.state.signal_profile_repository = profiles
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:

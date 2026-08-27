@@ -46,3 +46,32 @@ async def test_paper_executor_and_context_reader_share_position_state():
     assert result.succeeded is True
     assert portfolio["positions"]["BTC/USDT:USDT"]["amount"] == 1.0
     assert len(await cycle.executor.exchange.list_pending_algos("BTC/USDT:USDT")) == 1
+
+
+async def test_injected_runtime_state_is_shared_across_cycles_without_database():
+    from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle
+    from cryptotrader.hitl.store import ApprovalStore
+    from tests.factories.signal_fusion import profile
+
+    config = AppConfig()
+    profiles = SeededProfileRepository(None, profile())
+    approvals = ApprovalStore()
+    first = build_trading_cycle(
+        config,
+        "paper",
+        profile_repository=profiles,
+        approval_store=approvals,
+    )
+    second = build_trading_cycle(
+        config,
+        "paper",
+        profile_repository=profiles,
+        approval_store=approvals,
+    )
+
+    updated = await first.profiles.replace(profile(kronos=0.75, llm=0.25))
+
+    assert second.profiles is first.profiles
+    assert second.approvals is first.approvals
+    assert (await second.profiles.get()).revision == updated.revision
+    assert (await second.profiles.get()).components[0].weight == 0.75

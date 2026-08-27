@@ -5,7 +5,6 @@
     "start_date": "Start date",
     "end_date": "End date",
     "initial_capital": "Initial capital (USDT)",
-    "use_llm": "Use LLM verdict",
     "submit": "Run backtest",
     "cancel": "Cancel run"
   },

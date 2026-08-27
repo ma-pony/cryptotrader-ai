@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime  # noqa: TC003
+
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from cryptotrader.profiles.models import ComponentWeight, SignalProfile, validate_signal_profile
 
@@ -11,12 +13,16 @@ router = APIRouter(prefix="/api/signal-profile", tags=["signal-profile"])
 
 
 class ComponentWeightPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     component_id: str
     enabled: bool
     weight: float
 
 
 class SignalProfileUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     components: list[ComponentWeightPayload]
     neutral_threshold: float
     max_target_ratio: float
@@ -33,6 +39,7 @@ class InstalledComponentPayload(BaseModel):
 
 class SignalProfileResponse(SignalProfileUpdate):
     revision: int
+    updated_at: datetime | None
     installed_components: list[InstalledComponentPayload]
 
 
@@ -47,6 +54,7 @@ def _dependencies(request: Request):
 def _response(profile: SignalProfile, registry) -> SignalProfileResponse:
     return SignalProfileResponse(
         revision=profile.revision,
+        updated_at=profile.updated_at,
         components=[ComponentWeightPayload(**item.__dict__) for item in profile.components],
         neutral_threshold=profile.neutral_threshold,
         max_target_ratio=profile.max_target_ratio,

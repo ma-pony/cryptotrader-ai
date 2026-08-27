@@ -105,5 +105,7 @@ class ComponentSignal:
     def __post_init__(self) -> None:
         if not self.component_id.strip():
             raise ValueError("component_id must not be empty")
+        if self.direction not in {"long", "short", "neutral"}:
+            raise ValueError("direction must be long, short, or neutral")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be in [0, 1]")

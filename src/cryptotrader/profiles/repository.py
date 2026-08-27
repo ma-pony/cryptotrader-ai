@@ -49,6 +49,7 @@ def _profile_config(profile: SignalProfile) -> dict[str, Any]:
 
 def _to_profile(row: _SignalProfileRow) -> SignalProfile:
     config = row.config
+    updated_at = row.updated_at if row.updated_at.tzinfo is not None else row.updated_at.replace(tzinfo=UTC)
     return SignalProfile(
         revision=row.revision,
         components=tuple(ComponentWeight(**item) for item in config["components"]),
@@ -57,6 +58,7 @@ def _to_profile(row: _SignalProfileRow) -> SignalProfile:
         atr_stop_multiplier=float(config["atr_stop_multiplier"]),
         reward_ratio=float(config["reward_ratio"]),
         hitl_required=bool(config["hitl_required"]),
+        updated_at=updated_at,
     )
 
 

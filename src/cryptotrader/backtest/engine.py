@@ -328,6 +328,7 @@ class BacktestEngine:
         credentials = self.config.exchanges.get(self.config.scheduler.exchange_id or self.config.exchange_id)
         leverage = credentials.leverage if credentials is not None else 1
         return TradingCycle(
+            mode="backtest",
             profiles=profiles,
             registry=registry,
             contexts=contexts,
