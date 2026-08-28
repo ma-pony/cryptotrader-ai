@@ -244,6 +244,7 @@ class BacktestEngine:
         self._sp500: dict[str, float] = {}
         self._oi: dict[str, dict] = {}
         self._ls_ratio: dict[str, dict] = {}
+        self._top_trader_ratio: dict[str, dict] = {}
 
     async def run(self) -> BacktestResult:
         selected = await self.profile_repository.get()
@@ -353,6 +354,9 @@ class BacktestEngine:
         )
 
     async def _run_bars(self, cycle, contexts, executor, journal) -> BacktestResult:
+        interval_ms = _TF_MS.get(self.interval)
+        if interval_ms is None:
+            raise ValueError(f"unsupported backtest timeframe {self.interval!r}")
         indexes = [
             index for index, candle in enumerate(self._candles) if self.start_ms <= int(candle[0]) <= self.end_ms
         ]
@@ -364,7 +368,7 @@ class BacktestEngine:
         peak = self.capital
         for step, index in enumerate(indexes[:-1]):
             candle = self._candles[index]
-            as_of = datetime.fromtimestamp(int(candle[0]) / 1000, UTC)
+            as_of = datetime.fromtimestamp((int(candle[0]) + interval_ms) / 1000, UTC)
             outcome = await cycle.run(
                 CycleRequest(
                     pair=self.pair,
@@ -432,19 +436,22 @@ class BacktestEngine:
         )
 
         symbol = self.pair.base
-        self._fng = await fetch_fear_greed(self.start, self.end)
-        self._funding = await fetch_funding_rate(symbol, self.start, self.end)
+        start = datetime.fromisoformat(self.start).replace(tzinfo=UTC)
+        daily_start = (start - timedelta(days=1)).strftime("%Y-%m-%d")
+        auxiliary_start = (start - timedelta(days=65)).strftime("%Y-%m-%d")
+        self._fng = await fetch_fear_greed(daily_start, self.end)
+        self._funding = await fetch_funding_rate(symbol, daily_start, self.end)
         for attribute, loader in (
-            ("_btc_dom", lambda: fetch_btc_dominance(self.start, self.end)),
-            ("_fed_rate", lambda: fetch_fred_series("DFF", self.start, self.end)),
-            ("_dxy", lambda: fetch_fred_series("DTWEXBGS", self.start, self.end)),
-            ("_fut_vol", lambda: fetch_futures_volume(symbol, self.start, self.end)),
+            ("_btc_dom", lambda: fetch_btc_dominance(daily_start, self.end)),
+            ("_fed_rate", lambda: fetch_fred_series("DFF", daily_start, self.end)),
+            ("_dxy", lambda: fetch_fred_series("DTWEXBGS", daily_start, self.end)),
+            ("_fut_vol", lambda: fetch_futures_volume(symbol, daily_start, self.end)),
         ):
             try:
                 setattr(self, attribute, await loader())
             except Exception:
                 logger.warning("Historical source %s failed", attribute, exc_info=True)
-        self._load_extended_data()
+        self._load_extended_data(auxiliary_start)
 
     @staticmethod
     def _extract_numeric(data, key: str | None = None) -> float:
@@ -460,28 +467,63 @@ class BacktestEngine:
 
         return {date: value for date, value in get_range(source, start, end).items() if isinstance(value, dict)}
 
-    def _load_extended_data(self) -> None:
+    def _load_extended_data(self, historical_start: str) -> None:
         from cryptotrader.data.store import get_range
 
         symbol = self.pair.base
-        self._etf_flows = self._load_dict_range("sosovalue_etf", self.start, self.end)
-        self._oi = self._load_dict_range(f"binance_oi_{symbol}", self.start, self.end)
-        self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", self.start, self.end)
-        for date, value in get_range("stablecoin_total_supply", self.start, self.end).items():
+        self._etf_flows = self._load_dict_range("sosovalue_etf", historical_start, self.end)
+        self._oi = self._load_dict_range(f"binance_oi_{symbol}", historical_start, self.end)
+        self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", historical_start, self.end)
+        self._top_trader_ratio = self._load_dict_range(
+            f"binance_top_trader_{symbol}",
+            historical_start,
+            self.end,
+        )
+        for date, value in get_range("stablecoin_total_supply", historical_start, self.end).items():
             self._stablecoin_supply[date] = self._extract_numeric(value, "total_supply")
-        for date, value in get_range("defillama_tvl", self.start, self.end).items():
+        for date, value in get_range("defillama_tvl", historical_start, self.end).items():
             self._defi_tvl[date] = self._extract_numeric(value, "tvl")
         for source, target in (
             ("btc_hashrate", self._btc_hashrate),
             ("fred_VIXCLS", self._vix),
             ("fred_SP500", self._sp500),
         ):
-            for date, value in get_range(source, self.start, self.end).items():
+            for date, value in get_range(source, historical_start, self.end).items():
                 target[date] = self._extract_numeric(value)
+
+    @staticmethod
+    def _historical_sp500_btc_correlation(
+        candles: list[list],
+        sp500: dict[str, float],
+        completed_day: str,
+    ) -> float | None:
+        btc_closes: dict[str, float] = {}
+        for candle in sorted(candles, key=lambda item: int(item[0])):
+            date = datetime.fromtimestamp(int(candle[0]) / 1000, UTC).strftime("%Y-%m-%d")
+            if date <= completed_day:
+                btc_closes[date] = float(candle[4])
+        dates = sorted(set(btc_closes).intersection(sp500))[-31:]
+        if len(dates) < 31:
+            return None
+        btc_returns = [btc_closes[dates[index]] / btc_closes[dates[index - 1]] - 1.0 for index in range(1, 31)]
+        sp500_returns = [sp500[dates[index]] / sp500[dates[index - 1]] - 1.0 for index in range(1, 31)]
+        btc_average = sum(btc_returns) / len(btc_returns)
+        sp500_average = sum(sp500_returns) / len(sp500_returns)
+        covariance = sum(
+            (btc - btc_average) * (equity - sp500_average)
+            for btc, equity in zip(btc_returns, sp500_returns, strict=True)
+        )
+        btc_variance = sum((value - btc_average) ** 2 for value in btc_returns)
+        sp500_variance = sum((value - sp500_average) ** 2 for value in sp500_returns)
+        denominator = math.sqrt(btc_variance * sp500_variance)
+        return covariance / denominator if denominator > 0.0 else None
 
     def _snapshot_at(self, timeframe: str, as_of: datetime) -> DataSnapshot:
         timestamp_ms = int(as_of.timestamp() * 1000)
-        candles = [item for item in self._candles_by_timeframe[timeframe] if int(item[0]) <= timestamp_ms]
+        interval_ms = _TF_MS.get(timeframe)
+        if interval_ms is None:
+            raise ValueError(f"unsupported backtest timeframe {timeframe!r}")
+        candles = [item for item in self._candles_by_timeframe[timeframe] if int(item[0]) + interval_ms <= timestamp_ms]
         if not candles:
             raise ValueError(f"no {timeframe} candles available at {as_of.isoformat()}")
         frame = pd.DataFrame(
@@ -490,7 +532,6 @@ class BacktestEngine:
         )
         frame.index = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
         current = candles[-1]
-        date_str = as_of.strftime("%Y-%m-%d")
         completed_day = (as_of - timedelta(days=1)).strftime("%Y-%m-%d")
         futures = self._fut_vol.get(completed_day, {})
         past_volumes = [
@@ -504,11 +545,45 @@ class BacktestEngine:
         futures_volume = float(futures.get("volume", 0.0))
         oi = self._oi.get(completed_day, {})
         long_short = self._ls_ratio.get(completed_day, {})
-        etf = self._etf_flows.get(date_str, {})
+        top_trader = self._top_trader_ratio.get(completed_day, {})
+        etf = self._etf_flows.get(completed_day, {})
 
         from cryptotrader.backtest.historical_data import derive_news_events
 
         volatility = frame["close"].pct_change().std()
+        onchain = OnchainData(
+            open_interest=float(oi.get("openInterestValue", 0.0)) if oi else 0.0,
+            liquidations_24h={
+                "volume_ratio": futures_volume / average_volume if average_volume else 1.0,
+                "futures_volume": futures_volume,
+                "long_short_ratio": float(long_short.get("longShortRatio", 1.0)) if long_short else 1.0,
+            },
+            defi_tvl=self._defi_tvl.get(completed_day, 0.0),
+            data_quality={
+                "has_oi": bool(oi),
+                "has_ls_ratio": bool(long_short),
+                "has_top_trader_ratio": bool(top_trader),
+                "has_etf": bool(etf),
+            },
+        )
+        if top_trader:
+            onchain.lsr_top_count = float(top_trader.get("topTraderRatio", 0.0))
+        macro = MacroData(
+            fear_greed_index=self._fng.get(completed_day, 50),
+            btc_dominance=self._btc_dom.get(completed_day, 0.0),
+            fed_rate=self._fed_rate.get(completed_day, 0.0),
+            dxy=self._dxy.get(completed_day, 0.0),
+            etf_daily_net_inflow=float(etf.get("totalNetInflow", 0.0)) if etf else 0.0,
+            etf_total_net_assets=float(etf.get("totalNetAssets", 0.0)) if etf else 0.0,
+            etf_cum_net_inflow=float(etf.get("cumNetInflow", 0.0)) if etf else 0.0,
+            vix=self._vix.get(completed_day, 0.0),
+            sp500=self._sp500.get(completed_day, 0.0),
+            stablecoin_total_supply=self._stablecoin_supply.get(completed_day, 0.0),
+            btc_hashrate=self._btc_hashrate.get(completed_day, 0.0),
+        )
+        correlation = self._historical_sp500_btc_correlation(candles, self._sp500, completed_day)
+        if correlation is not None:
+            macro.spy_btc_corr_30d = correlation
         return DataSnapshot(
             timestamp=as_of,
             pair=self.pair.canonical(),
@@ -520,37 +595,14 @@ class BacktestEngine:
                 orderbook_imbalance=0.0,
                 volatility=float(volatility) if not pd.isna(volatility) else 0.0,
             ),
-            onchain=OnchainData(
-                open_interest=float(oi.get("openInterestValue", 0.0)) if oi else 0.0,
-                liquidations_24h={
-                    "volume_ratio": futures_volume / average_volume if average_volume else 1.0,
-                    "futures_volume": futures_volume,
-                    "long_short_ratio": float(long_short.get("longShortRatio", 1.0)) if long_short else 1.0,
-                },
-                defi_tvl=self._defi_tvl.get(date_str, 0.0),
-                data_quality={
-                    "has_oi": bool(oi),
-                    "has_ls_ratio": bool(long_short),
-                    "has_etf": bool(etf),
-                },
-            ),
+            onchain=onchain,
             news=NewsSentiment(
                 key_events=derive_news_events(candles, len(candles) - 1),
-                headlines=[f"{self.pair.base} at ${float(current[4]):,.0f}, Fear&Greed={self._fng.get(date_str, 50)}"],
+                headlines=[
+                    f"{self.pair.base} at ${float(current[4]):,.0f}, Fear&Greed={self._fng.get(completed_day, 50)}"
+                ],
             ),
-            macro=MacroData(
-                fear_greed_index=self._fng.get(date_str, 50),
-                btc_dominance=self._btc_dom.get(date_str, 0.0),
-                fed_rate=self._fed_rate.get(date_str, 0.0),
-                dxy=self._dxy.get(date_str, 0.0),
-                etf_daily_net_inflow=float(etf.get("totalNetInflow", 0.0)) if etf else 0.0,
-                etf_total_net_assets=float(etf.get("totalNetAssets", 0.0)) if etf else 0.0,
-                etf_cum_net_inflow=float(etf.get("cumNetInflow", 0.0)) if etf else 0.0,
-                vix=self._vix.get(date_str, 0.0),
-                sp500=self._sp500.get(date_str, 0.0),
-                stablecoin_total_supply=self._stablecoin_supply.get(date_str, 0.0),
-                btc_hashrate=self._btc_hashrate.get(date_str, 0.0),
-            ),
+            macro=macro,
         )
 
     def _compute_result(

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import AsyncMock
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from cryptotrader.backtest.engine import BacktestEngine, BacktestExecutor
 from cryptotrader.backtest.result import BacktestResult
-from cryptotrader.decision.models import ExecutionPlan, OrderIntent
+from cryptotrader.decision.models import CycleOutcome, ExecutionPlan, OrderIntent
+from cryptotrader.signals.models import CandleRequirement, DataRequirements
 from tests.factories.signal_fusion import context
 
 
@@ -25,6 +28,142 @@ def test_backtest_result_summary_uses_cycle_records():
     assert result.summary()["total_return"] == "15.00%"
     assert result.cycle_records == []
     assert result.profile_revisions == []
+
+
+def test_snapshot_excludes_candle_at_open_and_includes_it_at_close():
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-02", interval="1h")
+    candle = _candles(1)[0]
+    engine._candles_by_timeframe = {"1h": [candle]}
+    opened_at = datetime.fromtimestamp(candle[0] / 1000, UTC)
+
+    with pytest.raises(ValueError, match="no 1h candles available"):
+        engine._snapshot_at("1h", opened_at)
+
+    snapshot = engine._snapshot_at("1h", opened_at + timedelta(hours=1))
+
+    assert snapshot.market.ohlcv["close"].tolist() == [candle[4]]
+
+
+@pytest.mark.asyncio
+async def test_cycle_decides_at_signal_close_and_fills_at_next_bar_open():
+    bars = _candles(3)
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-02", interval="1h")
+    engine._candles_by_timeframe = {"1h": bars}
+    engine._candles = bars
+    executor = BacktestExecutor(initial_capital=10_000.0, slippage_bps=0.0, fee_bps=0.0)
+    observed: list[tuple[datetime, float]] = []
+    plan = ExecutionPlan(
+        intents=(OrderIntent("BTC/USDT:USDT", "buy", 1.0, False),),
+        stop_loss=1.0,
+        take_profit=1_000.0,
+    )
+
+    class Cycle:
+        async def run(self, request):
+            snapshot = engine._snapshot_at("1h", request.as_of)
+            observed.append((request.as_of, float(snapshot.market.ohlcv["close"].iloc[-1])))
+            if len(observed) == 1:
+                await executor.execute(plan, None)
+            return CycleOutcome(f"cycle-{len(observed)}", "no_change", 1)
+
+    class Contexts:
+        def set_execution_state(self, **_state):
+            return None
+
+    await engine._run_bars(Cycle(), Contexts(), executor, SimpleNamespace(records=[]))
+
+    first_close = datetime.fromtimestamp((bars[0][0] + 3_600_000) / 1000, UTC)
+    assert observed[0] == (first_close, bars[0][4])
+    assert executor.trades[0]["price"] == bars[1][1]
+    assert executor.trades[0]["ts"] == bars[1][0]
+
+
+def test_snapshot_uses_previous_completed_day_for_daily_inputs():
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-03", interval="1h")
+    opened_at = datetime(2024, 1, 2, tzinfo=UTC)
+    engine._candles_by_timeframe = {"1h": [[int(opened_at.timestamp() * 1000), 100.0, 102.0, 99.0, 101.0, 10.0]]}
+    previous = "2024-01-01"
+    current = "2024-01-02"
+    engine._fng = {previous: 11, current: 99}
+    engine._btc_dom = {previous: 51.0, current: 59.0}
+    engine._fed_rate = {previous: 5.1, current: 5.9}
+    engine._dxy = {previous: 101.0, current: 109.0}
+    engine._etf_flows = {
+        previous: {"totalNetInflow": 1.0, "totalNetAssets": 2.0, "cumNetInflow": 3.0},
+        current: {"totalNetInflow": 91.0, "totalNetAssets": 92.0, "cumNetInflow": 93.0},
+    }
+    engine._vix = {previous: 12.0, current: 19.0}
+    engine._sp500 = {previous: 4_700.0, current: 4_900.0}
+    engine._stablecoin_supply = {previous: 100.0, current: 900.0}
+    engine._btc_hashrate = {previous: 500.0, current: 900.0}
+    engine._defi_tvl = {previous: 50.0, current: 90.0}
+
+    snapshot = engine._snapshot_at("1h", opened_at + timedelta(hours=1))
+
+    assert snapshot.macro.fear_greed_index == 11
+    assert snapshot.macro.btc_dominance == 51.0
+    assert snapshot.macro.fed_rate == 5.1
+    assert snapshot.macro.dxy == 101.0
+    assert snapshot.macro.etf_daily_net_inflow == 1.0
+    assert snapshot.macro.etf_total_net_assets == 2.0
+    assert snapshot.macro.etf_cum_net_inflow == 3.0
+    assert snapshot.macro.vix == 12.0
+    assert snapshot.macro.sp500 == 4_700.0
+    assert snapshot.macro.stablecoin_total_supply == 100.0
+    assert snapshot.macro.btc_hashrate == 500.0
+    assert snapshot.onchain.defi_tvl == 50.0
+
+
+@pytest.mark.asyncio
+async def test_historical_sources_fetch_required_point_in_time_lookback():
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-03", interval="1h")
+    loaded_starts: list[str] = []
+    engine._load_extended_data = lambda *args: loaded_starts.extend(args)
+    empty = AsyncMock(return_value={})
+
+    with (
+        patch("cryptotrader.backtest.engine.fetch_historical", new=AsyncMock(return_value=_candles(3))),
+        patch("cryptotrader.backtest.historical_data.fetch_fear_greed", new=empty) as fear_greed,
+        patch("cryptotrader.backtest.historical_data.fetch_funding_rate", new=AsyncMock(return_value={})),
+        patch("cryptotrader.backtest.historical_data.fetch_btc_dominance", new=AsyncMock(return_value={})),
+        patch("cryptotrader.backtest.historical_data.fetch_fred_series", new=AsyncMock(return_value={})),
+        patch("cryptotrader.backtest.historical_data.fetch_futures_volume", new=AsyncMock(return_value={})),
+    ):
+        await engine._fetch_historical_data(
+            DataRequirements(candles=(CandleRequirement("1h", 2),)),
+        )
+
+    fear_greed.assert_awaited_once_with("2023-12-31", "2024-01-03")
+    assert loaded_starts == ["2023-10-28"]
+
+
+def test_kronos_aux_uses_only_completed_historical_series():
+    start = datetime(2024, 1, 1, tzinfo=UTC)
+    bars = []
+    sp500 = {}
+    for index in range(32):
+        opened_at = start + timedelta(days=index)
+        close = 100.0 + index * index
+        bars.append([int(opened_at.timestamp() * 1000), close, close, close, close, 10.0])
+        sp500[opened_at.strftime("%Y-%m-%d")] = close * 20.0
+    as_of = start + timedelta(days=31)
+    previous = (as_of - timedelta(days=1)).strftime("%Y-%m-%d")
+    current = as_of.strftime("%Y-%m-%d")
+    sp500[current] = 1.0
+
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-02-02", interval="1d")
+    engine._candles_by_timeframe = {"1d": bars}
+    engine._sp500 = sp500
+    engine._top_trader_ratio = {
+        previous: {"topTraderRatio": 1.7},
+        current: {"topTraderRatio": 9.9},
+    }
+
+    snapshot = engine._snapshot_at("1d", as_of)
+
+    assert snapshot.onchain.lsr_top_count == pytest.approx(1.7)
+    assert snapshot.macro.spy_btc_corr_30d == pytest.approx(1.0)
+    assert not hasattr(snapshot.market, "premium_index_5d")
 
 
 @pytest.mark.asyncio

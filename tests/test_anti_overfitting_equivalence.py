@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from cryptotrader.backtest.engine import BacktestEngine
 
@@ -16,7 +16,7 @@ def test_future_candle_changes_cannot_change_point_in_time_snapshot():
     right = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-02", interval="1h")
     left._candles_by_timeframe = {"1h": [*prefix, bullish_future]}
     right._candles_by_timeframe = {"1h": [*prefix, bearish_future]}
-    as_of = datetime.fromtimestamp(prefix[-1][0] / 1000, UTC)
+    as_of = datetime.fromtimestamp(prefix[-1][0] / 1000, UTC) + timedelta(hours=1)
 
     left_snapshot = left._snapshot_at("1h", as_of)
     right_snapshot = right._snapshot_at("1h", as_of)
