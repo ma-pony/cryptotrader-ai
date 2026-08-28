@@ -684,6 +684,41 @@ web/src/pages/
 
 旧 Journal 表和生产历史数据不主动删除，但新运行时不读取它们。
 
+### 17.1 硬切换迁移规则
+
+删除旧配置、类型、函数、路由或文件时，必须在同一重构任务中把所有调用方迁移到新入口。删除导致的导入错误、属性错误、配置错误、类型错误或运行时失败，都通过修改消费者解决，不通过恢复旧接口解决。
+
+禁止为了消除删除错误而新增：
+
+- 旧名称 alias 或 re-export。
+- 兼容 wrapper。
+- 旧字段 fallback。
+- TOML 或环境变量备用读取。
+- 同时维护新旧两套装配。
+- 捕获异常后静默走旧路径。
+
+迁移范围必须覆盖：
+
+```text
+API
+CLI
+Scheduler
+Chat
+Backtest
+触发器
+Docker/Compose
+健康检查
+初始化脚本
+运维脚本
+前端类型、hooks 和页面
+测试 fixture
+文档和示例命令
+```
+
+每个实施任务结束时必须保持可导入、可启动、可测试；不提交依赖“后续任务再修”的断裂中间状态。若旧符号仍有调用方，当前任务不算完成。
+
+数据库切换同样采用新方式直接修正：先建立并验证新 schema、默认配置和 `ConfigRepository`，再迁移全部消费者，最后删除旧加载链。不存在数据库配置时进入 `setup_required`，不回退到 TOML。
+
 ## 18. 测试策略
 
 不为旧配置和罕见平台错误编写兼容测试。自动化测试聚焦核心行为。
@@ -721,7 +756,16 @@ web/src/pages/
 - 网页保存新权重后下一周期读取新 revision。
 - API 和 Journal 不包含凭据。
 
-### 18.4 真实验证
+### 18.4 删除迁移检查
+
+- 所有生产模块可完成 import smoke test。
+- API、Scheduler、CLI、Chat、Backtest 和 Web 使用新的数据库配置与多平台入口。
+- Docker/Compose、健康检查和启动命令不引用被删除配置。
+- 前端生成类型、请求 hooks 和路由不引用旧 API。
+- 旧符号、旧字段和旧配置路径在运行时代码中搜索结果为零。
+- 删除旧代码后全量测试通过，不存在通过兼容 wrapper 保留的旧测试。
+
+### 18.5 真实验证
 
 - 使用 Bybit Testnet 完成最小开仓。
 - 安装并查询平台侧保护单。
@@ -735,6 +779,7 @@ web/src/pages/
 ## 19. 完成标准
 
 - 运行时代码不读取 TOML，不存在配置优先级合并。
+- 删除造成的所有调用错误已经迁移到新入口，不存在 alias、wrapper 或 fallback。
 - 除数据库引导和配置加密密钥外，运行配置全部来自数据库。
 - 业务层搜索不到 OKX、Bybit 等平台名称判断。
 - `SignalContext` 和 `TargetPosition` 不依赖执行平台。
@@ -748,6 +793,23 @@ web/src/pages/
 - Python 全量测试、Ruff、前端测试、类型检查和生产构建通过。
 - Bybit Testnet 完成真实开仓、保护、平仓和零残留闭环。
 - 真实 LLM 调用完成四智能体辩论与融合。
+
+完成前执行仓库级旧符号检查，至少覆盖：
+
+```text
+load_config
+AppConfig
+ExchangeCredentials
+ExchangesConfig
+CRYPTOTRADER_
+config/default.toml
+config/local.toml
+exchange_id
+LiveExchange
+supports_protection_orders
+```
+
+只允许迁移说明文档中出现这些名称；运行时代码、测试装配、Docker 和网页代码不得继续引用。
 
 ## 20. 与前置信号融合设计的关系
 
