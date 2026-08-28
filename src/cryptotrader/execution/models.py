@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 CapitalScope = Literal["simulated", "real"]
@@ -52,3 +53,36 @@ class ExecutionBook:
             isinstance(allocation, ConnectionAllocation) for allocation in self.allocations
         ):
             raise ValueError("allocations must be a tuple of ConnectionAllocation")
+
+
+@dataclass(frozen=True)
+class ConnectionTarget:
+    """One connection's deterministic share of a platform-neutral book target."""
+
+    book_id: str
+    connection_id: str
+    weight: Decimal
+    book_equity: Decimal
+    target_exposure: Decimal
+    target_signed_notional: Decimal
+
+    def __post_init__(self) -> None:
+        if type(self.book_id) is not str or not self.book_id.strip():
+            raise ValueError("book_id must be a non-empty string")
+        if type(self.connection_id) is not str or not self.connection_id.strip():
+            raise ValueError("connection_id must be a non-empty string")
+        if not isinstance(self.weight, Decimal) or not self.weight.is_finite() or not Decimal("0") <= self.weight <= 1:
+            raise ValueError("weight must be a finite Decimal in [0, 1]")
+        if not isinstance(self.book_equity, Decimal) or not self.book_equity.is_finite() or self.book_equity < 0:
+            raise ValueError("book_equity must be a non-negative finite Decimal")
+        if (
+            not isinstance(self.target_exposure, Decimal)
+            or not self.target_exposure.is_finite()
+            or not Decimal("-1") <= self.target_exposure <= 1
+        ):
+            raise ValueError("target_exposure must be a finite Decimal in [-1, 1]")
+        if not isinstance(self.target_signed_notional, Decimal) or not self.target_signed_notional.is_finite():
+            raise ValueError("target_signed_notional must be a finite Decimal")
+        expected = self.book_equity * self.target_exposure * self.weight
+        if self.target_signed_notional != expected:
+            raise ValueError("target_signed_notional must equal book_equity * target_exposure * weight")
