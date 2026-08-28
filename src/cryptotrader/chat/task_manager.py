@@ -78,7 +78,7 @@ class BackgroundTaskManager:
 
         interrupt_event = asyncio.Event()
         task = asyncio.create_task(runner(interrupt_event), name=f"analysis:{session_id}")
-        task.add_done_callback(lambda _t: self._on_task_done(session_id))
+        task.add_done_callback(lambda completed_task: self._on_task_done(session_id, completed_task))
 
         analysis_task = AnalysisTask(
             session_id=session_id,
@@ -98,15 +98,15 @@ class BackgroundTaskManager:
     def get(self, session_id: str) -> AnalysisTask | None:
         return self._tasks.get(session_id)
 
-    def interrupt(self, session_id: str) -> bool:
+    def interrupt(self, session_id: str) -> AnalysisTask | None:
         task = self._tasks.get(session_id)
         if task is None or task.completed:
-            return False
+            return None
         if task.interrupt_event.is_set():
-            return False
+            return None
         task.interrupt_event.set()
         task.task.cancel()
-        return True
+        return task
 
     @staticmethod
     async def _broadcast_new_workflow(
@@ -131,15 +131,15 @@ class BackgroundTaskManager:
         except Exception:
             logger.info("Failed to broadcast new_workflow", exc_info=True)
 
-    def _on_task_done(self, session_id: str) -> None:
-        task = self._tasks.get(session_id)
-        if task is None:
+    def _on_task_done(self, session_id: str, completed_task: asyncio.Task[None]) -> None:
+        analysis_task = self._tasks.get(session_id)
+        if analysis_task is None or analysis_task.task is not completed_task:
             return
-        task.completed = True
-        duration_ms = int((time.monotonic() - task.created_at) * 1000)
+        analysis_task.completed = True
+        duration_ms = int((time.monotonic() - analysis_task.created_at) * 1000)
         logger.info(
             "Analysis task completed: session_id=%s pair=%s duration_ms=%d",
             session_id,
-            task.pair,
+            analysis_task.pair,
             duration_ms,
         )

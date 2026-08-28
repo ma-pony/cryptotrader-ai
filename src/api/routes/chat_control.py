@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -24,7 +27,11 @@ async def interrupt_analysis(session_id: str) -> InterruptResponse:
         raise HTTPException(status_code=404, detail="Session not found")
     if task.completed or task.interrupt_event.is_set():
         return InterruptResponse(type="interrupt_noop", session_id=session_id)
-    manager.interrupt(session_id)
+    interrupted_task = manager.interrupt(session_id)
+    if interrupted_task is None:
+        return InterruptResponse(type="interrupt_noop", session_id=session_id)
+    with suppress(asyncio.CancelledError):
+        await interrupted_task.task
     return InterruptResponse(type="interrupt_received", session_id=session_id)
 
 

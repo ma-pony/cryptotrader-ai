@@ -72,6 +72,53 @@ async def test_session_replacement(state_mgr):
 
 
 @pytest.mark.asyncio
+async def test_replaced_task_callback_cannot_mark_new_task_completed(state_mgr):
+    config = ChatConfig(max_concurrent_tasks=5)
+    manager = BackgroundTaskManager.get_instance(config)
+    old_entered = asyncio.Event()
+    old_cleanup_started = asyncio.Event()
+    old_cleanup_release = asyncio.Event()
+
+    async def run_old(_interrupt_event):
+        old_entered.set()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            old_cleanup_started.set()
+            await old_cleanup_release.wait()
+            raise
+
+    old_analysis = manager.create(
+        "s1",
+        "BTC/USDT",
+        run_old,
+        "chat",
+        _make_bus("s1", state_mgr),
+    )
+    await old_entered.wait()
+    new_analysis = manager.create(
+        "s1",
+        "BTC/USDT",
+        _long_coro,
+        "chat",
+        _make_bus("s1", state_mgr),
+    )
+    await old_cleanup_started.wait()
+
+    old_cleanup_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await old_analysis.task
+    await asyncio.sleep(0)
+
+    assert manager.get("s1") is new_analysis
+    assert not new_analysis.completed
+
+    new_analysis.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await new_analysis.task
+
+
+@pytest.mark.asyncio
 async def test_interrupt(state_mgr):
     config = ChatConfig(max_concurrent_tasks=5)
     mgr = BackgroundTaskManager.get_instance(config)
