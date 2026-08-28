@@ -8,7 +8,14 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Literal
 
 from cryptotrader.pair import Pair
-from cryptotrader.venues.models import ProtectionSpec, VenueCapabilities, VenueQuote
+from cryptotrader.venues.models import (
+    ConnectionPosition,
+    NormalizedOrder,
+    ProtectionSpec,
+    ProtectionState,
+    VenueCapabilities,
+    VenueQuote,
+)
 
 if TYPE_CHECKING:
     from cryptotrader.risk.models import BookRiskDecision, ConnectionRiskDecision
@@ -387,3 +394,278 @@ class BookExecutionProposal:
     @property
     def weights(self) -> tuple[Decimal, ...]:
         return self.risk.connection_weights
+
+
+_CONNECTION_EXECUTION_STATUSES = frozenset({"completed", "failed"})
+_BOOK_EXECUTION_STATUSES = frozenset({"completed", "partial", "failed"})
+_EXECUTION_OPERATIONS = frozenset(
+    {
+        "pre_read",
+        "fetch_quote",
+        "normalize_amount",
+        "place_order",
+        "close_old_side",
+        "reconcile_flat",
+        "cancel_old_protection",
+        "open_target_side",
+        "replace_protection",
+        "reconcile",
+        "compensate_order",
+        "compensate_reconcile",
+        "execute",
+        "incomplete_fill",
+        "position_mismatch",
+        "protection_mismatch",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ExecutionFinalPosition:
+    """Credential-safe final position and protection summary."""
+
+    position: ConnectionPosition
+    protected: bool
+    protection_ids: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.position, ConnectionPosition):
+            raise ValueError("position must be a ConnectionPosition")
+        if type(self.protected) is not bool:
+            raise ValueError("protected must be a boolean")
+        if type(self.protection_ids) is not tuple or not all(
+            type(protection_id) is str and bool(protection_id.strip()) for protection_id in self.protection_ids
+        ):
+            raise ValueError("protection_ids must be a tuple of non-empty strings")
+        if len(self.protection_ids) != len(set(self.protection_ids)):
+            raise ValueError("protection_ids must be unique")
+        if self.position.signed_amount == 0 and self.protected:
+            raise ValueError("a flat final position cannot be protected")
+        if self.protected and not self.protection_ids:
+            raise ValueError("protected final position requires active protection IDs")
+
+
+@dataclass(frozen=True)
+class CompensationResult:
+    """Outcome of removing only risk added by the failed execution attempt."""
+
+    attempted: bool
+    succeeded: bool
+    order: NormalizedOrder | None = None
+    operation: str = ""
+
+    def __post_init__(self) -> None:
+        if type(self.attempted) is not bool or type(self.succeeded) is not bool:
+            raise ValueError("compensation flags must be booleans")
+        if self.order is not None and not isinstance(self.order, NormalizedOrder):
+            raise ValueError("compensation order must be a NormalizedOrder or None")
+        if type(self.operation) is not str:
+            raise ValueError("compensation operation must be a string")
+        if not self.attempted and (self.succeeded or self.order is not None or self.operation):
+            raise ValueError("unattempted compensation must not carry an outcome")
+        if (
+            self.attempted
+            and self.succeeded
+            and (
+                self.order is None
+                or self.order.status not in {"filled", "closed"}
+                or self.order.filled_amount != self.order.amount
+                or not self.order.reduce_only
+                or self.operation
+            )
+        ):
+            raise ValueError("successful compensation requires one complete reduce-only fill")
+        if self.attempted and not self.succeeded and self.operation not in _EXECUTION_OPERATIONS:
+            raise ValueError("failed compensation requires a safe operation category")
+
+
+NO_COMPENSATION = CompensationResult(False, False)
+
+
+@dataclass(frozen=True)
+class ConnectionExecutionResult:
+    """One connection's immutable, redacted execution outcome."""
+
+    book_id: str
+    connection_id: str
+    pair: Pair
+    target_signed_notional: Decimal
+    target_signed_amount: Decimal
+    status: Literal["completed", "failed"]
+    orders: tuple[NormalizedOrder, ...]
+    protection: ProtectionState | None
+    compensation: CompensationResult
+    final_position: ExecutionFinalPosition | None
+    error_operation: str
+    requires_attention: bool
+    trace: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        self._validate_identity_and_target()
+        self._validate_outcomes()
+        self._validate_status()
+
+    def _validate_identity_and_target(self) -> None:
+        for field_name in ("book_id", "connection_id"):
+            value = getattr(self, field_name)
+            if type(value) is not str or not value.strip():
+                raise ValueError(f"{field_name} must be a non-empty string")
+        if not isinstance(self.pair, Pair):
+            raise ValueError("pair must be a Pair")
+        _require_decimal(self.target_signed_notional, "target_signed_notional")
+        _require_decimal(self.target_signed_amount, "target_signed_amount")
+        if self.status not in _CONNECTION_EXECUTION_STATUSES:
+            raise ValueError("unsupported connection execution status")
+
+    def _validate_outcomes(self) -> None:
+        if type(self.orders) is not tuple or not all(isinstance(order, NormalizedOrder) for order in self.orders):
+            raise ValueError("orders must be a tuple of NormalizedOrder")
+        if any(order.pair != self.pair for order in self.orders):
+            raise ValueError("all orders must match the result pair")
+        order_ids = tuple(order.id for order in self.orders)
+        if len(order_ids) != len(set(order_ids)):
+            raise ValueError("order IDs must be unique and preserve execution order")
+        if self.protection is not None and (
+            not isinstance(self.protection, ProtectionState) or self.protection.pair != self.pair
+        ):
+            raise ValueError("protection must match the result pair")
+        if not isinstance(self.compensation, CompensationResult):
+            raise ValueError("compensation must be a CompensationResult")
+        if self.final_position is not None and (
+            not isinstance(self.final_position, ExecutionFinalPosition)
+            or self.final_position.position.pair != self.pair
+        ):
+            raise ValueError("final_position must match the result pair")
+        if type(self.error_operation) is not str:
+            raise ValueError("error_operation must be a string")
+        if type(self.requires_attention) is not bool:
+            raise ValueError("requires_attention must be a boolean")
+        if type(self.trace) is not tuple or any(operation not in _EXECUTION_OPERATIONS for operation in self.trace):
+            raise ValueError("trace must contain only safe execution operation categories")
+
+    def _validate_status(self) -> None:
+        if self.status == "completed":
+            self._validate_completed()
+        elif self.error_operation not in _EXECUTION_OPERATIONS:
+            raise ValueError("failed result requires a safe operation category")
+        if self.compensation.succeeded and self.requires_attention:
+            raise ValueError("successful compensation cannot require attention")
+
+    def _validate_completed(self) -> None:
+        if self.error_operation or self.requires_attention or self.final_position is None:
+            raise ValueError("completed result must have a safe exact final position")
+        if self.compensation.attempted:
+            raise ValueError("completed result must not carry compensation")
+        if any(
+            order.status not in {"filled", "closed"} or order.filled_amount != order.amount for order in self.orders
+        ):
+            raise ValueError("completed result orders must be complete fills")
+        if self.final_position.position.signed_amount != self.target_signed_amount:
+            raise ValueError("completed result must reach the exact target amount")
+        if self.pair.market_type != "spot" and self.target_signed_amount != 0 and not self.final_position.protected:
+            raise ValueError("completed derivative result must be protected")
+        if self.target_signed_amount == 0 and self.protection is not None:
+            raise ValueError("completed flat result must not carry protection")
+        if self.protection is not None and not set(self.protection.protection_ids) <= set(
+            self.final_position.protection_ids
+        ):
+            raise ValueError("completed protection must appear in the final position")
+
+    @classmethod
+    def failed(
+        cls,
+        plan: ConnectionExecutionPlan,
+        operation: str,
+        *,
+        orders: tuple[NormalizedOrder, ...] = (),
+        compensation: CompensationResult = NO_COMPENSATION,
+        final_position: ExecutionFinalPosition | None = None,
+        requires_attention: bool = False,
+        trace: tuple[str, ...] = (),
+        target_signed_amount: Decimal | None = None,
+    ) -> ConnectionExecutionResult:
+        return cls(
+            plan.book_id,
+            plan.connection_id,
+            plan.pair,
+            plan.target_signed_notional,
+            plan.target_signed_amount if target_signed_amount is None else target_signed_amount,
+            "failed",
+            orders,
+            None,
+            compensation,
+            final_position,
+            operation,
+            requires_attention,
+            trace,
+        )
+
+
+@dataclass(frozen=True)
+class BookExecutionResult:
+    """Whole-book result closed over the exact ready proposal."""
+
+    proposal: BookExecutionProposal
+    connection_results: tuple[ConnectionExecutionResult, ...]
+    status: Literal["completed", "partial", "failed"]
+    requires_attention: bool
+    reallocated: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.proposal, BookExecutionProposal) or not self.proposal.ready:
+            raise ValueError("book execution requires a ready proposal")
+        if type(self.connection_results) is not tuple or not all(
+            isinstance(result, ConnectionExecutionResult) for result in self.connection_results
+        ):
+            raise ValueError("connection_results must be a tuple of ConnectionExecutionResult")
+        plan_ids = tuple(plan.connection_id for plan in self.proposal.connection_plans)
+        result_ids = tuple(result.connection_id for result in self.connection_results)
+        if result_ids != plan_ids:
+            raise ValueError("connection results must match proposal plan order")
+        plans_by_id = {plan.connection_id: plan for plan in self.proposal.connection_plans}
+        for result in self.connection_results:
+            plan = plans_by_id[result.connection_id]
+            if (
+                result.book_id != self.proposal.book_id
+                or result.pair != self.proposal.pair
+                or result.target_signed_notional != plan.target_signed_notional
+            ):
+                raise ValueError("connection result must remain closed over its proposal plan and target")
+        if self.status not in _BOOK_EXECUTION_STATUSES or self.status != self.expected_status(
+            self.proposal, self.connection_results
+        ):
+            raise ValueError("book execution status must match exact connection outcomes")
+        if type(self.requires_attention) is not bool or self.requires_attention != any(
+            result.requires_attention for result in self.connection_results
+        ):
+            raise ValueError("requires_attention must be the OR of connection results")
+        if self.reallocated is not False:
+            raise ValueError("first-version execution must never reallocate target weight")
+
+    @staticmethod
+    def expected_status(
+        proposal: BookExecutionProposal,
+        results: tuple[ConnectionExecutionResult, ...],
+    ) -> Literal["completed", "partial", "failed"]:
+        target_ids = tuple(target.connection_id for target in proposal.risk.connection_targets)
+        result_by_id = {result.connection_id: result for result in results}
+        unavailable = set(proposal.unavailable_connections)
+        reached = sum(
+            connection_id not in unavailable
+            and (connection_id not in result_by_id or result_by_id[connection_id].status == "completed")
+            for connection_id in target_ids
+        )
+        failed = len(target_ids) - reached
+        if failed == 0:
+            return "completed"
+        if reached == 0:
+            return "failed"
+        return "partial"
+
+    @property
+    def book_id(self) -> str:
+        return self.proposal.book_id
+
+    @property
+    def target_weights(self) -> tuple[Decimal, ...]:
+        return self.proposal.weights

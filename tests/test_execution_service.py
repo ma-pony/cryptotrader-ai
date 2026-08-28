@@ -3,13 +3,30 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 
 from cryptotrader.decision.models import ExecutionPlan, OrderIntent
+from cryptotrader.execution.models import ConnectionExecutionPlan
 from cryptotrader.execution.order import OrderManager
 from cryptotrader.models import OrderStatus
+from cryptotrader.pair import Pair
+from cryptotrader.venues.models import (
+    ConnectionPosition,
+    NormalizedOrder,
+    OpenVenueState,
+    ProtectionState,
+    VenueCapabilities,
+    VenueQuote,
+)
+from cryptotrader.venues.models import (
+    OrderIntent as VenueOrderIntent,
+)
+from cryptotrader.venues.protocol import VenueOperationError
+from tests.factories.runtime_config import connection
 from tests.factories.signal_fusion import context, position
 
 
@@ -471,3 +488,327 @@ async def test_flat_result_cancels_protection_without_creating_oco():
     assert result.succeeded is True
     assert exchange.cancelled_algos == [("old-oco", "BTC/USDT:USDT")]
     assert exchange.ocos == []
+
+
+# Task 9 stages the venue-bound service beside the legacy service above.
+
+
+VENUE_PAIR = Pair.parse("BTC/USDT:USDT")
+VENUE_CAPABILITIES = VenueCapabilities(
+    frozenset({"swap"}),
+    native_protection=True,
+    hedge_mode=False,
+    reduce_only=True,
+    supported_order_types=frozenset({"market"}),
+)
+
+
+def _venue_protection(amount: str, *, side: str = "long", protection_id: str = "old") -> ProtectionState:
+    return ProtectionState(
+        (protection_id,),
+        VENUE_PAIR,
+        side,
+        Decimal(amount),
+        Decimal("90") if side == "long" else Decimal("110"),
+        Decimal("120") if side == "long" else Decimal("80"),
+        True,
+        False,
+    )
+
+
+class _VenueSession:
+    def __init__(
+        self,
+        current: str,
+        *,
+        protections: tuple[ProtectionState, ...] = (),
+        failures: tuple[str, ...] = (),
+        partial_fill: Decimal | None = None,
+        quote: VenueQuote | None = None,
+    ) -> None:
+        self.connection_id = "paper-a"
+        self.capabilities = VENUE_CAPABILITIES
+        self.signed_amount = Decimal(current)
+        self.protections = protections
+        self.failures = list(failures)
+        self.partial_fill = partial_fill
+        self.quote = quote or VenueQuote(VENUE_PAIR, Decimal("100"), Decimal("100"), Decimal("100"))
+        self.orders: list[VenueOrderIntent] = []
+        self.calls: list[str] = []
+        self._sequence = 0
+
+    def _fail(self, operation: str) -> None:
+        if self.failures and self.failures[0] == operation:
+            self.failures.pop(0)
+            raise VenueOperationError(f"RAW_SECRET_{operation}")
+
+    async def fetch_quote(self, pair):
+        self.calls.append("fetch_quote")
+        self._fail("fetch_quote")
+        return self.quote
+
+    async def normalize_amount(self, pair, base_amount):
+        self.calls.append("normalize_amount")
+        self._fail("normalize_amount")
+        return base_amount
+
+    async def place_order(self, intent):
+        self.calls.append("place_order")
+        self.orders.append(intent)
+        self._fail("place_order")
+        self._sequence += 1
+        filled = intent.amount if self.partial_fill is None else min(self.partial_fill, intent.amount)
+        self.partial_fill = None
+        self.signed_amount += filled if intent.side == "buy" else -filled
+        status = "filled" if filled == intent.amount else "partially_filled"
+        return NormalizedOrder(
+            f"order-{self._sequence}",
+            intent.pair,
+            intent.side,
+            intent.order_type,
+            intent.amount,
+            filled,
+            self.quote.last if filled else None,
+            status,
+            intent.reduce_only,
+        )
+
+    async def replace_protection(self, spec):
+        self.calls.append("replace_protection")
+        self._fail("replace_protection")
+        self.protections = (
+            ProtectionState(
+                (f"new-{self._sequence}",),
+                spec.pair,
+                spec.position_side,
+                spec.amount,
+                spec.stop_loss,
+                spec.take_profit,
+                True,
+                False,
+            ),
+        )
+        return self.protections[0]
+
+    async def cancel_protection(self, protection_ids):
+        self.calls.append("cancel_protection")
+        self._fail("cancel_protection")
+        ids = set(protection_ids)
+        self.protections = tuple(
+            protection for protection in self.protections if ids.isdisjoint(protection.protection_ids)
+        )
+
+    async def list_open_state(self, pair):
+        self.calls.append("list_open_state")
+        self._fail("list_open_state")
+        position = ConnectionPosition(pair, self.signed_amount, self.signed_amount * self.quote.last, None)
+        return OpenVenueState(position, (), self.protections)
+
+
+def _venue_plan(
+    current: str,
+    target: str,
+    *,
+    planned_current: str | None = None,
+    old_protection_ids: tuple[str, ...] = ("old",),
+) -> ConnectionExecutionPlan:
+    current_amount = Decimal(planned_current if planned_current is not None else current)
+    target_amount = Decimal(target)
+    side = "buy" if target_amount > current_amount else "sell"
+    amount = abs(target_amount - current_amount)
+    quote = VenueQuote(VENUE_PAIR, Decimal("100"), Decimal("100"), Decimal("100"))
+    current_notional = current_amount * Decimal("100")
+    target_notional = target_amount * Decimal("100")
+    reduce_only = target_amount == 0 or (
+        current_amount * target_amount > 0 and abs(target_amount) < abs(current_amount)
+    )
+    return ConnectionExecutionPlan(
+        book_id="simulation",
+        connection_id="paper-a",
+        pair=VENUE_PAIR,
+        current_signed_notional=current_notional,
+        target_signed_notional=target_notional,
+        delta_signed_notional=target_notional - current_notional,
+        current_signed_amount=current_amount,
+        target_signed_amount=target_amount,
+        delta_signed_amount=target_amount - current_amount,
+        post_fill_signed_amount=target_amount,
+        quote=quote,
+        execution_price=Decimal("100"),
+        amount=amount,
+        side=side,
+        reduce_only=reduce_only,
+        market_type="swap",
+        stop_loss=None if target_amount == 0 else Decimal("90") if target_amount > 0 else Decimal("110"),
+        take_profit=None if target_amount == 0 else Decimal("120") if target_amount > 0 else Decimal("80"),
+        old_protection_ids=old_protection_ids,
+        capabilities=VENUE_CAPABILITIES,
+    )
+
+
+@pytest.mark.asyncio
+async def test_venue_service_reloads_state_and_uses_platform_protection_replacement_once():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("2", protections=(_venue_protection("2"),))
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "3"))
+
+    assert result.status == "completed"
+    assert session.orders[0].amount == Decimal("1")
+    assert session.calls.count("replace_protection") == 1
+    assert "cancel_protection" not in session.calls
+    assert result.trace == ("pre_read", "place_order", "replace_protection", "reconcile")
+    assert result.final_position is not None
+    assert result.final_position.protected is True
+
+
+@pytest.mark.asyncio
+async def test_venue_service_flat_target_cancels_old_protection_while_flat():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("1", protections=(_venue_protection("1"),))
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "0"))
+
+    assert result.status == "completed"
+    assert result.trace == ("pre_read", "place_order", "cancel_old_protection", "reconcile")
+    assert session.orders[0].reduce_only is True
+    assert session.signed_amount == 0
+    assert session.protections == ()
+
+
+@pytest.mark.asyncio
+async def test_venue_service_sign_flip_closes_then_opens_without_one_leg_flip():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("1", protections=(_venue_protection("1"),))
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+
+    assert result.status == "completed"
+    assert [(order.side, order.amount, order.reduce_only) for order in session.orders] == [
+        ("sell", Decimal("1"), True),
+        ("sell", Decimal("2"), False),
+    ]
+    assert result.trace == (
+        "pre_read",
+        "close_old_side",
+        "reconcile_flat",
+        "cancel_old_protection",
+        "open_target_side",
+        "replace_protection",
+        "reconcile",
+    )
+
+
+@pytest.mark.asyncio
+async def test_venue_service_open_failure_after_flip_close_stays_safely_flat():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("1", protections=(_venue_protection("1"),))
+    original_place = session.place_order
+    calls = 0
+
+    async def fail_second(intent):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise VenueOperationError("RAW_SECRET_OPEN")
+        return await original_place(intent)
+
+    session.place_order = fail_second
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+
+    assert result.status == "failed"
+    assert session.signed_amount == 0
+    assert session.protections == ()
+    assert result.requires_attention is False
+    assert "RAW_SECRET" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_flip_close_transport_error_after_fill_cancels_old_protection_while_flat():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("1", protections=(_venue_protection("1"),))
+    original_place = session.place_order
+
+    async def fill_then_fail(intent):
+        await original_place(intent)
+        raise VenueOperationError("RAW_SECRET_CLOSE")
+
+    session.place_order = fill_then_fail
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+
+    assert result.status == "failed"
+    assert result.requires_attention is False
+    assert session.signed_amount == 0
+    assert session.protections == ()
+    assert result.trace == (
+        "pre_read",
+        "close_old_side",
+        "reconcile_flat",
+        "cancel_old_protection",
+        "reconcile",
+    )
+    assert "RAW_SECRET" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_partial_risk_reduction_never_reincreases_position():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("2", protections=(_venue_protection("2"),), partial_fill=Decimal("0.5"))
+    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+
+    assert result.status == "failed"
+    assert len(session.orders) == 1
+    assert session.signed_amount == Decimal("1.5")
+    assert result.compensation.attempted is False
+
+
+@pytest.mark.asyncio
+async def test_venue_quote_failure_has_safe_category_while_programmer_error_propagates():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("1", protections=(_venue_protection("1"),), failures=("fetch_quote",))
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    assert result.status == "failed"
+    assert result.error_operation == "fetch_quote"
+    assert "RAW_SECRET" not in repr(result)
+
+    async def invalid_quote(pair):
+        raise ValueError("session contract violated")
+
+    session = _VenueSession("1", protections=(_venue_protection("1"),))
+    session.fetch_quote = invalid_quote
+    with pytest.raises(ValueError, match="contract violated"):
+        await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+
+
+@pytest.mark.asyncio
+async def test_venue_service_executes_the_same_contract_against_real_paper_session():
+    from cryptotrader.execution.service import VenueExecutionService
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    session = await PaperVenueAdapter().connect(connection("paper-a"), None)
+    await session.set_quote(VENUE_PAIR, Decimal("100"))
+    plan = replace(_venue_plan("0", "1", old_protection_ids=()), capabilities=session.capabilities)
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "completed"
+    assert result.final_position is not None
+    assert result.final_position.position.signed_amount == Decimal("1")
+    assert result.final_position.protected is True
+    assert result.trace == ("pre_read", "place_order", "replace_protection", "reconcile")
+
+
+@pytest.mark.asyncio
+async def test_latest_quote_invalidating_protection_fails_closed_before_mutation():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    latest = VenueQuote(VENUE_PAIR, Decimal("130"), Decimal("130"), Decimal("130"))
+    session = _VenueSession("0", quote=latest)
+
+    with pytest.raises(ValueError, match="geometry"):
+        await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
+    assert session.orders == []
