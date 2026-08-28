@@ -133,8 +133,10 @@ class PaperVenueSession:
             expected_side = "long" if position.signed_amount > 0 else "short" if position.signed_amount < 0 else None
             if expected_side != spec.position_side or spec.amount > abs(position.signed_amount):
                 raise VenueOperationError(f"{self.connection_id}: protection does not match the open position")
-            if not self._valid_protection_geometry(spec, quote.last):
-                raise VenueOperationError(f"{self.connection_id}: invalid protection price geometry")
+            try:
+                spec.validate_geometry(quote.last)
+            except ValueError:
+                raise VenueOperationError(f"{self.connection_id}: invalid protection price geometry") from None
 
             self._account.protection_sequence += 1
             protection_id = f"{self.connection_id}-paper-protection-{self._account.protection_sequence}"
@@ -377,16 +379,6 @@ class PaperVenueSession:
             protection.take_profit,
             False,
             True,
-        )
-
-    @staticmethod
-    def _valid_protection_geometry(spec: ProtectionSpec, current_price: Decimal) -> bool:
-        if spec.position_side == "long":
-            return (spec.stop_loss is None or spec.stop_loss < current_price) and (
-                spec.take_profit is None or spec.take_profit > current_price
-            )
-        return (spec.stop_loss is None or spec.stop_loss > current_price) and (
-            spec.take_profit is None or spec.take_profit < current_price
         )
 
     @staticmethod

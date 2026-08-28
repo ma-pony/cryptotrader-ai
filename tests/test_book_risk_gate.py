@@ -80,6 +80,21 @@ def test_book_cap_scales_whole_target_without_reweighting_connections():
     assert result.cap_source == "max_net_exposure"
 
 
+def test_book_cap_preserves_high_precision_decimal_exposure_exactly():
+    from cryptotrader.risk.gate import BookRiskGate
+
+    exact_cap = Decimal("0.1234567890123456789012345678")
+    result = BookRiskGate(_limits(max_net_exposure=exact_cap)).evaluate(_request())
+
+    assert result.capped_target_exposure == exact_cap
+    assert tuple(target.target_exposure for target in result.connection_targets) == (exact_cap, exact_cap)
+    assert tuple(target.target_signed_notional for target in result.connection_targets) == (
+        Decimal("100") * exact_cap * Decimal("0.4"),
+        Decimal("100") * exact_cap * Decimal("0.6"),
+    )
+    assert result.connection_weights == (Decimal("0.4"), Decimal("0.6"))
+
+
 @pytest.mark.parametrize(
     ("limits", "expected", "source"),
     [

@@ -26,6 +26,21 @@ class WeightedAllocationPolicy:
     ) -> tuple[ConnectionTarget, ...]:
         if not isinstance(target, TargetPosition):
             raise ValueError("target must be a TargetPosition")
+        return self.allocate_exposure(Decimal(str(target.signed_ratio)), book, portfolio)
+
+    def allocate_exposure(
+        self,
+        target_exposure: Decimal,
+        book: ExecutionBook,
+        portfolio: BookPortfolioSnapshot,
+    ) -> tuple[ConnectionTarget, ...]:
+        """Allocate an already-validated Decimal book exposure without a float round-trip."""
+        if (
+            not isinstance(target_exposure, Decimal)
+            or not target_exposure.is_finite()
+            or not Decimal("-1") <= target_exposure <= Decimal("1")
+        ):
+            raise ValueError("target_exposure must be a finite Decimal in [-1, 1]")
         if not isinstance(book, ExecutionBook):
             raise ValueError("book must be an ExecutionBook")
         if not isinstance(portfolio, BookPortfolioSnapshot):
@@ -41,7 +56,6 @@ class WeightedAllocationPolicy:
         if actual_connections != expected_connections:
             raise ValueError("portfolio connections must match enabled book allocations in configured order")
 
-        target_exposure = Decimal(str(target.signed_ratio))
         return tuple(
             self._connection_target(book, portfolio, allocation, target_exposure) for allocation in enabled_allocations
         )

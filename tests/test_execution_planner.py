@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import ROUND_DOWN, Decimal
 
 import pytest
@@ -18,7 +19,8 @@ from cryptotrader.venues.models import (
 )
 
 PAIR = Pair.parse("BTC/USDT:USDT")
-CAPABILITIES = VenueCapabilities(frozenset({"swap"}), True, False, True, frozenset({"market"}))
+SPOT_PAIR = Pair.parse("BTC/USDT")
+CAPABILITIES = VenueCapabilities(frozenset({"spot", "swap"}), True, False, True, frozenset({"market"}))
 
 
 def _book() -> ExecutionBook:
@@ -35,15 +37,26 @@ def _book() -> ExecutionBook:
     )
 
 
-def _portfolio(*, current: tuple[str, str] = ("0", "0")) -> BookPortfolioSnapshot:
+def _portfolio(
+    *,
+    current: tuple[str, str] = ("0", "0"),
+    amounts: tuple[str, str] | None = None,
+    pair: Pair = PAIR,
+) -> BookPortfolioSnapshot:
+    amounts = amounts or tuple(str(Decimal(notional) / Decimal("100")) for notional in current)
     snapshots = tuple(
         ConnectionPortfolioSnapshot(
             connection_id,
             Decimal("5000"),
             {"USDT": Decimal("5000")},
-            ConnectionPosition(PAIR, Decimal(notional) / Decimal("100"), Decimal(notional), Decimal("100")),
+            ConnectionPosition(pair, Decimal(amount), Decimal(notional), Decimal("100")),
         )
-        for connection_id, notional in zip(("reachable", "unreachable"), current, strict=True)
+        for connection_id, amount, notional in zip(
+            ("reachable", "unreachable"),
+            amounts,
+            current,
+            strict=True,
+        )
     )
     return BookPortfolioSnapshot(
         "simulation",
@@ -54,10 +67,21 @@ def _portfolio(*, current: tuple[str, str] = ("0", "0")) -> BookPortfolioSnapsho
     )
 
 
-def _request(*, target: str = "0.5", current: tuple[str, str] = ("0", "0")):
+def _request(
+    *,
+    target: str = "0.5",
+    current: tuple[str, str] = ("0", "0"),
+    amounts: tuple[str, str] | None = None,
+    pair: Pair = PAIR,
+):
     from cryptotrader.risk.models import BookRiskRequest
 
-    return BookRiskRequest(_book(), _portfolio(current=current), Decimal(target), Decimal("10000"))
+    return BookRiskRequest(
+        _book(),
+        _portfolio(current=current, amounts=amounts, pair=pair),
+        Decimal(target),
+        Decimal("10000"),
+    )
 
 
 class _Session:
@@ -67,6 +91,8 @@ class _Session:
         *,
         unavailable: bool = False,
         normalize_error: bool = False,
+        state_error: bool = False,
+        unsafe_normalization: bool = False,
         protection_ids: tuple[str, ...] = (),
     ) -> None:
         self.connection_id = snapshot.connection_id
@@ -74,13 +100,15 @@ class _Session:
         self._snapshot = snapshot
         self._unavailable = unavailable
         self._normalize_error = normalize_error
+        self._state_error = state_error
+        self._unsafe_normalization = unsafe_normalization
         self.normalize_calls: list[tuple[Pair, Decimal]] = []
         protections = ()
         if protection_ids:
             protections = (
                 ProtectionState(
                     protection_ids,
-                    PAIR,
+                    snapshot.position.pair,
                     "long",
                     Decimal("1"),
                     Decimal("90"),
@@ -97,7 +125,7 @@ class _Session:
         return VenueQuote(pair, Decimal("99"), Decimal("101"), Decimal("100"))
 
     async def list_open_state(self, pair):
-        if self._unavailable:
+        if self._unavailable or self._state_error:
             raise RuntimeError("RAW_SECRET_MARKER venue response")
         return self._state
 
@@ -105,6 +133,8 @@ class _Session:
         self.normalize_calls.append((pair, base_amount))
         if self._normalize_error:
             raise RuntimeError("RAW_SECRET_MARKER precision response")
+        if self._unsafe_normalization:
+            return base_amount + Decimal("1")
         return base_amount.quantize(Decimal("0.001"), rounding=ROUND_DOWN)
 
 
@@ -113,6 +143,8 @@ def _sessions(
     *,
     unavailable: str | None = None,
     normalize_error: str | None = None,
+    state_error: str | None = None,
+    unsafe_normalization: str | None = None,
     protection_ids: tuple[str, ...] = (),
 ):
     result = {
@@ -120,6 +152,8 @@ def _sessions(
             snapshot,
             unavailable=snapshot.connection_id == unavailable,
             normalize_error=snapshot.connection_id == normalize_error,
+            state_error=snapshot.connection_id == state_error,
+            unsafe_normalization=snapshot.connection_id == unsafe_normalization,
             protection_ids=protection_ids if snapshot.connection_id == "reachable" else (),
         )
         for snapshot in portfolio.connections
@@ -138,13 +172,20 @@ def _planner():
     )
 
 
-async def _propose(request, sessions):
+async def _propose(
+    request,
+    sessions,
+    *,
+    pair: Pair | None = None,
+    stop_loss: Decimal | None = Decimal("90"),
+    take_profit: Decimal | None = Decimal("120"),
+):
     return await _planner().propose(
         request,
         sessions,
-        pair=PAIR,
-        stop_loss=Decimal("90"),
-        take_profit=Decimal("120"),
+        pair=pair or request.portfolio.connections[0].position.pair,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
         config_revision=7,
     )
 
@@ -166,7 +207,7 @@ async def test_increase_requires_every_connection_to_pass_before_any_plan_is_rea
 
 @pytest.mark.asyncio
 async def test_risk_reduction_keeps_reachable_connection_plans():
-    request = _request(target="0", current=("2000", "3000"))
+    request = _request(target="0", current=("2000", "3000"), amounts=("19.75", "30.25"))
     sessions = _sessions(request.portfolio, unavailable="unreachable")
 
     proposal = await _propose(request, sessions)
@@ -174,12 +215,14 @@ async def test_risk_reduction_keeps_reachable_connection_plans():
     assert proposal.ready is True
     assert tuple(plan.connection_id for plan in proposal.connection_plans) == ("reachable",)
     assert proposal.connection_plans[0].reduce_only is True
+    assert proposal.connection_plans[0].amount == Decimal("19.750")
+    assert proposal.connection_plans[0].post_fill_signed_amount == Decimal("0.000")
     assert proposal.unavailable_connections == ("unreachable",)
 
 
 @pytest.mark.asyncio
 async def test_planner_preserves_allocation_order_and_builds_exact_normalized_plan_fields():
-    request = _request(target="0.5", current=("1000", "1000"))
+    request = _request(target="0.5", current=("1000", "1000"), amounts=("10", "10"))
     sessions = _sessions(request.portfolio, protection_ids=("old-a", "old-b"))
 
     proposal = await _propose(request, sessions)
@@ -193,26 +236,230 @@ async def test_planner_preserves_allocation_order_and_builds_exact_normalized_pl
     assert plan.delta_signed_notional == Decimal("1000.00")
     assert plan.side == "buy"
     assert plan.execution_price == Decimal("101")
-    assert plan.amount == Decimal("9.900")
+    assert plan.current_signed_amount == Decimal("10")
+    assert plan.target_signed_amount == Decimal("2000.00") / Decimal("101")
+    assert plan.delta_signed_amount == Decimal("2000.00") / Decimal("101") - Decimal("10")
+    assert plan.amount == Decimal("9.801")
+    assert plan.post_fill_signed_amount == Decimal("19.801")
     assert plan.reduce_only is False
     assert plan.market_type == "swap"
     assert plan.stop_loss == Decimal("90")
     assert plan.take_profit == Decimal("120")
     assert plan.old_protection_ids == ("old-a", "old-b")
     assert plan.capabilities == CAPABILITIES
-    assert sessions["reachable"].normalize_calls == [(PAIR, Decimal("1000.00") / Decimal("101"))]
+    assert sessions["reachable"].normalize_calls == [(PAIR, Decimal("2000.00") / Decimal("101") - Decimal("10"))]
 
 
 @pytest.mark.asyncio
 async def test_sign_flip_and_amount_normalization_failure_discard_all_hidden_partial_plans():
-    request = _request(target="-0.5", current=("1000", "1000"))
+    request = _request(target="-0.5", current=("1000", "1000"), amounts=("10", "10"))
     sessions = _sessions(request.portfolio, normalize_error="unreachable")
 
-    proposal = await _propose(request, sessions)
+    proposal = await _propose(request, sessions, stop_loss=Decimal("110"), take_profit=Decimal("80"))
 
     assert proposal.ready is False
     assert proposal.connection_plans == ()
     assert proposal.risk.rejected_by == "connection_preflight"
     assert proposal.unavailable_connections == ("unreachable",)
-    assert proposal.errors == ("connection unreachable: preflight unavailable",)
+    assert proposal.errors == ("connection unreachable: normalize_amount failed",)
+    assert proposal.connection_risks[1].operation == "normalize_amount"
     assert "RAW_SECRET_MARKER" not in repr(proposal)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("pair", [SPOT_PAIR, PAIR])
+async def test_flat_close_uses_exact_snapshot_base_amount_across_the_spread(pair):
+    request = _request(target="0", current=("1000", "2000"), amounts=("9.876", "20.125"), pair=pair)
+
+    proposal = await _propose(request, _sessions(request.portfolio), pair=pair)
+
+    assert proposal.ready is True
+    first, second = proposal.connection_plans
+    assert (first.side, first.amount, first.post_fill_signed_amount) == (
+        "sell",
+        Decimal("9.876"),
+        Decimal("0.000"),
+    )
+    assert (second.side, second.amount, second.post_fill_signed_amount) == (
+        "sell",
+        Decimal("20.125"),
+        Decimal("0.000"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_reduction_uses_target_base_amount_and_rounds_without_crossing_target():
+    request = _request(target="0.04", current=("1000", "2000"), amounts=("10", "20"))
+    sessions = _sessions(request.portfolio)
+
+    proposal = await _propose(request, sessions)
+
+    plan = proposal.connection_plans[0]
+    exact_target = Decimal("160.000") / Decimal("99")
+    assert plan.side == "sell"
+    assert plan.target_signed_amount == exact_target
+    assert plan.delta_signed_amount == exact_target - Decimal("10")
+    assert plan.amount == Decimal("8.383")
+    assert plan.post_fill_signed_amount == Decimal("1.617")
+    assert plan.post_fill_signed_amount >= plan.target_signed_amount
+    assert sessions["reachable"].normalize_calls == [(PAIR, Decimal("10") - exact_target)]
+
+
+@pytest.mark.asyncio
+async def test_sign_flip_amount_is_exact_close_plus_new_target_leg_before_safe_rounding():
+    request = _request(target="-0.1", current=("1000", "2000"), amounts=("10", "20"))
+
+    proposal = await _propose(
+        request,
+        _sessions(request.portfolio),
+        stop_loss=Decimal("110"),
+        take_profit=Decimal("80"),
+    )
+
+    plan = proposal.connection_plans[0]
+    exact_new_short = Decimal("-400.00") / Decimal("99")
+    assert plan.side == "sell"
+    assert plan.target_signed_amount == exact_new_short
+    assert plan.delta_signed_amount == exact_new_short - Decimal("10")
+    assert plan.amount == Decimal("14.040")
+    assert plan.post_fill_signed_amount == Decimal("-4.040")
+    assert plan.post_fill_signed_amount >= plan.target_signed_amount
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("target", "stop_loss", "take_profit"),
+    [
+        ("0.5", None, None),
+        ("0.5", Decimal("101"), None),
+        ("0.5", None, Decimal("101")),
+        ("-0.5", Decimal("99"), None),
+        ("-0.5", None, Decimal("99")),
+    ],
+)
+async def test_derivative_increase_rejects_missing_or_inverted_protection(target, stop_loss, take_profit):
+    request = _request(target=target)
+
+    proposal = await _propose(
+        request,
+        _sessions(request.portfolio),
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+    )
+
+    assert proposal.ready is False
+    assert proposal.connection_plans == ()
+    assert proposal.risk.rejected_by == "connection_preflight"
+    assert tuple(decision.operation for decision in proposal.connection_risks) == (
+        "validate_protection",
+        "validate_protection",
+    )
+
+
+@pytest.mark.asyncio
+async def test_partial_derivative_reduction_requires_valid_target_side_protection():
+    request = _request(target="0.04", current=("1000", "2000"), amounts=("10", "20"))
+
+    proposal = await _propose(
+        request,
+        _sessions(request.portfolio),
+        stop_loss=Decimal("100"),
+        take_profit=None,
+    )
+
+    assert proposal.ready is False
+    assert proposal.connection_plans == ()
+    assert tuple(decision.operation for decision in proposal.connection_risks) == (
+        "validate_protection",
+        "validate_protection",
+    )
+
+
+@pytest.mark.asyncio
+async def test_mixed_pair_open_state_is_an_invariant_failure_not_venue_unavailability():
+    request = _request()
+    sessions = _sessions(request.portfolio)
+    malformed = sessions["reachable"]._state
+    foreign = ProtectionState(
+        ("foreign",),
+        Pair.parse("ETH/USDT:USDT"),
+        "long",
+        Decimal("1"),
+        Decimal("90"),
+        None,
+        True,
+        False,
+    )
+    object.__setattr__(malformed, "protections", (foreign,))
+
+    proposal = await _propose(request, sessions)
+
+    assert proposal.ready is False
+    assert proposal.connection_plans == ()
+    assert proposal.unavailable_connections == ()
+    assert proposal.connection_risks[0].operation == "build_risk_request"
+    assert proposal.errors[0] == "connection reachable: build_risk_request failed"
+
+
+@pytest.mark.asyncio
+async def test_preflight_failures_are_safely_classified_without_raw_exception_context():
+    request = _request(target="0", current=("1000", "2000"), amounts=("10", "20"))
+    sessions = _sessions(request.portfolio, state_error="unreachable", unsafe_normalization="reachable")
+
+    proposal = await _propose(request, sessions)
+
+    assert proposal.ready is False
+    assert proposal.connection_plans == ()
+    assert proposal.unavailable_connections == ("unreachable",)
+    assert tuple((decision.connection_id, decision.operation) for decision in proposal.connection_risks) == (
+        ("reachable", "build_plan"),
+        ("unreachable", "list_open_state"),
+    )
+    assert proposal.errors == (
+        "connection reachable: build_plan failed",
+        "connection unreachable: list_open_state failed",
+    )
+    assert "RAW_SECRET_MARKER" not in repr(proposal)
+
+
+@pytest.mark.asyncio
+async def test_execution_dtos_reject_impossible_prices_transitions_capabilities_and_sets():
+    request = _request(target="0.5", current=("1000", "1000"), amounts=("10", "10"))
+    proposal = await _propose(request, _sessions(request.portfolio))
+    plan = proposal.connection_plans[0]
+
+    with pytest.raises(ValueError, match="ask"):
+        replace(plan, execution_price=plan.quote.bid)
+    with pytest.raises(ValueError, match="reduce_only"):
+        replace(plan, reduce_only=True)
+    with pytest.raises(ValueError, match="market order"):
+        replace(
+            plan,
+            capabilities=VenueCapabilities(
+                frozenset({"swap"}),
+                True,
+                False,
+                True,
+                frozenset({"limit"}),
+            ),
+        )
+    with pytest.raises(ValueError, match="protection"):
+        replace(plan, stop_loss=None, take_profit=None)
+    with pytest.raises(ValueError, match="post_fill_signed_amount"):
+        replace(plan, post_fill_signed_amount=plan.current_signed_amount)
+    with pytest.raises(ValueError, match="ready proposal"):
+        replace(proposal, ready=False)
+    with pytest.raises(ValueError, match="disjoint"):
+        replace(proposal, unavailable_connections=(plan.connection_id,))
+    with pytest.raises(ValueError, match="configured order"):
+        replace(proposal, connection_risks=tuple(reversed(proposal.connection_risks)))
+    with pytest.raises(ValueError, match="configured order"):
+        replace(proposal, connection_risks=(), connection_plans=())
+    with pytest.raises(ValueError, match="errors must match"):
+        replace(proposal, errors=("RAW_SECRET_MARKER",))
+    with pytest.raises(ValueError, match="venue operation failures"):
+        replace(
+            proposal,
+            connection_plans=(proposal.connection_plans[0],),
+            unavailable_connections=("unreachable",),
+        )

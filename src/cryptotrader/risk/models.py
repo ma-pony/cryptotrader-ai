@@ -132,6 +132,10 @@ class BookRiskDecision:
             minimum=Decimal("-1"),
             maximum=Decimal("1"),
         )
+        self._validate_targets()
+        self._validate_diagnostics()
+
+    def _validate_targets(self) -> None:
         if type(self.connection_weights) is not tuple:
             raise ValueError("connection_weights must be a tuple")
         for weight in self.connection_weights:
@@ -144,6 +148,14 @@ class BookRiskDecision:
             raise ValueError("connection target weights must match the book decision")
         if any(target.target_exposure != self.capped_target_exposure for target in self.connection_targets):
             raise ValueError("connection targets must use the capped book exposure")
+        connection_ids = tuple(target.connection_id for target in self.connection_targets)
+        if len(connection_ids) != len(set(connection_ids)):
+            raise ValueError("connection targets must have unique connection IDs")
+        book_ids = {target.book_id for target in self.connection_targets}
+        if len(book_ids) > 1:
+            raise ValueError("connection targets must belong to one execution book")
+
+    def _validate_diagnostics(self) -> None:
         for field_name in ("rejected_by", "reason", "cap_source"):
             if type(getattr(self, field_name)) is not str:
                 raise ValueError(f"{field_name} must be a string")
@@ -196,6 +208,10 @@ class ConnectionRiskRequest:
         pair = self.portfolio.position.pair
         if self.quote.pair != pair or self.open_state.position.pair != pair:
             raise ValueError("venue state pair must match the portfolio position")
+        if any(order.pair != pair for order in self.open_state.open_orders):
+            raise ValueError("open order pairs must match the portfolio position")
+        if any(protection.pair != pair for protection in self.open_state.protections):
+            raise ValueError("protection pairs must match the portfolio position")
         if self.open_state.position != self.portfolio.position:
             raise ValueError("open state position must match the portfolio snapshot")
 
@@ -216,11 +232,17 @@ class ConnectionRiskDecision:
     passed: bool
     risk_increase: bool
     reason: str = ""
+    operation: str = ""
 
     def __post_init__(self) -> None:
         if type(self.connection_id) is not str or not self.connection_id.strip():
             raise ValueError("connection_id must be a non-empty string")
         if type(self.passed) is not bool or type(self.risk_increase) is not bool:
             raise ValueError("connection risk flags must be booleans")
-        if type(self.reason) is not str:
-            raise ValueError("reason must be a string")
+        for field_name in ("reason", "operation"):
+            if type(getattr(self, field_name)) is not str:
+                raise ValueError(f"{field_name} must be a string")
+        if self.passed and (self.reason or self.operation):
+            raise ValueError("passed connection risk decisions must not carry failure diagnostics")
+        if not self.passed and (not self.reason.strip() or not self.operation.strip()):
+            raise ValueError("failed connection risk decisions require reason and operation")

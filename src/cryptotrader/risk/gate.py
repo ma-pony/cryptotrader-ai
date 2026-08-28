@@ -78,8 +78,8 @@ class BookRiskGate:
             cap_source = "max_drawdown"
 
         capped = self._signed_cap(requested, absolute_cap)
-        connection_targets = self._allocation_policy.allocate(
-            self._target_position(capped),
+        connection_targets = self._allocation_policy.allocate_exposure(
+            capped,
             request.book,
             request.portfolio,
         )
@@ -111,12 +111,6 @@ class BookRiskGate:
             return requested
         return absolute_cap if requested > 0 else -absolute_cap
 
-    @staticmethod
-    def _target_position(exposure: Decimal) -> TargetPosition:
-        if exposure == 0:
-            return TargetPosition("flat", 0.0)
-        return TargetPosition("long" if exposure > 0 else "short", float(abs(exposure)))
-
 
 class ConnectionRiskGate:
     """Preflight normalized venue state while preserving safe risk reduction."""
@@ -132,10 +126,10 @@ class ConnectionRiskGate:
         connection_id = request.target.connection_id
         increase = request.risk_increase
         if not request.available:
-            return ConnectionRiskDecision(connection_id, False, increase, "connection unavailable")
+            return ConnectionRiskDecision(connection_id, False, increase, "connection unavailable", "availability")
 
         reason = self._available_rejection_reason(request)
-        return ConnectionRiskDecision(connection_id, reason == "", increase, reason)
+        return ConnectionRiskDecision(connection_id, reason == "", increase, reason, "risk" if reason else "")
 
     def _available_rejection_reason(self, request: ConnectionRiskRequest) -> str:
         increase = request.risk_increase

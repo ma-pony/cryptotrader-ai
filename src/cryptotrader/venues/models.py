@@ -290,6 +290,20 @@ class ProtectionSpec:
         if self.stop_loss is None and self.take_profit is None:
             raise ValueError("protection requires stop_loss or take_profit")
 
+    def validate_geometry(self, reference_price: Decimal) -> None:
+        """Require every protection price to be beyond the execution reference."""
+        _require_decimal(reference_price, "reference_price", positive=True)
+        if self.position_side == "long":
+            valid = (self.stop_loss is None or self.stop_loss < reference_price) and (
+                self.take_profit is None or self.take_profit > reference_price
+            )
+        else:
+            valid = (self.stop_loss is None or self.stop_loss > reference_price) and (
+                self.take_profit is None or self.take_profit < reference_price
+            )
+        if not valid:
+            raise ValueError("invalid protection price geometry")
+
 
 @dataclass(frozen=True)
 class ProtectionState:
@@ -345,6 +359,11 @@ class OpenVenueState:
             isinstance(protection, ProtectionState) for protection in self.protections
         ):
             raise ValueError("protections must be a tuple of ProtectionState")
+        pair = self.position.pair
+        if any(order.pair != pair for order in self.open_orders):
+            raise ValueError("open order pairs must match the position pair")
+        if any(protection.pair != pair for protection in self.protections):
+            raise ValueError("protection pairs must match the position pair")
 
     @property
     def triggered_protections(self) -> tuple[ProtectionState, ...]:
