@@ -198,7 +198,7 @@ def test_runtime_llm_factory_builds_from_database_settings_without_legacy_config
 
 
 @pytest.mark.asyncio
-async def test_llm_committee_factory_run_never_reads_legacy_config(monkeypatch):
+async def test_llm_committee_factory_resolves_empty_role_from_database_without_legacy_config(monkeypatch):
     from cryptotrader.signals.components.llm_committee import create_component
     from tests.test_llm_committee_component import RecordingSink, _context
 
@@ -206,7 +206,7 @@ async def test_llm_committee_factory_run_never_reads_legacy_config(monkeypatch):
         analysis="analysis-db",
         debate="debate-db",
         committee_summary="summary-db",
-        tech_agent="tech-db",
+        tech_agent="",
         chain_agent="chain-db",
         news_agent="news-db",
         macro_agent="macro-db",
@@ -283,7 +283,7 @@ async def test_llm_committee_factory_run_never_reads_legacy_config(monkeypatch):
     assert len(result.details["analyses"]) == 4
     assert len(result.details["debate_turns"]) == 4
     assert [call["model"] for call in calls] == [
-        "tech-db",
+        "analysis-db",
         "chain-db",
         "news-db",
         "macro-db",
@@ -293,6 +293,31 @@ async def test_llm_committee_factory_run_never_reads_legacy_config(monkeypatch):
         "debate-db",
         "summary-db",
     ]
+
+
+def test_llm_committee_factory_rejects_unresolved_empty_database_role(monkeypatch):
+    from cryptotrader.signals.components.llm_committee import create_component
+
+    settings = LlmConfig(
+        models=LlmModelsConfig(
+            analysis="",
+            tech_agent="",
+            fallback="",
+        )
+    )
+    document = runtime_document(
+        llm=settings,
+        signals=signal_config(
+            components=(SignalComponentConfig(component_id="llm_committee", enabled=True, weight=1.0),)
+        ),
+    )
+
+    def reject_legacy_config():
+        raise AssertionError("new discovery path read legacy load_config")
+
+    monkeypatch.setattr("cryptotrader.config.load_config", reject_legacy_config)
+    with pytest.raises(ValueError, match="tech_agent"):
+        create_component(document, NullCycleEventSink())
 
 
 def test_market_source_entry_point_returns_configured_source():

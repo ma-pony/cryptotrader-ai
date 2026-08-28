@@ -316,6 +316,12 @@ class LLMCommitteeComponent:
             "news_agent": self.models.news_agent,
             "macro_agent": self.models.macro_agent,
         }
+        if self._legacy_agents is None:
+            analysis_model = self.models.analysis or self.models.fallback
+            unresolved = tuple(agent_id for agent_id, model in models.items() if not model)
+            if unresolved and not analysis_model:
+                raise ValueError(f"No runtime LLM model configured for empty roles: {', '.join(unresolved)}")
+            models = {agent_id: model or analysis_model for agent_id, model in models.items()}
         result = {}
         for agent_id, model in models.items():
             prompt_builder = PromptBuilder(
