@@ -262,6 +262,35 @@ async def test_component_failure_skips_fusion_and_execution_but_journals_cycle()
 
 
 @pytest.mark.asyncio
+async def test_paper_protection_runs_before_components_and_refreshes_position_on_component_failure():
+    cycle = build_test_cycle()
+    cycle.contexts.current_position = position("long", 2.0, 0.5)
+    call_order = []
+    seen_positions = []
+
+    async def process_pending_protection(signal_context):
+        call_order.append("protection")
+        assert signal_context.current_position.side == "long"
+        cycle.contexts.current_position = position()
+        return True
+
+    async def fail_components(components, signal_context):
+        call_order.append("components")
+        seen_positions.append(signal_context.current_position)
+        raise ComponentRunError({"kronos": RuntimeError("component failed")})
+
+    cycle.executor.process_pending_protection = process_pending_protection
+    cycle.runner.run = fail_components
+
+    outcome = await cycle.run(request())
+
+    assert outcome.status == "component_failed"
+    assert call_order == ["protection", "components"]
+    assert cycle.contexts.refresh_calls == 1
+    assert seen_positions == [position()]
+
+
+@pytest.mark.asyncio
 async def test_hitl_stores_target_plan_and_approval_replans_from_current_position():
     cycle = build_test_cycle(selected_profile=profile(hitl=True))
     pending = await cycle.run(request())
@@ -351,6 +380,31 @@ async def test_execution_failure_does_not_rewrite_passed_risk_decision():
     assert outcome.status == "execution_failed"
     assert outcome.risk_result.passed is True
     assert outcome.execution_result.error == "exchange failed"
+
+
+@pytest.mark.asyncio
+async def test_failed_execution_journals_and_emits_retained_protection_ids():
+    from cryptotrader.execution.service import ExecutionResult
+
+    cycle = build_test_cycle()
+
+    async def fail_with_retained_protection(execution_plan, signal_context):
+        return ExecutionResult(
+            succeeded=False,
+            orders=(),
+            algo_id=None,
+            error="replacement failed; original position restored",
+            retained_algo_ids=("old-oco",),
+        )
+
+    cycle.executor.execute = fail_with_retained_protection
+
+    outcome = await cycle.run(request())
+
+    assert outcome.status == "execution_failed"
+    assert cycle.journal.records[0].execution_result["retained_algo_ids"] == ["old-oco"]
+    execution_event = next(event for event in cycle.events.events if event.name == "execution_completed")
+    assert execution_event.data["execution_result"]["retained_algo_ids"] == ["old-oco"]
 
 
 @pytest.mark.asyncio

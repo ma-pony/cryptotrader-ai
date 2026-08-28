@@ -57,7 +57,7 @@ def _record():
         target_position={"side": "long", "size_ratio": 0.2},
         trade_plan={"target": {"side": "long", "size_ratio": 0.2}, "stop_loss": 90, "take_profit": 120},
         risk_result={"passed": True, "rejected_by": "", "reason": ""},
-        execution_result={"succeeded": True, "orders": []},
+        execution_result={"succeeded": False, "orders": [], "retained_algo_ids": ["old-oco"]},
     )
 
 
@@ -77,6 +77,7 @@ def test_detail_exposes_components_contributions_and_internal_debate(client: Tes
     assert body["fusion"]["score"] == pytest.approx(0.36)
     assert body["fusion"]["contributions"][0]["weighted_value"] == pytest.approx(0.48)
     assert body["target_position"] == {"side": "long", "size_ratio": 0.2}
+    assert body["execution_result"]["retained_algo_ids"] == ["old-oco"]
     committee = body["components"][1]
     assert committee["details"]["analyses"]["technical"]["direction"] == "long"
     assert committee["details"]["debate_turns"][0]["round"] == 1

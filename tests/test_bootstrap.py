@@ -152,7 +152,7 @@ async def test_paper_executor_and_context_reader_share_position_state():
 async def test_paper_hitl_refreshes_real_ticker_and_preserves_frozen_analysis():
     from tests.factories.signal_fusion import request
 
-    cycle = await _build_paper_hitl_cycle(125.0)
+    cycle = await _build_paper_hitl_cycle(105.0)
     pending = await cycle.run(request())
     frozen = await cycle.approvals.get(pending.approval_id)
     assert frozen is not None
@@ -163,7 +163,7 @@ async def test_paper_hitl_refreshes_real_ticker_and_preserves_frozen_analysis():
     assert approved.trade_plan == frozen.plan
     assert approved.component_signals == frozen.plan.component_signals
     assert approved.fused_signal == frozen.plan.fused_signal
-    assert cycle.execution_planner.context.current_price == 125.0
+    assert cycle.execution_planner.context.current_price == 105.0
     assert cycle.execution_planner.context.snapshots == frozen.signal_context.snapshots
     assert cycle.execution_planner.context.atr == frozen.signal_context.atr
     assert cycle.runner.calls == 1

@@ -6,10 +6,11 @@ import asyncio
 import uuid
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.models import Order
 from cryptotrader.pair import Pair
 
 if TYPE_CHECKING:
-    from cryptotrader.models import Order
+    from cryptotrader.signals.models import SignalContext
 
 
 class PaperExchange:
@@ -53,18 +54,27 @@ class PaperExchange:
         self._slippage_base: float = _cfg.backtest.slippage_base
         self._fee_bps: float = _cfg.backtest.fee_bps
 
+    def supports_protection_orders(self) -> bool:
+        return True
+
     def estimate_slippage(self, order: Order) -> float:
         impact = order.amount * order.price * 1e-8
         return self._slippage_base + impact
 
-    def _update_derivative_position(self, order: Order, fill_price: float) -> None:
+    def _update_derivative_position(self, order: Order, fill_price: float) -> float:
         current = self._derivative_positions.get(order.pair)
         current_amount = float((current or {}).get("amount", 0.0) or 0.0)
         delta = order.amount if order.side == "buy" else -order.amount
         next_amount = current_amount + delta
+        realized_pnl = 0.0
+        if current_amount * delta < 0.0:
+            closed_amount = min(abs(current_amount), abs(delta))
+            direction = 1.0 if current_amount > 0.0 else -1.0
+            avg_price = float((current or {}).get("avg_price", fill_price))
+            realized_pnl = (fill_price - avg_price) * closed_amount * direction
         if abs(next_amount) < 1e-12:
             self._derivative_positions.pop(order.pair, None)
-            return
+            return realized_pnl
         if current_amount * next_amount <= 0.0:
             avg_price = fill_price
         elif abs(next_amount) > abs(current_amount):
@@ -79,6 +89,7 @@ class PaperExchange:
             "unrealized_pnl": 0.0,
             "liquidation_price": None,
         }
+        return realized_pnl
 
     async def place_order(self, order: Order) -> dict[str, Any]:
         async with self._lock:
@@ -99,19 +110,20 @@ class PaperExchange:
             is_derivative = pair_obj.market_type != "spot"
 
             # Balance pre-check (include fee in buy cost)
-            if is_derivative and not order.reduce_only:
+            if is_derivative:
                 # Conservative paper-mode margin: assume 1x (worst-case full notional).
                 # When real leverage > 1, USDT cash buffer is even larger than needed,
                 # so this never spuriously fails an order that the live exchange
                 # would accept. PaperExchange does not consult the leverage config.
-                margin_required = cost
-                available = self._balances.get("USDT", 0)
-                if available < margin_required + fee:
-                    return {
-                        "id": order_id,
-                        "status": "failed",
-                        "reason": f"Insufficient USDT margin: {available:.2f} < {margin_required + fee:.2f}",
-                    }
+                if not order.reduce_only:
+                    margin_required = cost
+                    available = self._balances.get("USDT", 0)
+                    if available < margin_required + fee:
+                        return {
+                            "id": order_id,
+                            "status": "failed",
+                            "reason": f"Insufficient USDT margin: {available:.2f} < {margin_required + fee:.2f}",
+                        }
             elif order.side == "buy":
                 available = self._balances.get("USDT", 0)
                 if available < cost + fee:
@@ -149,8 +161,8 @@ class PaperExchange:
                 # ``get_positions`` will not surface the perp until the live
                 # exchange path or DB read merges them in — acceptable because
                 # the journal records the order and the portfolio API uses DB.
-                self._balances["USDT"] = self._balances.get("USDT", 0) - fee
-                self._update_derivative_position(order, fill_price)
+                realized_pnl = self._update_derivative_position(order, fill_price)
+                self._balances["USDT"] = self._balances.get("USDT", 0) + realized_pnl - fee
             elif order.side == "buy":
                 self._balances["USDT"] -= cost + fee
                 self._balances[base] = self._balances.get(base, 0) + order.amount
@@ -254,6 +266,85 @@ class PaperExchange:
                 "status": "pending",
             }
             return algo_id
+
+    async def process_pending_protection(self, context: SignalContext) -> bool:
+        """Trigger at most one pending OCO from the latest closed context bar."""
+        latest = self._latest_closed_bar(context)
+        if latest is None:
+            return False
+        high, low = latest
+        pair = context.pair.canonical()
+        async with self._lock:
+            pending = [
+                dict(algo) for algo in self._algos.values() if algo["status"] == "pending" and algo["pair"] == pair
+            ]
+
+        for algo in pending:
+            trigger = self._protection_trigger(algo, high, low)
+            if trigger is None:
+                continue
+            trigger_price, trigger_reason = trigger
+
+            algo_id = str(algo["algoId"])
+            async with self._lock:
+                current = self._algos.get(algo_id)
+                if current is None or current["status"] != "pending":
+                    continue
+                current["status"] = "triggering"
+
+            result = await self.place_order(
+                Order(
+                    pair=pair,
+                    side=str(algo["side"]),
+                    amount=float(algo["amount"]),
+                    price=float(trigger_price),
+                    reduce_only=True,
+                )
+            )
+            async with self._lock:
+                current = self._algos[algo_id]
+                if result.get("status") == "filled":
+                    current.update(
+                        status="triggered",
+                        trigger_reason=trigger_reason,
+                        trigger_price=float(trigger_price),
+                        trigger_order_id=result.get("id"),
+                    )
+                    return True
+                current["status"] = "pending"
+                current["trigger_error"] = result.get("reason") or result.get("status")
+        return False
+
+    @staticmethod
+    def _protection_trigger(
+        algo: dict[str, Any],
+        high: float,
+        low: float,
+    ) -> tuple[float, str] | None:
+        if algo["pos_side"] == "long":
+            if low <= algo["sl_trigger_px"]:
+                return float(algo["sl_trigger_px"]), "stop_loss"
+            if high >= algo["tp_trigger_px"]:
+                return float(algo["tp_trigger_px"]), "take_profit"
+            return None
+        if high >= algo["sl_trigger_px"]:
+            return float(algo["sl_trigger_px"]), "stop_loss"
+        if low <= algo["tp_trigger_px"]:
+            return float(algo["tp_trigger_px"]), "take_profit"
+        return None
+
+    @staticmethod
+    def _latest_closed_bar(context: SignalContext) -> tuple[float, float] | None:
+        candidates = []
+        for snapshot in context.snapshots.values():
+            frame = snapshot.market.ohlcv
+            if frame.empty:
+                continue
+            candidates.append((frame.index[-1], frame.iloc[-1]))
+        if not candidates:
+            return None
+        _, bar = max(candidates, key=lambda item: item[0])
+        return float(bar["high"]), float(bar["low"])
 
     async def cancel_algo(self, algo_id: str, pair: str) -> None:
         async with self._lock:

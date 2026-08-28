@@ -36,6 +36,14 @@ def _make_okx_exchange() -> LiveExchange:
         )
 
 
+def test_live_protection_capability_is_explicit_per_implemented_adapter():
+    assert _make_okx_exchange().supports_protection_orders() is True
+    with patch("ccxt.async_support.binance") as mock_cls:
+        mock_cls.return_value = MagicMock()
+        binance = LiveExchange("binance", "k", "s", sandbox=True)
+    assert binance.supports_protection_orders() is False
+
+
 @pytest.mark.asyncio
 async def test_reduce_only_order_reaches_exchange_params():
     ex = _make_okx_exchange()
@@ -280,6 +288,26 @@ async def test_cancel_algo_real_error_propagates():
     ex._exchange.private_post_trade_cancel_algos = AsyncMock(side_effect=Exception("OKX 50001: System error"))
 
     with pytest.raises(Exception, match="50001"):
+        await ex.cancel_algo("abc123", "DOGE/USDT:USDT")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"code": "50001", "msg": "system error", "data": []},
+        {
+            "code": "0",
+            "data": [{"algoId": "abc123", "sCode": "51000", "sMsg": "cancel rejected"}],
+        },
+    ],
+)
+async def test_cancel_algo_business_rejection_propagates(response):
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    ex._exchange.private_post_trade_cancel_algos = AsyncMock(return_value=response)
+
+    with pytest.raises(RuntimeError, match=r"cancel.*failed"):
         await ex.cancel_algo("abc123", "DOGE/USDT:USDT")
 
 

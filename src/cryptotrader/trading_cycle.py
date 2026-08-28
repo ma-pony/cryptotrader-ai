@@ -55,6 +55,7 @@ def _execution_payload(result: ExecutionResult | None) -> dict[str, Any] | None:
         "succeeded": result.succeeded,
         "algo_id": result.algo_id,
         "error": result.error,
+        "retained_algo_ids": list(result.retained_algo_ids),
         "orders": [
             {
                 "intent": {
@@ -131,6 +132,11 @@ class TradingCycle:
         approval_id = None
         try:
             context = await self.contexts.collect(request, requirements)
+            protection_processor = getattr(self.executor, "process_pending_protection", None)
+            if self.mode == "paper" and protection_processor is not None:
+                protection_triggered = await protection_processor(context)
+                if protection_triggered:
+                    context = await self.contexts.refresh_execution_state(context)
             await self.events.publish(
                 CycleEvent(
                     "context_ready",

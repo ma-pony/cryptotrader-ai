@@ -87,6 +87,8 @@ def _is_venue_unavailable(exc: BaseException) -> bool:
 
 @runtime_checkable
 class ExchangeAdapter(Protocol):
+    def supports_protection_orders(self) -> bool: ...
+
     async def place_order(self, order: Order) -> dict[str, Any]: ...
 
     async def cancel_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]: ...
@@ -161,6 +163,10 @@ class LiveExchange:
         # later retry (e.g. after the user closes the open position that was
         # locking leverage) can still apply the new value.
         self._leverage_attempts: dict[str, int] = {}
+
+    def supports_protection_orders(self) -> bool:
+        """Whether the adapter can maintain exchange-side stop/take-profit OCOs."""
+        return self._exchange_id == "okx"
 
     async def _ensure_markets(self) -> None:
         if not self._markets_loaded:
@@ -890,15 +896,15 @@ class LiveExchange:
                 return
             raise
 
-        # OKX returns code=0 even when individual leg failed; check sCode per leg.
+        if str(resp.get("code", "")) != "0":
+            raise RuntimeError(f"OKX cancel algo failed: code={resp.get('code')} msg={resp.get('msg')}")
+        # OKX returns code=0 even when an individual leg failed; propagate that
+        # failure so the execution service can remove the replacement and unwind.
         for leg in resp.get("data", []) or []:
             sc = str(leg.get("sCode", ""))
             if sc not in ("0", "51400", "51401"):
-                logger.warning(
-                    "cancel_algo %s leg returned sCode=%s sMsg=%s",
-                    algo_id,
-                    sc,
-                    leg.get("sMsg"),
+                raise RuntimeError(
+                    f"OKX cancel algo failed: sCode={sc} sMsg={leg.get('sMsg')}",
                 )
         logger.info("cancel_algo %s ok (instId=%s)", algo_id, inst_id)
 
