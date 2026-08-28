@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from cryptotrader.venues.ccxt_base import CcxtVenueBase, VenueOperationError, create_async_client
@@ -9,6 +10,7 @@ from cryptotrader.venues.models import ProtectionState, VenueCapabilities
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from decimal import Decimal
 
     from cryptotrader.pair import Pair
     from cryptotrader.runtime_config.secrets import CredentialPayload
@@ -21,15 +23,27 @@ class OkxVenueSession(CcxtVenueBase):
     def __init__(self, connection: VenueConnection, client: Any) -> None:
         super().__init__(connection, client)
         self._protection_pairs: dict[str, Pair] = {}
+        self._position_mode_lock = asyncio.Lock()
+        self._hedged: bool | None = None
+
+    async def _position_mode_is_hedged(self) -> bool:
+        if self._hedged is not None:
+            return self._hedged
+        async with self._position_mode_lock:
+            if self._hedged is None:
+                response = await self._call("fetch OKX position mode", self._client.fetch_position_mode)
+                if not isinstance(response, dict) or type(response.get("hedged")) is not bool:
+                    raise VenueOperationError(f"{self.connection_id}: invalid OKX position mode response")
+                self._hedged = response["hedged"]
+        return self._hedged
 
     async def _order_params(self, intent: OrderIntent) -> dict[str, Any]:
         if intent.pair.market_type == "spot":
             return {}
-        position = await self.fetch_position(intent.pair)
-        if position.signed_amount > 0:
-            position_side = "long"
-        elif position.signed_amount < 0:
-            position_side = "short"
+        if not await self._position_mode_is_hedged():
+            position_side = "net"
+        elif intent.reduce_only:
+            position_side = "long" if intent.side == "sell" else "short"
         else:
             position_side = "long" if intent.side == "buy" else "short"
         params: dict[str, Any] = {
@@ -40,6 +54,37 @@ class OkxVenueSession(CcxtVenueBase):
             params["reduceOnly"] = True
         return params
 
+    async def _configure_market(self, pair: Pair, market: dict[str, Any]) -> None:
+        del market
+        hedged = await self._position_mode_is_hedged()
+        base_params: dict[str, Any] = {"lever": self.connection.leverage}
+        if self.connection.margin_mode == "isolated":
+            position_sides = ("long", "short") if hedged else ("net",)
+            for position_side in position_sides:
+                await self._call(
+                    "configure OKX margin and leverage",
+                    self._client.set_margin_mode,
+                    self.connection.margin_mode,
+                    pair.to_ccxt(),
+                    base_params | {"posSide": position_side},
+                )
+        else:
+            await self._call(
+                "configure OKX margin and leverage",
+                self._client.set_margin_mode,
+                self.connection.margin_mode,
+                pair.to_ccxt(),
+                base_params,
+            )
+
+    def _account_equity(self, raw_balance: Any) -> Decimal:
+        info = raw_balance.get("info") if isinstance(raw_balance, dict) else None
+        data = info.get("data") if isinstance(info, dict) else None
+        account = data[0] if isinstance(data, list) and data and isinstance(data[0], dict) else None
+        if account is None:
+            raise VenueOperationError(f"{self.connection_id}: invalid OKX equity response")
+        return self._decimal(account.get("totalEq"), "OKX total equity")
+
     async def replace_protection(self, spec: ProtectionSpec) -> ProtectionState:
         market = await self._market(spec.pair)
         if spec.pair.market_type != "swap":
@@ -47,6 +92,7 @@ class OkxVenueSession(CcxtVenueBase):
         old_protection_ids = tuple(
             protection_id
             for protection in await self._fetch_protections(spec.pair)
+            if protection.position_side == spec.position_side
             for protection_id in protection.protection_ids
         )
         venue_amount = await self._amount_to_venue(spec.pair, spec.amount)
@@ -80,7 +126,9 @@ class OkxVenueSession(CcxtVenueBase):
         response = await self._call("create OKX protection", self._client.private_post_trade_order_algo, params)
         if not isinstance(response, dict) or str(response.get("code")) != "0":
             raise VenueOperationError(f"{self.connection_id}: OKX protection rejected")
-        data = response.get("data") or ()
+        data = response.get("data")
+        if not isinstance(data, list):
+            raise VenueOperationError(f"{self.connection_id}: OKX protection rejected")
         leg = data[0] if data and isinstance(data[0], dict) else {}
         if str(leg.get("sCode")) != "0" or not leg.get("algoId"):
             raise VenueOperationError(f"{self.connection_id}: OKX protection leg rejected")
@@ -103,9 +151,12 @@ class OkxVenueSession(CcxtVenueBase):
             raise VenueOperationError(f"{self.connection_id}: OKX protection query rejected")
         contract_size = await self._contract_size(pair)
         protections: list[ProtectionState] = []
-        for row in response.get("data") or ():
+        rows = response.get("data")
+        if not isinstance(rows, list):
+            raise VenueOperationError(f"{self.connection_id}: invalid OKX protection response")
+        for row in rows:
             if not isinstance(row, dict) or not row.get("algoId"):
-                continue
+                raise VenueOperationError(f"{self.connection_id}: invalid OKX protection response")
             protection_id = str(row["algoId"])
             self._protection_pairs[protection_id] = pair
             amount = self._decimal(row.get("sz"), "OKX protection size") * contract_size
@@ -115,17 +166,18 @@ class OkxVenueSession(CcxtVenueBase):
             take_profit = self._decimal(raw_take, "OKX take profit") if raw_take not in (None, "", "0") else None
             if stop_loss is None and take_profit is None:
                 continue
-            state = str(row.get("state") or "effective").lower()
             protections.append(
-                ProtectionState(
+                self._sync(
+                    "normalize OKX protection",
+                    ProtectionState,
                     (protection_id,),
                     pair,
                     str(row.get("posSide") or "long").lower(),
                     amount,
                     stop_loss,
                     take_profit,
-                    state in {"effective", "live"},
-                    state in {"triggered", "filled"},
+                    True,
+                    False,
                 )
             )
         return tuple(protections)
@@ -149,8 +201,11 @@ class OkxVenueSession(CcxtVenueBase):
                 raise VenueOperationError(f"{self.connection_id}: cancel OKX protection failed") from None
             if not isinstance(response, dict) or str(response.get("code")) != "0":
                 raise VenueOperationError(f"{self.connection_id}: cancel OKX protection rejected")
-            for leg in response.get("data") or ():
-                if str(leg.get("sCode")) not in {"0", "51400", "51401"}:
+            legs = response.get("data")
+            if not isinstance(legs, list):
+                raise VenueOperationError(f"{self.connection_id}: cancel OKX protection rejected")
+            for leg in legs:
+                if not isinstance(leg, dict) or str(leg.get("sCode")) not in {"0", "51400", "51401"}:
                     raise VenueOperationError(f"{self.connection_id}: cancel OKX protection leg rejected")
 
 

@@ -10,15 +10,20 @@ from cryptotrader.venues.models import ProtectionSpec
 from tests.factories.runtime_config import connection
 from tests.fakes.ccxt_client import FakeCcxtFactory
 
+_CLIENTS = {}
+
 
 async def _session():
     from cryptotrader.venues.okx import OkxVenueAdapter
 
-    adapter = OkxVenueAdapter(client_factory=FakeCcxtFactory("okx"))
-    return await adapter.connect(
+    factory = FakeCcxtFactory("okx")
+    adapter = OkxVenueAdapter(client_factory=factory)
+    session = await adapter.connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
+    _CLIENTS[session] = factory.clients[-1]
+    return session
 
 
 @pytest.mark.asyncio
@@ -28,7 +33,7 @@ async def test_okx_algo_oco_preserves_contract_size_precision_and_platform_param
 
     await session.replace_protection(spec)
 
-    request = next(payload for name, payload in session.client.calls if name == "private_post_trade_order_algo")
+    request = next(payload for name, payload in _CLIENTS[session].calls if name == "private_post_trade_order_algo")
     assert request == {
         "instId": "BTC-USDT-SWAP",
         "tdMode": "isolated",
@@ -65,7 +70,7 @@ async def test_okx_algo_snaps_base_amount_to_contract_lot_size():
 
     protection = await session.replace_protection(spec)
 
-    request = next(payload for name, payload in session.client.calls if name == "private_post_trade_order_algo")
+    request = next(payload for name, payload in _CLIENTS[session].calls if name == "private_post_trade_order_algo")
     assert request["sz"] == "2"
     assert protection.amount == Decimal("0.02")
 
@@ -80,7 +85,7 @@ async def test_okx_algo_rejects_amount_that_rounds_to_zero_before_request():
     with pytest.raises(VenueOperationError, match="rounds to zero"):
         await session.replace_protection(spec)
 
-    assert not any(name == "private_post_trade_order_algo" for name, _ in session.client.calls)
+    assert not any(name == "private_post_trade_order_algo" for name, _ in _CLIENTS[session].calls)
 
 
 @pytest.mark.asyncio
@@ -99,7 +104,7 @@ async def test_okx_algo_business_rejections_are_normalized(response):
     async def reject(_params):
         return response
 
-    session.client.private_post_trade_order_algo = reject
+    _CLIENTS[session].private_post_trade_order_algo = reject
     spec = ProtectionSpec(Pair.parse("BTC/USDT:USDT"), "long", Decimal("0.02"), Decimal("48000"), Decimal("55000"))
 
     with pytest.raises(VenueOperationError, match=r"protection .*rejected"):
@@ -123,7 +128,7 @@ async def test_okx_swap_fails_closed_for_invalid_contract_size(contract_size):
     from cryptotrader.venues.ccxt_base import VenueOperationError
 
     session = await _session()
-    session.client.markets["BTC/USDT:USDT"]["contractSize"] = contract_size
+    _CLIENTS[session].markets["BTC/USDT:USDT"]["contractSize"] = contract_size
     spec = ProtectionSpec(Pair.parse("BTC/USDT:USDT"), "long", Decimal("0.02"), Decimal("48000"), Decimal("55000"))
 
     with pytest.raises(VenueOperationError, match="contract size"):
@@ -139,7 +144,7 @@ async def test_okx_cancel_swallows_official_already_gone_code():
     async def already_gone(_params):
         raise RuntimeError("OKX 51400: Algo order does not exist")
 
-    session.client.private_post_trade_cancel_algos = already_gone
+    _CLIENTS[session].private_post_trade_cancel_algos = already_gone
     await session.cancel_protection(protection.protection_ids)
 
 
@@ -161,7 +166,7 @@ async def test_okx_cancel_business_rejections_are_normalized(response):
     async def reject(_params):
         return response
 
-    session.client.private_post_trade_cancel_algos = reject
+    _CLIENTS[session].private_post_trade_cancel_algos = reject
     with pytest.raises(VenueOperationError, match=r"cancel OKX protection .*rejected"):
         await session.cancel_protection(protection.protection_ids)
 
@@ -175,6 +180,6 @@ async def test_okx_pending_algo_query_rejection_is_normalized():
     async def reject(_params):
         return {"code": "50001", "msg": "down", "data": []}
 
-    session.client.private_get_trade_orders_algo_pending = reject
+    _CLIENTS[session].private_get_trade_orders_algo_pending = reject
     with pytest.raises(VenueOperationError, match="protection query rejected"):
         await session.list_open_state(Pair.parse("BTC/USDT:USDT"))

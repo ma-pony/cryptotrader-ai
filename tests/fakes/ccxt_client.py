@@ -32,7 +32,18 @@ class FakeCcxtClient:
                 "spot": False,
                 "swap": True,
                 "linear": True,
-                "contractSize": "0.01",
+                "inverse": False,
+                "contractSize": "1" if exchange_id == "bybit" else "0.01",
+                "precision": {"amount": "0.001" if exchange_id == "bybit" else "1", "price": "0.1"},
+            },
+            "BTC/USD:BTC": {
+                "id": "BTCUSD" if exchange_id == "bybit" else "BTC-USD-SWAP",
+                "symbol": "BTC/USD:BTC",
+                "spot": False,
+                "swap": True,
+                "linear": False,
+                "inverse": True,
+                "contractSize": "100",
                 "precision": {"amount": "1", "price": "0.1"},
             },
         }
@@ -48,9 +59,9 @@ class FakeCcxtClient:
                 "symbol": "BTC/USDT:USDT",
                 "type": "limit",
                 "side": "buy",
-                "amount": "3",
-                "filled": "1",
-                "remaining": "2",
+                "amount": "0.03" if exchange_id == "bybit" else "3",
+                "filled": "0.01" if exchange_id == "bybit" else "1",
+                "remaining": "0.02" if exchange_id == "bybit" else "2",
                 "average": "49900",
                 "price": "49900",
                 "status": "open",
@@ -61,10 +72,12 @@ class FakeCcxtClient:
         self._okx_algos: list[dict[str, Any]] = []
         self._bybit_stop_loss = "0"
         self._bybit_take_profit = "0"
-        self.position_contracts = "2"
+        self.position_contracts = "0.02" if exchange_id == "bybit" else "2"
         self.position_index = 1
         self.position_side = "long"
+        self.hedged = True
         self.confirm_protection = True
+        self.close_failures = 0
 
     def set_sandbox_mode(self, enabled: bool) -> None:
         self.calls.append(("set_sandbox_mode", enabled))
@@ -106,7 +119,43 @@ class FakeCcxtClient:
             "total": {"USDT": "10000.50", "BTC": "0.25"},
             "free": {"USDT": "9000.25", "BTC": "0.20"},
             "used": {"USDT": "1000.25", "BTC": "0.05"},
-            "info": {"accountType": "UNIFIED" if self.id == "bybit" else "18"},
+            "info": (
+                {
+                    "retCode": 0,
+                    "result": {
+                        "list": [
+                            {
+                                "accountType": "UNIFIED",
+                                "totalEquity": "23456.78",
+                                "coin": [
+                                    {"coin": "USDT", "walletBalance": "10000.50"},
+                                    {"coin": "BTC", "walletBalance": "0.25"},
+                                ],
+                            }
+                        ]
+                    },
+                }
+                if self.id == "bybit"
+                else {
+                    "code": "0",
+                    "data": [
+                        {
+                            "totalEq": "12345.67",
+                            "details": [
+                                {"ccy": "USDT", "cashBal": "10000.50"},
+                                {"ccy": "BTC", "cashBal": "0.25"},
+                            ],
+                        }
+                    ],
+                }
+            ),
+        }
+
+    async def fetch_position_mode(self, symbol: str | None = None) -> dict[str, Any]:
+        self.calls.append(("fetch_position_mode", symbol))
+        return {
+            "hedged": self.hedged,
+            "info": {"posMode": "long_short_mode" if self.hedged else "net_mode"},
         }
 
     async def fetch_positions(self, symbols: list[str] | None = None) -> list[dict[str, Any]]:
@@ -122,23 +171,43 @@ class FakeCcxtClient:
                 "side": "Buy" if self.position_side == "long" else "Sell",
                 "size": self.position_contracts,
                 "avgPrice": "50000",
-                "positionIdx": self.position_index,
+                "positionIdx": self.position_index if self.hedged else 0,
                 "stopLoss": self._bybit_stop_loss,
                 "takeProfit": self._bybit_take_profit,
             }
         )
-        return [
-            {
-                "symbol": symbol,
-                "contracts": self.position_contracts,
-                "contractSize": "0.01",
-                "side": self.position_side,
-                "entryPrice": "50000",
-                "notional": "1000",
-                "unrealizedPnl": "12.5",
-                "info": info,
-            }
-        ]
+        active = {
+            "symbol": symbol,
+            "contracts": self.position_contracts,
+            "contractSize": "1" if self.id == "bybit" else "0.01",
+            "side": self.position_side,
+            "entryPrice": "50000",
+            "notional": "1000",
+            "unrealizedPnl": "12.5",
+            "info": info,
+        }
+        if self.id != "bybit" or not self.hedged:
+            return [active]
+        opposite_index = 2 if self.position_index == 1 else 1
+        opposite_side = "short" if opposite_index == 2 else "long"
+        empty = {
+            "symbol": symbol,
+            "contracts": "0",
+            "contractSize": "1",
+            "side": opposite_side,
+            "entryPrice": None,
+            "notional": "0",
+            "info": {
+                "symbol": "BTCUSDT",
+                "side": "Sell" if opposite_side == "short" else "Buy",
+                "size": "0",
+                "avgPrice": "",
+                "positionIdx": opposite_index,
+                "stopLoss": "0",
+                "takeProfit": "0",
+            },
+        }
+        return [active, empty]
 
     async def fetch_ticker(self, symbol: str) -> dict[str, Any]:
         self.calls.append(("fetch_ticker", symbol))
@@ -170,6 +239,14 @@ class FakeCcxtClient:
             "reduceOnly": bool(params.get("reduceOnly")),
             "info": {"ordId": order_id, "reduceOnly": params.get("reduceOnly", False)},
         }
+
+    async def set_margin_mode(self, margin_mode, symbol=None, params=None):
+        self.calls.append(("set_margin_mode", (margin_mode, symbol, deepcopy(params or {}))))
+        return {"code": "0", "retCode": 0}
+
+    async def set_leverage(self, leverage, symbol=None, params=None):
+        self.calls.append(("set_leverage", (leverage, symbol, deepcopy(params or {}))))
+        return {"code": "0", "retCode": 0}
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         self.calls.append(("fetch_open_orders", symbol))
@@ -216,6 +293,9 @@ class FakeCcxtClient:
     async def close(self) -> None:
         self.close_calls += 1
         self.calls.append(("close", None))
+        if self.close_failures:
+            self.close_failures -= 1
+            raise RuntimeError("close failed with raw secret")
 
 
 class FakeCcxtFactory:

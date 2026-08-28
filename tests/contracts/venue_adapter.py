@@ -31,7 +31,7 @@ def assert_venue_contract(
         assert isinstance(capabilities, VenueCapabilities)
 
 
-async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionEnvironment) -> None:
+async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionEnvironment, fake_factory) -> None:
     """Exercise platform-neutral CCXT behavior against a venue-shaped fake."""
     from cryptotrader.venues.models import OrderIntent, ProtectionSpec
 
@@ -51,7 +51,8 @@ async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionE
     portfolio = await session.fetch_portfolio(pair)
     assert isinstance(portfolio, ConnectionPortfolioSnapshot)
     assert portfolio.connection_id == f"{adapter.adapter_id}-{environment}"
-    assert portfolio.equity == Decimal("10000.50")
+    expected_equity = Decimal("12345.67") if adapter.adapter_id == "okx" else Decimal("23456.78")
+    assert portfolio.equity == expected_equity
     assert portfolio.balances["USDT"] == Decimal("10000.50")
     assert portfolio.position.signed_amount == Decimal("0.02")
     assert portfolio.position.signed_notional == Decimal("1000")
@@ -92,5 +93,6 @@ async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionE
     assert (await session.list_open_state(pair)).protections == ()
     await session.close()
     await session.close()
-    assert session.client.load_markets_calls == 1
-    assert session.client.close_calls == 1
+    fake_client = fake_factory.clients[-1]
+    assert fake_client.load_markets_calls == 1
+    assert fake_client.close_calls == 1

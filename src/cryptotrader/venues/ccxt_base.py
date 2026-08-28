@@ -48,13 +48,10 @@ class CcxtVenueBase:
         self._client = client
         self._markets_loaded = False
         self._markets_lock = asyncio.Lock()
+        self._configuration_lock = asyncio.Lock()
+        self._configured_markets: set[str] = set()
         self._close_lock = asyncio.Lock()
         self._closed = False
-
-    @property
-    def client(self) -> Any:
-        """Expose the configured client for diagnostics; methods never return raw payloads."""
-        return self._client
 
     async def _ensure_markets(self) -> None:
         if self._markets_loaded:
@@ -67,6 +64,14 @@ class CcxtVenueBase:
     async def _call(self, operation: str, method: Callable, *args: Any) -> Any:
         try:
             return await method(*args)
+        except VenueOperationError:
+            raise
+        except Exception:
+            raise VenueOperationError(f"{self.connection_id}: {operation} failed") from None
+
+    def _sync(self, operation: str, method: Callable, *args: Any) -> Any:
+        try:
+            return method(*args)
         except VenueOperationError:
             raise
         except Exception:
@@ -88,9 +93,14 @@ class CcxtVenueBase:
 
     async def _market(self, pair: Pair) -> dict[str, Any]:
         await self._ensure_markets()
-        market = (getattr(self._client, "markets", None) or {}).get(pair.to_ccxt())
+        markets = self._sync("read market metadata", lambda: getattr(self._client, "markets", None))
+        market = markets.get(pair.to_ccxt()) if isinstance(markets, dict) else None
         if not isinstance(market, dict):
             raise VenueOperationError(f"{self.connection_id}: unknown market {pair}")
+        if not isinstance(market.get("id"), str) or not market["id"]:
+            raise VenueOperationError(f"{self.connection_id}: invalid market metadata for {pair}")
+        if pair.market_type == "swap" and (market.get("inverse") is True or market.get("linear") is not True):
+            raise VenueOperationError(f"{self.connection_id}: inverse contracts are unsupported for {pair}")
         return market
 
     async def _contract_size(self, pair: Pair) -> Decimal:
@@ -105,7 +115,12 @@ class CcxtVenueBase:
     async def _amount_to_venue(self, pair: Pair, base_amount: Decimal) -> Decimal:
         contract_size = await self._contract_size(pair)
         raw_amount = base_amount / contract_size
-        precise = self._client.amount_to_precision(pair.to_ccxt(), str(raw_amount))
+        precise = self._sync(
+            "normalize amount",
+            self._client.amount_to_precision,
+            pair.to_ccxt(),
+            str(raw_amount),
+        )
         result = self._decimal(precise, "amount precision")
         if result <= 0:
             raise VenueOperationError(f"{self.connection_id}: amount rounds to zero for {pair}")
@@ -113,7 +128,12 @@ class CcxtVenueBase:
 
     async def _price_to_venue(self, pair: Pair, price: Decimal) -> Decimal:
         await self._market(pair)
-        precise = self._client.price_to_precision(pair.to_ccxt(), str(price))
+        precise = self._sync(
+            "normalize price",
+            self._client.price_to_precision,
+            pair.to_ccxt(),
+            str(price),
+        )
         result = self._decimal(precise, "price precision")
         if result <= 0:
             raise VenueOperationError(f"{self.connection_id}: price rounds to zero for {pair}")
@@ -121,6 +141,9 @@ class CcxtVenueBase:
 
     async def fetch_balances(self) -> Mapping[str, Decimal]:
         raw = await self._call("fetch balance", self._client.fetch_balance)
+        return self._normalize_balances(raw)
+
+    def _normalize_balances(self, raw: Any) -> Mapping[str, Decimal]:
         totals = raw.get("total") if isinstance(raw, dict) else None
         if not isinstance(totals, dict):
             raise VenueOperationError(f"{self.connection_id}: balance response has no totals")
@@ -133,19 +156,30 @@ class CcxtVenueBase:
 
     async def fetch_position(self, pair: Pair) -> ConnectionPosition:
         if pair.market_type == "spot":
-            balances = await self.fetch_balances()
+            balances, quote = await asyncio.gather(self.fetch_balances(), self.fetch_quote(pair))
             amount = balances.get(pair.base, Decimal("0"))
-            return ConnectionPosition(pair, amount, Decimal("0"), None)
+            return self._sync(
+                "normalize spot position",
+                ConnectionPosition,
+                pair,
+                amount,
+                amount * quote.last,
+                None,
+            )
 
         await self._market(pair)
         raw_positions = await self._call("fetch positions", self._client.fetch_positions, [pair.to_ccxt()])
+        if not isinstance(raw_positions, (list, tuple)):
+            raise VenueOperationError(f"{self.connection_id}: invalid position response")
         signed_amount = Decimal("0")
         signed_notional = Decimal("0")
         weighted_entry = Decimal("0")
         absolute_amount = Decimal("0")
         contract_size = await self._contract_size(pair)
-        for raw in raw_positions or ():
-            if not isinstance(raw, dict) or raw.get("symbol") != pair.to_ccxt():
+        for raw in raw_positions:
+            if not isinstance(raw, dict):
+                raise VenueOperationError(f"{self.connection_id}: invalid position response")
+            if raw.get("symbol") != pair.to_ccxt():
                 continue
             contracts = self._decimal(raw.get("contracts"), "position contracts", default=Decimal("0"))
             amount = contracts * contract_size
@@ -159,14 +193,36 @@ class CcxtVenueBase:
             weighted_entry += entry * abs(amount)
             absolute_amount += abs(amount)
         entry_price = weighted_entry / absolute_amount if absolute_amount else None
-        return ConnectionPosition(pair, signed_amount, signed_notional, entry_price)
+        return self._sync(
+            "normalize position",
+            ConnectionPosition,
+            pair,
+            signed_amount,
+            signed_notional,
+            entry_price,
+        )
 
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
-        balances, position = await asyncio.gather(self.fetch_balances(), self.fetch_position(pair))
-        equity_asset = pair.settle or pair.quote
-        return ConnectionPortfolioSnapshot(
+        raw_balance = await self._call("fetch balance", self._client.fetch_balance)
+        balances = self._normalize_balances(raw_balance)
+        if pair.market_type == "spot":
+            quote = await self.fetch_quote(pair)
+            amount = balances.get(pair.base, Decimal("0"))
+            position = self._sync(
+                "normalize spot position",
+                ConnectionPosition,
+                pair,
+                amount,
+                amount * quote.last,
+                None,
+            )
+        else:
+            position = await self.fetch_position(pair)
+        return self._sync(
+            "normalize portfolio",
+            ConnectionPortfolioSnapshot,
             self.connection_id,
-            balances.get(equity_asset, Decimal("0")),
+            self._account_equity(raw_balance),
             balances,
             position,
         )
@@ -174,7 +230,11 @@ class CcxtVenueBase:
     async def fetch_quote(self, pair: Pair) -> VenueQuote:
         await self._market(pair)
         raw = await self._call("fetch quote", self._client.fetch_ticker, pair.to_ccxt())
-        return VenueQuote(
+        if not isinstance(raw, dict):
+            raise VenueOperationError(f"{self.connection_id}: invalid quote response")
+        return self._sync(
+            "normalize quote",
+            VenueQuote,
             pair,
             self._decimal(raw.get("bid"), "bid"),
             self._decimal(raw.get("ask"), "ask"),
@@ -183,6 +243,8 @@ class CcxtVenueBase:
 
     async def place_order(self, intent: OrderIntent) -> NormalizedOrder:
         await self._market(intent.pair)
+        if intent.pair.market_type == "swap":
+            await self._ensure_market_configured(intent.pair)
         venue_amount = await self._amount_to_venue(intent.pair, intent.amount)
         venue_price = await self._price_to_venue(intent.pair, intent.price) if intent.price is not None else None
         params = await self._order_params(intent)
@@ -205,24 +267,41 @@ class CcxtVenueBase:
         *,
         fallback_reduce_only: bool = False,
     ) -> NormalizedOrder:
-        contract_size = await self._contract_size(pair)
-        amount = self._decimal(raw.get("amount"), "order amount") * contract_size
-        filled = self._decimal(raw.get("filled"), "filled amount", default=Decimal("0")) * contract_size
-        average_raw = raw.get("average")
-        average = self._decimal(average_raw, "average price") if average_raw not in (None, "") else None
-        info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
-        reduce_only = self._boolean(raw.get("reduceOnly", info.get("reduceOnly", fallback_reduce_only)))
-        return NormalizedOrder(
-            str(raw.get("id") or ""),
-            pair,
-            str(raw.get("side") or ""),
-            str(raw.get("type") or ""),
-            amount,
-            filled,
-            average,
-            str(raw.get("status") or "unknown"),
-            reduce_only,
-        )
+        try:
+            if not isinstance(raw, dict):
+                raise ValueError
+            contract_size = await self._contract_size(pair)
+            amount = self._decimal(raw.get("amount"), "order amount") * contract_size
+            filled = self._decimal(raw.get("filled"), "filled amount", default=Decimal("0")) * contract_size
+            average_raw = raw.get("average")
+            average = self._decimal(average_raw, "average price") if average_raw not in (None, "") else None
+            info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
+            reduce_only = self._boolean(raw.get("reduceOnly", info.get("reduceOnly", fallback_reduce_only)))
+            return NormalizedOrder(
+                str(raw.get("id") or ""),
+                pair,
+                str(raw.get("side") or ""),
+                str(raw.get("type") or ""),
+                amount,
+                filled,
+                average,
+                str(raw.get("status") or "unknown"),
+                reduce_only,
+            )
+        except VenueOperationError:
+            raise
+        except Exception:
+            raise VenueOperationError(f"{self.connection_id}: invalid order response") from None
+
+    async def _ensure_market_configured(self, pair: Pair) -> None:
+        symbol = pair.to_ccxt()
+        if symbol in self._configured_markets:
+            return
+        async with self._configuration_lock:
+            if symbol not in self._configured_markets:
+                market = await self._market(pair)
+                await self._configure_market(pair, market)
+                self._configured_markets.add(symbol)
 
     async def list_open_state(self, pair: Pair) -> OpenVenueState:
         await self._market(pair)
@@ -249,6 +328,12 @@ class CcxtVenueBase:
     async def _order_params(self, intent: OrderIntent) -> dict[str, Any]:
         raise NotImplementedError
 
+    async def _configure_market(self, pair: Pair, market: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def _account_equity(self, raw_balance: Any) -> Decimal:
+        raise NotImplementedError
+
     async def _fetch_protections(self, pair: Pair) -> tuple[ProtectionState, ...]:
         raise NotImplementedError
 
@@ -262,5 +347,5 @@ class CcxtVenueBase:
         async with self._close_lock:
             if self._closed:
                 return
-            self._closed = True
             await self._call("close session", self._client.close)
+            self._closed = True
