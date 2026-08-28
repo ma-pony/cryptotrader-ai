@@ -255,8 +255,6 @@ description_max_tokens = 800
 event_buffer_ttl_seconds = 300
 # 最大同时运行的后台分析任务数
 max_concurrent_tasks = 10
-# Live Steering 单条指令最大字符数
-max_steering_instruction_chars = 500
 # 事件缓冲区最大条目数（超出时 FIFO 淘汰）
 event_buffer_max_size = 500
 

@@ -4,7 +4,6 @@ Coverage:
 - T051: PromptBuilder telemetry 8 fields on each of 4 agents
 - T052: fixture skills — _test_shared loaded by all 4 agents; _test_tech only by tech
 - SC-Y13: scope filter correctness via DefaultSkillProvider
-- live_steering parameter renders into prompt user-tail
 - SC-Y17: PromptBuilder.build() returns (SystemMessage, HumanMessage) for all 4 agents
 """
 
@@ -197,25 +196,3 @@ class TestFixtureSkillScopeFilter:
             sys_msg, usr_msg = pb.build(snapshot=_snapshot_dict(), portfolio={})
             full = sys_msg.content + usr_msg.content
             assert "TEST TECH SKILL" not in full, f"{agent_id}: tech-skill body should NOT appear in {agent_id} prompt"
-
-
-# ── live_steering parameter renders into prompt ───────────────────────────────
-
-
-class TestSteeringInPrompt:
-    """build(steering=...) injects live steering text into the user message."""
-
-    @pytest.mark.parametrize("agent_id", ["tech", "chain", "news", "macro"])
-    def test_steering_in_prompt_when_provided(self, agent_id):
-        pb = _build_pb(agent_id)
-        steer = "Focus on funding-rate divergence in the next call."
-        sys_msg, usr_msg = pb.build(snapshot=_snapshot_dict(), portfolio={}, steering=steer)
-        full = sys_msg.content + usr_msg.content
-        assert steer in full, f"{agent_id}: steering text missing from prompt"
-
-    @pytest.mark.parametrize("agent_id", ["tech", "chain", "news", "macro"])
-    def test_no_steering_section_when_empty(self, agent_id):
-        pb = _build_pb(agent_id)
-        sys_msg, usr_msg = pb.build(snapshot=_snapshot_dict(), portfolio={})
-        full = sys_msg.content + usr_msg.content
-        assert "[用户实时引导]" not in full

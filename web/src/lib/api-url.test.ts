@@ -19,4 +19,11 @@ describe('buildApiUrl', () => {
       'https://files.example.com/report.json',
     );
   });
+
+  it('normalizes repeated leading slashes without creating a protocol-relative URL', () => {
+    expect(buildApiUrl('//api/chat/stream', '')).toBe('/api/chat/stream');
+    expect(buildApiUrl('///api/chat/stream', 'https://api.example.com/')).toBe(
+      'https://api.example.com/api/chat/stream',
+    );
+  });
 });

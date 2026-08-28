@@ -52,6 +52,7 @@ class EventBus:
         self._session_id = session_id
         self._buffer = buffer
         self._subscribers: list[asyncio.Queue[SSEEnvelope]] = []
+        self._published_counts: dict[str, int] = {}
 
     async def publish(self, event_type: str, data: dict[str, Any] | None = None) -> SSEEnvelope:
         eid = await self._buffer.next_event_id()
@@ -63,12 +64,17 @@ class EventBus:
             data=data or {},
         )
         await self._buffer.push(envelope)
+        self._published_counts[event_type] = self._published_counts.get(event_type, 0) + 1
         for q in self._subscribers:
             try:
                 q.put_nowait(envelope)
             except asyncio.QueueFull:
                 logger.warning("Subscriber queue full for session %s, dropping event", self._session_id)
         return envelope
+
+    def published_count(self, event_type: str) -> int:
+        """Return successfully buffered events of one type for lifecycle deduplication."""
+        return self._published_counts.get(event_type, 0)
 
     def subscribe(self) -> asyncio.Queue[SSEEnvelope]:
         q: asyncio.Queue[SSEEnvelope] = asyncio.Queue(maxsize=200)

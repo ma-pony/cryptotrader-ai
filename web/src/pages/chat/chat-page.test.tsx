@@ -159,14 +159,14 @@ describe('ChatPage', () => {
     expect(screen.queryByText('部分裁决')).not.toBeInTheDocument();
   });
 
-  it('shows committee progress without exposing steering controls', async () => {
+  it('shows committee progress without exposing mutation controls', async () => {
     mockSessionId = 'session-1';
     mockAgentThinking = true;
     const ChatPage = (await import('./index')).default;
     render(<ChatPage />);
 
     expect(screen.getByText('tech agent')).toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: /steering input/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
   });
 
   it('stops an active request before navigating to another session', async () => {

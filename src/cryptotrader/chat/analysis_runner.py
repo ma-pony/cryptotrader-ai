@@ -26,18 +26,37 @@ async def run_analysis_and_buffer(
     cycle: TradingCycle,
     trigger_source: str = "chat",
 ) -> None:
-    await event_bus.publish(
-        "session_start",
-        {"session_id": session_id, "pair": pair, "trigger_source": trigger_source},
-    )
-    if interrupt_event.is_set():
-        await event_bus.publish("cycle_cancelled", {"session_id": session_id, "status": "cancelled"})
-        await event_bus.publish("stream_done", {"session_id": session_id, "interrupted": True})
-        await state_mgr.set(f"analysis:status:{session_id}", "cancelled", ex=600)
-        return
+    def published_count(event_type: str) -> int:
+        counter = getattr(event_bus, "published_count", None)
+        if callable(counter):
+            return int(counter(event_type))
+        events = getattr(event_bus, "events", ())
+        return sum(1 for name, _data in events if name == event_type)
 
-    await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
+    cancelled_count_at_start = published_count("cycle_cancelled")
+    done_count_at_start = published_count("stream_done")
+
+    async def finish_cancelled() -> None:
+        done_already_published = published_count("stream_done") > done_count_at_start
+        if not done_already_published and published_count("cycle_cancelled") == cancelled_count_at_start:
+            await event_bus.publish(
+                "cycle_cancelled",
+                {"session_id": session_id, "status": "cancelled"},
+            )
+        if not done_already_published:
+            await event_bus.publish("stream_done", {"session_id": session_id, "interrupted": True})
+        await state_mgr.set(f"analysis:status:{session_id}", "cancelled", ex=600)
+
     try:
+        await event_bus.publish(
+            "session_start",
+            {"session_id": session_id, "pair": pair, "trigger_source": trigger_source},
+        )
+        if interrupt_event.is_set():
+            await finish_cancelled()
+            return
+
+        await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
         outcome = await cycle.run(CycleRequest(Pair.parse(pair), "paper"))
         await event_bus.publish(
             "stream_done",
@@ -46,8 +65,7 @@ async def run_analysis_and_buffer(
         await state_mgr.set(f"analysis:status:{session_id}", "done", ex=600)
     except asyncio.CancelledError:
         logger.info("Trading cycle cancelled: session_id=%s", session_id)
-        await event_bus.publish("stream_done", {"session_id": session_id, "interrupted": True})
-        await state_mgr.set(f"analysis:status:{session_id}", "cancelled", ex=600)
+        await finish_cancelled()
         raise
     except Exception:
         logger.exception("Trading cycle failed: session_id=%s", session_id)

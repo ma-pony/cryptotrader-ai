@@ -373,7 +373,6 @@ class ChartAnalysisConfig:
 class ChatConfig:
     event_buffer_ttl_seconds: int = 300
     max_concurrent_tasks: int = 10
-    max_steering_instruction_chars: int = 500
     event_buffer_max_size: int = 500
 
 

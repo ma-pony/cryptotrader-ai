@@ -18,6 +18,25 @@ vi.mock('@/lib/stream-fetch', () => ({
   streamFetch: streamFetchMock,
 }));
 
+const deferred = <T,>() => {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+};
+
+const terminalEvent = (type: 'stream_done' | 'stream_error', eventId: number) => ({
+  event: type,
+  data: {
+    event_id: eventId,
+    type,
+    ts: '2026-08-28T00:00:00Z',
+    session_id: 'session-1',
+    data: type === 'stream_error' ? { error: 'failed' } : { status: 'completed' },
+  },
+});
+
 describe('useChatMessages request lifecycle', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,7 +65,9 @@ describe('useChatMessages request lifecycle', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useChatMessages(null));
-    act(() => result.current.sendMessage('BTC/USDT'));
+    act(() => {
+      result.current.sendMessage('BTC/USDT');
+    });
 
     await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
     const streamOptions = streamFetchMock.mock.calls[0]?.[1];
@@ -78,7 +99,9 @@ describe('useChatMessages request lifecycle', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const { result } = renderHook(() => useChatMessages('existing/session'));
-    act(() => result.current.sendMessage('continue'));
+    act(() => {
+      result.current.sendMessage('continue');
+    });
     await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
 
     expect(streamFetchMock.mock.calls[0]?.[1].body).toEqual(expect.objectContaining({
@@ -108,7 +131,9 @@ describe('useChatMessages request lifecycle', () => {
       ({ selectedSessionId }) => useChatMessages(selectedSessionId),
       { initialProps: { selectedSessionId: 'session-1' as string | null } },
     );
-    act(() => result.current.sendMessage('analyze'));
+    act(() => {
+      result.current.sendMessage('analyze');
+    });
     await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
 
     rerender({ selectedSessionId: 'session-2' });
@@ -134,7 +159,9 @@ describe('useChatMessages request lifecycle', () => {
       ({ selectedSessionId }) => useChatMessages(selectedSessionId),
       { initialProps: { selectedSessionId: null as string | null } },
     );
-    act(() => result.current.sendMessage('analyze'));
+    act(() => {
+      result.current.sendMessage('analyze');
+    });
     await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
     const generatedSessionId = (streamFetchMock.mock.calls[0]?.[1].body as { session_id: string }).session_id;
 
@@ -145,6 +172,124 @@ describe('useChatMessages request lifecycle', () => {
 
     act(() => result.current.stopStream());
     await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+  });
+
+  it.each(['stream_done', 'stream_error'] as const)(
+    'releases only the matching run on %s before the HTTP body reaches EOF',
+    async (terminalType) => {
+      const firstStream = deferred<void>();
+      const secondStream = deferred<void>();
+      streamFetchMock
+        .mockImplementationOnce(() => firstStream.promise)
+        .mockImplementationOnce(() => secondStream.promise);
+      const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => Promise.resolve(new Response(null, { status: 200 })));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const { result } = renderHook(() => useChatMessages('session-1'));
+      act(() => {
+        result.current.sendMessage('first');
+      });
+      await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
+      const firstOptions = streamFetchMock.mock.calls[0]?.[1];
+
+      act(() => firstOptions?.onEvent?.(terminalEvent(terminalType, 1)));
+      let secondAccepted: boolean | undefined;
+      act(() => {
+        secondAccepted = result.current.sendMessage('second');
+      });
+
+      expect(secondAccepted).toBe(true);
+      await waitFor(() => expect(streamFetchMock).toHaveBeenCalledTimes(2));
+      expect(result.current.status).toBe('connecting');
+      expect(result.current.messages.map((message) => message.content_md)).toEqual(['first', 'second']);
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      act(() => firstOptions?.onEvent?.(terminalEvent(terminalType, 2)));
+      firstStream.resolve();
+      await act(async () => Promise.resolve());
+
+      expect(result.current.status).toBe('connecting');
+      expect(useChatStore.getState().pendingMessage?.content_md).toBe('second');
+
+      const secondOptions = streamFetchMock.mock.calls[1]?.[1];
+      act(() => secondOptions?.onEvent?.(terminalEvent('stream_done', 3)));
+      secondStream.resolve();
+    },
+  );
+
+  it('waits for a delayed interrupt before reusing the same session', async () => {
+    const interrupt = deferred<Response>();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => interrupt.promise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result } = renderHook(() => useChatMessages('session-1'));
+    act(() => {
+      result.current.sendMessage('first');
+    });
+    await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
+    act(() => result.current.stopStream());
+
+    let accepted: boolean | undefined;
+    act(() => {
+      accepted = result.current.sendMessage('second');
+    });
+
+    expect(accepted).toBe(true);
+    expect(result.current.status).toBe('connecting');
+    expect(streamFetchMock).toHaveBeenCalledOnce();
+
+    interrupt.resolve(new Response(null, { status: 200 }));
+    await waitFor(() => expect(streamFetchMock).toHaveBeenCalledTimes(2));
+    act(() => streamFetchMock.mock.calls[1]?.[1].onEvent?.(terminalEvent('stream_done', 2)));
+  });
+
+  it('keeps the same-session interrupt barrier across unmount and remount', async () => {
+    const interrupt = deferred<Response>();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => interrupt.promise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const firstHook = renderHook(() => useChatMessages('session-1'));
+    act(() => {
+      firstHook.result.current.sendMessage('first');
+    });
+    await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
+    act(() => firstHook.result.current.stopStream());
+    firstHook.unmount();
+
+    const secondHook = renderHook(() => useChatMessages('session-1'));
+    act(() => {
+      secondHook.result.current.sendMessage('second');
+    });
+    expect(secondHook.result.current.status).toBe('connecting');
+    expect(streamFetchMock).toHaveBeenCalledOnce();
+
+    interrupt.resolve(new Response(null, { status: 200 }));
+    await waitFor(() => expect(streamFetchMock).toHaveBeenCalledTimes(2));
+    act(() => streamFetchMock.mock.calls[1]?.[1].onEvent?.(terminalEvent('stream_done', 2)));
+  });
+
+  it('does not block a different session behind another session interrupt', async () => {
+    const interrupt = deferred<Response>();
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) => interrupt.promise);
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { result, rerender } = renderHook(
+      ({ selectedSessionId }) => useChatMessages(selectedSessionId),
+      { initialProps: { selectedSessionId: 'session-1' } },
+    );
+    act(() => {
+      result.current.sendMessage('first');
+    });
+    await waitFor(() => expect(streamFetchMock).toHaveBeenCalledOnce());
+    act(() => result.current.stopStream());
+    rerender({ selectedSessionId: 'session-2' });
+    act(() => {
+      result.current.sendMessage('second');
+    });
+
+    await waitFor(() => expect(streamFetchMock).toHaveBeenCalledTimes(2));
+    interrupt.resolve(new Response(null, { status: 200 }));
+    act(() => streamFetchMock.mock.calls[1]?.[1].onEvent?.(terminalEvent('stream_done', 2)));
   });
 
 });

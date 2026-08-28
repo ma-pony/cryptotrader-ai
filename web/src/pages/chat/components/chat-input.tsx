@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import type { StreamStatus } from '@/hooks/use-chat-messages';
 
 interface ChatInputProps {
-  onSend: (text: string) => void;
+  onSend: (text: string) => boolean;
   onStop: () => void;
   status: StreamStatus;
 }
@@ -21,7 +21,7 @@ export const ChatInput: FC<ChatInputProps> = ({ onSend, onStop, status }) => {
     if (!el) return;
     const text = el.value.trim();
     if (!text) return;
-    onSend(text);
+    if (!onSend(text)) return;
     el.value = '';
     el.style.height = 'auto';
   }, [onSend]);

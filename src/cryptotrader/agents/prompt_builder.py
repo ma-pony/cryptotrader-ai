@@ -56,9 +56,9 @@ class ConfigValidationError(Exception):
 # 核心必填 section（运行时 prompt 只保留 skill + snapshot + output_schema + user_tail）
 _REQUIRED_SECTIONS = frozenset({"system_prompt", "user_tail", "available_skills", "output_schema"})
 
-# 默认 slot 分配；live_steering / snapshot / portfolio / agent_analyses 为动态注入
+# 默认 slot 分配；snapshot / portfolio / agent_analyses 为动态注入
 _DEFAULT_SYSTEM_SLOT = ["system_prompt", "available_skills", "output_schema"]
-_DEFAULT_USER_SLOT = ["live_steering", "snapshot", "portfolio", "agent_analyses", "user_tail"]
+_DEFAULT_USER_SLOT = ["snapshot", "portfolio", "agent_analyses", "user_tail"]
 
 
 @dataclass
@@ -152,7 +152,7 @@ class ConfigLoader:
                 raise ConfigValidationError(path, f"section {sec_name!r} 在 body 中未找到")
 
         # 规则 8：priority 中每个 key 都在 sections 中（动态 section 例外）
-        _dynamic_sections = {"snapshot", "portfolio", "agent_analyses", "live_steering"}
+        _dynamic_sections = {"snapshot", "portfolio", "agent_analyses"}
         for pkey in priority:
             if pkey not in sections and pkey not in _dynamic_sections:
                 raise ConfigValidationError(path, f"priority 引用了未声明的 section: {pkey!r}")
@@ -347,14 +347,8 @@ class PromptBuilder:
         snapshot: dict,
         portfolio: dict,
         agent_analyses: dict | None = None,
-        steering: str = "",
     ) -> tuple[SystemMessage, HumanMessage]:
-        """组装 LLM messages — 唯一对外入口。
-
-        Args:
-            steering: 用户实时引导文本（来自前端 chat -> Redis 队列）。
-                非空时作为 live_steering section 注入；空时该 section 不出现在 prompt。
-        """
+        """组装 LLM messages — 唯一对外入口。"""
         t0 = time.monotonic()
 
         # 1. 获取 skills
@@ -380,8 +374,6 @@ class PromptBuilder:
         sections["portfolio"] = portfolio_text
         if agent_analyses_text:
             sections["agent_analyses"] = agent_analyses_text
-        if steering:
-            sections["live_steering"] = f"[用户实时引导]\n{steering}"
 
         # 4. Token budget
         result = self._enforcer.enforce(sections, self.config.budget, self.config.priority)

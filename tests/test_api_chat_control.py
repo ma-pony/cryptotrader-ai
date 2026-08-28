@@ -1,4 +1,4 @@
-"""Tests for chat control API endpoints — interrupt, steer, watch."""
+"""Tests for chat control API endpoints — interrupt and watch."""
 
 from __future__ import annotations
 

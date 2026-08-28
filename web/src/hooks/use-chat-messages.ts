@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { interruptChatSession } from '@/lib/chat-control';
+import { interruptChatSession, waitForChatCancellation } from '@/lib/chat-control';
 import { streamFetch, type SSEEvent } from '@/lib/stream-fetch';
 import { useChatStore } from '@/stores/use-chat-store';
 import type { ChatMessage } from '@/types/api';
@@ -13,7 +13,7 @@ export interface UseChatMessagesReturn {
   messages: ChatMessage[];
   status: StreamStatus;
   error: string | null;
-  sendMessage: (text: string, additionalContext?: AdditionalContext) => void;
+  sendMessage: (text: string, additionalContext?: AdditionalContext) => boolean;
   stopStream: () => void;
   clearMessages: () => void;
 }
@@ -25,7 +25,10 @@ export function useChatMessages(
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const activeRequestRef = useRef<{ sessionId: string; controller: AbortController } | null>(null);
+  const activeRequestRef = useRef<{
+    sessionId: string;
+    controller: AbortController;
+  } | null>(null);
   const previousSessionIdRef = useRef(sessionId);
   const { upsertSession, setPendingMessage } = useChatStore();
 
@@ -33,8 +36,8 @@ export function useChatMessages(
     const activeRequest = activeRequestRef.current;
     if (!activeRequest) return false;
 
-    activeRequestRef.current = null;
     void interruptChatSession(activeRequest.sessionId).catch(() => undefined);
+    activeRequestRef.current = null;
     activeRequest.controller.abort();
     return true;
   }, []);
@@ -60,7 +63,14 @@ export function useChatMessages(
     }
   }, [sessionId, stopStream]);
 
-  const handleEvent = useCallback((event: SSEEvent) => {
+  const handleEvent = useCallback((
+    event: SSEEvent,
+    run: { sessionId: string; controller: AbortController },
+  ) => {
+    if (activeRequestRef.current !== run) return;
+    if (event.event === 'stream_done' || event.event === 'stream_error') {
+      activeRequestRef.current = null;
+    }
     onCycleEvent?.(event);
     const envelope = event.data as SSEEnvelope;
 
@@ -109,7 +119,7 @@ export function useChatMessages(
   }, [onCycleEvent, setPendingMessage, upsertSession]);
 
   const sendMessage = useCallback((text: string, additionalContext?: AdditionalContext) => {
-    if (activeRequestRef.current) return;
+    if (activeRequestRef.current) return false;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -124,30 +134,33 @@ export function useChatMessages(
 
     const requestSessionId = sessionId ?? crypto.randomUUID();
     const controller = new AbortController();
-    activeRequestRef.current = { sessionId: requestSessionId, controller };
-    void streamFetch('/api/chat/stream', {
-      body: {
-        session_id: requestSessionId,
-        message: text,
-        ...(additionalContext ? { additional_context: additionalContext } : {}),
-      },
-      signal: controller.signal,
-      onEvent: handleEvent,
-      onError: (streamError) => {
-        setError(streamError.message);
-        setStatus('error');
-        setPendingMessage(null);
-      },
-    }).catch((streamError: unknown) => {
+    const run = { sessionId: requestSessionId, controller };
+    activeRequestRef.current = run;
+    void (async () => {
+      await waitForChatCancellation(requestSessionId);
+      if (controller.signal.aborted || activeRequestRef.current !== run) return;
+      await streamFetch('/api/chat/stream', {
+        body: {
+          session_id: requestSessionId,
+          message: text,
+          ...(additionalContext ? { additional_context: additionalContext } : {}),
+        },
+        signal: controller.signal,
+        onEvent: (event) => handleEvent(event, run),
+      });
+    })().catch((streamError: unknown) => {
       if ((streamError as Error).name === 'AbortError') return;
+      if (activeRequestRef.current !== run) return;
+      activeRequestRef.current = null;
       setError((streamError as Error).message);
       setStatus('error');
       setPendingMessage(null);
     }).finally(() => {
-      if (activeRequestRef.current?.controller === controller) {
+      if (activeRequestRef.current === run) {
         activeRequestRef.current = null;
       }
     });
+    return true;
   }, [handleEvent, sessionId, setPendingMessage]);
 
   const clearMessages = useCallback(() => {
