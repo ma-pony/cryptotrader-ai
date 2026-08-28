@@ -23,6 +23,10 @@ if TYPE_CHECKING:
     )
 
 
+class VenueOperationError(RuntimeError):
+    """A credential-safe failure raised by a normalized venue operation."""
+
+
 @runtime_checkable
 class VenueAdapter(Protocol):
     """A code-owned platform implementation that opens isolated sessions."""

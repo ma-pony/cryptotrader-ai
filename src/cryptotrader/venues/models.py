@@ -292,17 +292,19 @@ class ProtectionSpec:
 
     def validate_geometry(self, reference_price: Decimal) -> None:
         """Require every protection price to be beyond the execution reference."""
+        if not self.has_valid_geometry(reference_price):
+            raise ValueError("invalid protection price geometry")
+
+    def has_valid_geometry(self, reference_price: Decimal) -> bool:
+        """Return whether every protection price is beyond the execution reference."""
         _require_decimal(reference_price, "reference_price", positive=True)
         if self.position_side == "long":
-            valid = (self.stop_loss is None or self.stop_loss < reference_price) and (
+            return (self.stop_loss is None or self.stop_loss < reference_price) and (
                 self.take_profit is None or self.take_profit > reference_price
             )
-        else:
-            valid = (self.stop_loss is None or self.stop_loss > reference_price) and (
-                self.take_profit is None or self.take_profit < reference_price
-            )
-        if not valid:
-            raise ValueError("invalid protection price geometry")
+        return (self.stop_loss is None or self.stop_loss > reference_price) and (
+            self.take_profit is None or self.take_profit < reference_price
+        )
 
 
 @dataclass(frozen=True)

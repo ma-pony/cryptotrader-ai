@@ -17,16 +17,13 @@ from cryptotrader.venues.models import (
     VenueCapabilities,
     VenueQuote,
 )
+from cryptotrader.venues.protocol import VenueOperationError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from cryptotrader.pair import Pair
     from cryptotrader.venues.models import ProtectionSpec, VenueConnection
-
-
-class VenueOperationError(RuntimeError):
-    """A credential-safe failure at the normalized venue boundary."""
 
 
 def create_async_client(exchange_id: str, config: dict[str, Any], client_factory: Callable | None = None) -> Any:

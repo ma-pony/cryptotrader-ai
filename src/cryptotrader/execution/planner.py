@@ -13,6 +13,7 @@ from cryptotrader.decision.models import OrderIntent as LegacyOrderIntent
 from cryptotrader.execution.models import BookExecutionProposal, ConnectionExecutionPlan
 from cryptotrader.risk.models import ConnectionRiskDecision, ConnectionRiskRequest
 from cryptotrader.venues.models import OpenVenueState, ProtectionSpec, VenueCapabilities, VenueQuote
+from cryptotrader.venues.protocol import VenueOperationError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -215,49 +216,44 @@ class ExecutionPlanner:
         current_amount = portfolio.position.signed_amount
         target_amount = Decimal("0") if target_notional == 0 else target_notional / execution_price
         delta_amount = target_amount - current_amount
-        try:
-            self._validate_protection(
-                pair,
-                target_amount,
-                execution_price,
-                inputs.capabilities,
-                stop_loss,
-                take_profit,
-            )
-        except Exception:
+        if not self._valid_protection(
+            pair,
+            target_amount,
+            execution_price,
+            inputs.capabilities,
+            stop_loss,
+            take_profit,
+        ):
             return self._failure(target, portfolio, "validate_protection", unavailable=False)
 
         try:
             amount = await session.normalize_amount(pair, abs(delta_amount))
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except VenueOperationError:
             return self._failure(target, portfolio, "normalize_amount", unavailable=True)
 
-        try:
-            signed_fill = amount if side == "buy" else -amount
-            post_fill_amount = current_amount + signed_fill
-            reduce_only = self._reduces_position(current_amount, target_amount)
-            target_is_flat = target_amount == 0
-            plan = self._build_connection_plan(
-                target=target,
-                portfolio=portfolio,
-                pair=pair,
-                inputs=inputs,
-                execution_price=execution_price,
-                amount=amount,
-                current_amount=current_amount,
-                target_amount=target_amount,
-                delta_amount=delta_amount,
-                post_fill_amount=post_fill_amount,
-                side=side,
-                reduce_only=reduce_only,
-                stop_loss=None if target_is_flat else stop_loss,
-                take_profit=None if target_is_flat else take_profit,
-            )
-            return _PreflightResult(decision, plan, False, "")
-        except Exception:
-            return self._failure(target, portfolio, "build_plan", unavailable=False)
+        signed_fill = amount if side == "buy" else -amount
+        post_fill_amount = current_amount + signed_fill
+        reduce_only = self._reduces_position(current_amount, target_amount)
+        target_is_flat = target_amount == 0
+        plan = self._build_connection_plan(
+            target=target,
+            portfolio=portfolio,
+            pair=pair,
+            inputs=inputs,
+            execution_price=execution_price,
+            amount=amount,
+            current_amount=current_amount,
+            target_amount=target_amount,
+            delta_amount=delta_amount,
+            post_fill_amount=post_fill_amount,
+            side=side,
+            reduce_only=reduce_only,
+            stop_loss=None if target_is_flat else stop_loss,
+            take_profit=None if target_is_flat else take_profit,
+        )
+        return _PreflightResult(decision, plan, False, "")
 
     async def _read_preflight_inputs(
         self,
@@ -266,8 +262,10 @@ class ExecutionPlanner:
         session: VenueSession | None,
         pair: Pair,
     ) -> _PreflightInputs | _PreflightResult:
-        if session is None or getattr(session, "connection_id", None) != target.connection_id:
+        if session is None:
             return self._failure(target, portfolio, "session", unavailable=True)
+        if getattr(session, "connection_id", None) != target.connection_id:
+            raise ExecutionPlanningError("session connection_id must match the connection target")
         quote, state = await asyncio.gather(
             session.fetch_quote(pair),
             session.list_open_state(pair),
@@ -277,14 +275,15 @@ class ExecutionPlanner:
             raise quote
         if isinstance(state, asyncio.CancelledError):
             raise state
-        if isinstance(quote, Exception):
+        if isinstance(quote, BaseException) and not isinstance(quote, VenueOperationError):
+            raise quote
+        if isinstance(state, BaseException) and not isinstance(state, VenueOperationError):
+            raise state
+        if isinstance(quote, VenueOperationError):
             return self._failure(target, portfolio, "fetch_quote", unavailable=True)
-        if isinstance(state, Exception):
+        if isinstance(state, VenueOperationError):
             return self._failure(target, portfolio, "list_open_state", unavailable=True)
-        try:
-            return _PreflightInputs(quote, state, session.capabilities)
-        except Exception:
-            return self._failure(target, portfolio, "build_risk_request", unavailable=False)
+        return _PreflightInputs(quote, state, session.capabilities)
 
     def _evaluate_connection_risk(
         self,
@@ -292,21 +291,15 @@ class ExecutionPlanner:
         portfolio: ConnectionPortfolioSnapshot,
         inputs: _PreflightInputs,
     ) -> ConnectionRiskDecision | _PreflightResult:
-        try:
-            request = ConnectionRiskRequest(
-                target,
-                portfolio,
-                True,
-                inputs.quote,
-                inputs.state,
-                inputs.capabilities,
-            )
-        except Exception:
-            return self._failure(target, portfolio, "build_risk_request", unavailable=False)
-        try:
-            decision = self._connection_risk_gate.evaluate(request)
-        except Exception:
-            return self._failure(target, portfolio, "risk_gate", unavailable=False)
+        request = ConnectionRiskRequest(
+            target,
+            portfolio,
+            True,
+            inputs.quote,
+            inputs.state,
+            inputs.capabilities,
+        )
+        decision = self._connection_risk_gate.evaluate(request)
         return decision if decision.passed else self._rejected(decision)
 
     @staticmethod
@@ -411,23 +404,23 @@ class ExecutionPlanner:
         return "sell" if current_notional > 0 else "buy"
 
     @staticmethod
-    def _validate_protection(
+    def _valid_protection(
         pair: Pair,
         target_amount: Decimal,
         execution_price: Decimal,
         capabilities,
         stop_loss: Decimal | None,
         take_profit: Decimal | None,
-    ) -> None:
+    ) -> bool:
         if target_amount == 0:
-            return
+            return True
         has_protection = stop_loss is not None or take_profit is not None
         if pair.market_type != "spot" and not has_protection:
-            raise ValueError("non-flat derivative target requires protection")
+            return False
         if not has_protection:
-            return
+            return True
         if not capabilities.native_protection:
-            raise ValueError("protection target requires native protection capability")
+            return False
         spec = ProtectionSpec(
             pair,
             "long" if target_amount > 0 else "short",
@@ -435,7 +428,7 @@ class ExecutionPlanner:
             stop_loss,
             take_profit,
         )
-        spec.validate_geometry(execution_price)
+        return spec.has_valid_geometry(execution_price)
 
     @staticmethod
     def _reduces_position(current: Decimal, target: Decimal) -> bool:

@@ -17,6 +17,7 @@ from cryptotrader.venues.models import (
     VenueCapabilities,
     VenueQuote,
 )
+from cryptotrader.venues.protocol import VenueOperationError
 
 PAIR = Pair.parse("BTC/USDT:USDT")
 SPOT_PAIR = Pair.parse("BTC/USDT")
@@ -91,6 +92,7 @@ class _Session:
         *,
         unavailable: bool = False,
         normalize_error: bool = False,
+        normalize_invariant_error: bool = False,
         state_error: bool = False,
         unsafe_normalization: bool = False,
         protection_ids: tuple[str, ...] = (),
@@ -100,6 +102,7 @@ class _Session:
         self._snapshot = snapshot
         self._unavailable = unavailable
         self._normalize_error = normalize_error
+        self._normalize_invariant_error = normalize_invariant_error
         self._state_error = state_error
         self._unsafe_normalization = unsafe_normalization
         self.normalize_calls: list[tuple[Pair, Decimal]] = []
@@ -121,18 +124,20 @@ class _Session:
 
     async def fetch_quote(self, pair):
         if self._unavailable:
-            raise RuntimeError("RAW_SECRET_MARKER venue response")
+            raise VenueOperationError("RAW_SECRET_MARKER venue response")
         return VenueQuote(pair, Decimal("99"), Decimal("101"), Decimal("100"))
 
     async def list_open_state(self, pair):
         if self._unavailable or self._state_error:
-            raise RuntimeError("RAW_SECRET_MARKER venue response")
+            raise VenueOperationError("RAW_SECRET_MARKER venue response")
         return self._state
 
     async def normalize_amount(self, pair, base_amount):
         self.normalize_calls.append((pair, base_amount))
         if self._normalize_error:
-            raise RuntimeError("RAW_SECRET_MARKER precision response")
+            raise VenueOperationError("RAW_SECRET_MARKER precision response")
+        if self._normalize_invariant_error:
+            raise ValueError("normalize contract violation")
         if self._unsafe_normalization:
             return base_amount + Decimal("1")
         return base_amount.quantize(Decimal("0.001"), rounding=ROUND_DOWN)
@@ -143,6 +148,7 @@ def _sessions(
     *,
     unavailable: str | None = None,
     normalize_error: str | None = None,
+    normalize_invariant_error: str | None = None,
     state_error: str | None = None,
     unsafe_normalization: str | None = None,
     protection_ids: tuple[str, ...] = (),
@@ -152,6 +158,7 @@ def _sessions(
             snapshot,
             unavailable=snapshot.connection_id == unavailable,
             normalize_error=snapshot.connection_id == normalize_error,
+            normalize_invariant_error=snapshot.connection_id == normalize_invariant_error,
             state_error=snapshot.connection_id == state_error,
             unsafe_normalization=snapshot.connection_id == unsafe_normalization,
             protection_ids=protection_ids if snapshot.connection_id == "reachable" else (),
@@ -376,50 +383,67 @@ async def test_partial_derivative_reduction_requires_valid_target_side_protectio
 
 
 @pytest.mark.asyncio
-async def test_mixed_pair_open_state_is_an_invariant_failure_not_venue_unavailability():
-    request = _request()
+@pytest.mark.parametrize("fault", ["mixed_pair", "normalize_exception", "unsafe_normalization"])
+async def test_reduction_invariants_abort_the_whole_proposal_instead_of_returning_a_sibling_plan(fault):
+    request = _request(target="0", current=("1000", "2000"), amounts=("10", "20"))
     sessions = _sessions(request.portfolio)
-    malformed = sessions["reachable"]._state
-    foreign = ProtectionState(
-        ("foreign",),
-        Pair.parse("ETH/USDT:USDT"),
-        "long",
-        Decimal("1"),
-        Decimal("90"),
-        None,
-        True,
-        False,
-    )
-    object.__setattr__(malformed, "protections", (foreign,))
+    broken = sessions["unreachable"]
+    if fault == "mixed_pair":
+        foreign = ProtectionState(
+            ("foreign",),
+            Pair.parse("ETH/USDT:USDT"),
+            "long",
+            Decimal("1"),
+            Decimal("90"),
+            None,
+            True,
+            False,
+        )
+        object.__setattr__(broken._state, "protections", (foreign,))
+    elif fault == "normalize_exception":
+        broken._normalize_invariant_error = True
+    else:
+        broken._unsafe_normalization = True
 
-    proposal = await _propose(request, sessions)
-
-    assert proposal.ready is False
-    assert proposal.connection_plans == ()
-    assert proposal.unavailable_connections == ()
-    assert proposal.connection_risks[0].operation == "build_risk_request"
-    assert proposal.errors[0] == "connection reachable: build_risk_request failed"
+    with pytest.raises(ValueError):
+        await _propose(request, sessions)
 
 
 @pytest.mark.asyncio
-async def test_preflight_failures_are_safely_classified_without_raw_exception_context():
+async def test_actual_venue_operation_failure_is_safely_classified_while_reduction_proceeds():
     request = _request(target="0", current=("1000", "2000"), amounts=("10", "20"))
-    sessions = _sessions(request.portfolio, state_error="unreachable", unsafe_normalization="reachable")
+    sessions = _sessions(request.portfolio, state_error="unreachable")
 
     proposal = await _propose(request, sessions)
 
-    assert proposal.ready is False
-    assert proposal.connection_plans == ()
+    assert proposal.ready is True
+    assert tuple(plan.connection_id for plan in proposal.connection_plans) == ("reachable",)
     assert proposal.unavailable_connections == ("unreachable",)
     assert tuple((decision.connection_id, decision.operation) for decision in proposal.connection_risks) == (
-        ("reachable", "build_plan"),
+        ("reachable", ""),
         ("unreachable", "list_open_state"),
     )
-    assert proposal.errors == (
-        "connection reachable: build_plan failed",
-        "connection unreachable: list_open_state failed",
-    )
+    assert proposal.errors == ("connection unreachable: list_open_state failed",)
     assert "RAW_SECRET_MARKER" not in repr(proposal)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_venue_failure_does_not_hide_a_state_invariant_failure():
+    request = _request(target="0", current=("1000", "2000"), amounts=("10", "20"))
+    sessions = _sessions(request.portfolio)
+    broken = sessions["unreachable"]
+
+    async def unavailable_quote(pair):
+        raise VenueOperationError("RAW_SECRET_MARKER venue response")
+
+    async def invalid_state(pair):
+        raise ValueError("state contract violation")
+
+    broken.fetch_quote = unavailable_quote
+    broken.list_open_state = invalid_state
+
+    with pytest.raises(ValueError, match="state contract violation"):
+        await _propose(request, sessions)
 
 
 @pytest.mark.asyncio
@@ -463,3 +487,38 @@ async def test_execution_dtos_reject_impossible_prices_transitions_capabilities_
             connection_plans=(proposal.connection_plans[0],),
             unavailable_connections=("unreachable",),
         )
+
+
+@pytest.mark.asyncio
+async def test_book_proposal_rejects_risk_targets_from_a_foreign_book():
+    request = _request(target="0.5", current=("1000", "1000"), amounts=("10", "10"))
+    proposal = await _propose(request, _sessions(request.portfolio))
+    foreign_risk = replace(
+        proposal.risk,
+        connection_targets=tuple(replace(target, book_id="foreign") for target in proposal.risk.connection_targets),
+    )
+
+    with pytest.raises(ValueError, match="proposal book"):
+        replace(proposal, risk=foreign_risk)
+
+
+@pytest.mark.asyncio
+async def test_book_proposal_rejects_a_coherent_plan_for_a_different_risk_target_notional():
+    request = _request(target="0.5", current=("1000", "1000"), amounts=("10", "10"))
+    proposal = await _propose(request, _sessions(request.portfolio))
+    plan = proposal.connection_plans[0]
+    foreign_target_notional = Decimal("2100")
+    foreign_target_amount = foreign_target_notional / plan.execution_price
+    foreign_delta_amount = foreign_target_amount - plan.current_signed_amount
+    coherent_foreign_plan = replace(
+        plan,
+        target_signed_notional=foreign_target_notional,
+        delta_signed_notional=foreign_target_notional - plan.current_signed_notional,
+        target_signed_amount=foreign_target_amount,
+        delta_signed_amount=foreign_delta_amount,
+        post_fill_signed_amount=foreign_target_amount,
+        amount=foreign_delta_amount,
+    )
+
+    with pytest.raises(ValueError, match="risk target"):
+        replace(proposal, connection_plans=(coherent_foreign_plan, proposal.connection_plans[1]))

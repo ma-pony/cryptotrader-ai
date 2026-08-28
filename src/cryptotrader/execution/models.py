@@ -306,6 +306,8 @@ class BookExecutionProposal:
         _require_decimal(self.target_exposure, "target_exposure")
         if not isinstance(self.risk, BookRiskDecision):
             raise ValueError("risk must be a BookRiskDecision")
+        if any(target.book_id != self.book_id for target in self.risk.connection_targets):
+            raise ValueError("connection risk targets must belong to the proposal book")
         if self.requested_target_exposure != self.risk.requested_target_exposure:
             raise ValueError("requested_target_exposure must match the risk decision")
         if self.target_exposure != self.risk.capped_target_exposure:
@@ -342,6 +344,12 @@ class BookExecutionProposal:
         plan_ids = tuple(plan.connection_id for plan in self.connection_plans)
         if len(plan_ids) != len(set(plan_ids)) or not self._is_ordered_subset(plan_ids, expected_ids):
             raise ValueError("connection plans must be unique and preserve configured order")
+        targets_by_id = {target.connection_id: target for target in self.risk.connection_targets}
+        if any(
+            plan.target_signed_notional != targets_by_id[plan.connection_id].target_signed_notional
+            for plan in self.connection_plans
+        ):
+            raise ValueError("connection plan target notional must match its risk target")
         if not self._is_ordered_subset(self.unavailable_connections, expected_ids):
             raise ValueError("unavailable connections must preserve configured order")
         if set(plan_ids).intersection(self.unavailable_connections):
