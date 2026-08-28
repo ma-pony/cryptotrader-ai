@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 import re
 from collections.abc import Mapping
@@ -16,15 +17,26 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.decision.models import TargetPosition
-from cryptotrader.execution.codec import book_execution_result_from_payload, book_execution_result_payload
-from cryptotrader.journal.models import MultiVenueCycleRecord, TradingCycleRecord
+from cryptotrader.execution.codec import (
+    book_execution_proposal_from_payload,
+    book_execution_proposal_payload,
+    book_execution_result_from_payload,
+    book_execution_result_payload,
+)
+from cryptotrader.journal.models import (
+    BookCycleResult,
+    BookHitlSnapshot,
+    MultiVenueCycleRecord,
+    TradingCycleRecord,
+)
 from cryptotrader.pair import Pair
+from cryptotrader.portfolio.models import BookPortfolioSnapshot, ConnectionPortfolioSnapshot
 from cryptotrader.signals.fusion import ComponentContribution, FusedSignal
 from cryptotrader.signals.models import ComponentSignal
+from cryptotrader.venues.models import ConnectionPosition
 
 if TYPE_CHECKING:
     from cryptotrader.decision.models import CycleStatus
-    from cryptotrader.execution.models import BookExecutionResult
 
 _ready: set[str] = set()
 _multi_venue_ready: set[str] = set()
@@ -324,6 +336,11 @@ def _codec_array(value: Any) -> list[Any]:
     return value
 
 
+def _require_journal_version(value: Any) -> None:
+    if type(value) is not int or value != _JOURNAL_CODEC_VERSION:
+        raise ValueError("unsupported journal codec version")
+
+
 def _detail_payload(value: Any) -> dict[str, Any]:
     if isinstance(value, Mapping):
         return {
@@ -440,8 +457,7 @@ def _component_signals_payload(values: tuple[ComponentSignal, ...]) -> dict[str,
 
 def _component_signals_from_payload(value: Any) -> tuple[ComponentSignal, ...]:
     payload = _codec_object(value, {"version", "items"})
-    if payload["version"] != _JOURNAL_CODEC_VERSION:
-        raise ValueError("unsupported journal codec version")
+    _require_journal_version(payload["version"])
     return tuple(_component_signal_from_payload(item) for item in _codec_array(payload["items"]))
 
 
@@ -466,8 +482,7 @@ def _fused_signal_payload(value: FusedSignal | None) -> dict[str, Any]:
 
 def _fused_signal_from_payload(value: Any) -> FusedSignal | None:
     wrapper = _codec_object(value, {"version", "value"})
-    if wrapper["version"] != _JOURNAL_CODEC_VERSION:
-        raise ValueError("unsupported journal codec version")
+    _require_journal_version(wrapper["version"])
     if wrapper["value"] is None:
         return None
     payload = _codec_object(wrapper["value"], {"score", "contributions", "reasoning"})
@@ -491,30 +506,173 @@ def _target_position_payload(value: TargetPosition | None) -> dict[str, Any]:
 
 def _target_position_from_payload(value: Any) -> TargetPosition | None:
     wrapper = _codec_object(value, {"version", "value"})
-    if wrapper["version"] != _JOURNAL_CODEC_VERSION:
-        raise ValueError("unsupported journal codec version")
+    _require_journal_version(wrapper["version"])
     if wrapper["value"] is None:
         return None
     payload = _codec_object(wrapper["value"], {"side", "size_ratio"})
     return TargetPosition(payload["side"], payload["size_ratio"])
 
 
-def _book_results_payload(values: tuple[BookExecutionResult, ...]) -> dict[str, Any]:
+def _connection_portfolio_payload(value: ConnectionPortfolioSnapshot) -> dict[str, Any]:
     return {
-        "version": _JOURNAL_CODEC_VERSION,
-        "items": [book_execution_result_payload(item) for item in values],
+        "connection_id": value.connection_id,
+        "equity": str(value.equity),
+        "balances": [[asset, str(amount)] for asset, amount in value.balances.items()],
+        "position": {
+            "pair": value.position.pair.canonical(),
+            "signed_amount": str(value.position.signed_amount),
+            "signed_notional": str(value.position.signed_notional),
+            "entry_price": None if value.position.entry_price is None else str(value.position.entry_price),
+        },
     }
 
 
-def _book_results_from_payload(value: Any) -> tuple[BookExecutionResult, ...]:
+def _decimal_from_payload(value: Any) -> Decimal:
+    if type(value) is not str:
+        raise ValueError("invalid journal decimal")
+    result = Decimal(value)
+    if not result.is_finite():
+        raise ValueError("invalid journal decimal")
+    return result
+
+
+def _connection_portfolio_from_payload(value: Any) -> ConnectionPortfolioSnapshot:
+    payload = _codec_object(value, {"connection_id", "equity", "balances", "position"})
+    balances: dict[str, Decimal] = {}
+    for raw_balance in _codec_array(payload["balances"]):
+        if type(raw_balance) is not list or len(raw_balance) != 2 or type(raw_balance[0]) is not str:
+            raise ValueError("invalid journal balance")
+        asset = raw_balance[0]
+        if asset in balances:
+            raise ValueError("duplicate journal balance asset")
+        balances[asset] = _decimal_from_payload(raw_balance[1])
+    position_payload = _codec_object(
+        payload["position"],
+        {"pair", "signed_amount", "signed_notional", "entry_price"},
+    )
+    if type(position_payload["pair"]) is not str:
+        raise ValueError("invalid journal position pair")
+    entry_price = position_payload["entry_price"]
+    return ConnectionPortfolioSnapshot(
+        payload["connection_id"],
+        _decimal_from_payload(payload["equity"]),
+        balances,
+        ConnectionPosition(
+            Pair.parse(position_payload["pair"]),
+            _decimal_from_payload(position_payload["signed_amount"]),
+            _decimal_from_payload(position_payload["signed_notional"]),
+            None if entry_price is None else _decimal_from_payload(entry_price),
+        ),
+    )
+
+
+def _book_portfolio_payload(value: BookPortfolioSnapshot) -> dict[str, Any]:
+    return {
+        "book_id": value.book_id,
+        "capital_scope": value.capital_scope,
+        "total_equity": str(value.total_equity),
+        "total_signed_notional": str(value.total_signed_notional),
+        "connections": [_connection_portfolio_payload(item) for item in value.connections],
+    }
+
+
+def _book_portfolio_from_payload(value: Any) -> BookPortfolioSnapshot:
+    payload = _codec_object(
+        value,
+        {"book_id", "capital_scope", "total_equity", "total_signed_notional", "connections"},
+    )
+    return BookPortfolioSnapshot(
+        payload["book_id"],
+        payload["capital_scope"],
+        _decimal_from_payload(payload["total_equity"]),
+        _decimal_from_payload(payload["total_signed_notional"]),
+        tuple(_connection_portfolio_from_payload(item) for item in _codec_array(payload["connections"])),
+    )
+
+
+def _hitl_payload(value: BookHitlSnapshot) -> dict[str, Any]:
+    return {
+        "approval_id": value.approval_id,
+        "status": value.status,
+        "config_revision": value.config_revision,
+    }
+
+
+def _hitl_from_payload(value: Any) -> BookHitlSnapshot:
+    payload = _codec_object(value, {"approval_id", "status", "config_revision"})
+    return BookHitlSnapshot(payload["approval_id"], payload["status"], payload["config_revision"])
+
+
+def _book_cycle_result_payload(value: BookCycleResult) -> dict[str, Any]:
+    return {
+        "book_id": value.book_id,
+        "capital_scope": value.capital_scope,
+        "proposal": book_execution_proposal_payload(value.proposal),
+        "portfolio_before": _book_portfolio_payload(value.portfolio_before),
+        "hitl": _hitl_payload(value.hitl),
+        "execution": None if value.execution is None else book_execution_result_payload(value.execution),
+        "portfolio_after": (None if value.portfolio_after is None else _book_portfolio_payload(value.portfolio_after)),
+        "portfolio_after_available": value.portfolio_after_available,
+        "status": value.status,
+    }
+
+
+def _book_cycle_result_from_payload(value: Any) -> BookCycleResult:
+    payload = _codec_object(
+        value,
+        {
+            "book_id",
+            "capital_scope",
+            "proposal",
+            "portfolio_before",
+            "hitl",
+            "execution",
+            "portfolio_after",
+            "portfolio_after_available",
+            "status",
+        },
+    )
+    return BookCycleResult(
+        payload["book_id"],
+        payload["capital_scope"],
+        book_execution_proposal_from_payload(payload["proposal"]),
+        _book_portfolio_from_payload(payload["portfolio_before"]),
+        _hitl_from_payload(payload["hitl"]),
+        None if payload["execution"] is None else book_execution_result_from_payload(payload["execution"]),
+        (None if payload["portfolio_after"] is None else _book_portfolio_from_payload(payload["portfolio_after"])),
+        payload["portfolio_after_available"],
+        payload["status"],
+    )
+
+
+def _book_results_payload(values: tuple[BookCycleResult, ...]) -> dict[str, Any]:
+    return {
+        "version": _JOURNAL_CODEC_VERSION,
+        "items": [_book_cycle_result_payload(item) for item in values],
+    }
+
+
+def _book_results_from_payload(value: Any) -> tuple[BookCycleResult, ...]:
     payload = _codec_object(value, {"version", "items"})
-    if payload["version"] != _JOURNAL_CODEC_VERSION:
-        raise ValueError("unsupported journal codec version")
-    return tuple(book_execution_result_from_payload(item) for item in _codec_array(payload["items"]))
+    _require_journal_version(payload["version"])
+    return tuple(_book_cycle_result_from_payload(item) for item in _codec_array(payload["items"]))
+
+
+def _record_payloads(record: MultiVenueCycleRecord) -> tuple[dict[str, Any], ...]:
+    return (
+        _component_signals_payload(record.component_signals),
+        _fused_signal_payload(record.fused_signal),
+        _target_position_payload(record.target_position),
+        _book_results_payload(record.book_results),
+    )
 
 
 def _multi_venue_record(row: _MultiVenueCycleRow) -> MultiVenueCycleRecord:
+    raw_payloads = (row.component_signals, row.fused_signal, row.target_position, row.book_results)
+    if _contains_secret_field(raw_payloads):
+        raise ValueError("secret field")
     invalid = False
+    secret = False
     try:
         created_at = (
             row.created_at.replace(tzinfo=UTC) if row.created_at.tzinfo is None else row.created_at.astimezone(UTC)
@@ -532,8 +690,13 @@ def _multi_venue_record(row: _MultiVenueCycleRow) -> MultiVenueCycleRecord:
             row.requires_attention,
             created_at,
         )
-    except Exception:
-        invalid = True
+        if _contains_secret_field(_record_payloads(record)):
+            raise ValueError("secret field")
+    except (ArithmeticError, KeyError, TypeError, ValueError) as error:
+        secret = str(error) == "secret field"
+        invalid = not secret
+    if secret:
+        raise ValueError("secret field")
     if invalid:
         raise ValueError("stored cycle payload is invalid")
     return record
@@ -545,6 +708,7 @@ class MultiVenueCycleStore:
     def __init__(self, database_url: str | None = None) -> None:
         self.database_url = database_url
         self.records: list[MultiVenueCycleRecord] = []
+        self._lock = asyncio.Lock()
 
     async def ensure_table(self) -> None:
         if self.database_url is None or self.database_url in _multi_venue_ready:
@@ -559,10 +723,7 @@ class MultiVenueCycleStore:
             raise ValueError("record must be a MultiVenueCycleRecord")
         if any(_contains_secret_field(signal.details) for signal in record.component_signals):
             raise ValueError("secret field")
-        component_signals = _component_signals_payload(record.component_signals)
-        fused_signal = _fused_signal_payload(record.fused_signal)
-        target_position = _target_position_payload(record.target_position)
-        book_results = _book_results_payload(record.book_results)
+        component_signals, fused_signal, target_position, book_results = _record_payloads(record)
         if _contains_secret_field((component_signals, fused_signal, target_position, book_results)):
             raise ValueError("secret field")
 
@@ -599,6 +760,124 @@ class MultiVenueCycleStore:
             await session.close()
         if duplicate:
             raise ValueError("cycle already exists")
+
+    @staticmethod
+    def _validate_replacement(current: MultiVenueCycleRecord, replacement: MultiVenueCycleRecord) -> None:
+        frozen_current = (
+            current.cycle_id,
+            current.config_revision,
+            current.market_data_source_id,
+            current.component_signals,
+            current.fused_signal,
+            current.target_position,
+            current.created_at,
+        )
+        frozen_replacement = (
+            replacement.cycle_id,
+            replacement.config_revision,
+            replacement.market_data_source_id,
+            replacement.component_signals,
+            replacement.fused_signal,
+            replacement.target_position,
+            replacement.created_at,
+        )
+        if frozen_current != frozen_replacement:
+            raise ValueError("frozen cycle identity cannot change")
+        current_books = tuple(
+            (item.book_id, item.capital_scope, item.proposal, item.portfolio_before) for item in current.book_results
+        )
+        replacement_books = tuple(
+            (item.book_id, item.capital_scope, item.proposal, item.portfolio_before)
+            for item in replacement.book_results
+        )
+        if current_books != replacement_books:
+            raise ValueError("frozen book identity cannot change")
+        allowed = {
+            "ready": {"ready", "completed", "partial", "failed"},
+            "awaiting_approval": {
+                "awaiting_approval",
+                "approval_rejected",
+                "completed",
+                "partial",
+                "failed",
+            },
+            "approval_rejected": {"approval_rejected"},
+            "completed": {"completed"},
+            "partial": {"partial"},
+            "failed": {"failed"},
+        }
+        if any(
+            new.status not in allowed[old.status]
+            for old, new in zip(current.book_results, replacement.book_results, strict=True)
+        ):
+            raise ValueError("book cycle state cannot regress")
+
+    async def replace(self, record: MultiVenueCycleRecord) -> None:
+        """Advance mutable per-book outcomes while keeping cycle evidence frozen."""
+        if not isinstance(record, MultiVenueCycleRecord):
+            raise ValueError("record must be a MultiVenueCycleRecord")
+        component_signals, fused_signal, target_position, book_results = _record_payloads(record)
+        if _contains_secret_field((component_signals, fused_signal, target_position, book_results)):
+            raise ValueError("secret field")
+
+        if self.database_url is None:
+            async with self._lock:
+                index = next(
+                    (index for index, current in enumerate(self.records) if current.cycle_id == record.cycle_id),
+                    None,
+                )
+                if index is None:
+                    raise LookupError("cycle was not found")
+                self._validate_replacement(self.records[index], record)
+                self.records[index] = record
+            return
+
+        await self.ensure_table()
+        session = await get_async_session(self.database_url)
+        try:
+            row = await session.get(_MultiVenueCycleRow, record.cycle_id)
+            if row is None:
+                raise LookupError("cycle was not found")
+            current = _multi_venue_record(row)
+            self._validate_replacement(current, record)
+            statement = (
+                update(_MultiVenueCycleRow)
+                .where(
+                    _MultiVenueCycleRow.cycle_id == current.cycle_id,
+                    _MultiVenueCycleRow.config_revision == current.config_revision,
+                    _MultiVenueCycleRow.market_data_source_id == current.market_data_source_id,
+                    _MultiVenueCycleRow.component_signals == _component_signals_payload(current.component_signals),
+                    _MultiVenueCycleRow.fused_signal == _fused_signal_payload(current.fused_signal),
+                    _MultiVenueCycleRow.target_position == _target_position_payload(current.target_position),
+                    _MultiVenueCycleRow.created_at == current.created_at,
+                    _MultiVenueCycleRow.book_results == _book_results_payload(current.book_results),
+                    _MultiVenueCycleRow.cycle_status == current.cycle_status,
+                    _MultiVenueCycleRow.execution_status == current.execution_status,
+                    _MultiVenueCycleRow.requires_attention == current.requires_attention,
+                )
+                .values(
+                    book_results=book_results,
+                    cycle_status=record.cycle_status,
+                    execution_status=record.execution_status,
+                    requires_attention=record.requires_attention,
+                )
+                .returning(_MultiVenueCycleRow)
+                .execution_options(populate_existing=True)
+            )
+            returned = (await session.execute(statement)).scalar_one_or_none()
+            if returned is None:
+                await session.rollback()
+                raise ValueError("cycle changed concurrently")
+            persisted = _multi_venue_record(returned)
+            if persisted != record:
+                await session.rollback()
+                raise ValueError("stored cycle payload is invalid")
+            await session.commit()
+        except (LookupError, ValueError):
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
 
     async def get(self, cycle_id: str) -> MultiVenueCycleRecord | None:
         if self.database_url is None:

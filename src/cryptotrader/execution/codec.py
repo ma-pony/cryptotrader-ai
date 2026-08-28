@@ -27,6 +27,11 @@ from cryptotrader.venues.models import (
 _CODEC_VERSION = 1
 
 
+def _require_version(value: Any, label: str) -> None:
+    if type(value) is not int or value != _CODEC_VERSION:
+        raise ValueError(f"unsupported {label} codec version")
+
+
 def _object(value: Any, keys: set[str]) -> dict[str, Any]:
     if type(value) is not dict or set(value) != keys:
         raise ValueError("invalid encoded object")
@@ -319,8 +324,7 @@ _PROPOSAL_KEYS = {
 
 def book_execution_proposal_from_payload(value: Any) -> BookExecutionProposal:
     payload = _object(value, _PROPOSAL_KEYS)
-    if payload["version"] != _CODEC_VERSION:
-        raise ValueError("unsupported proposal codec version")
+    _require_version(payload["version"], "proposal")
     return BookExecutionProposal(
         payload["book_id"],
         payload["capital_scope"],
@@ -538,8 +542,7 @@ def book_execution_result_from_payload(value: Any) -> BookExecutionResult:
         value,
         {"version", "proposal", "connection_results", "status", "requires_attention", "reallocated"},
     )
-    if payload["version"] != _CODEC_VERSION:
-        raise ValueError("unsupported result codec version")
+    _require_version(payload["version"], "result")
     return BookExecutionResult(
         book_execution_proposal_from_payload(payload["proposal"]),
         tuple(_connection_result_from_payload(item) for item in _array(payload["connection_results"])),

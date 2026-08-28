@@ -348,11 +348,44 @@ def _utc(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _book_record(row: _BookApprovalRow) -> BookApproval:
-    invalid = False
+_APPROVAL_ENVELOPE_VERSION = 1
+_APPROVAL_ENVELOPE_KEYS = {
+    "version",
+    "approval_id",
+    "cycle_id",
+    "book_id",
+    "config_revision",
+    "proposal",
+}
+
+
+def _approval_envelope(record: BookApproval) -> dict[str, Any]:
+    return {
+        "version": _APPROVAL_ENVELOPE_VERSION,
+        "approval_id": record.approval_id,
+        "cycle_id": record.cycle_id,
+        "book_id": record.book_id,
+        "config_revision": record.config_revision,
+        "proposal": book_execution_proposal_payload(record.proposal),
+    }
+
+
+def _decode_book_record(row: _BookApprovalRow) -> BookApproval | None:
     try:
-        proposal = book_execution_proposal_from_payload(row.proposal_json)
-        record = BookApproval(
+        envelope = row.proposal_json
+        if type(envelope) is not dict or set(envelope) != _APPROVAL_ENVELOPE_KEYS:
+            raise ValueError("invalid approval envelope")
+        if type(envelope["version"]) is not int or envelope["version"] != _APPROVAL_ENVELOPE_VERSION:
+            raise ValueError("unsupported approval envelope version")
+        if (
+            envelope["approval_id"] != row.approval_id
+            or envelope["cycle_id"] != row.cycle_id
+            or envelope["book_id"] != row.book_id
+            or envelope["config_revision"] != row.config_revision
+        ):
+            raise ValueError("approval envelope identity mismatch")
+        proposal = book_execution_proposal_from_payload(envelope["proposal"])
+        return BookApproval(
             row.approval_id,
             row.cycle_id,
             row.book_id,
@@ -363,9 +396,13 @@ def _book_record(row: _BookApprovalRow) -> BookApproval:
             _utc(row.decided_at) if row.decided_at is not None else None,
             _utc(row.claimed_at) if row.claimed_at is not None else None,
         )
-    except Exception:
-        invalid = True
-    if invalid:
+    except (ArithmeticError, KeyError, TypeError, ValueError):
+        return None
+
+
+def _book_record(row: _BookApprovalRow) -> BookApproval:
+    record = _decode_book_record(row)
+    if record is None:
         raise ValueError("stored approval payload is invalid")
     return record
 
@@ -405,7 +442,7 @@ class BookApprovalStore:
             None,
             None,
         )
-        proposal_json = book_execution_proposal_payload(record.proposal)
+        proposal_json = _approval_envelope(record)
         if self.database_url is None:
             async with self._lock:
                 if any(item.approval_id == record.approval_id for item in self.records):
@@ -500,24 +537,31 @@ class BookApprovalStore:
             update(_BookApprovalRow)
             .where(_BookApprovalRow.approval_id == approval_id, _BookApprovalRow.status == "pending")
             .values(status=status, decided_at=decided_at)
+            .returning(_BookApprovalRow)
         )
         session = await get_async_session(self.database_url)
-        updated = False
+        transitioned: BookApproval | None = None
+        invalid_payload = False
         try:
             result = await session.execute(statement)
-            if result.rowcount == 1:
+            row = result.scalar_one_or_none()
+            if row is not None:
+                transitioned = _decode_book_record(row)
+            if transitioned is not None:
                 await session.commit()
-                updated = True
             else:
                 await session.rollback()
+                invalid_payload = row is not None
         finally:
             await session.close()
+        if invalid_payload:
+            raise ValueError("stored approval payload is invalid")
+        if transitioned is not None:
+            return transitioned
         record = await self.get(approval_id)
         if record is None:
             raise ApprovalNotFound("approval was not found")
-        if not updated:
-            raise ApprovalStateError("approval is not pending")
-        return record
+        raise ApprovalStateError("approval is not pending")
 
     async def claim_for_execution(
         self,
@@ -568,26 +612,34 @@ class BookApprovalStore:
                 decided_at=case((revision_changed, now), else_=_BookApprovalRow.decided_at),
                 claimed_at=case((revision_changed, _BookApprovalRow.claimed_at), else_=now),
             )
+            .returning(_BookApprovalRow)
         )
         session = await get_async_session(self.database_url)
-        transitioned = False
+        transitioned: BookApproval | None = None
+        invalid_payload = False
         try:
             result = await session.execute(transition)
-            if result.rowcount == 1:
+            row = result.scalar_one_or_none()
+            if row is not None:
+                transitioned = _decode_book_record(row)
+            if transitioned is not None:
                 await session.commit()
-                transitioned = True
             else:
                 await session.rollback()
+                invalid_payload = row is not None
         finally:
             await session.close()
+        if invalid_payload:
+            raise ValueError("stored approval payload is invalid")
+        if transitioned is not None:
+            if transitioned.status == "invalidated":
+                raise ApprovalInvalidated("approval revision is invalid")
+            return transitioned.proposal
         record = await self.get(approval_id)
         if record is None:
             raise ApprovalNotFound("approval was not found")
-        if record.status == "invalidated":
-            raise ApprovalInvalidated("approval revision is invalid")
-        if not transitioned:
-            self._raise_claim_state(record)
-        return record.proposal
+        self._raise_claim_state(record)
+        raise AssertionError("unreachable claim state")
 
     @staticmethod
     def _raise_claim_state(record: BookApproval) -> None:

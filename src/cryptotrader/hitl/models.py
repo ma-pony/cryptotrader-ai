@@ -40,6 +40,8 @@ class BookApproval:
             raise ValueError("config_revision must be a non-negative integer")
         if not isinstance(self.proposal, BookExecutionProposal):
             raise ValueError("proposal must be a BookExecutionProposal")
+        if self.proposal.ready is not True:
+            raise ValueError("approval proposal must be ready")
         if self.proposal.book_id != self.book_id:
             raise ValueError("book_id must match proposal")
         if self.proposal.config_revision != self.config_revision:

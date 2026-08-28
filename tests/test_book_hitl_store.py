@@ -19,6 +19,10 @@ def _book_proposal(*, config_revision: int = 7) -> BookExecutionProposal:
     return replace(_proposal(), config_revision=config_revision)
 
 
+def _non_ready_proposal(*, config_revision: int = 7) -> BookExecutionProposal:
+    return replace(_book_proposal(config_revision=config_revision), connection_plans=(), ready=False)
+
+
 @pytest.mark.parametrize(
     ("status", "decided", "claimed"),
     [
@@ -73,6 +77,20 @@ def test_book_approval_rejects_identity_and_time_mismatches():
         )
     with pytest.raises(ValueError, match="pending"):
         BookApproval("approval", "cycle", proposal.book_id, 7, proposal, "pending", now, now, None)
+    with pytest.raises(ValueError, match="ready"):
+        BookApproval("approval", "cycle", proposal.book_id, 7, _non_ready_proposal(), "pending", now, None, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_store_rejects_non_ready_proposal_before_create(tmp_path, database):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'non-ready.db'}" if database else None)
+
+    with pytest.raises(ValueError, match="ready"):
+        await store.create(_non_ready_proposal(), cycle_id="cycle-non-ready")
+    assert await store.list_pending() == []
 
 
 @pytest.mark.asyncio
@@ -192,6 +210,109 @@ async def test_sqlite_concurrent_claim_executes_exact_saved_proposal_once(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_sqlite_approve_claim_race_returns_exact_approved_transition_snapshot(tmp_path):
+    from cryptotrader.hitl.store import ApprovalNotApproved, BookApprovalStore
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'approve-claim-race.db'}"
+    creator = BookApprovalStore(database_url)
+    approval = await creator.create(_book_proposal(), cycle_id="cycle-approve-claim-race")
+
+    approved, claimed = await asyncio.gather(
+        BookApprovalStore(database_url).approve(approval.id),
+        BookApprovalStore(database_url).claim_for_execution(approval.id, current_revision=7),
+        return_exceptions=True,
+    )
+
+    assert not isinstance(approved, Exception)
+    assert approved.status == "approved"
+    assert isinstance(claimed, (BookExecutionProposal, ApprovalNotApproved))
+    persisted = await creator.get(approval.id)
+    assert persisted is not None
+    assert persisted.status == ("executed" if isinstance(claimed, BookExecutionProposal) else "approved")
+
+
+@pytest.mark.asyncio
+async def test_memory_claim_revalidates_approved_proposal_before_execution():
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    store = BookApprovalStore()
+    approval = await store.create(_book_proposal(), cycle_id="cycle-memory-corrupt")
+    await store.approve(approval.id)
+    object.__setattr__(approval.proposal, "ready", False)
+
+    with pytest.raises(ValueError, match="ready"):
+        await store.claim_for_execution(approval.id, current_revision=7)
+    assert store.records[0].status == "approved"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["approve", "reject", "claim"])
+async def test_sqlite_state_transition_rolls_back_when_returned_envelope_is_corrupt(tmp_path, operation):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    path = tmp_path / f"rollback-{operation}.db"
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    approval = await store.create(_book_proposal(), cycle_id="cycle-rollback")
+    if operation == "claim":
+        await store.approve(approval.id)
+    with sqlite3.connect(path) as connection:
+        envelope = json.loads(
+            connection.execute(
+                "SELECT proposal_json FROM book_approvals WHERE approval_id = ?",
+                (approval.id,),
+            ).fetchone()[0]
+        )
+        envelope["proposal"]["book_id"] = "RAW_SECRET_PAYLOAD"
+        connection.execute(
+            "UPDATE book_approvals SET proposal_json = ? WHERE approval_id = ?",
+            (json.dumps(envelope), approval.id),
+        )
+
+    async def transition():
+        if operation == "claim":
+            return await store.claim_for_execution(approval.id, current_revision=7)
+        return await getattr(store, operation)(approval.id)
+
+    with pytest.raises(ValueError, match="stored approval payload") as captured:
+        await transition()
+    with sqlite3.connect(path) as connection:
+        persisted_status = connection.execute(
+            "SELECT status FROM book_approvals WHERE approval_id = ?",
+            (approval.id,),
+        ).fetchone()[0]
+    assert persisted_status == ("approved" if operation == "claim" else "pending")
+    assert "RAW_SECRET_PAYLOAD" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_approve_returns_its_exact_transition_snapshot_without_post_commit_reread(tmp_path, monkeypatch):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'approve-race.db'}"
+    approver = BookApprovalStore(database_url)
+    claimer = BookApprovalStore(database_url)
+    approval = await approver.create(_book_proposal(), cycle_id="cycle-race")
+    original_get = approver.get
+    reread_called = False
+
+    async def raced_get(approval_id):
+        nonlocal reread_called
+        reread_called = True
+        await claimer.claim_for_execution(approval_id, current_revision=7)
+        return await original_get(approval_id)
+
+    monkeypatch.setattr(approver, "get", raced_get)
+
+    approved = await approver.approve(approval.id)
+
+    assert approved.status == "approved"
+    assert reread_called is False
+    assert await claimer.claim_for_execution(approval.id, current_revision=7) == approval.proposal
+
+
+@pytest.mark.asyncio
 async def test_sqlite_schema_has_exact_book_approval_columns(tmp_path):
     from cryptotrader.hitl.store import BookApprovalStore
 
@@ -216,11 +337,55 @@ async def test_sqlite_schema_has_exact_book_approval_columns(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_sqlite_proposal_json_is_a_strict_versioned_identity_envelope(tmp_path):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    path = tmp_path / "envelope.db"
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    approval = await store.create(
+        _book_proposal(),
+        approval_id="approval-envelope",
+        cycle_id="cycle-envelope",
+    )
+
+    with sqlite3.connect(path) as connection:
+        envelope = json.loads(
+            connection.execute(
+                "SELECT proposal_json FROM book_approvals WHERE approval_id = ?",
+                (approval.id,),
+            ).fetchone()[0]
+        )
+
+    assert set(envelope) == {"version", "approval_id", "cycle_id", "book_id", "config_revision", "proposal"}
+    assert envelope["version"] == 1
+    assert envelope["approval_id"] == approval.approval_id
+    assert envelope["cycle_id"] == approval.cycle_id
+    assert envelope["book_id"] == approval.book_id
+    assert envelope["config_revision"] == approval.config_revision
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("field_name", "invalid_value"),
-    [("book_id", "RAW_SECRET_PAYLOAD"), ("config_revision", 8)],
+    ("target", "field_name", "invalid_value"),
+    [
+        ("envelope", "version", True),
+        ("envelope", "approval_id", "other-approval"),
+        ("envelope", "cycle_id", "other-cycle"),
+        ("envelope", "book_id", "other-book"),
+        ("envelope", "config_revision", 8),
+        ("proposal", "book_id", "RAW_SECRET_PAYLOAD"),
+        ("proposal", "config_revision", 8),
+        ("row", "cycle_id", "other-cycle"),
+        ("row", "book_id", "other-book"),
+        ("row", "config_revision", 8),
+    ],
 )
-async def test_corrupt_or_identity_mismatched_sqlite_payload_fails_closed(tmp_path, field_name, invalid_value):
+async def test_corrupt_or_identity_mismatched_sqlite_payload_fails_closed(
+    tmp_path,
+    target,
+    field_name,
+    invalid_value,
+):
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / "corrupt.db"
@@ -234,11 +399,22 @@ async def test_corrupt_or_identity_mismatched_sqlite_payload_fails_closed(tmp_pa
                 (approval.id,),
             ).fetchone()[0]
         )
-        proposal_json[field_name] = invalid_value
-        connection.execute(
-            "UPDATE book_approvals SET proposal_json = ? WHERE approval_id = ?",
-            (json.dumps(proposal_json), approval.id),
-        )
+        if target == "proposal":
+            proposal_json["proposal"][field_name] = invalid_value
+        elif target == "envelope":
+            proposal_json[field_name] = invalid_value
+        else:
+            statements = {
+                "cycle_id": "UPDATE book_approvals SET cycle_id = ? WHERE approval_id = ?",
+                "book_id": "UPDATE book_approvals SET book_id = ? WHERE approval_id = ?",
+                "config_revision": "UPDATE book_approvals SET config_revision = ? WHERE approval_id = ?",
+            }
+            connection.execute(statements[field_name], (invalid_value, approval.id))
+        if target != "row":
+            connection.execute(
+                "UPDATE book_approvals SET proposal_json = ? WHERE approval_id = ?",
+                (json.dumps(proposal_json), approval.id),
+            )
 
     with pytest.raises(ValueError, match="stored approval payload") as captured:
         await store.get(approval.id)
