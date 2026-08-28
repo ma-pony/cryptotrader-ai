@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any
+import math
+from typing import TYPE_CHECKING, Any, Protocol
 
 if TYPE_CHECKING:
     from cryptotrader.decision.models import CycleRequest
@@ -11,6 +12,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _DUST_AMOUNT_THRESHOLD = 1e-6
+
+
+class MarketPriceUnavailableError(RuntimeError):
+    pass
+
+
+class TickerSource(Protocol):
+    async def latest_price(self, pair: str, exchange_id: str) -> float: ...
 
 
 def _is_dust(amount: float) -> bool:
@@ -35,12 +44,32 @@ async def _market_price(exchange: Any, pair: str) -> float:
         return 0.0
 
 
+async def _required_market_price(source: TickerSource | None, pair: str, exchange_id: str) -> float:
+    if source is None:
+        raise MarketPriceUnavailableError(f"current ticker source is unavailable for {pair}")
+    try:
+        price = float(await source.latest_price(pair, exchange_id))
+    except Exception as error:
+        message = f"current ticker unavailable for {pair}: {type(error).__name__}: {error}"
+        raise MarketPriceUnavailableError(message) from error
+    if not math.isfinite(price) or price <= 0.0:
+        raise MarketPriceUnavailableError(f"current ticker for {pair} must be positive and finite")
+    return price
+
+
 class ExchangePortfolioReader:
     """Read balances and positions from the exchange used by execution."""
 
-    def __init__(self, exchange: Any, database_url: str | None = None) -> None:
+    def __init__(
+        self,
+        exchange: Any,
+        database_url: str | None = None,
+        *,
+        ticker_source: TickerSource | None = None,
+    ) -> None:
         self.exchange = exchange
         self.database_url = database_url
+        self.ticker_source = ticker_source
 
     async def read(
         self,
@@ -50,8 +79,11 @@ class ExchangePortfolioReader:
         refresh_price: bool = False,
     ) -> dict[str, Any]:
         pair = request.pair.canonical()
-        latest_price = await _market_price(self.exchange, pair) if refresh_price else 0.0
-        execution_price = latest_price if latest_price > 0.0 else current_price
+        execution_price = (
+            await _required_market_price(self.ticker_source, pair, request.exchange_id)
+            if refresh_price
+            else current_price
+        )
         balances = await self.exchange.get_balance()
         try:
             free_balances = await self.exchange.get_free_balance()

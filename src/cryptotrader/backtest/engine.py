@@ -411,7 +411,12 @@ class BacktestEngine:
         executor.close_at(float(last[4]), int(last[0]))
         final_equity = executor.equity_at(float(last[4]))
         curve[-1] = final_equity
-        records = list(journal.records)
+        records = []
+        for outcome in outcomes:
+            record = await journal.get(outcome.cycle_id)
+            if record is None:
+                raise RuntimeError(f"backtest cycle {outcome.cycle_id!r} is missing from the journal")
+            records.append(record)
         return self._compute_result(
             final_equity,
             curve,

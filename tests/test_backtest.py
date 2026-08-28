@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -11,7 +10,7 @@ from cryptotrader.backtest.engine import BacktestEngine, BacktestExecutor
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.decision.models import CycleOutcome, ExecutionPlan, OrderIntent
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
-from tests.factories.signal_fusion import context
+from tests.factories.signal_fusion import context, cycle_record
 
 
 def _candles(count: int = 8) -> list[list]:
@@ -66,6 +65,9 @@ async def test_cycle_decides_at_signal_close_and_fills_at_next_bar_open():
     engine._candles = bars
     executor = BacktestExecutor(initial_capital=10_000.0, slippage_bps=0.0, fee_bps=0.0)
     observed: list[tuple[datetime, float]] = []
+    from cryptotrader.journal.store import CycleJournalStore
+
+    journal = CycleJournalStore()
     plan = ExecutionPlan(
         intents=(OrderIntent("BTC/USDT:USDT", "buy", 1.0, False),),
         stop_loss=1.0,
@@ -78,18 +80,78 @@ async def test_cycle_decides_at_signal_close_and_fills_at_next_bar_open():
             observed.append((request.as_of, float(snapshot.market.ohlcv["close"].iloc[-1])))
             if len(observed) == 1:
                 await executor.execute(plan, None)
-            return CycleOutcome(f"cycle-{len(observed)}", "no_change", 1)
+            cycle_id = f"cycle-{len(observed)}"
+            await journal.append(cycle_record(cycle_id=cycle_id))
+            return CycleOutcome(cycle_id, "no_change", 1)
 
     class Contexts:
         def set_execution_state(self, **_state):
             return None
 
-    await engine._run_bars(Cycle(), Contexts(), executor, SimpleNamespace(records=[]))
+    await engine._run_bars(Cycle(), Contexts(), executor, journal)
 
     first_close = datetime.fromtimestamp((bars[0][0] + 3_600_000) / 1000, UTC)
     assert observed[0] == (first_close, bars[0][4])
     assert executor.trades[0]["price"] == bars[1][1]
     assert executor.trades[0]["ts"] == bars[1][0]
+
+
+async def _run_journal_scoped_backtest(prefix: str, journal):
+    bars = _candles(4)
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-02", interval="1h")
+    engine._candles_by_timeframe = {"1h": bars}
+    engine._candles = bars
+    executor = BacktestExecutor(initial_capital=10_000.0, slippage_bps=0.0, fee_bps=0.0)
+
+    class Cycle:
+        def __init__(self):
+            self.calls = 0
+
+        async def run(self, _request):
+            self.calls += 1
+            cycle_id = f"{prefix}-{self.calls}"
+            await journal.append(cycle_record(cycle_id=cycle_id))
+            await asyncio.sleep(0)
+            return CycleOutcome(cycle_id, "no_change", 1)
+
+    class Contexts:
+        def set_execution_state(self, **_state):
+            return None
+
+    return await engine._run_bars(Cycle(), Contexts(), executor, journal)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_sqlite", [False, True])
+async def test_backtest_result_resolves_only_ordered_outcome_records(tmp_path, use_sqlite):
+    from cryptotrader.journal.store import CycleJournalStore
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'shared-cycles.db'}" if use_sqlite else None
+    journal = CycleJournalStore(database_url)
+    await journal.append(cycle_record(cycle_id="prior-live"))
+
+    result = await _run_journal_scoped_backtest("run", journal)
+
+    assert [record.cycle_id for record in result.cycle_records] == result.cycle_ids
+    assert result.cycle_ids == ["run-1", "run-2", "run-3"]
+
+
+@pytest.mark.asyncio
+async def test_concurrent_backtests_sharing_journal_do_not_cross_contaminate():
+    from cryptotrader.journal.store import CycleJournalStore
+
+    journal = CycleJournalStore()
+    await journal.append(cycle_record(cycle_id="prior-live"))
+
+    run_a, run_b = await asyncio.gather(
+        _run_journal_scoped_backtest("run-a", journal),
+        _run_journal_scoped_backtest("run-b", journal),
+    )
+
+    assert [record.cycle_id for record in run_a.cycle_records] == run_a.cycle_ids
+    assert [record.cycle_id for record in run_b.cycle_records] == run_b.cycle_ids
+    assert run_a.cycle_ids == ["run-a-1", "run-a-2", "run-a-3"]
+    assert run_b.cycle_ids == ["run-b-1", "run-b-2", "run-b-3"]
 
 
 def test_snapshot_uses_previous_completed_day_for_daily_inputs():
@@ -242,8 +304,9 @@ async def test_engine_uses_one_frozen_profile_revision_for_every_cycle(monkeypat
     release_second_bar = asyncio.Event()
 
     class FakeCycle:
-        def __init__(self, frozen_profiles):
+        def __init__(self, frozen_profiles, journal):
             self.profiles = frozen_profiles
+            self.journal = journal
             self.calls = 0
 
         async def run(self, _request):
@@ -251,7 +314,9 @@ async def test_engine_uses_one_frozen_profile_revision_for_every_cycle(monkeypat
             selected = await self.profiles.get()
             if self.calls == 2:
                 await release_second_bar.wait()
-            return CycleOutcome(f"cycle-{self.calls}", "no_change", selected.revision)
+            cycle_id = f"cycle-{self.calls}"
+            await self.journal.append(cycle_record(cycle_id=cycle_id, profile_revision=selected.revision))
+            return CycleOutcome(cycle_id, "no_change", selected.revision)
 
     profiles = MutableProfiles()
     engine = BacktestEngine(
@@ -261,7 +326,7 @@ async def test_engine_uses_one_frozen_profile_revision_for_every_cycle(monkeypat
         interval="1h",
         lookback=2,
         profile_repository=profiles,
-        cycle_factory=lambda frozen, _contexts, _executor, _journal: FakeCycle(frozen),
+        cycle_factory=lambda frozen, _contexts, _executor, journal: FakeCycle(frozen, journal),
     )
 
     async def fake_fetch(_requirements):

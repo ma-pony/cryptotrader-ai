@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from cryptotrader.profiles.models import SignalProfile
     from cryptotrader.signals.models import SignalContext
 
-ApprovalStatus = Literal["pending", "approved", "rejected"]
+ApprovalStatus = Literal["pending", "approved", "rejected", "cancelled"]
 _ready: set[str] = set()
 
 
@@ -212,6 +212,40 @@ class ApprovalStore:
 
     async def reject(self, approval_id: str, *, decision_by: str) -> ApprovalRecord:
         return await self._decide(approval_id, "rejected", decision_by)
+
+    async def cancel_pending(self, approval_id: str) -> ApprovalRecord | None:
+        decided_at = datetime.now(UTC)
+        if self.database_url is None:
+            async with self._lock:
+                for index, record in enumerate(self.records):
+                    if record.approval_id != approval_id:
+                        continue
+                    if record.status != "pending":
+                        return record
+                    cancelled = replace(record, status="cancelled", decided_at=decided_at)
+                    self.records[index] = cancelled
+                    return cancelled
+            return None
+
+        await self.ensure_table()
+        statement = (
+            update(_ApprovalRow)
+            .where(
+                _ApprovalRow.approval_id == approval_id,
+                _ApprovalRow.status == "pending",
+            )
+            .values(status="cancelled", decided_at=decided_at)
+        )
+        session = await get_async_session(self.database_url)
+        try:
+            result = await session.execute(statement)
+            if result.rowcount == 1:
+                await session.commit()
+            else:
+                await session.rollback()
+        finally:
+            await session.close()
+        return await self.get(approval_id)
 
     async def _decide(
         self,

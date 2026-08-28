@@ -121,11 +121,15 @@ def build_trading_cycle(
 
     default_profile = config.signal_profile_defaults.to_profile()
     exchange = _build_exchange(config, mode)
-    portfolio = ExchangePortfolioReader(exchange, config.infrastructure.database_url or None)
 
     from cryptotrader.data.snapshot import SnapshotAggregator
 
     aggregator = SnapshotAggregator(config.providers)
+    portfolio = ExchangePortfolioReader(
+        exchange,
+        config.infrastructure.database_url or None,
+        ticker_source=aggregator.market,
+    )
     contexts = LiveSignalContextProvider(
         aggregator,
         aggregator.market,

@@ -12,7 +12,7 @@ from cryptotrader.decision.engine import DecisionEngine
 from cryptotrader.decision.exit_policy import AtrExitPolicy
 from cryptotrader.decision.models import CycleRequest, TargetPosition
 from cryptotrader.execution.planner import ExecutionPlanner
-from cryptotrader.hitl.store import ApprovalStore
+from cryptotrader.hitl.store import ApprovalStateError, ApprovalStore
 from cryptotrader.journal.store import CycleJournalStore
 from cryptotrader.risk.models import RiskDecision
 from cryptotrader.signals.fusion import WeightedSignalFusion
@@ -157,6 +157,8 @@ def build_test_cycle(
     cancelled=False,
     cancel_context=False,
     adjusted_target=None,
+    approval_store=None,
+    journal_store=None,
 ):
     from cryptotrader.trading_cycle import TradingCycle
 
@@ -175,11 +177,11 @@ def build_test_cycle(
         fusion=WeightedSignalFusion(),
         decisions=DecisionEngine(),
         exits=AtrExitPolicy(),
-        approvals=ApprovalStore(),
+        approvals=approval_store or ApprovalStore(),
         risk=_Risk(passed=risk_passed, adjusted_target=adjusted_target),
         execution_planner=_Planner(),
         executor=_Executor(succeeds=execution_succeeds),
-        journal=CycleJournalStore(),
+        journal=journal_store or CycleJournalStore(),
         events=_Events(),
     )
 
@@ -390,6 +392,54 @@ async def test_context_collection_cancellation_writes_one_empty_terminal_record_
     assert record.fused_signal is None
     assert record.target_position is None
     assert record.trade_plan is None
+    assert [event.name for event in cycle.events.events].count("cycle_cancelled") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_sqlite", [False, True])
+async def test_post_commit_approval_creation_cancellation_is_irreversible(tmp_path, use_sqlite):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'cancelled-approval.db'}" if use_sqlite else None
+
+    class _CancelAfterCommitApprovalStore(ApprovalStore):
+        def __init__(self):
+            super().__init__(database_url)
+            self.created_approval_id = None
+
+        async def create(self, **kwargs):
+            record = await super().create(**kwargs)
+            self.created_approval_id = record.approval_id
+            raise asyncio.CancelledError
+
+    approvals = _CancelAfterCommitApprovalStore()
+    journal = CycleJournalStore(database_url)
+    cycle = build_test_cycle(
+        selected_profile=profile(hitl=True),
+        approval_store=approvals,
+        journal_store=journal,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await cycle.run(request())
+
+    approval_id = approvals.created_approval_id
+    assert approval_id is not None
+    approval = await approvals.get(approval_id)
+    assert approval is not None
+    assert approval.status == "cancelled"
+    assert await approvals.list_pending() == []
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await approvals.approve(approval_id, decision_by="web")
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await approvals.reject(approval_id, decision_by="web")
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await cycle.resume_approved(approval_id)
+    records = await journal.list(limit=10)
+    assert len(records) == 1
+    assert records[0].status == "cancelled"
+    assert records[0].component_signals == ()
+    assert records[0].fused_signal is None
+    assert records[0].target_position is None
+    assert records[0].trade_plan is None
     assert [event.name for event in cycle.events.events].count("cycle_cancelled") == 1
 
 

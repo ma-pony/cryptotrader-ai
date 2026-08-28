@@ -128,6 +128,7 @@ class TradingCycle:
             self.exit_requirement,
         )
         context = None
+        approval_id = None
         try:
             context = await self.contexts.collect(request, requirements)
             await self.events.publish(
@@ -164,12 +165,14 @@ class TradingCycle:
                     plan=plan,
                 )
             if requires_approval(profile, request.mode):
+                approval_id = str(uuid4())
                 approval = await self.approvals.create(
                     cycle_id=cycle_id,
                     cycle_request=request,
                     profile=profile,
                     signal_context=context,
                     plan=plan,
+                    approval_id=approval_id,
                     created_at=created_at,
                 )
                 await self.events.publish(
@@ -204,6 +207,8 @@ class TradingCycle:
                 plan=plan,
             )
         except asyncio.CancelledError:
+            if approval_id is not None:
+                await self.approvals.cancel_pending(approval_id)
             existing = await self.journal.get(cycle_id)
             await self._finish(
                 cycle_id=cycle_id,
@@ -237,7 +242,36 @@ class TradingCycle:
         approval = await self.approvals.approve(approval_id, decision_by=decision_by)
         context = None
         try:
-            context = await self.contexts.refresh_execution_state(approval.signal_context)
+            try:
+                context = await self.contexts.refresh_execution_state(approval.signal_context)
+            except Exception as error:
+                reason = f"{type(error).__name__}: {error}"
+                risk_result = RiskDecision(
+                    passed=False,
+                    plan=approval.plan,
+                    rejected_by="execution_state_refresh",
+                    reason=reason,
+                )
+                return await self._finish(
+                    cycle_id=approval.cycle_id,
+                    created_at=approval.created_at,
+                    status="risk_rejected",
+                    profile=approval.profile,
+                    context=approval.signal_context,
+                    signals=approval.plan.component_signals,
+                    fused=approval.plan.fused_signal,
+                    plan=approval.plan,
+                    hitl_result={
+                        "approval_id": approval.approval_id,
+                        "status": "approved",
+                        "decision_by": approval.decision_by,
+                        "refresh_status": "failed",
+                        "error": reason,
+                    },
+                    risk_result=risk_result,
+                    replace_journal=True,
+                    error=reason,
+                )
             return await self._risk_plan_execute(
                 cycle_id=approval.cycle_id,
                 created_at=approval.created_at,

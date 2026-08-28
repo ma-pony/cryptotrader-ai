@@ -6,6 +6,7 @@ OHLCV data is cached in the unified store. Ticker and orderbook are always fetch
 from __future__ import annotations
 
 import logging
+import math
 import time
 from typing import TYPE_CHECKING
 
@@ -62,6 +63,33 @@ def clip_ohlcv_at(frame: pd.DataFrame, as_of: datetime, limit: int | None = None
 
 
 class MarketCollector:
+    async def latest_price(self, pair: str, exchange_id: str = "") -> float:
+        """Read one current public ticker without collecting a new snapshot."""
+        if not exchange_id:
+            from cryptotrader.config import load_config
+
+            exchange_id = load_config().exchange_id
+        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)(
+            {"options": {"fetchMarkets": fetch_market_types(exchange_id)}}
+        )
+        try:
+            await exchange.load_markets()
+            ticker = await exchange.fetch_ticker(pair)
+        finally:
+            await exchange.close()
+        if not isinstance(ticker, dict):
+            raise ValueError(f"ticker for {pair!r} is not a mapping")
+        raw = ticker.get("last")
+        if raw is None:
+            raw = ticker.get("close")
+        try:
+            price = float(raw)
+        except (TypeError, ValueError) as error:
+            raise ValueError(f"ticker for {pair!r} has no valid price") from error
+        if not math.isfinite(price) or price <= 0.0:
+            raise ValueError(f"ticker for {pair!r} has no positive finite price")
+        return price
+
     async def collect(
         self,
         pair: str,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol
 
@@ -172,7 +173,12 @@ class LiveSignalContextProvider:
         portfolio.setdefault("recent_prices", context.portfolio.get("recent_prices", []))
         portfolio.setdefault("funding_rate", context.portfolio.get("funding_rate", 0.0))
         portfolio.setdefault("symbol", context.pair.base)
-        price = float(portfolio.get("current_price", context.current_price) or context.current_price)
+        try:
+            price = float(portfolio["current_price"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("refreshed portfolio has no valid current ticker") from error
+        if not math.isfinite(price) or price <= 0.0:
+            raise ValueError("refreshed portfolio current ticker must be positive and finite")
         equity = float(portfolio.get("total_value", 0.0) or 0.0)
         current_position = _position_snapshot(
             portfolio,

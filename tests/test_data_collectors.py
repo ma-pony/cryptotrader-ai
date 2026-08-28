@@ -74,6 +74,41 @@ async def test_market_collector():
 
 
 @pytest.mark.asyncio
+async def test_market_collector_reads_one_public_ticker_and_closes_client():
+    from cryptotrader.data.market import MarketCollector
+
+    mock_exchange = MagicMock()
+    mock_exchange.load_markets = AsyncMock()
+    mock_exchange.fetch_ticker = AsyncMock(return_value={"last": 125.0})
+    mock_exchange.close = AsyncMock()
+
+    with patch("cryptotrader.data.market.ccxt") as mock_ccxt:
+        mock_ccxt.okx.return_value = mock_exchange
+        price = await MarketCollector().latest_price("BTC/USDT:USDT", "okx")
+
+    assert price == 125.0
+    mock_exchange.fetch_ticker.assert_awaited_once_with("BTC/USDT:USDT")
+    mock_exchange.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_market_collector_rejects_invalid_public_ticker():
+    from cryptotrader.data.market import MarketCollector
+
+    mock_exchange = MagicMock()
+    mock_exchange.load_markets = AsyncMock()
+    mock_exchange.fetch_ticker = AsyncMock(return_value={"last": 0.0})
+    mock_exchange.close = AsyncMock()
+
+    with patch("cryptotrader.data.market.ccxt") as mock_ccxt:
+        mock_ccxt.okx.return_value = mock_exchange
+        with pytest.raises(ValueError, match="positive finite"):
+            await MarketCollector().latest_price("BTC/USDT:USDT", "okx")
+
+    mock_exchange.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_market_collector_paginates_large_ohlcv_request():
     """Kronos-sized requests must bypass exchange single-page limits."""
     from cryptotrader.data.market import MarketCollector

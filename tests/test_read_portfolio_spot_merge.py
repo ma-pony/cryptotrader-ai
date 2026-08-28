@@ -62,14 +62,17 @@ async def test_reader_returns_latest_pair_ticker_for_hitl_execution_refresh():
         balances={"USDT": 10_000.0},
         ticker_prices={"BTC/USDT:USDT": 125.0},
     )
+    ticker_source = AsyncMock()
+    ticker_source.latest_price = AsyncMock(return_value=125.0)
 
-    result = await ExchangePortfolioReader(ex).read(
+    result = await ExchangePortfolioReader(ex, ticker_source=ticker_source).read(
         _request("BTC/USDT:USDT"),
         100.0,
         refresh_price=True,
     )
 
     assert result["current_price"] == 125.0
+    ticker_source.latest_price.assert_awaited_once_with("BTC/USDT:USDT", "okx")
 
 
 @pytest.mark.asyncio
