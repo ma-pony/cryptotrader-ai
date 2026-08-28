@@ -324,7 +324,7 @@ class BookCycleResult:
         assert self.failure is not None
         if self.failure.stage == "risk" and self.proposal is not None:
             risk = self.proposal.risk
-            if risk.passed or not (risk.rejected_by.strip() or risk.reason.strip()):
+            if risk.passed or not risk.rejected_by.strip() or not risk.reason.strip():
                 raise ValueError("risk preparation failure requires rejected risk evidence")
 
     def _expected_hitl_states(self) -> set[str]:

@@ -729,7 +729,11 @@ async def test_sqlite_concurrent_replace_allows_only_one_progression(tmp_path):
     )
 
     assert sum(outcome is None for outcome in outcomes) == 1
-    assert sum(isinstance(outcome, ValueError) for outcome in outcomes) == 1
+    failures = tuple(outcome for outcome in outcomes if isinstance(outcome, ValueError))
+    assert len(failures) == 1
+    assert str(failures[0]) == "cycle changed concurrently"
+    assert failures[0].__cause__ is None
+    assert failures[0].__context__ is None
     assert await creator.get(initial.cycle_id) in (rejected, completed)
 
 
@@ -762,8 +766,10 @@ async def test_replace_requires_existing_cycle(tmp_path, monkeypatch, database):
     if database:
         await store.ensure_table()
         sessions = _install_tracking_write_session(monkeypatch, journal_store)
-    with pytest.raises(LookupError, match="cycle was not found"):
+    with pytest.raises(LookupError, match=r"^cycle was not found$") as captured:
         await store.replace(_record())
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
     if database:
         assert sessions[0].close_calls == 1
 
@@ -831,6 +837,31 @@ def test_risk_preparation_failure_rejects_a_contradictory_passed_risk_proposal()
 
     with pytest.raises(ValueError, match="risk"):
         replace(failure, proposal=contradictory)
+
+
+@pytest.mark.parametrize(
+    ("rejected_by", "reason"),
+    [
+        ("book_risk", ""),
+        ("", "configured book risk limit"),
+        ("", ""),
+    ],
+)
+def test_risk_preparation_failure_requires_both_rejection_diagnostics(rejected_by, reason):
+    failure = _preparation_failure_book("risk")
+    risk = replace(failure.proposal.risk, rejected_by=rejected_by, reason=reason)
+    proposal = replace(failure.proposal, risk=risk)
+
+    with pytest.raises(ValueError, match="risk"):
+        replace(failure, proposal=proposal)
+
+
+def test_risk_preparation_failure_accepts_real_rejected_proposal_evidence():
+    failure = _preparation_failure_book("risk")
+
+    assert failure.proposal.risk.passed is False
+    assert failure.proposal.risk.rejected_by == "book_risk"
+    assert failure.proposal.risk.reason == "configured book risk limit"
 
 
 @pytest.mark.parametrize("stage", ["portfolio", "allocation", "risk", "planning"])
@@ -1368,10 +1399,10 @@ async def test_replace_cannot_rewrite_awaiting_approval_identity(tmp_path, datab
 
 
 class _TrackingSession:
-    def __init__(self, inner, *, fail_add=False, fail_close=False):
+    def __init__(self, inner, *, fail_add=False, close_error=None):
         self.inner = inner
         self.fail_add = fail_add
-        self.fail_close = fail_close
+        self.close_error = close_error
         self.close_calls = 0
 
     def __getattr__(self, name):
@@ -1379,17 +1410,17 @@ class _TrackingSession:
 
     def add(self, row):
         if self.fail_add:
-            raise RuntimeError("program add failure")
+            raise RuntimeError("PRIMARY_PROGRAM_ERROR")
         return self.inner.add(row)
 
     async def close(self):
         self.close_calls += 1
         await self.inner.close()
-        if self.fail_close:
-            raise SQLAlchemyError("RAW_CLOSE_MARKER")
+        if self.close_error is not None:
+            raise self.close_error
 
 
-def _install_tracking_write_session(monkeypatch, journal_store, *, fail_add=False, fail_close=False):
+def _install_tracking_write_session(monkeypatch, journal_store, *, fail_add=False, close_error=None):
     original = journal_store._write_session
     sessions = []
 
@@ -1397,7 +1428,7 @@ def _install_tracking_write_session(monkeypatch, journal_store, *, fail_add=Fals
         session = _TrackingSession(
             await original(database_url),
             fail_add=fail_add,
-            fail_close=fail_close,
+            close_error=close_error,
         )
         sessions.append(session)
         return session
@@ -1439,7 +1470,11 @@ async def test_normal_database_write_close_failure_is_redacted(tmp_path, monkeyp
     record = _record()
     if operation == "replace":
         await store.save(record)
-    sessions = _install_tracking_write_session(monkeypatch, journal_store, fail_close=True)
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        close_error=SQLAlchemyError("RAW_CLOSE_MARKER"),
+    )
 
     async def write():
         if operation == "save":
@@ -1453,6 +1488,56 @@ async def test_normal_database_write_close_failure_is_redacted(tmp_path, monkeyp
     assert "RAW_CLOSE_MARKER" not in repr(captured.value)
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "replace"])
+async def test_program_close_failure_after_success_is_redacted(tmp_path, monkeypatch, operation):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'program-close-{operation}.db'}")
+    await store.ensure_table()
+    record = _record()
+    if operation == "replace":
+        await store.save(record)
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        close_error=RuntimeError("RAW_CLOSE_PROGRAM_ERROR"),
+    )
+
+    async def write():
+        if operation == "save":
+            return await store.save(record)
+        return await store.replace(record)
+
+    with pytest.raises(JournalPersistenceError, match=r"^journal persistence failed$") as captured:
+        await write()
+
+    assert sessions[0].close_calls == 1
+    assert "RAW_CLOSE_PROGRAM_ERROR" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_write_close_does_not_swallow_cancellation(tmp_path, monkeypatch):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'close-cancelled.db'}")
+    await store.ensure_table()
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        close_error=asyncio.CancelledError(),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await store.save(_record())
+
+    assert sessions[0].close_calls == 1
 
 
 @pytest.mark.asyncio
@@ -1470,12 +1555,19 @@ async def test_illegal_terminal_replace_closes_once_and_preserves_domain_error(t
         connection_results=(book.execution.connection_results[0], changed_result),
     )
     changed = replace(original, book_results=(replace(book, execution=changed_execution),))
-    sessions = _install_tracking_write_session(monkeypatch, journal_store, fail_close=True)
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        close_error=RuntimeError("RAW_CLOSE_PROGRAM_ERROR"),
+    )
 
-    with pytest.raises(ValueError, match=r"terminal|immutable"):
+    with pytest.raises(ValueError, match=r"^terminal book audit facts are immutable$") as captured:
         await store.replace(changed)
 
     assert sessions[0].close_calls == 1
+    assert "RAW_CLOSE_PROGRAM_ERROR" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
 
 @pytest.mark.asyncio
@@ -1522,12 +1614,12 @@ async def test_program_write_failure_closes_once_without_close_overwrite(tmp_pat
         monkeypatch,
         journal_store,
         fail_add=failure == "add",
-        fail_close=True,
+        close_error=RuntimeError("RAW_CLOSE_PROGRAM_ERROR"),
     )
     if failure == "validate":
 
         def fail_validation(*_args):
-            raise RuntimeError("program validation failure")
+            raise RuntimeError("PRIMARY_PROGRAM_ERROR")
 
         monkeypatch.setattr(MultiVenueCycleStore, "_validate_replacement", staticmethod(fail_validation))
 
@@ -1536,11 +1628,41 @@ async def test_program_write_failure_closes_once_without_close_overwrite(tmp_pat
             return await store.save(record)
         return await store.replace(record)
 
-    message = "program add failure" if failure == "add" else "program validation failure"
-    with pytest.raises(RuntimeError, match=message):
+    with pytest.raises(RuntimeError, match=r"^PRIMARY_PROGRAM_ERROR$") as captured:
         await write()
 
     assert sessions[0].close_calls == 1
+    assert "RAW_CLOSE_PROGRAM_ERROR" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_lookup_error_is_preserved_when_close_has_program_failure(tmp_path, monkeypatch):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'close-lookup.db'}")
+    record = _record()
+    await store.save(record)
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        close_error=RuntimeError("RAW_CLOSE_PROGRAM_ERROR"),
+    )
+
+    def fail_validation(*_args):
+        raise LookupError("primary lookup failure")
+
+    monkeypatch.setattr(MultiVenueCycleStore, "_validate_replacement", staticmethod(fail_validation))
+
+    with pytest.raises(LookupError, match=r"^primary lookup failure$") as captured:
+        await store.replace(record)
+
+    assert sessions[0].close_calls == 1
+    assert "RAW_CLOSE_PROGRAM_ERROR" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
 
 
 @pytest.mark.asyncio

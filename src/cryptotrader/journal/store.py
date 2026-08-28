@@ -59,7 +59,7 @@ async def _safe_rollback(session: Any) -> bool:
 async def _safe_close(session: Any) -> bool:
     try:
         await session.close()
-    except SQLAlchemyError:
+    except Exception:
         return False
     return True
 
