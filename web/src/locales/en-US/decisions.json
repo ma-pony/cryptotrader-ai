@@ -34,6 +34,7 @@
     "select_hint": "Select a decision to view details",
     "load_error": "Failed to load",
     "cycle_error": "Cycle orchestration failed",
+    "context_unavailable": "Context unavailable",
     "target": {
       "none": "No target position",
       "long": "Target long {{ratio}}",

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/lib/i18n';
 import type { DecisionDetail } from '@/types/api';
-import { CycleRiskResultSchema } from '@/types/api.schema';
+import { CycleRiskResultSchema, DecisionDetailSchema } from '@/types/api.schema';
 
 import {
   CycleDecisionDetail,
@@ -20,6 +20,7 @@ const cycleDecision = {
   status: 'completed',
   profile_revision: 7,
   context: {
+    available: true,
     pair: 'BTC/USDT',
     as_of: '2026-08-28T00:00:00Z',
     mode: 'paper',
@@ -217,5 +218,51 @@ describe('cycle decision detail', () => {
     expect(screen.getByText('Protection orders')).toBeInTheDocument();
     expect(screen.getByText('Protection trigger')).toBeInTheDocument();
     expect(screen.getAllByText('Target long 20%').length).toBeGreaterThan(0);
+  });
+
+  it('renders a context-stage failure without accessing unavailable market facts', async () => {
+    const unavailable = DecisionDetailSchema.parse({
+      ...cycleDecision,
+      status: 'cycle_failed',
+      context: {
+        available: false,
+        pair: 'BTC/USDT',
+        as_of: null,
+        mode: 'paper',
+        exchange_id: 'binance',
+      },
+      components: [],
+      component_error: null,
+      error: 'RuntimeError: context unavailable',
+      fusion: null,
+      target_position: null,
+      trade_plan: null,
+      hitl_result: null,
+      risk_result: null,
+      execution_result: null,
+    });
+
+    const zh = render(
+      <MemoryRouter>
+        <CycleDecisionDetail data={unavailable} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('周期失败')).toBeInTheDocument();
+    expect(screen.getByText('Revision 7')).toBeInTheDocument();
+    expect(screen.getByText('RuntimeError: context unavailable')).toBeInTheDocument();
+    expect(screen.getByText('上下文未生成')).toBeInTheDocument();
+    expect(screen.queryByText('ATR')).not.toBeInTheDocument();
+
+    zh.unmount();
+    await i18n.changeLanguage('en-US');
+
+    render(
+      <MemoryRouter>
+        <CycleDecisionDetail data={unavailable} />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByText('Context unavailable')).toBeInTheDocument();
   });
 });

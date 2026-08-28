@@ -16,6 +16,7 @@ from cryptotrader.cycle_serialization import (
     signal_profile_payload,
     target_payload,
     trade_plan_payload,
+    unavailable_signal_context_payload,
 )
 from cryptotrader.decision.models import CycleOutcome
 from cryptotrader.execution.planner import ExecutionPlanningError
@@ -576,14 +577,7 @@ class TradingCycle:
                 else:
                     execution_result = replace(execution_result, protection_trigger=prior_trigger)
         context_summary = (
-            signal_context_payload(context)
-            if context is not None
-            else {
-                "pair": request.pair.canonical(),
-                "as_of": request.as_of.isoformat() if request.as_of is not None else None,
-                "mode": request.mode,
-                "exchange_id": request.exchange_id,
-            }
+            signal_context_payload(context) if context is not None else unavailable_signal_context_payload(request)
         )
         pair = context.pair.canonical() if context is not None else request.pair.canonical()
         record = TradingCycleRecord(

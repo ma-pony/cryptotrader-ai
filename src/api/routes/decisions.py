@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
     from cryptotrader.journal.models import TradingCycleRecord
@@ -25,6 +25,43 @@ CycleStatusValue = Literal[
 router = APIRouter(prefix="/api/decisions", tags=["decisions"])
 
 
+class _ContextOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class _ContextPositionOut(_ContextOut):
+    side: Literal["long", "short", "flat"]
+    amount: float
+    size_ratio: float
+    avg_price: float | None
+    unrealized_pnl: float
+
+
+class AvailableContextOut(_ContextOut):
+    available: Literal[True]
+    pair: str
+    as_of: str
+    mode: Literal["live", "paper", "backtest"]
+    exchange_id: str
+    market_type: Literal["spot", "swap", "future", "option"]
+    equity: float
+    current_price: float
+    atr: float
+    current_position: _ContextPositionOut
+    portfolio: dict[str, Any]
+
+
+class UnavailableContextOut(_ContextOut):
+    available: Literal[False]
+    pair: str
+    as_of: str | None
+    mode: Literal["live", "paper", "backtest"]
+    exchange_id: str
+
+
+DecisionContextOut = Annotated[AvailableContextOut | UnavailableContextOut, Field(discriminator="available")]
+
+
 class DecisionListItem(BaseModel):
     cycle_id: str
     ts: str
@@ -33,7 +70,7 @@ class DecisionListItem(BaseModel):
     market_type: str
     status: CycleStatusValue
     profile_revision: int
-    price: float = 0.0
+    price: float | None
     fused_score: float | None = None
     target_position: dict[str, Any] | None = None
     component_error: dict[str, str] | None = None
@@ -59,7 +96,7 @@ class DecisionDetailOut(BaseModel):
     status: CycleStatusValue
     profile_revision: int
     profile: dict[str, Any]
-    context: dict[str, Any]
+    context: DecisionContextOut
     components: list[dict[str, Any]]
     component_error: dict[str, str] | None = None
     error: str | None = None
@@ -106,7 +143,11 @@ def _list_item(record: TradingCycleRecord) -> DecisionListItem:
         market_type=market_type,
         status=record.status,
         profile_revision=record.profile_revision,
-        price=float(record.context_summary.get("current_price", 0.0) or 0.0),
+        price=(
+            float(record.context_summary["current_price"])
+            if record.context_summary.get("current_price") is not None
+            else None
+        ),
         fused_score=float(score) if score is not None else None,
         target_position=_mapping(record.target_position),
         component_error=dict(record.component_error) if record.component_error is not None else None,

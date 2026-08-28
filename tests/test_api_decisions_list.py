@@ -80,6 +80,30 @@ def test_list_includes_component_failed_cycles(client: TestClient) -> None:
     assert item["component_error"] == {"llm_committee": "RuntimeError: timeout"}
 
 
+def test_list_preserves_unknown_price_for_unavailable_context(client: TestClient) -> None:
+    record = cycle_record(
+        cycle_id="cycle-context-unavailable",
+        status="cycle_failed",
+        error="RuntimeError: context unavailable",
+        context_summary={
+            "available": False,
+            "pair": "BTC/USDT:USDT",
+            "as_of": None,
+            "mode": "paper",
+            "exchange_id": "okx",
+        },
+    )
+    store = _store([record])
+    with (
+        patch("cryptotrader.config.load_config", return_value=_config()),
+        patch("cryptotrader.journal.store.CycleJournalStore", return_value=store),
+    ):
+        response = client.get("/api/decisions")
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["price"] is None
+
+
 def test_list_passes_pair_status_and_offset_to_cycle_store(client: TestClient) -> None:
     store = _store([])
     with (

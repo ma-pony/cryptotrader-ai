@@ -42,3 +42,24 @@ class TradingCycleRecord:
             raise ValueError("profile_revision must be positive")
         if self.profile_snapshot.get("revision") != self.profile_revision:
             raise ValueError("profile_snapshot revision must match profile_revision")
+        available = self.context_summary.get("available")
+        if available is True:
+            required = {
+                "pair",
+                "as_of",
+                "mode",
+                "exchange_id",
+                "market_type",
+                "equity",
+                "current_price",
+                "atr",
+                "current_position",
+                "portfolio",
+            }
+        elif available is False:
+            required = {"pair", "as_of", "mode", "exchange_id"}
+        else:
+            raise ValueError("context_summary must declare availability")
+        missing = required - self.context_summary.keys()
+        if missing:
+            raise ValueError(f"context_summary missing fields: {sorted(missing)}")

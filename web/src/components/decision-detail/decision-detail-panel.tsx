@@ -193,10 +193,14 @@ export const CycleDecisionDetail = ({ data }: { data: DecisionDetail }) => {
             </div>
             <p className="mt-2 text-xs text-muted-foreground">{formatDateTime(data.ts)} · {data.context.mode.toUpperCase()}</p>
           </div>
-          <div className="text-right">
-            <div className="font-mono text-xl font-semibold">{formatCurrency(data.context.current_price)}</div>
-            <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">ATR {formatCurrency(data.context.atr)}</div>
-          </div>
+          {data.context.available ? (
+            <div className="text-right">
+              <div className="font-mono text-xl font-semibold">{formatCurrency(data.context.current_price)}</div>
+              <div className="mt-1 text-[10px] uppercase tracking-wider text-muted-foreground">ATR {formatCurrency(data.context.atr)}</div>
+            </div>
+          ) : (
+            <div className="text-right text-xs text-muted-foreground">{t('detail.context_unavailable')}</div>
+          )}
         </div>
       </section>
 

@@ -162,6 +162,7 @@ def position_payload(position: PositionSnapshot) -> dict[str, Any]:
 
 def signal_context_payload(context: SignalContext) -> dict[str, Any]:
     return {
+        "available": True,
         "pair": context.pair.canonical(),
         "as_of": context.as_of.isoformat(),
         "mode": context.mode,
@@ -172,6 +173,16 @@ def signal_context_payload(context: SignalContext) -> dict[str, Any]:
         "atr": context.atr,
         "current_position": position_payload(context.current_position),
         "portfolio": json_value(context.portfolio),
+    }
+
+
+def unavailable_signal_context_payload(request: CycleRequest) -> dict[str, Any]:
+    return {
+        "available": False,
+        "pair": request.pair.canonical(),
+        "as_of": request.as_of.isoformat() if request.as_of is not None else None,
+        "mode": request.mode,
+        "exchange_id": request.exchange_id,
     }
 
 

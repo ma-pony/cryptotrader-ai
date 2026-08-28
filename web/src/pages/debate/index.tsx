@@ -52,6 +52,7 @@ const normalizeDir = (raw: string): NormalizedDir => {
 };
 
 const toScenario = (d: DecisionDetail): DebateScenario | null => {
+  if (!d.context.available) return null;
   const committee = d.components.find((component) => component.component_id === 'llm_committee');
   if (!committee) return null;
   const turnsApi = committee.details.debate_turns ?? [];

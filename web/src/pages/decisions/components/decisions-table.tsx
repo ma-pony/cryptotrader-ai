@@ -60,7 +60,7 @@ const Row = ({
         </span>
       </div>
       <div className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-        <span className="font-mono tabular-nums">{formatCurrency(item.price)}</span>
+        <span className="font-mono tabular-nums">{item.price === null ? '—' : formatCurrency(item.price)}</span>
         <span className="truncate">{item.target_position ? `${(item.target_position.size_ratio * 100).toFixed(0)}%` : '—'}</span>
         <span className="truncate font-mono text-[10px]">R{item.profile_revision}</span>
       </div>

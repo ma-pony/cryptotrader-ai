@@ -139,6 +139,7 @@ describe('Decision list + detail schemas', () => {
       status: 'completed',
       profile_revision: 7,
       context: {
+        available: true,
         pair: 'BTC/USDT',
         as_of: '2026-08-28T10:32:08+00:00',
         mode: 'paper',
@@ -227,6 +228,60 @@ describe('Decision list + detail schemas', () => {
     expect(parsed.target_position?.side).toBe('long');
     expect(parsed.execution_result?.retained_algo_ids).toEqual(['old-oco']);
     expect(parsed.execution_result?.protection_trigger?.algo_id).toBe('paper-oco');
+  });
+
+  it('parses a context-stage failure without invented market facts', () => {
+    const detail = {
+      cycle_id: 'cycle-context-unavailable',
+      ts: '2026-08-28T10:32:08+00:00',
+      pair: 'BTC/USDT',
+      pair_display: 'BTC/USDT',
+      market_type: 'spot',
+      status: 'cycle_failed',
+      profile_revision: 7,
+      context: {
+        available: false,
+        pair: 'BTC/USDT',
+        as_of: null,
+        mode: 'paper',
+        exchange_id: 'binance',
+      },
+      components: [],
+      component_error: null,
+      error: 'RuntimeError: context unavailable',
+      fusion: null,
+      target_position: null,
+      trade_plan: null,
+      hitl_result: null,
+      risk_result: null,
+      execution_result: null,
+    };
+
+    const parsed = DecisionDetailSchema.parse(detail);
+
+    expect(parsed.context.available).toBe(false);
+    expect(parsed.error).toBe('RuntimeError: context unavailable');
+  });
+
+  it('preserves an unknown decision-list price as null', () => {
+    const item = DecisionListItemSchema.parse({
+      cycle_id: 'cycle-context-unavailable',
+      ts: '2026-08-28T10:32:08+00:00',
+      pair: 'BTC/USDT',
+      pair_display: 'BTC/USDT',
+      market_type: 'spot',
+      status: 'cycle_failed',
+      profile_revision: 7,
+      price: null,
+      fused_score: null,
+      target_position: null,
+      component_error: null,
+      error: 'RuntimeError: context unavailable',
+      risk_result: null,
+      execution_result: null,
+    });
+
+    expect(item.price).toBeNull();
   });
 
   it('rejects the removed legacy verdict contract', () => {

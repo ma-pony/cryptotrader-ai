@@ -308,6 +308,19 @@ async def test_started_cycle_orchestration_failure_writes_one_generic_terminal(s
     record = cycle.journal.records[0]
     assert record.status == "cycle_failed"
     assert record.error == f"RuntimeError: {stage} unavailable"
+    if stage == "context":
+        expected_context = {
+            "available": False,
+            "pair": "BTC/USDT:USDT",
+            "as_of": None,
+            "mode": "paper",
+            "exchange_id": "okx",
+        }
+        assert record.context_summary == expected_context
+
+        from api.routes.decisions import _detail
+
+        assert _detail(record).model_dump()["context"] == expected_context
     assert (len(record.component_signals) > 0) is (stage != "context")
     assert (record.fused_signal is not None) is (stage in {"decision", "exit"})
     assert record.trade_plan is None

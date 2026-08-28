@@ -34,6 +34,7 @@
     "select_hint": "选择一条决策查看详情",
     "load_error": "加载失败",
     "cycle_error": "周期编排失败",
+    "context_unavailable": "上下文未生成",
     "target": {
       "none": "未生成目标仓位",
       "long": "目标多仓 {{ratio}}",

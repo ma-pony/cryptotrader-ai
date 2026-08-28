@@ -221,7 +221,7 @@ export const DecisionListItemSchema = z.object({
   market_type: MarketTypeSchema,
   status: CycleStatusSchema,
   profile_revision: z.number(),
-  price: z.number(),
+  price: z.number().nullable(),
   fused_score: z.number().nullable(),
   target_position: TargetPositionSchema.nullable(),
   component_error: z.record(z.string()).nullable(),
@@ -238,6 +238,41 @@ export const PaginatedDecisionsSchema = z.object({
   has_next: z.boolean(),
 });
 
+const SignalContextPositionSchema = z.object({
+  side: z.enum(['long', 'short', 'flat']),
+  amount: z.number(),
+  size_ratio: z.number(),
+  avg_price: z.number().nullable(),
+  unrealized_pnl: z.number(),
+}).strict();
+
+const AvailableSignalContextSchema = z.object({
+  available: z.literal(true),
+  pair: z.string(),
+  as_of: z.string(),
+  mode: z.enum(['live', 'paper', 'backtest']),
+  exchange_id: z.string(),
+  market_type: MarketTypeSchema,
+  equity: z.number(),
+  current_price: z.number(),
+  atr: z.number(),
+  current_position: SignalContextPositionSchema,
+  portfolio: z.record(z.unknown()),
+}).strict();
+
+const UnavailableSignalContextSchema = z.object({
+  available: z.literal(false),
+  pair: z.string(),
+  as_of: z.string().nullable(),
+  mode: z.enum(['live', 'paper', 'backtest']),
+  exchange_id: z.string(),
+}).strict();
+
+export const DecisionContextSchema = z.discriminatedUnion('available', [
+  AvailableSignalContextSchema,
+  UnavailableSignalContextSchema,
+]);
+
 export const DecisionDetailSchema = z.object({
   cycle_id: z.string(),
   ts: z.string(),
@@ -246,24 +281,7 @@ export const DecisionDetailSchema = z.object({
   market_type: MarketTypeSchema,
   status: CycleStatusSchema,
   profile_revision: z.number(),
-  context: z.object({
-    pair: z.string(),
-    as_of: z.string(),
-    mode: z.enum(['live', 'paper', 'backtest']),
-    exchange_id: z.string(),
-    market_type: MarketTypeSchema,
-    equity: z.number(),
-    current_price: z.number(),
-    atr: z.number(),
-    current_position: z.object({
-      side: z.enum(['long', 'short', 'flat']),
-      amount: z.number(),
-      size_ratio: z.number(),
-      avg_price: z.number().nullable(),
-      unrealized_pnl: z.number(),
-    }),
-    portfolio: z.record(z.unknown()),
-  }),
+  context: DecisionContextSchema,
   components: z.array(ComponentSignalSchema),
   component_error: z.record(z.string()).nullable(),
   error: z.string().nullable(),
