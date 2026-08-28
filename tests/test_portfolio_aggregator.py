@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import traceback
 from dataclasses import FrozenInstanceError
 from decimal import Decimal
 
@@ -129,6 +130,54 @@ async def test_aggregator_fails_the_whole_read_and_names_the_failed_connection(s
             {"okx-demo": session},
             PAIR,
         )
+
+
+async def test_aggregator_redacts_venue_failure_and_cancels_and_reaps_sibling_reads():
+    from cryptotrader.portfolio.aggregator import PortfolioAggregator, PortfolioReadError
+
+    credential_marker = "CREDENTIAL_MARKER_DO_NOT_LEAK_7F3A"
+    sibling_started = asyncio.Event()
+    sibling_cancelled = asyncio.Event()
+    sibling_reaped = asyncio.Event()
+
+    class BlockingSession(_Session):
+        async def fetch_portfolio(self, pair: Pair):
+            sibling_started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                sibling_cancelled.set()
+                raise
+            finally:
+                sibling_reaped.set()
+
+    class FailingSession(_Session):
+        async def fetch_portfolio(self, pair: Pair):
+            await sibling_started.wait()
+            raise RuntimeError(credential_marker)
+
+    book = _book(
+        ConnectionAllocation("blocking", True, 0.5),
+        ConnectionAllocation("failed", True, 0.5),
+    )
+    sessions = {
+        "blocking": BlockingSession(_portfolio("blocking", "50")),
+        "failed": FailingSession(_portfolio("failed", "50")),
+    }
+
+    with pytest.raises(PortfolioReadError) as exc_info:
+        await PortfolioAggregator().read(book, sessions, PAIR)
+
+    error = exc_info.value
+    formatted = "".join(traceback.format_exception(error))
+    assert str(error) == "failed to read portfolio for connection failed"
+    assert credential_marker not in str(error)
+    assert credential_marker not in repr(error)
+    assert credential_marker not in formatted
+    assert error.__cause__ is None
+    assert error.__context__ is None
+    assert sibling_cancelled.is_set()
+    assert sibling_reaped.is_set()
 
 
 def test_book_portfolio_snapshot_is_frozen_decimal_and_rejects_inconsistent_totals():

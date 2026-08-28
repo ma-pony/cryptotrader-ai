@@ -71,10 +71,13 @@ class PortfolioAggregator:
         session: VenueSession,
         pair: Pair,
     ) -> ConnectionPortfolioSnapshot:
+        read_failed = False
         try:
             snapshot = await session.fetch_portfolio(pair)
-        except Exception as exc:
-            raise PortfolioReadError(f"failed to read portfolio for connection {connection_id}") from exc
+        except Exception:
+            read_failed = True
+        if read_failed:
+            raise PortfolioReadError(f"failed to read portfolio for connection {connection_id}")
         if not isinstance(snapshot, ConnectionPortfolioSnapshot):
             raise PortfolioReadError(f"failed to read portfolio for connection {connection_id}: invalid snapshot type")
         if snapshot.connection_id != connection_id:
