@@ -49,6 +49,7 @@ def _payload(record: TradingCycleRecord) -> dict[str, Any]:
         "hitl_result": dict(record.hitl_result) if record.hitl_result is not None else None,
         "risk_result": dict(record.risk_result) if record.risk_result is not None else None,
         "execution_result": dict(record.execution_result) if record.execution_result is not None else None,
+        "error": record.error,
     }
 
 
@@ -73,6 +74,7 @@ def _record(row: _TradingCycleRow) -> TradingCycleRecord:
         hitl_result=payload["hitl_result"],
         risk_result=payload["risk_result"],
         execution_result=payload["execution_result"],
+        error=payload["error"],
     )
 
 

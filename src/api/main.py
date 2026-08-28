@@ -93,11 +93,10 @@ async def lifespan(_app: FastAPI):
 
 
 async def _init_signal_profile(app_instance: FastAPI) -> None:
-    from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle
+    from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle, initialize_trading_cycle
     from cryptotrader.config import load_config
     from cryptotrader.hitl.store import ApprovalStore
     from cryptotrader.journal.store import CycleJournalStore
-    from cryptotrader.profiles.models import validate_signal_profile
 
     config = load_config()
     database_url = config.infrastructure.database_url or None
@@ -111,8 +110,7 @@ async def _init_signal_profile(app_instance: FastAPI) -> None:
         approval_store=approvals,
         journal_store=journal,
     )
-    active_profile = await cycle.profiles.get()
-    validate_signal_profile(active_profile, cycle.registry.ids())
+    await initialize_trading_cycle(cycle)
     custom_components = tuple(
         component for component in cycle.registry.components() if component.id not in {"kronos", "llm_committee"}
     )

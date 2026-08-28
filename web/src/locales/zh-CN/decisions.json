@@ -25,12 +25,43 @@
     "awaiting_approval": "待审批",
     "approval_rejected": "审批拒绝",
     "component_failed": "组件失败",
+    "cycle_failed": "周期失败",
     "risk_rejected": "风控拒绝",
     "execution_failed": "执行失败",
     "cancelled": "已取消"
   },
   "detail": {
     "select_hint": "选择一条决策查看详情",
-    "load_error": "加载失败"
+    "load_error": "加载失败",
+    "cycle_error": "周期编排失败",
+    "target": {
+      "none": "未生成目标仓位",
+      "long": "目标多仓 {{ratio}}",
+      "short": "目标空仓 {{ratio}}",
+      "flat": "目标清仓"
+    },
+    "audit": {
+      "original_target": "原始目标",
+      "adjusted_target": "风控后目标",
+      "cap_source": "仓位上限来源",
+      "no_cap": "未裁剪",
+      "order_execution": "订单执行",
+      "intent": "订单意图",
+      "intent_amount": "委托数量",
+      "filled_amount": "实际成交",
+      "order_id": "交易所订单 ID",
+      "reduce_only": "只减仓",
+      "opens_exposure": "开仓或增仓",
+      "buy": "买入",
+      "sell": "卖出",
+      "protection_orders": "保护单",
+      "new_algo_id": "新保护单 ID",
+      "retained_algo_ids": "保留或未解除保护单 ID",
+      "protection_trigger": "保护触发",
+      "trigger_algo_id": "触发保护单 ID",
+      "trigger_reason": "触发原因",
+      "trigger_price": "触发价格",
+      "trigger_order_id": "平仓订单 ID"
+    }
   }
 }

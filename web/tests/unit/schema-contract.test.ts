@@ -102,7 +102,14 @@ describe('Decision list + detail schemas', () => {
       fused_score: 0.48,
       target_position: { side: 'long', size_ratio: 0.3 },
       component_error: null,
-      risk_result: { passed: true, rejected_by: '', reason: '', target: { side: 'long', size_ratio: 0.3 } },
+      error: null,
+      risk_result: {
+        passed: true,
+        rejected_by: '',
+        reason: '',
+        cap_source: '',
+        target: { side: 'long', size_ratio: 0.3 },
+      },
       execution_result: { succeeded: true, algo_id: 'oco-1', error: null, orders: [] },
     };
     const parsed = DecisionListItemSchema.parse(item);
@@ -169,6 +176,7 @@ describe('Decision list + detail schemas', () => {
         },
       }],
       component_error: null,
+      error: null,
       fusion: {
         score: 0.48,
         reasoning: 'weighted',
@@ -185,7 +193,13 @@ describe('Decision list + detail schemas', () => {
         fused_signal: { score: 0.48, reasoning: 'weighted', contributions: [] },
       },
       hitl_result: null,
-      risk_result: { passed: true, rejected_by: '', reason: '', target: { side: 'long', size_ratio: 0.3 } },
+      risk_result: {
+        passed: true,
+        rejected_by: '',
+        reason: '',
+        cap_source: '',
+        target: { side: 'long', size_ratio: 0.3 },
+      },
       execution_result: {
         succeeded: true,
         algo_id: 'oco-1',

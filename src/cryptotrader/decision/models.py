@@ -20,6 +20,7 @@ CycleStatus = Literal[
     "awaiting_approval",
     "approval_rejected",
     "component_failed",
+    "cycle_failed",
     "risk_rejected",
     "execution_failed",
     "cancelled",

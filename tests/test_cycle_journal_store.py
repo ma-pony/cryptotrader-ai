@@ -78,6 +78,22 @@ async def test_cycle_record_round_trips_component_contributions(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_cycle_failure_error_round_trips_without_component_misclassification(tmp_path):
+    from cryptotrader.journal.store import CycleJournalStore
+
+    store = CycleJournalStore(f"sqlite+aiosqlite:///{tmp_path / 'failed-cycles.db'}")
+    record = cycle_record(status="cycle_failed", error="RuntimeError: market unavailable")
+
+    await store.append(record)
+
+    loaded = await store.get(record.cycle_id)
+    assert loaded is not None
+    assert loaded.status == "cycle_failed"
+    assert loaded.error == "RuntimeError: market unavailable"
+    assert loaded.component_error is None
+
+
+@pytest.mark.asyncio
 async def test_complete_profile_snapshot_round_trips_through_memory_and_sqlite(tmp_path):
     from cryptotrader.journal.store import CycleJournalStore
 

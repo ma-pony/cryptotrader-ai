@@ -29,6 +29,7 @@ class TradingCycleRecord:
     hitl_result: Mapping[str, Any] | None
     risk_result: Mapping[str, Any] | None
     execution_result: Mapping[str, Any] | None
+    error: str | None = None
 
     def __post_init__(self) -> None:
         if not self.cycle_id:

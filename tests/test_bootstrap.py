@@ -6,7 +6,12 @@ from unittest.mock import AsyncMock
 import pandas as pd
 import pytest
 
-from cryptotrader.config import AppConfig, SignalPluginsConfig
+from cryptotrader.config import (
+    AppConfig,
+    SignalPluginsConfig,
+    SignalProfileDefaultsConfig,
+)
+from cryptotrader.profiles.models import ComponentWeight
 
 
 def _snapshot(price: float = 100.0):
@@ -111,6 +116,41 @@ def test_bootstrap_registers_builtins_and_custom_factories():
     assert set(cycle.registry.ids()) == {"kronos", "llm_committee", "fake"}
     assert cycle.runner.events is cycle.events
     assert cycle.executor.exchange is cycle.contexts.portfolio.exchange
+
+
+def test_bootstrap_rejects_default_profile_component_missing_from_registry():
+    from cryptotrader.bootstrap import build_trading_cycle
+
+    config = AppConfig(
+        signal_profile_defaults=SignalProfileDefaultsConfig(
+            components=[ComponentWeight("missing_component", True, 1.0)],
+        ),
+    )
+
+    with pytest.raises(ValueError, match="missing_component"):
+        build_trading_cycle(config, mode="paper")
+
+
+@pytest.mark.asyncio
+async def test_shared_startup_rejects_persisted_profile_component_missing_from_registry():
+    from types import SimpleNamespace
+
+    from cryptotrader.bootstrap import initialize_trading_cycle
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.custom_signal_component import FakeSignalComponent
+    from tests.factories.signal_fusion import profile
+
+    class Profiles:
+        async def get(self):
+            return profile(ComponentWeight("missing_component", True, 1.0))
+
+    cycle = SimpleNamespace(
+        profiles=Profiles(),
+        registry=SignalComponentRegistry((FakeSignalComponent(),)),
+    )
+
+    with pytest.raises(ValueError, match="missing_component"):
+        await initialize_trading_cycle(cycle)
 
 
 def test_paper_bootstrap_uses_market_collector_as_read_only_ticker_source():

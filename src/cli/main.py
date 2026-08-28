@@ -51,7 +51,7 @@ def run(
 
 
 async def _run(pairs: list[str], mode: str, exchange_id: str):
-    from cryptotrader.bootstrap import build_trading_cycle
+    from cryptotrader.bootstrap import build_trading_cycle, initialize_trading_cycle
     from cryptotrader.config import load_config
 
     config = load_config()
@@ -72,6 +72,7 @@ async def _run(pairs: list[str], mode: str, exchange_id: str):
 
     cycle = build_trading_cycle(config, mode)
     try:
+        await initialize_trading_cycle(cycle)
         await _run_pairs_loop(pairs, mode, exchange_id, cycle, config)
     finally:
         await cycle.executor.exchange.close()

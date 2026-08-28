@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -131,3 +132,19 @@ def test_detail_exposes_the_complete_frozen_profile_snapshot() -> None:
     object.__setattr__(record, "profile_snapshot", frozen_profile)
 
     assert _detail(record).model_dump()["profile"] == frozen_profile
+
+
+def test_detail_exposes_generic_cycle_failure_without_component_misclassification() -> None:
+    from api.routes.decisions import _detail
+
+    record = replace(
+        _record(),
+        status="cycle_failed",
+        error="RuntimeError: context unavailable",
+    )
+
+    body = _detail(record).model_dump()
+
+    assert body["status"] == "cycle_failed"
+    assert body["error"] == "RuntimeError: context unavailable"
+    assert body["component_error"] is None

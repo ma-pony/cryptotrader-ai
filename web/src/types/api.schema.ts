@@ -90,6 +90,7 @@ export const CycleStatusSchema = z.enum([
   'awaiting_approval',
   'approval_rejected',
   'component_failed',
+  'cycle_failed',
   'risk_rejected',
   'execution_failed',
   'cancelled',
@@ -181,6 +182,7 @@ export const CycleRiskResultSchema = z.object({
   passed: z.boolean(),
   rejected_by: z.string(),
   reason: z.string(),
+  cap_source: z.string(),
   target: TargetPositionSchema,
 });
 
@@ -223,6 +225,7 @@ export const DecisionListItemSchema = z.object({
   fused_score: z.number().nullable(),
   target_position: TargetPositionSchema.nullable(),
   component_error: z.record(z.string()).nullable(),
+  error: z.string().nullable(),
   risk_result: CycleRiskResultSchema.nullable(),
   execution_result: CycleExecutionResultSchema.nullable(),
 });
@@ -263,6 +266,7 @@ export const DecisionDetailSchema = z.object({
   }),
   components: z.array(ComponentSignalSchema),
   component_error: z.record(z.string()).nullable(),
+  error: z.string().nullable(),
   fusion: FusedSignalSchema.nullable(),
   target_position: TargetPositionSchema.nullable(),
   trade_plan: TradePlanSchema.nullable(),

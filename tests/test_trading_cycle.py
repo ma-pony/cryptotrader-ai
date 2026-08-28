@@ -263,6 +263,103 @@ async def test_component_failure_skips_fusion_and_execution_but_journals_cycle()
 
 
 @pytest.mark.asyncio
+async def test_profile_failure_is_preflight_and_does_not_open_a_cycle():
+    cycle = build_test_cycle()
+
+    async def fail_profile_load():
+        raise RuntimeError("profile store unavailable")
+
+    cycle.profiles.get = fail_profile_load
+
+    with pytest.raises(RuntimeError, match="profile store unavailable"):
+        await cycle.run(request())
+
+    assert cycle.events.events == []
+    assert cycle.journal.records == []
+    assert cycle.executor.executed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["context", "fusion", "decision", "exit"])
+async def test_started_cycle_orchestration_failure_writes_one_generic_terminal(stage):
+    cycle = build_test_cycle()
+
+    if stage == "context":
+
+        async def fail_context(cycle_request, requirements):
+            raise RuntimeError("context unavailable")
+
+        cycle.contexts.collect = fail_context
+    elif stage == "fusion":
+        cycle.fusion.fuse = lambda signals, weights: (_ for _ in ()).throw(RuntimeError("fusion unavailable"))
+    elif stage == "decision":
+        cycle.decisions.target_for = lambda fused, selected_profile: (_ for _ in ()).throw(
+            RuntimeError("decision unavailable")
+        )
+    else:
+        cycle.exits.build_plan = lambda *args: (_ for _ in ()).throw(RuntimeError("exit unavailable"))
+
+    outcome = await cycle.run(request())
+
+    assert outcome.status == "cycle_failed"
+    assert outcome.error == f"RuntimeError: {stage} unavailable"
+    assert cycle.executor.executed == []
+    assert len(cycle.journal.records) == 1
+    record = cycle.journal.records[0]
+    assert record.status == "cycle_failed"
+    assert record.error == f"RuntimeError: {stage} unavailable"
+    assert (len(record.component_signals) > 0) is (stage != "context")
+    assert (record.fused_signal is not None) is (stage in {"decision", "exit"})
+    assert record.trade_plan is None
+    event_names = [event.name for event in cycle.events.events]
+    assert event_names.count("cycle_started") == 1
+    assert event_names.count("cycle_failed") == 1
+    assert "execution_completed" not in event_names
+
+
+@pytest.mark.asyncio
+async def test_started_cycle_failure_after_plan_preserves_plan_snapshot():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+
+    async def fail_approval_creation(**kwargs):
+        raise RuntimeError("approval store unavailable")
+
+    cycle.approvals.create = fail_approval_creation
+
+    outcome = await cycle.run(request())
+
+    assert outcome.status == "cycle_failed"
+    assert outcome.trade_plan is not None
+    assert cycle.executor.executed == []
+    assert len(cycle.journal.records) == 1
+    assert cycle.journal.records[0].trade_plan is not None
+    assert cycle.journal.records[0].error == "RuntimeError: approval store unavailable"
+
+
+@pytest.mark.asyncio
+async def test_approval_cleanup_failure_cannot_hide_started_cycle_terminal():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+
+    async def fail_approval_creation(**kwargs):
+        raise RuntimeError("approval store unavailable")
+
+    async def fail_approval_cleanup(approval_id):
+        raise RuntimeError("approval cleanup unavailable")
+
+    cycle.approvals.create = fail_approval_creation
+    cycle.approvals.cancel_pending = fail_approval_cleanup
+
+    outcome = await cycle.run(request())
+
+    assert outcome.status == "cycle_failed"
+    assert outcome.error == (
+        "RuntimeError: approval store unavailable; approval cleanup failed: RuntimeError: approval cleanup unavailable"
+    )
+    assert len(cycle.journal.records) == 1
+    assert [event.name for event in cycle.events.events].count("cycle_failed") == 1
+
+
+@pytest.mark.asyncio
 async def test_paper_protection_runs_before_components_and_refreshes_position_on_component_failure():
     cycle = build_test_cycle()
     cycle.contexts.current_position = position("long", 2.0, 0.5)

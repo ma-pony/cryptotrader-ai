@@ -1,4 +1,5 @@
 import { Activity, BrainCircuit, GitMerge, ShieldCheck, XCircle } from 'lucide-react';
+import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
@@ -20,12 +21,12 @@ const componentName = (id: string) => {
   return id;
 };
 
-const targetLabel = (target: TargetPosition | null) => {
-  if (!target) return '未生成目标仓位';
+const targetLabel = (target: TargetPosition | null, t: TFunction<'decisions'>) => {
+  if (!target) return t('detail.target.none');
   const ratio = `${(target.size_ratio * 100).toFixed(0)}%`;
-  if (target.side === 'long') return `目标多仓 ${ratio}`;
-  if (target.side === 'short') return `目标空仓 ${ratio}`;
-  return '目标清仓';
+  if (target.side === 'long') return t('detail.target.long', { ratio });
+  if (target.side === 'short') return t('detail.target.short', { ratio });
+  return t('detail.target.flat');
 };
 
 const directionLabel = (direction: ComponentSignal['direction']) => {
@@ -66,6 +67,103 @@ const Section = ({
   </section>
 );
 
+const AuditFact = ({ label, value }: { label: string; value: React.ReactNode }) => (
+  <div className="min-w-0 rounded-md border border-border bg-background/55 p-3">
+    <dt className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</dt>
+    <dd className="mt-1 break-words font-mono text-xs font-semibold text-foreground">{value}</dd>
+  </div>
+);
+
+const RiskTargetAudit = ({ data }: { data: DecisionDetail }) => {
+  const { t } = useTranslation('decisions');
+  const result = data.risk_result;
+  if (!result) return null;
+
+  return (
+    <dl className="mt-3 grid gap-2 sm:grid-cols-3">
+      <AuditFact label={t('detail.audit.original_target')} value={targetLabel(data.target_position, t)} />
+      <AuditFact label={t('detail.audit.adjusted_target')} value={targetLabel(result.target, t)} />
+      <AuditFact
+        label={t('detail.audit.cap_source')}
+        value={result.cap_source || t('detail.audit.no_cap')}
+      />
+    </dl>
+  );
+};
+
+const amountLabel = (amount: number) => amount.toLocaleString(undefined, { maximumFractionDigits: 12 });
+
+const ExecutionAudit = ({ result }: { result: NonNullable<DecisionDetail['execution_result']> }) => {
+  const { t } = useTranslation('decisions');
+  const hasProtectionOrders = Boolean(result.algo_id) || result.retained_algo_ids.length > 0;
+  const hasSafetyFacts = result.orders.length > 0 || hasProtectionOrders || Boolean(result.protection_trigger);
+  if (!hasSafetyFacts) return null;
+
+  return (
+    <div className="mt-4 space-y-3 border-t border-border pt-4">
+      {result.orders.length > 0 ? (
+        <div>
+          <h4 className="text-xs font-semibold text-foreground">{t('detail.audit.order_execution')}</h4>
+          <div className="mt-2 grid gap-2">
+            {result.orders.map((order, index) => (
+              <article
+                key={`${order.intent.pair}-${order.intent.side}-${index}`}
+                className="min-w-0 rounded-md border border-border bg-background/55 p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold">
+                    {t('detail.audit.intent')} · {t(`detail.audit.${order.intent.side}`)}
+                  </span>
+                  <Badge variant="secondary">{order.status}</Badge>
+                </div>
+                <div className="mt-2 break-all font-mono text-[10px] text-muted-foreground">
+                  {order.intent.pair} · {order.intent.reduce_only ? t('detail.audit.reduce_only') : t('detail.audit.opens_exposure')}
+                </div>
+                <dl className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3">
+                  <AuditFact label={t('detail.audit.intent_amount')} value={amountLabel(order.intent.amount)} />
+                  <AuditFact label={t('detail.audit.filled_amount')} value={amountLabel(order.filled_amount)} />
+                  {order.exchange_id ? (
+                    <AuditFact label={t('detail.audit.order_id')} value={order.exchange_id} />
+                  ) : null}
+                </dl>
+              </article>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {hasProtectionOrders ? (
+        <div>
+          <h4 className="text-xs font-semibold text-foreground">{t('detail.audit.protection_orders')}</h4>
+          <dl className="mt-2 grid gap-2 sm:grid-cols-2">
+            {result.algo_id ? (
+              <AuditFact label={t('detail.audit.new_algo_id')} value={result.algo_id} />
+            ) : null}
+            {result.retained_algo_ids.length > 0 ? (
+              <AuditFact
+                label={t('detail.audit.retained_algo_ids')}
+                value={result.retained_algo_ids.join(', ')}
+              />
+            ) : null}
+          </dl>
+        </div>
+      ) : null}
+
+      {result.protection_trigger ? (
+        <div>
+          <h4 className="text-xs font-semibold text-foreground">{t('detail.audit.protection_trigger')}</h4>
+          <dl className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <AuditFact label={t('detail.audit.trigger_reason')} value={result.protection_trigger.trigger_reason} />
+            <AuditFact label={t('detail.audit.trigger_price')} value={formatCurrency(result.protection_trigger.trigger_price)} />
+            <AuditFact label={t('detail.audit.trigger_order_id')} value={result.protection_trigger.order_id} />
+            <AuditFact label={t('detail.audit.trigger_algo_id')} value={result.protection_trigger.algo_id} />
+          </dl>
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 export const CycleDecisionDetail = ({ data }: { data: DecisionDetail }) => {
   const { t } = useTranslation('decisions');
   const committee = data.components.find((item) => item.component_id === 'llm_committee');
@@ -90,7 +188,7 @@ export const CycleDecisionDetail = ({ data }: { data: DecisionDetail }) => {
             <div className="flex flex-wrap items-center gap-2 text-lg font-semibold">
               <PairBadge pair={data.pair} pairDisplay={data.pair_display} marketType={data.market_type} />
               <span className={cn('font-mono', data.target_position?.side === 'long' ? 'text-trade-long' : data.target_position?.side === 'short' ? 'text-trade-short' : 'text-muted-foreground')}>
-                {targetLabel(data.target_position)}
+                {targetLabel(data.target_position, t)}
               </span>
             </div>
             <p className="mt-2 text-xs text-muted-foreground">{formatDateTime(data.ts)} · {data.context.mode.toUpperCase()}</p>
@@ -108,6 +206,15 @@ export const CycleDecisionDetail = ({ data }: { data: DecisionDetail }) => {
           {Object.entries(data.component_error).map(([id, error]) => (
             <p key={id} className="mt-2 font-mono text-xs text-muted-foreground">{componentName(id)} · {error}</p>
           ))}
+        </section>
+      ) : null}
+
+      {data.error && !data.component_error ? (
+        <section className="rounded-xl border border-destructive/40 bg-destructive/5 p-4">
+          <div className="flex items-center gap-2 text-sm font-semibold text-destructive">
+            <XCircle className="h-4 w-4" />{t('detail.cycle_error')}
+          </div>
+          <p className="mt-2 break-words font-mono text-xs text-muted-foreground">{data.error}</p>
         </section>
       ) : null}
 
@@ -200,7 +307,7 @@ export const CycleDecisionDetail = ({ data }: { data: DecisionDetail }) => {
         <Section title="目标仓位与退出保护" eyebrow="04 · Target Plan">
           <div className="flex items-center gap-3">
             <Activity className="h-5 w-5 text-amber-500" />
-            <span className="text-base font-semibold">{targetLabel(data.target_position)}</span>
+            <span className="text-base font-semibold">{targetLabel(data.target_position, t)}</span>
           </div>
           {data.trade_plan ? (
             <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
@@ -216,8 +323,10 @@ export const CycleDecisionDetail = ({ data }: { data: DecisionDetail }) => {
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2"><span className="flex items-center gap-2"><ShieldCheck className="h-4 w-4" />风控</span><Badge variant={data.risk_result?.passed ? 'success' : data.risk_result ? 'destructive' : 'secondary'}>{data.risk_result ? (data.risk_result.passed ? 'PASS' : 'REJECT') : 'NOT_RUN'}</Badge></div>
             <div className="flex items-center justify-between rounded-md border border-border px-3 py-2"><span>执行</span><Badge variant={data.execution_result?.succeeded ? 'success' : data.execution_result ? 'destructive' : 'secondary'}>{data.execution_result ? (data.execution_result.succeeded ? 'SUCCEEDED' : 'FAILED') : 'NOT_RUN'}</Badge></div>
           </div>
+          <RiskTargetAudit data={data} />
           {data.risk_result?.reason ? <p className="mt-3 text-xs text-destructive">{data.risk_result.reason}</p> : null}
           {data.execution_result?.error ? <p className="mt-3 text-xs text-destructive">{data.execution_result.error}</p> : null}
+          {data.execution_result ? <ExecutionAudit result={data.execution_result} /> : null}
         </Section>
       </div>
     </div>

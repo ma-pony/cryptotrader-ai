@@ -16,6 +16,7 @@ CycleStatusValue = Literal[
     "awaiting_approval",
     "approval_rejected",
     "component_failed",
+    "cycle_failed",
     "risk_rejected",
     "execution_failed",
     "cancelled",
@@ -36,6 +37,7 @@ class DecisionListItem(BaseModel):
     fused_score: float | None = None
     target_position: dict[str, Any] | None = None
     component_error: dict[str, str] | None = None
+    error: str | None = None
     risk_result: dict[str, Any] | None = None
     execution_result: dict[str, Any] | None = None
 
@@ -60,6 +62,7 @@ class DecisionDetailOut(BaseModel):
     context: dict[str, Any]
     components: list[dict[str, Any]]
     component_error: dict[str, str] | None = None
+    error: str | None = None
     fusion: dict[str, Any] | None = None
     target_position: dict[str, Any] | None = None
     trade_plan: dict[str, Any] | None = None
@@ -107,6 +110,7 @@ def _list_item(record: TradingCycleRecord) -> DecisionListItem:
         fused_score=float(score) if score is not None else None,
         target_position=_mapping(record.target_position),
         component_error=dict(record.component_error) if record.component_error is not None else None,
+        error=record.error,
         risk_result=_mapping(record.risk_result),
         execution_result=_mapping(record.execution_result),
     )
@@ -126,6 +130,7 @@ def _detail(record: TradingCycleRecord) -> DecisionDetailOut:
         context=dict(record.context_summary),
         components=[dict(item) for item in record.component_signals],
         component_error=dict(record.component_error) if record.component_error is not None else None,
+        error=record.error,
         fusion=_mapping(record.fused_signal),
         target_position=_mapping(record.target_position),
         trade_plan=_mapping(record.trade_plan),

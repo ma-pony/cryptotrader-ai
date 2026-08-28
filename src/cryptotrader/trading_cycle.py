@@ -137,7 +137,7 @@ class TradingCycle:
         self.exit_requirement = exit_requirement or DataRequirements()
 
     async def run(self, request: CycleRequest) -> CycleOutcome:
-        self._require_mode(request.mode)
+        profile, components, requirements = await self._preflight(request)
         cycle_id = str(uuid4())
         created_at = datetime.now(UTC)
         await self.events.publish(
@@ -146,16 +146,10 @@ class TradingCycle:
                 {"cycle_id": cycle_id, "pair": request.pair.canonical(), "mode": request.mode},
             )
         )
-        profile = await self.profiles.get()
-        if profile is None:
-            raise RuntimeError("global signal profile is not initialized")
-        validate_signal_profile(profile, self.registry.ids())
-        components = self.registry.enabled(profile)
-        requirements = DataRequirements.merge(
-            *(component.requirements() for component in components),
-            self.exit_requirement,
-        )
         context = None
+        signals: tuple[ComponentSignal, ...] = ()
+        fused = None
+        plan = None
         approval_id = None
         paper_execution_result = None
         try:
@@ -302,6 +296,68 @@ class TradingCycle:
                 execution_result=paper_execution_result,
                 error=str(error),
             )
+        except Exception as error:
+            return await self._finish_orchestration_failure(
+                error=error,
+                cycle_id=cycle_id,
+                created_at=created_at,
+                profile=profile,
+                context=context,
+                request=request,
+                signals=signals,
+                fused=fused,
+                plan=plan,
+                approval_id=approval_id,
+                execution_result=paper_execution_result,
+            )
+
+    async def _finish_orchestration_failure(
+        self,
+        *,
+        error: Exception,
+        cycle_id: str,
+        created_at: datetime,
+        profile,
+        context: SignalContext | None,
+        request: CycleRequest,
+        signals: tuple[ComponentSignal, ...],
+        fused: FusedSignal | None,
+        plan: TradePlan | None,
+        approval_id: str | None,
+        execution_result: ExecutionResult | None,
+    ) -> CycleOutcome:
+        reason = f"{type(error).__name__}: {error}"
+        if approval_id is not None:
+            try:
+                await self.approvals.cancel_pending(approval_id)
+            except Exception as cleanup_error:
+                reason += f"; approval cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}"
+        return await self._finish(
+            cycle_id=cycle_id,
+            created_at=created_at,
+            status="cycle_failed",
+            profile=profile,
+            context=context,
+            request=request,
+            signals=signals,
+            fused=fused,
+            plan=plan,
+            execution_result=execution_result,
+            error=reason,
+        )
+
+    async def _preflight(self, request: CycleRequest):
+        self._require_mode(request.mode)
+        profile = await self.profiles.get()
+        if profile is None:
+            raise RuntimeError("global signal profile is not initialized")
+        validate_signal_profile(profile, self.registry.ids())
+        components = self.registry.enabled(profile)
+        requirements = DataRequirements.merge(
+            *(component.requirements() for component in components),
+            self.exit_requirement,
+        )
+        return profile, components, requirements
 
     async def resume_approved(self, approval_id: str, *, decision_by: str = "web") -> CycleOutcome:
         pending = await self.approvals.get(approval_id)
@@ -546,6 +602,7 @@ class TradingCycle:
             hitl_result=hitl_result,
             risk_result=_risk_payload(risk_result),
             execution_result=_execution_payload(execution_result),
+            error=error,
         )
         if replace_journal:
             await self.journal.replace(record)

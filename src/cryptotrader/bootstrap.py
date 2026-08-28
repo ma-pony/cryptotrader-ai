@@ -15,6 +15,7 @@ from cryptotrader.execution.service import ExecutionService
 from cryptotrader.hitl.store import ApprovalStore
 from cryptotrader.journal.store import CycleJournalStore
 from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
+from cryptotrader.profiles.models import validate_signal_profile
 from cryptotrader.profiles.repository import SignalProfileRepository
 from cryptotrader.risk.gate import RiskGate
 from cryptotrader.risk.state import RedisStateManager
@@ -55,6 +56,18 @@ class SeededProfileRepository:
             )
             return self._memory
         return await self.repository.replace(profile)
+
+
+async def initialize_trading_cycle(cycle: TradingCycle) -> TradingCycle:
+    """Validate the active profile once at the shared runtime boundary."""
+    if getattr(cycle, "_startup_validated", False):
+        return cycle
+    active_profile = await cycle.profiles.get()
+    if active_profile is None:
+        raise RuntimeError("global signal profile is not initialized")
+    validate_signal_profile(active_profile, cycle.registry.ids())
+    cycle._startup_validated = True
+    return cycle
 
 
 def _build_exchange(config: AppConfig, mode: TradingMode):
@@ -120,6 +133,7 @@ def build_trading_cycle(
     registry = build_signal_registry(config, events, custom_components=custom_components)
 
     default_profile = config.signal_profile_defaults.to_profile()
+    validate_signal_profile(default_profile, registry.ids())
     exchange = _build_exchange(config, mode)
 
     from cryptotrader.data.snapshot import SnapshotAggregator

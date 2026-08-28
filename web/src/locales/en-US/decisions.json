@@ -25,12 +25,43 @@
     "awaiting_approval": "Awaiting approval",
     "approval_rejected": "Approval rejected",
     "component_failed": "Component failed",
+    "cycle_failed": "Cycle failed",
     "risk_rejected": "Risk rejected",
     "execution_failed": "Execution failed",
     "cancelled": "Cancelled"
   },
   "detail": {
     "select_hint": "Select a decision to view details",
-    "load_error": "Failed to load"
+    "load_error": "Failed to load",
+    "cycle_error": "Cycle orchestration failed",
+    "target": {
+      "none": "No target position",
+      "long": "Target long {{ratio}}",
+      "short": "Target short {{ratio}}",
+      "flat": "Target flat"
+    },
+    "audit": {
+      "original_target": "Original target",
+      "adjusted_target": "Risk-adjusted target",
+      "cap_source": "Cap source",
+      "no_cap": "Not capped",
+      "order_execution": "Order execution",
+      "intent": "Order intent",
+      "intent_amount": "Intent amount",
+      "filled_amount": "Filled amount",
+      "order_id": "Exchange order ID",
+      "reduce_only": "Reduce only",
+      "opens_exposure": "Open or increase",
+      "buy": "Buy",
+      "sell": "Sell",
+      "protection_orders": "Protection orders",
+      "new_algo_id": "New OCO ID",
+      "retained_algo_ids": "Retained or unresolved protection IDs",
+      "protection_trigger": "Protection trigger",
+      "trigger_algo_id": "Triggered protection ID",
+      "trigger_reason": "Trigger reason",
+      "trigger_price": "Trigger price",
+      "trigger_order_id": "Close order ID"
+    }
   }
 }

@@ -5,6 +5,7 @@ import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
@@ -33,6 +34,38 @@ async def test_scheduler_routes_pair_through_injected_trading_cycle():
     assert cycle.requests[0].mode == "paper"
     assert cycle.requests[0].exchange_id == "okx"
     assert scheduler.status["BTC/USDT:USDT"]["last_status"] == "no_change"
+
+
+async def test_scheduler_start_rejects_invalid_active_profile_before_registering_jobs():
+    from cryptotrader.profiles.models import ComponentWeight
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.custom_signal_component import FakeSignalComponent
+    from tests.factories.signal_fusion import profile
+
+    class Profiles:
+        async def get(self):
+            return profile(ComponentWeight("missing_component", True, 1.0))
+
+    cycle = SimpleNamespace(
+        profiles=Profiles(),
+        registry=SignalComponentRegistry((FakeSignalComponent(),)),
+    )
+    scheduler = Scheduler(["BTC/USDT"], cycle=cycle)
+    loop = asyncio.get_running_loop()
+
+    with patch.object(loop, "add_signal_handler"):
+        task = asyncio.create_task(scheduler.start())
+        for _ in range(20):
+            if task.done() or scheduler._stop_event is not None:
+                break
+            await asyncio.sleep(0)
+        if not task.done():
+            scheduler.stop()
+            await task
+
+    with pytest.raises(ValueError, match="missing_component"):
+        task.result()
+    assert scheduler._scheduler.get_jobs() == []
 
 
 def test_scheduler_init():
