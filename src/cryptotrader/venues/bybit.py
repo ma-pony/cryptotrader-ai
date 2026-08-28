@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 class BybitVenueSession(CcxtVenueBase):
     """One isolated Bybit unified-account session."""
 
-    def __init__(self, connection: VenueConnection, client: Any) -> None:
-        super().__init__(connection, client)
+    def __init__(self, connection: VenueConnection, client: Any, capabilities: VenueCapabilities) -> None:
+        super().__init__(connection, client, capabilities)
         self._protection_pairs: dict[str, tuple[Pair, int]] = {}
         self._position_mode_lock = asyncio.Lock()
         self._hedged_markets: dict[str, bool] = {}
@@ -262,7 +262,7 @@ class BybitVenueAdapter:
             client.set_sandbox_mode(True)
         elif connection.environment == "demo":
             client.enable_demo_trading(True)
-        return BybitVenueSession(connection, client)
+        return BybitVenueSession(connection, client, self.capabilities(connection.environment))
 
     def _require_connection(self, connection: VenueConnection) -> None:
         if connection.adapter_id != self.adapter_id:

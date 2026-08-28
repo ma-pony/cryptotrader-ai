@@ -59,12 +59,22 @@ class _PaperAccount:
 class PaperVenueSession:
     """One session over connection-local deterministic Paper account state."""
 
-    def __init__(self, connection: VenueConnection, account: _PaperAccount) -> None:
+    def __init__(
+        self,
+        connection: VenueConnection,
+        account: _PaperAccount,
+        capabilities: VenueCapabilities,
+    ) -> None:
         self.connection_id = connection.id
         self.connection = connection
         self._account = account
+        self._capabilities = capabilities
         self._closed = False
         self._close_lock = asyncio.Lock()
+
+    @property
+    def capabilities(self) -> VenueCapabilities:
+        return self._capabilities
 
     async def set_quote(self, pair: Pair, price: Decimal) -> VenueQuote:
         """Install the latest deterministic Paper quote for one pair."""
@@ -83,6 +93,13 @@ class PaperVenueSession:
         self._require_supported_pair(pair)
         async with self._account.lock_for(pair):
             return self._quote_locked(pair)
+
+    async def normalize_amount(self, pair: Pair, base_amount: Decimal) -> Decimal:
+        self._require_open()
+        self._require_supported_pair(pair)
+        if not isinstance(base_amount, Decimal) or not base_amount.is_finite() or base_amount <= 0:
+            raise ValueError("Paper base amount must be a positive finite Decimal")
+        return base_amount
 
     async def place_order(self, intent: OrderIntent) -> NormalizedOrder:
         self._require_open()
@@ -436,7 +453,7 @@ class PaperVenueAdapter:
             self._accounts[connection.id] = account
         elif account.initial_equity != initial_equity or account.leverage != connection.leverage:
             raise ValueError("Paper connection parameters changed for an existing session")
-        return PaperVenueSession(connection, account)
+        return PaperVenueSession(connection, account, self.capabilities(connection.environment))
 
     @staticmethod
     def _initial_equity(connection: VenueConnection) -> Decimal:

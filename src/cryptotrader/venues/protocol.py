@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from decimal import Decimal
+
     from cryptotrader.pair import Pair
     from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
     from cryptotrader.runtime_config.secrets import CredentialPayload
@@ -42,9 +44,14 @@ class VenueSession(Protocol):
 
     connection_id: str
 
+    @property
+    def capabilities(self) -> VenueCapabilities: ...
+
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot: ...
 
     async def fetch_quote(self, pair: Pair) -> VenueQuote: ...
+
+    async def normalize_amount(self, pair: Pair, base_amount: Decimal) -> Decimal: ...
 
     async def place_order(self, intent: OrderIntent) -> NormalizedOrder: ...
 

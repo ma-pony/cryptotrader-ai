@@ -121,19 +121,23 @@ def test_money_amount_and_price_fields_reject_binary_float(factory):
         factory(Pair.parse("BTC/USDT:USDT"))
 
 
-def test_venue_protocols_are_structural_and_contract_helper_checks_capabilities():
+def test_venue_protocols_are_structural_and_contract_helper_checks_capabilities():  # noqa: C901
     from cryptotrader.venues.models import VenueCapabilities
     from cryptotrader.venues.protocol import VenueAdapter, VenueSession
     from tests.contracts.venue_adapter import assert_venue_contract
 
     class FakeSession:
         connection_id = "paper-local"
+        capabilities = VenueCapabilities(frozenset({"spot", "swap"}), True, False, True, frozenset({"market"}))
 
         async def fetch_portfolio(self, pair):
             return None
 
         async def fetch_quote(self, pair):
             return None
+
+        async def normalize_amount(self, pair, base_amount):
+            return base_amount
 
         async def place_order(self, intent):
             return None

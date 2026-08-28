@@ -194,6 +194,52 @@ async def test_inverse_contract_is_rejected_before_precision_or_configuration(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("adapter_module", "adapter_name", "exchange_id", "environment", "expected"),
+    [
+        ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo", Decimal("0.12")),
+        ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet", Decimal("0.123")),
+    ],
+)
+async def test_normalize_amount_round_trips_platform_units_back_to_safe_base_amount(
+    adapter_module, adapter_name, exchange_id, environment, expected
+):
+    fake_factory = FakeCcxtFactory(exchange_id)
+    adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
+    session = await adapter_class(client_factory=fake_factory).connect(
+        connection("normalize", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+
+    normalized = await session.normalize_amount(Pair.parse("BTC/USDT:USDT"), Decimal("0.123456"))
+
+    assert normalized == expected
+    assert normalized <= Decimal("0.123456")
+
+
+@pytest.mark.asyncio
+async def test_normalize_amount_rejects_zero_unsafe_rounding_and_inverse_contracts():
+    from cryptotrader.venues.okx import OkxVenueAdapter
+
+    fake_factory = FakeCcxtFactory("okx")
+    session = await OkxVenueAdapter(client_factory=fake_factory).connect(
+        connection("normalize", "demo", adapter_id="okx", credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+    client = fake_factory.clients[-1]
+
+    with pytest.raises(VenueOperationError, match="positive finite Decimal"):
+        await session.normalize_amount(Pair.parse("BTC/USDT:USDT"), Decimal("0"))
+
+    client.amount_to_precision = lambda *_args: "13"
+    with pytest.raises(VenueOperationError, match="unsafe amount normalization"):
+        await session.normalize_amount(Pair.parse("BTC/USDT:USDT"), Decimal("0.123456"))
+
+    with pytest.raises(VenueOperationError, match="inverse contracts are unsupported"):
+        await session.normalize_amount(Pair.parse("BTC/USD:BTC"), Decimal("0.1"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("adapter_module", "adapter_name", "exchange_id", "environment"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo"),

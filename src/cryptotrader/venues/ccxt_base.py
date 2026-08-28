@@ -14,6 +14,7 @@ from cryptotrader.venues.models import (
     OpenVenueState,
     OrderIntent,
     ProtectionState,
+    VenueCapabilities,
     VenueQuote,
 )
 
@@ -42,9 +43,10 @@ def create_async_client(exchange_id: str, config: dict[str, Any], client_factory
 class CcxtVenueBase:
     """Common precision, normalization, metadata, and lifecycle behavior."""
 
-    def __init__(self, connection: VenueConnection, client: Any) -> None:
+    def __init__(self, connection: VenueConnection, client: Any, capabilities: VenueCapabilities) -> None:
         self.connection_id = connection.id
         self.connection = connection
+        self._capabilities = capabilities
         self._client = client
         self._markets_loaded = False
         self._markets_lock = asyncio.Lock()
@@ -52,6 +54,10 @@ class CcxtVenueBase:
         self._configured_markets: set[str] = set()
         self._close_lock = asyncio.Lock()
         self._closed = False
+
+    @property
+    def capabilities(self) -> VenueCapabilities:
+        return self._capabilities
 
     async def _ensure_markets(self) -> None:
         if self._markets_loaded:
@@ -125,6 +131,20 @@ class CcxtVenueBase:
         if result <= 0:
             raise VenueOperationError(f"{self.connection_id}: amount rounds to zero for {pair}")
         return result
+
+    async def normalize_amount(self, pair: Pair, base_amount: Decimal) -> Decimal:
+        """Normalize platform-neutral base units without exposing contract units."""
+        if not isinstance(base_amount, Decimal) or not base_amount.is_finite() or base_amount <= 0:
+            raise VenueOperationError(f"{self.connection_id}: base amount must be a positive finite Decimal")
+        await self._market(pair)
+        contract_size = await self._contract_size(pair)
+        venue_amount = await self._amount_to_venue(pair, base_amount)
+        normalized = venue_amount * contract_size
+        if not normalized.is_finite() or normalized <= 0:
+            raise VenueOperationError(f"{self.connection_id}: amount rounds to zero for {pair}")
+        if normalized > base_amount:
+            raise VenueOperationError(f"{self.connection_id}: unsafe amount normalization for {pair}")
+        return normalized
 
     async def _price_to_venue(self, pair: Pair, price: Decimal) -> Decimal:
         await self._market(pair)

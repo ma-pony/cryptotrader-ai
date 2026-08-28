@@ -109,6 +109,20 @@ async def test_paper_session_uses_same_portfolio_and_order_contract():
     assert state.open_orders == ()
 
 
+async def test_paper_session_exposes_capabilities_and_deterministic_amount_normalization():
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    adapter = PaperVenueAdapter()
+    session = await adapter.connect(paper_connection(), None)
+
+    assert session.capabilities == adapter.capabilities("paper")
+    assert await session.normalize_amount(PAIR, Decimal("0.123456")) == Decimal("0.123456")
+    with pytest.raises(ValueError, match="positive finite Decimal"):
+        await session.normalize_amount(PAIR, Decimal("0"))
+    with pytest.raises(ValueError, match="positive finite Decimal"):
+        await session.normalize_amount(PAIR, 0.1)
+
+
 async def test_paper_accounts_are_independent_per_connection_id():
     from cryptotrader.venues.paper import PaperVenueAdapter
 

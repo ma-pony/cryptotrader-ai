@@ -20,8 +20,8 @@ if TYPE_CHECKING:
 class OkxVenueSession(CcxtVenueBase):
     """One isolated OKX account session."""
 
-    def __init__(self, connection: VenueConnection, client: Any) -> None:
-        super().__init__(connection, client)
+    def __init__(self, connection: VenueConnection, client: Any, capabilities: VenueCapabilities) -> None:
+        super().__init__(connection, client, capabilities)
         self._protection_pairs: dict[str, Pair] = {}
         self._position_mode_lock = asyncio.Lock()
         self._hedged: bool | None = None
@@ -245,7 +245,7 @@ class OkxVenueAdapter:
         client = create_async_client("okx", config, self._client_factory)
         if connection.environment == "demo":
             client.set_sandbox_mode(True)
-        return OkxVenueSession(connection, client)
+        return OkxVenueSession(connection, client, self.capabilities(connection.environment))
 
     def _require_connection(self, connection: VenueConnection) -> None:
         if connection.adapter_id != self.adapter_id:

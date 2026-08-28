@@ -48,6 +48,12 @@ async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionE
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
 
+    assert session.capabilities == adapter.capabilities(environment)
+    assert await session.normalize_amount(spot, Decimal("0.123456")) == Decimal("0.123")
+    assert await session.normalize_amount(pair, Decimal("0.123456")) == (
+        Decimal("0.12") if adapter.adapter_id == "okx" else Decimal("0.123")
+    )
+
     portfolio = await session.fetch_portfolio(pair)
     assert isinstance(portfolio, ConnectionPortfolioSnapshot)
     assert portfolio.connection_id == f"{adapter.adapter_id}-{environment}"
@@ -108,6 +114,9 @@ async def assert_paper_session_contract(adapter_factory) -> None:
         None,
     )
     await session.set_quote(pair, Decimal("50000"))
+
+    assert session.capabilities == adapter_factory().capabilities("paper")
+    assert await session.normalize_amount(pair, Decimal("0.123456")) == Decimal("0.123456")
 
     portfolio = await session.fetch_portfolio(pair)
     order = await session.place_order(OrderIntent(pair, "buy", Decimal("0.2"), "market", None, False))
