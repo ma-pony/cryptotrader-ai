@@ -1,17 +1,44 @@
-"""Exchange hardening tests — retry, balance check, precision."""
+"""Regression coverage for the hardened Decimal venue boundary."""
 
-from cryptotrader.execution.exchange import ExchangeAdapter, LiveExchange
-from cryptotrader.models import Order
+from decimal import Decimal
+
+import pytest
+
+from cryptotrader.pair import Pair
+from cryptotrader.runtime_config.secrets import CredentialPayload
+from cryptotrader.venues.models import OrderIntent
+from cryptotrader.venues.protocol import VenueAdapter, VenueSession
+from tests.factories.runtime_config import connection
+from tests.fakes.ccxt_client import FakeCcxtFactory
 
 
-def test_exchange_adapter_protocol():
-    assert issubclass(LiveExchange, ExchangeAdapter)
-    assert hasattr(ExchangeAdapter, "place_order")
-    assert hasattr(ExchangeAdapter, "cancel_order")
-    assert hasattr(ExchangeAdapter, "get_balance")
+async def _session():
+    from cryptotrader.venues.okx import OkxVenueAdapter
+
+    adapter = OkxVenueAdapter(client_factory=FakeCcxtFactory("okx"))
+    session = await adapter.connect(
+        connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+    return adapter, session
 
 
-def test_order_creation():
-    o = Order(pair="BTC/USDT", side="buy", amount=0.001, price=50000)
-    assert o.order_type == "market"
-    assert o.side == "buy"
+@pytest.mark.asyncio
+async def test_okx_adapter_and_session_are_structural_task_4_protocols():
+    adapter, session = await _session()
+
+    assert isinstance(adapter, VenueAdapter)
+    assert isinstance(session, VenueSession)
+
+
+@pytest.mark.asyncio
+async def test_okx_precision_never_returns_binary_float_above_session_boundary():
+    _, session = await _session()
+
+    order = await session.place_order(
+        OrderIntent(Pair.parse("BTC/USDT:USDT"), "buy", Decimal("0.123"), "market", None, False)
+    )
+
+    assert order.amount == Decimal("0.12")
+    assert order.filled_amount == Decimal("0.12")
+    assert isinstance(order.average_price, Decimal)

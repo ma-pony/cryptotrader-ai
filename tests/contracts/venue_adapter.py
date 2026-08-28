@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING
 
+from cryptotrader.pair import Pair
+from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
+from cryptotrader.runtime_config.secrets import CredentialPayload
 from cryptotrader.venues.models import ConnectionEnvironment, VenueCapabilities
 from cryptotrader.venues.protocol import VenueAdapter
+from tests.factories.runtime_config import connection
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -24,3 +29,68 @@ def assert_venue_contract(
     for environment in environments:
         capabilities = adapter.capabilities(environment)
         assert isinstance(capabilities, VenueCapabilities)
+
+
+async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionEnvironment) -> None:
+    """Exercise platform-neutral CCXT behavior against a venue-shaped fake."""
+    from cryptotrader.venues.models import OrderIntent, ProtectionSpec
+
+    pair = Pair.parse("BTC/USDT:USDT")
+    spot = Pair.parse("BTC/USDT")
+    adapter = adapter_factory()
+    session = await adapter.connect(
+        connection(
+            f"{adapter.adapter_id}-{environment}",
+            environment,
+            adapter_id=adapter.adapter_id,
+            credential_ref="credentials",
+        ),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+
+    portfolio = await session.fetch_portfolio(pair)
+    assert isinstance(portfolio, ConnectionPortfolioSnapshot)
+    assert portfolio.connection_id == f"{adapter.adapter_id}-{environment}"
+    assert portfolio.equity == Decimal("10000.50")
+    assert portfolio.balances["USDT"] == Decimal("10000.50")
+    assert portfolio.position.signed_amount == Decimal("0.02")
+    assert portfolio.position.signed_notional == Decimal("1000")
+    assert isinstance(portfolio.position.signed_amount, Decimal)
+    assert isinstance(portfolio.position.signed_notional, Decimal)
+
+    spot_order = await session.place_order(OrderIntent(spot, "buy", Decimal("0.1"), "market", None, False))
+    entry = await session.place_order(OrderIntent(pair, "buy", Decimal("0.1"), "market", None, False))
+    reduction = await session.place_order(OrderIntent(pair, "sell", Decimal("0.04"), "market", None, True))
+    close = await session.place_order(OrderIntent(pair, "sell", Decimal("0.02"), "market", None, True))
+
+    assert spot_order.amount == Decimal("0.1")
+    assert entry.amount == Decimal("0.1")
+    assert reduction.filled_amount == Decimal("0.04")
+    assert close.reduce_only is True
+
+    protection = await session.replace_protection(
+        ProtectionSpec(pair, "long", Decimal("0.02"), Decimal("48000"), Decimal("55000"))
+    )
+    assert protection.stop_loss == Decimal("48000")
+    assert protection.take_profit == Decimal("55000")
+    assert protection.active is True
+    state = await session.list_open_state(pair)
+    assert state.position.signed_amount == Decimal("0.02")
+    assert state.protections == (protection,)
+    assert state.open_orders[0].id == "open-1"
+    assert state.open_orders[0].amount == Decimal("0.03")
+    assert state.open_orders[0].filled_amount == Decimal("0.01")
+
+    replacement = await session.replace_protection(
+        ProtectionSpec(pair, "long", Decimal("0.02"), Decimal("47000"), Decimal("56000"))
+    )
+    assert replacement.stop_loss == Decimal("47000")
+    assert replacement.take_profit == Decimal("56000")
+    assert (await session.list_open_state(pair)).protections == (replacement,)
+
+    await session.cancel_protection(replacement.protection_ids)
+    assert (await session.list_open_state(pair)).protections == ()
+    await session.close()
+    await session.close()
+    assert session.client.load_markets_calls == 1
+    assert session.client.close_calls == 1
