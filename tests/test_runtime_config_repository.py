@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 from dataclasses import asdict
@@ -96,6 +97,27 @@ async def test_stale_credential_update_rolls_back(repository):
 
     assert await repository.reveal_credentials("okx-demo") == original
     assert (await repository.get_or_create()).revision == current.revision
+
+
+async def test_concurrent_same_reference_creation_has_one_winner_and_one_revision_conflict(repository):
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+    from cryptotrader.runtime_config.repository import RevisionConflict
+
+    before = await repository.get_or_create()
+    first = credential_payload("concurrent-first")
+    second = credential_payload("concurrent-second")
+
+    results = await asyncio.gather(
+        repository.put_credentials(before.revision, "shared-ref", first),
+        repository.put_credentials(before.revision, "shared-ref", second),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, RuntimeConfigSnapshot) for result in results) == 1
+    assert sum(isinstance(result, RevisionConflict) for result in results) == 1
+    conflict = next(result for result in results if isinstance(result, RevisionConflict))
+    assert (conflict.expected, conflict.actual) == (before.revision, before.revision + 1)
+    assert await repository.reveal_credentials("shared-ref") in {first, second}
 
 
 async def test_repository_api_objects_never_serialize_secrets(repository):

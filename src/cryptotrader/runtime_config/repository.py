@@ -161,19 +161,6 @@ class RuntimeConfigRepository:
         encrypted_payload = self._vault.seal(credential_ref, payload)
         session = await get_async_session(self.database_url)
         try:
-            credential = await session.get(_VenueCredentialRow, credential_ref)
-            if credential is None:
-                session.add(
-                    _VenueCredentialRow(
-                        credential_ref=credential_ref,
-                        encrypted_payload=encrypted_payload,
-                        updated_at=updated_at,
-                    )
-                )
-            else:
-                credential.encrypted_payload = encrypted_payload
-                credential.updated_at = updated_at
-
             result = await session.execute(
                 update(_RuntimeConfigRow)
                 .where(
@@ -189,6 +176,19 @@ class RuntimeConfigRepository:
                 actual = await self._actual_revision(session)
                 await session.rollback()
                 raise RevisionConflict(expected_revision, actual)
+
+            credential = await session.get(_VenueCredentialRow, credential_ref)
+            if credential is None:
+                session.add(
+                    _VenueCredentialRow(
+                        credential_ref=credential_ref,
+                        encrypted_payload=encrypted_payload,
+                        updated_at=updated_at,
+                    )
+                )
+            else:
+                credential.encrypted_payload = encrypted_payload
+                credential.updated_at = updated_at
 
             row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
             if row is None:
