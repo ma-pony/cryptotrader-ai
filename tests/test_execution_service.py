@@ -702,6 +702,46 @@ async def test_spot_nonflat_execution_reconciles_without_native_protection():
 
 
 @pytest.mark.asyncio
+async def test_spot_active_protection_fails_precondition_before_quote_or_mutation():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    quote = VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("100"), Decimal("99.5"))
+    external_oco = ProtectionState(
+        ("external-oco",),
+        SPOT_PAIR,
+        "long",
+        Decimal("1"),
+        Decimal("90"),
+        Decimal("120"),
+        True,
+        False,
+    )
+    session = _VenueSession("1", protections=(external_oco,), quote=quote)
+    session.capabilities = SPOT_CAPABILITIES
+    plan = replace(
+        _venue_plan("1", "2", old_protection_ids=()),
+        pair=SPOT_PAIR,
+        quote=quote,
+        execution_price=Decimal("100"),
+        market_type="spot",
+        stop_loss=None,
+        take_profit=None,
+        capabilities=SPOT_CAPABILITIES,
+    )
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "failed"
+    assert result.error_operation == "precondition"
+    assert result.requires_attention is True
+    assert result.execution_quote is None
+    assert result.trace == ("pre_read", "precondition")
+    assert session.calls == ["list_open_state"]
+    assert session.signed_amount == Decimal("1")
+    assert session.protections == (external_oco,)
+
+
+@pytest.mark.asyncio
 async def test_spot_never_validates_or_installs_plan_protection_at_latest_quote():
     from cryptotrader.execution.service import VenueExecutionService
 
@@ -862,6 +902,57 @@ async def test_unreadable_state_after_failed_reduction_requires_attention():
     assert result.status == "failed"
     assert result.final_position is None
     assert result.requires_attention is True
+
+
+@pytest.mark.asyncio
+async def test_reduction_replace_transport_error_is_safe_only_with_exact_desired_protection_state():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("2", protections=(_venue_protection("2"),))
+    original_replace = session.replace_protection
+
+    async def install_then_fail(spec):
+        await original_replace(spec)
+        raise VenueOperationError("RAW_SECRET_REPLACE_RESPONSE")
+
+    session.replace_protection = install_then_fail
+    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+
+    assert result.status == "failed"
+    assert result.error_operation == "replace_protection"
+    assert result.requires_attention is False
+    assert result.compensation.attempted is False
+    assert len(session.orders) == 1
+    assert session.signed_amount == Decimal("1")
+    assert result.final_position is not None
+    assert result.final_position.protections == session.protections
+    assert result.trace == ("pre_read", "place_order", "replace_protection", "reconcile")
+
+
+@pytest.mark.asyncio
+async def test_reduction_replace_transport_error_with_old_and_new_protection_requires_attention():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("2", protections=(_venue_protection("2"),))
+    original_replace = session.replace_protection
+
+    async def retain_old_install_new_then_fail(spec):
+        old = session.protections
+        await original_replace(spec)
+        session.protections = (*old, *session.protections)
+        raise VenueOperationError("RAW_SECRET_REPLACE_RESPONSE")
+
+    session.replace_protection = retain_old_install_new_then_fail
+    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+
+    assert result.status == "failed"
+    assert result.error_operation == "replace_protection"
+    assert result.requires_attention is True
+    assert result.compensation.attempted is False
+    assert len(session.orders) == 1
+    assert session.signed_amount == Decimal("1")
+    assert result.final_position is not None
+    assert len(result.final_position.protections) == 2
 
 
 @pytest.mark.asyncio

@@ -209,6 +209,60 @@ async def test_coordinator_executes_real_spot_service_without_protection_path():
 
 
 @pytest.mark.asyncio
+async def test_coordinator_audits_spot_protection_precondition_without_losing_sibling():
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+    from cryptotrader.execution.service import VenueExecutionService
+    from cryptotrader.venues.models import VenueQuote
+
+    quote = VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("100"), Decimal("99.5"))
+    base = _proposal()
+    plans = tuple(
+        replace(
+            plan,
+            pair=SPOT_PAIR,
+            quote=quote,
+            execution_price=Decimal("100"),
+            market_type="spot",
+            stop_loss=None,
+            take_profit=None,
+            capabilities=SPOT_CAPABILITIES,
+        )
+        for plan in base.connection_plans
+    )
+    proposal = replace(base, pair=SPOT_PAIR, connection_plans=plans)
+    external_oco = ProtectionState(
+        ("external-oco",),
+        SPOT_PAIR,
+        "long",
+        Decimal("1"),
+        Decimal("90"),
+        Decimal("120"),
+        True,
+        False,
+    )
+    protected = _VenueSession("0", protections=(external_oco,), quote=quote)
+    protected.connection_id = "first"
+    protected.capabilities = SPOT_CAPABILITIES
+    sibling = _VenueSession("0", quote=quote)
+    sibling.connection_id = "second"
+    sibling.capabilities = SPOT_CAPABILITIES
+
+    result = await ExecutionCoordinator(
+        {
+            "first": VenueExecutionService(protected),
+            "second": VenueExecutionService(sibling),
+        }
+    ).execute(proposal)
+
+    assert result.status == "partial"
+    assert tuple(item.status for item in result.connection_results) == ("failed", "completed")
+    assert result.connection_results[0].error_operation == "precondition"
+    assert result.connection_results[0].requires_attention is True
+    assert protected.calls == ["list_open_state"]
+    assert sibling.signed_amount == Decimal("0.6")
+
+
+@pytest.mark.asyncio
 async def test_coordinator_rejects_non_ready_proposal_before_any_service_side_effect():
     from cryptotrader.execution.coordinator import ExecutionCoordinator
 

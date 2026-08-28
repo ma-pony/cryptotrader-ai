@@ -401,6 +401,7 @@ _BOOK_EXECUTION_STATUSES = frozenset({"completed", "partial", "failed"})
 _EXECUTION_OPERATIONS = frozenset(
     {
         "pre_read",
+        "precondition",
         "fetch_quote",
         "normalize_amount",
         "place_order",
@@ -616,7 +617,7 @@ class ConnectionExecutionResult:
             self._validate_completed()
         elif self.error_operation not in _EXECUTION_OPERATIONS:
             raise ValueError("failed result requires a safe operation category")
-        elif self.execution_quote is None and self.error_operation not in {"pre_read", "fetch_quote"}:
+        elif self.execution_quote is None and self.error_operation not in {"pre_read", "precondition", "fetch_quote"}:
             raise ValueError("failed result after quote acquisition requires an execution quote")
         if self.compensation.succeeded and self.requires_attention:
             raise ValueError("successful compensation cannot require attention")

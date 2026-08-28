@@ -449,6 +449,14 @@ class VenueExecutionService:
             initial = await self.session.list_open_state(plan.pair)
         except VenueOperationError:
             return self._failed(plan, "pre_read", trace=("pre_read",))
+        self._validate_fresh_state(plan, initial)
+        if plan.pair.market_type == "spot" and self._active_protection_ids(initial):
+            return self._failed(
+                plan,
+                "precondition",
+                requires_attention=True,
+                trace=("pre_read", "precondition"),
+            )
         try:
             quote = await self.session.fetch_quote(plan.pair)
         except VenueOperationError:
@@ -826,12 +834,12 @@ class VenueExecutionService:
                     safe_amount=transition.initial_state.position.signed_amount if safe_amount is None else safe_amount,
                     operation="replace_protection",
                 )
-            return await self._failed_after_risk_reduction(
+            return await self._failed_after_ambiguous_reduction_protection(
                 plan,
                 orders,
                 trace,
-                "replace_protection",
-                transition.target_amount,
+                spec,
+                expected,
                 transition.quote,
             )
         self._validate_protection_response(protection, spec)
@@ -1204,6 +1212,41 @@ class VenueExecutionService:
             execution_quote=execution_quote,
         )
 
+    async def _failed_after_ambiguous_reduction_protection(
+        self,
+        plan: ConnectionExecutionPlan,
+        orders: list[NormalizedOrder],
+        trace: list[str],
+        desired: ProtectionSpec,
+        expected_amount: Decimal,
+        execution_quote: VenueQuote,
+    ) -> ConnectionExecutionResult:
+        trace.append("reconcile")
+        try:
+            state = await self.session.list_open_state(plan.pair)
+        except VenueOperationError:
+            return self._failed(
+                plan,
+                "replace_protection",
+                orders=tuple(orders),
+                requires_attention=True,
+                trace=tuple(trace),
+                target_amount=expected_amount,
+                execution_quote=execution_quote,
+            )
+        final = self._summarize(state, desired=desired)
+        exact = state.position.signed_amount == expected_amount and self._has_exact_protection(state, desired)
+        return self._failed(
+            plan,
+            "replace_protection",
+            orders=tuple(orders),
+            final_position=final,
+            requires_attention=not exact,
+            trace=tuple(trace),
+            target_amount=expected_amount,
+            execution_quote=execution_quote,
+        )
+
     async def _failed_after_flip_close(
         self,
         plan: ConnectionExecutionPlan,
@@ -1358,9 +1401,18 @@ class VenueExecutionService:
         )
 
     @staticmethod
-    def _validate_fresh_inputs(plan: ConnectionExecutionPlan, state: OpenVenueState, quote: VenueQuote) -> None:
+    def _validate_fresh_state(plan: ConnectionExecutionPlan, state: OpenVenueState) -> None:
         if not isinstance(state, OpenVenueState) or state.position.pair != plan.pair:
             raise ValueError("fresh open state must match the execution pair")
+
+    @classmethod
+    def _validate_fresh_inputs(
+        cls,
+        plan: ConnectionExecutionPlan,
+        state: OpenVenueState,
+        quote: VenueQuote,
+    ) -> None:
+        cls._validate_fresh_state(plan, state)
         if not isinstance(quote, VenueQuote) or quote.pair != plan.pair:
             raise ValueError("latest quote must match the execution pair")
 
@@ -1431,6 +1483,20 @@ class VenueExecutionService:
             or protection.triggered
         ):
             raise ValueError("replacement protection does not match its specification")
+
+    @staticmethod
+    def _has_exact_protection(state: OpenVenueState, desired: ProtectionSpec) -> bool:
+        active = tuple(protection for protection in state.protections if protection.active and not protection.triggered)
+        if len(active) != 1:
+            return False
+        protection = active[0]
+        return (
+            protection.pair == desired.pair
+            and protection.position_side == desired.position_side
+            and protection.amount == desired.amount
+            and protection.stop_loss == desired.stop_loss
+            and protection.take_profit == desired.take_profit
+        )
 
     @classmethod
     def _summarize(
