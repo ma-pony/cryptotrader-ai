@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import metadata
+from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
 from cryptotrader.venues.protocol import VenueAdapter
@@ -65,6 +66,8 @@ class VenueAdapterRegistry:
     def _register(self, adapter: VenueAdapter) -> None:
         if not isinstance(adapter, VenueAdapter):
             raise TypeError("adapter does not implement VenueAdapter")
+        if not iscoroutinefunction(adapter.connect):
+            raise TypeError(f"venue adapter {adapter.adapter_id} connect must be async")
         if type(adapter.adapter_id) is not str or not adapter.adapter_id.strip():
             raise ValueError("venue adapter id must be a non-empty string")
         if adapter.adapter_id in self._adapters:

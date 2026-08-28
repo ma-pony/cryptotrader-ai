@@ -20,6 +20,11 @@ class FakeAdapter:
         raise NotImplementedError
 
 
+class SyncConnectAdapter(FakeAdapter):
+    def connect(self, connection, credentials):
+        raise NotImplementedError
+
+
 def _entry_point(name: str, factory_name: str) -> metadata.EntryPoint:
     return metadata.EntryPoint(
         name=name,
@@ -51,6 +56,13 @@ def test_registry_rejects_duplicate_adapter_ids():
 
     with pytest.raises(ValueError, match="duplicate venue adapter id: alpha"):
         VenueAdapterRegistry((FakeAdapter("alpha"), FakeAdapter("alpha")))
+
+
+def test_registry_rejects_adapter_with_synchronous_connect_before_runtime_use():
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+
+    with pytest.raises(TypeError, match="connect must be async"):
+        VenueAdapterRegistry((SyncConnectAdapter("sync"),))
 
 
 def test_registry_discovers_entry_point_factories(monkeypatch):

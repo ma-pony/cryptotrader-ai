@@ -155,3 +155,20 @@ def test_venue_protocols_are_structural_and_contract_helper_checks_capabilities(
     assert isinstance(adapter, VenueAdapter)
     assert isinstance(session, VenueSession)
     assert_venue_contract(FakeAdapter, ("paper",))
+
+
+def test_shared_venue_contract_rejects_synchronous_connect():
+    from cryptotrader.venues.models import VenueCapabilities
+    from tests.contracts.venue_adapter import assert_venue_contract
+
+    class SyncConnectAdapter:
+        adapter_id = "sync"
+
+        def capabilities(self, environment):
+            return VenueCapabilities(frozenset({"swap"}), True, False, True, frozenset({"market"}))
+
+        def connect(self, connection, credentials):
+            raise NotImplementedError
+
+    with pytest.raises(AssertionError, match="connect must be async"):
+        assert_venue_contract(SyncConnectAdapter, ("paper",))
