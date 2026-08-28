@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -19,21 +20,50 @@ PositionSide = Literal["long", "short"]
 _ENVIRONMENTS = frozenset({"paper", "demo", "testnet", "live"})
 _MARGIN_MODES = frozenset({"isolated", "cross"})
 _MARKET_TYPES = frozenset({"spot", "swap", "future", "option"})
-_SECRET_PARAMETER_KEYS = frozenset(
+_ALWAYS_SECRET_PARAMETER_TOKENS = frozenset({"secret", "password", "passphrase"})
+_EXACT_SECRET_PARAMETER_TOKENS = frozenset(
+    {frozenset({"token"}), frozenset({"authorization"}), frozenset({"credential"}), frozenset({"credentials"})}
+)
+_SECRET_PARAMETER_COMPOUNDS = (
+    frozenset({"api", "key"}),
+    frozenset({"api", "secret"}),
+    frozenset({"auth", "token"}),
+    frozenset({"access", "token"}),
+    frozenset({"refresh", "token"}),
+    frozenset({"private", "key"}),
+    frozenset({"authorization", "header"}),
+    frozenset({"credential", "payload"}),
+    frozenset({"credentials", "payload"}),
+)
+_COMPACT_SECRET_PARAMETER_KEYS = frozenset(
     {
         "apikey",
         "apisecret",
-        "secret",
-        "passphrase",
-        "password",
-        "authorization",
+        "authtoken",
         "accesstoken",
         "refreshtoken",
         "privatekey",
-        "credential",
-        "credentials",
+        "authorizationheader",
+        "credentialpayload",
+        "credentialspayload",
     }
 )
+
+
+def _parameter_key_tokens(key: str) -> frozenset[str]:
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    return frozenset(token for token in re.split(r"[^A-Za-z0-9]+", separated.lower()) if token)
+
+
+def _is_secret_parameter_key(key: str) -> bool:
+    tokens = _parameter_key_tokens(key)
+    compact_key = "".join(character for character in key.lower() if character.isalnum())
+    return (
+        bool(tokens & _ALWAYS_SECRET_PARAMETER_TOKENS)
+        or tokens in _EXACT_SECRET_PARAMETER_TOKENS
+        or any(compound <= tokens for compound in _SECRET_PARAMETER_COMPOUNDS)
+        or compact_key in _COMPACT_SECRET_PARAMETER_KEYS
+    )
 
 
 def _freeze_json_value(value: Any, path: str) -> Any:
@@ -42,8 +72,7 @@ def _freeze_json_value(value: Any, path: str) -> Any:
         for key, item in value.items():
             if type(key) is not str:
                 raise ValueError(f"{path} keys must be strings")
-            normalized_key = "".join(character for character in key.lower() if character.isalnum())
-            if not key.strip() or normalized_key in _SECRET_PARAMETER_KEYS:
+            if not key.strip() or _is_secret_parameter_key(key):
                 raise ValueError(f"{path} contains a forbidden parameter key")
             frozen[key] = _freeze_json_value(item, f"{path}.{key}")
         return MappingProxyType(frozen)

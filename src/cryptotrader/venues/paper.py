@@ -25,6 +25,8 @@ if TYPE_CHECKING:
     from cryptotrader.runtime_config.secrets import CredentialPayload
     from cryptotrader.venues.models import VenueConnection
 
+_SUPPORTED_MARKET_TYPES = frozenset({"spot", "swap"})
+
 
 @dataclass
 class _PaperPosition:
@@ -67,22 +69,27 @@ class PaperVenueSession:
     async def set_quote(self, pair: Pair, price: Decimal) -> VenueQuote:
         """Install the latest deterministic Paper quote for one pair."""
         self._require_open()
+        self._require_supported_pair(pair)
         if not isinstance(price, Decimal) or not price.is_finite() or price <= 0:
             raise ValueError("Paper quote price must be a positive finite Decimal")
         async with self._account.lock_for(pair):
             quote = VenueQuote(pair, price, price, price)
             self._account.quotes[pair] = quote
+            self._apply_bankruptcy_locked()
             return quote
 
     async def fetch_quote(self, pair: Pair) -> VenueQuote:
         self._require_open()
+        self._require_supported_pair(pair)
         async with self._account.lock_for(pair):
             return self._quote_locked(pair)
 
     async def place_order(self, intent: OrderIntent) -> NormalizedOrder:
         self._require_open()
+        self._require_supported_pair(intent.pair)
         async with self._account.lock_for(intent.pair):
             quote = self._quote_locked(intent.pair)
+            self._apply_bankruptcy_locked()
             if intent.order_type == "market":
                 fill_price = quote.last
             elif intent.order_type == "limit" and intent.price is not None:
@@ -93,14 +100,18 @@ class PaperVenueSession:
 
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
         self._require_open()
+        self._require_supported_pair(pair)
         async with self._account.lock_for(pair):
             self._quote_locked(pair)
+            self._apply_bankruptcy_locked()
             return self._portfolio_locked(pair)
 
     async def replace_protection(self, spec: ProtectionSpec) -> ProtectionState:
         self._require_open()
+        self._require_supported_pair(spec.pair)
         async with self._account.lock_for(spec.pair):
             quote = self._quote_locked(spec.pair)
+            self._apply_bankruptcy_locked()
             position = self._account.positions.get(spec.pair, _PaperPosition())
             expected_side = "long" if position.signed_amount > 0 else "short" if position.signed_amount < 0 else None
             if expected_side != spec.position_side or spec.amount > abs(position.signed_amount):
@@ -146,9 +157,11 @@ class PaperVenueSession:
 
     async def list_open_state(self, pair: Pair) -> OpenVenueState:
         self._require_open()
+        self._require_supported_pair(pair)
         async with self._account.lock_for(pair):
             self._quote_locked(pair)
-            triggered = self._trigger_protection_locked(pair)
+            bankrupt = self._apply_bankruptcy_locked()
+            triggered = None if bankrupt else self._trigger_protection_locked(pair)
             position = self._position_dto_locked(pair)
             open_orders = tuple(
                 order for order in self._account.orders.values() if order.pair == pair and order.status == "open"
@@ -217,7 +230,8 @@ class PaperVenueSession:
         ):
             return False
         next_amount = current.signed_amount + delta
-        if abs(next_amount) > abs(current.signed_amount):
+        opens_opposite_leg = current.signed_amount * next_amount < 0
+        if opens_opposite_leg or abs(next_amount) > abs(current.signed_amount):
             required_margin = self._required_margin_locked(intent.pair, next_amount, fill_price)
             if required_margin > self._equity_locked():
                 return False
@@ -294,6 +308,16 @@ class PaperVenueSession:
                 equity += (self._quote_locked(pair).last - position.entry_price) * position.signed_amount
         return equity
 
+    def _apply_bankruptcy_locked(self) -> bool:
+        if self._equity_locked() > 0:
+            return False
+        self._account.balances = {"USDT": Decimal("0")}
+        self._account.positions.clear()
+        self._account.spot_entry_prices.clear()
+        self._account.protections.clear()
+        self._account.protection_pairs.clear()
+        return True
+
     def _trigger_protection_locked(self, pair: Pair) -> ProtectionState | None:
         protection = self._account.protections.get(pair)
         if protection is None:
@@ -361,6 +385,10 @@ class PaperVenueSession:
         if self._closed:
             raise VenueOperationError(f"{self.connection_id}: Paper session is closed")
 
+    def _require_supported_pair(self, pair: Pair) -> None:
+        if pair.market_type not in _SUPPORTED_MARKET_TYPES:
+            raise VenueOperationError(f"{self.connection_id}: unsupported Paper market type {pair.market_type}")
+
 
 class PaperVenueAdapter:
     """Factory for credential-free Paper sessions backed by connection parameters."""
@@ -373,7 +401,7 @@ class PaperVenueAdapter:
     def capabilities(self, environment: str) -> VenueCapabilities:
         self._require_environment(environment)
         return VenueCapabilities(
-            frozenset({"spot", "swap"}),
+            _SUPPORTED_MARKET_TYPES,
             native_protection=True,
             hedge_mode=False,
             reduce_only=True,

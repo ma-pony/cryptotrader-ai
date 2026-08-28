@@ -17,7 +17,7 @@ from cryptotrader.venues.models import VenueConnection  # noqa: TC001
 
 
 class _FrozenConfigModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True)
 
 
 def _freeze_parameters(value: Any) -> Any:

@@ -215,6 +215,55 @@ def test_venue_connection_parameters_reject_non_json_and_secret_values(parameter
         connection(parameters=parameters)
 
 
+@pytest.mark.parametrize(
+    "secret_key",
+    [
+        "auth_token",
+        "accessToken",
+        "apikey",
+        "api_key_id",
+        "credentials_payload",
+        "authorization_header",
+        "privatekey",
+        "private_key_pem",
+        "credential_payload",
+    ],
+)
+def test_venue_connection_parameters_reject_compound_secret_keys_without_echoing_values(secret_key):
+    marker = "must-never-appear-in-errors"
+
+    with pytest.raises(ValueError, match="forbidden parameter key") as error:
+        connection(parameters={"safe": {"nested": {secret_key: marker}}})
+
+    assert marker not in str(error.value)
+
+
+def test_venue_connection_parameters_keep_nonsecret_compound_names_usable_and_serializable():
+    parameters = {
+        "tokenization_method": "bpe",
+        "keyframe_interval": 12,
+        "private_market": True,
+        "authorization_mode": "external-proxy",
+    }
+
+    document = runtime_document(connections=(connection(parameters=parameters),))
+
+    assert document.model_dump(mode="json")["execution"]["connections"][0]["parameters"] == parameters
+
+
+def test_runtime_document_validation_hides_rejected_parameter_input_values():
+    from cryptotrader.runtime_config.models import RuntimeConfigDocument
+
+    marker = "api-boundary-secret-marker"
+    payload = runtime_document(connections=(connection(),)).model_dump(mode="json")
+    payload["execution"]["connections"][0]["parameters"] = {"nested": {"authorization_header": marker}}
+
+    with pytest.raises(ValidationError, match="forbidden parameter key") as error:
+        RuntimeConfigDocument.model_validate(payload)
+
+    assert marker not in str(error.value)
+
+
 @pytest.mark.parametrize("enabled", ["false", 0, 1])
 def test_venue_connection_rejects_non_boolean_enabled(enabled):
     from cryptotrader.venues.models import VenueConnection

@@ -15,6 +15,12 @@ from tests.factories.runtime_config import connection
 PAIR = Pair.parse("BTC/USDT:USDT")
 
 
+class OptionPair(Pair):
+    @property
+    def market_type(self):
+        return "option"
+
+
 def paper_connection(connection_id: str = "paper-local", *, initial_equity="10000", **overrides):
     parameters = {} if initial_equity is None else {"initial_equity": initial_equity}
     return connection(connection_id, "paper", parameters=parameters, **overrides)
@@ -119,6 +125,26 @@ async def test_paper_accounts_are_independent_per_connection_id():
     assert (await second.fetch_portfolio(PAIR)).equity == Decimal("25000")
 
 
+async def test_same_connection_id_reconnect_retains_state_but_fresh_adapter_resets_runtime_state():
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    account = paper_connection("paper-durable", initial_equity="10000")
+    adapter = PaperVenueAdapter()
+    first = await adapter.connect(account, None)
+    await first.set_quote(PAIR, Decimal("50000"))
+    await first.place_order(order_intent(amount="0.1"))
+    await first.close()
+
+    reconnected = await adapter.connect(account, None)
+    assert (await reconnected.fetch_portfolio(PAIR)).position.signed_amount == Decimal("0.1")
+
+    fresh_runtime = await PaperVenueAdapter().connect(account, None)
+    await fresh_runtime.set_quote(PAIR, Decimal("50000"))
+    fresh_snapshot = await fresh_runtime.fetch_portfolio(PAIR)
+    assert fresh_snapshot.equity == Decimal("10000")
+    assert fresh_snapshot.position.signed_amount == Decimal("0")
+
+
 async def test_paper_session_requires_a_quote_before_orders_or_portfolio_reads():
     from cryptotrader.venues.ccxt_base import VenueOperationError
     from cryptotrader.venues.paper import PaperVenueAdapter
@@ -129,6 +155,24 @@ async def test_paper_session_requires_a_quote_before_orders_or_portfolio_reads()
         await session.place_order(order_intent())
     with pytest.raises(VenueOperationError, match="quote is not set"):
         await session.fetch_portfolio(PAIR)
+
+
+@pytest.mark.parametrize(
+    "unsupported_pair",
+    [Pair.parse("BTC/USDT:USDT-261225"), OptionPair("BTC", "USDT", "BTC/USDT:USDT")],
+)
+async def test_paper_session_rejects_market_types_not_declared_by_capabilities(unsupported_pair):
+    from cryptotrader.venues.ccxt_base import VenueOperationError
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    session = await PaperVenueAdapter().connect(paper_connection(), None)
+
+    with pytest.raises(VenueOperationError, match="unsupported Paper market type"):
+        await session.set_quote(unsupported_pair, Decimal("100"))
+    with pytest.raises(VenueOperationError, match="unsupported Paper market type"):
+        await session.fetch_quote(unsupported_pair)
+    with pytest.raises(VenueOperationError, match="unsupported Paper market type"):
+        await session.place_order(OrderIntent(unsupported_pair, "buy", Decimal("1"), "market", None, False))
 
 
 async def test_paper_spot_fill_uses_decimal_balances_and_cost_basis():
