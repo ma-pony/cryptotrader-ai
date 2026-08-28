@@ -58,6 +58,7 @@ async def test_default_market_source_builds_context_from_explicit_public_source_
     source = DefaultMarketDataSource(
         market_config(parameters={"exchange_id": "binance"}),
         aggregator=aggregator,
+        clock=lambda: as_of,
     )
     as_of = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -85,6 +86,37 @@ async def test_default_market_source_builds_context_from_explicit_public_source_
         }
     ]
     assert aggregator.market.calls == [("BTC/USDT:USDT", "binance", "1h", 20)]
+
+
+@pytest.mark.asyncio
+async def test_default_market_source_rejects_historical_as_of_before_collection():
+    from cryptotrader.market_sources.default import DefaultMarketDataSource
+
+    class FakeAggregator:
+        def __init__(self) -> None:
+            self.calls = []
+            self.market = object()
+
+        async def collect(self, **kwargs):
+            self.calls.append(kwargs)
+            raise AssertionError("historical request reached live collection")
+
+    aggregator = FakeAggregator()
+    now = datetime(2026, 1, 1, 12, tzinfo=UTC)
+    source = DefaultMarketDataSource(
+        market_config(parameters={"exchange_id": "binance"}),
+        aggregator=aggregator,
+        clock=lambda: now,
+    )
+
+    with pytest.raises(ValueError, match="live-only"):
+        await source.collect(
+            Pair.parse("BTC/USDT:USDT"),
+            datetime(2026, 1, 1, 11, 55, tzinfo=UTC),
+            DataRequirements(candles=(CandleRequirement("1h", 20),)),
+        )
+
+    assert aggregator.calls == []
 
 
 @pytest.mark.asyncio

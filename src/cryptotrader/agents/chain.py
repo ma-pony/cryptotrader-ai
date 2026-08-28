@@ -55,7 +55,15 @@ def _format_btc_network_health(oc: object) -> list[str]:
 
 
 class ChainAgent(ToolAgent):
-    def __init__(self, *, prompt_builder: PromptBuilder, model: str = "", backtest_mode: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        prompt_builder: PromptBuilder,
+        model: str = "",
+        backtest_mode: bool = False,
+        llm_factory=None,
+        prompt_caching: bool | None = None,
+    ) -> None:
         from cryptotrader.agents.skills.tool import load_skill_tool
 
         super().__init__(
@@ -64,6 +72,8 @@ class ChainAgent(ToolAgent):
             tools=[*CHAIN_TOOLS, load_skill_tool],
             model=model,
             backtest_mode=backtest_mode,
+            llm_factory=llm_factory,
+            prompt_caching=prompt_caching,
         )
 
     _KNOWN_EXCHANGES = frozenset(

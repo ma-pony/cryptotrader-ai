@@ -24,9 +24,10 @@ from cryptotrader.models import AgentAnalysis, DataSnapshot
 from cryptotrader.security import sanitize_input
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
     from cryptotrader.agents.prompt_builder import PromptBuilder
+    from cryptotrader.runtime_config.models import LlmConfig as RuntimeLlmConfig
 
 _logger = logging.getLogger(__name__)
 logger = _logger
@@ -242,6 +243,70 @@ def create_llm(
     return llm
 
 
+def create_runtime_llm_factory(config: RuntimeLlmConfig) -> Callable[..., ChatOpenAI]:
+    """Bind the database LLM document to a factory that never reads legacy config."""
+    from cryptotrader.llm.token_tracker import TokenTrackerCallback
+
+    model_costs = {
+        item.name: (float(item.input_usd_per_mtok), float(item.output_usd_per_mtok))
+        for item in config.model_costs
+        if item.name
+    }
+    callback = TokenTrackerCallback(model_costs)
+
+    def runtime_create_llm(
+        model: str = "",
+        temperature: float | None = None,
+        timeout: int | None = None,
+        json_mode: bool = False,
+        *,
+        with_fallback: bool = True,
+        role: str = "",
+        track_tokens: bool = True,
+    ) -> ChatOpenAI:
+        from cryptotrader.llm.factory import _wrap_with_retry
+        from cryptotrader.metrics import get_metrics_collector
+
+        del role
+        selected_model = model or config.models.analysis or config.models.fallback
+        if not selected_model:
+            raise ValueError("No LLM model configured in runtime_config")
+        selected_temperature = config.default_temperature if temperature is None else temperature
+        selected_timeout = config.timeout if timeout is None else timeout
+        get_metrics_collector().inc_llm_calls(model=selected_model, node="create_runtime_llm")
+
+        def build(model_name: str):
+            kwargs: dict[str, Any] = {
+                "model": model_name,
+                "temperature": selected_temperature,
+                "timeout": selected_timeout,
+                "api_key": "",
+            }
+            if config.base_url:
+                kwargs["base_url"] = config.base_url
+            if model_name in config.streaming_models:
+                kwargs["streaming"] = True
+            if json_mode:
+                kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
+            if track_tokens:
+                kwargs["callbacks"] = [callback]
+            return _wrap_with_retry(ChatOpenAI(**kwargs), config.retry)
+
+        llm = build(selected_model)
+        fallback_model = config.models.fallback
+        if with_fallback and fallback_model and fallback_model != selected_model:
+            from langchain_core.runnables import RunnableWithFallbacks
+
+            llm = RunnableWithFallbacks(
+                runnable=llm,
+                fallbacks=[build(fallback_model)],
+                exceptions_to_handle=(Exception,),
+            )
+        return llm
+
+    return runtime_create_llm
+
+
 def _to_langchain_messages(messages: list[dict]) -> list:
     """Convert OpenAI-format message dicts to LangChain message objects."""
     result = []
@@ -367,10 +432,20 @@ async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
 class BaseAgent:
     """Single-LLM-call agent using PromptBuilder for prompt assembly (spec 017b)."""
 
-    def __init__(self, *, agent_id: str, prompt_builder: PromptBuilder, model: str = "") -> None:
+    def __init__(
+        self,
+        *,
+        agent_id: str,
+        prompt_builder: PromptBuilder,
+        model: str = "",
+        llm_factory: Callable[..., Any] | None = None,
+        prompt_caching: bool | None = None,
+    ) -> None:
         self.agent_id = agent_id
         self._prompt_builder = prompt_builder
         self.model = model
+        self._llm_factory = llm_factory
+        self._prompt_caching = prompt_caching
 
     def _resolve_model(self) -> str:
         """Return model name, falling back to config if not set."""
@@ -441,11 +516,16 @@ class BaseAgent:
                 portfolio={},
             )
             model = self._resolve_model()
-            llm = create_llm(model=model)
+            llm = (self._llm_factory or create_llm)(model=model)
             messages = [sys_msg, usr_msg]
-            from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
+            from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model, should_cache
 
-            if should_cache(model=model, role=self.agent_id):
+            cache_enabled = (
+                should_cache(model=model, role=self.agent_id)
+                if self._prompt_caching is None
+                else self._prompt_caching and is_anthropic_model(model)
+            )
+            if cache_enabled:
                 messages = apply_cache_control(messages)
             response = await llm.ainvoke(messages)
             log_llm_usage(response, caller=self.agent_id)
@@ -589,8 +669,16 @@ class ToolAgent(BaseAgent):
         tools: Sequence,
         model: str = "",
         backtest_mode: bool = False,
+        llm_factory: Callable[..., Any] | None = None,
+        prompt_caching: bool | None = None,
     ) -> None:
-        super().__init__(agent_id=agent_id, prompt_builder=prompt_builder, model=model)
+        super().__init__(
+            agent_id=agent_id,
+            prompt_builder=prompt_builder,
+            model=model,
+            llm_factory=llm_factory,
+            prompt_caching=prompt_caching,
+        )
         self.tools = list(tools)
         self.backtest_mode = backtest_mode
 
@@ -607,7 +695,11 @@ class ToolAgent(BaseAgent):
                 portfolio={},
             )
 
-            llm = _create_chat_model(self.model)
+            llm = (self._llm_factory or create_llm)(
+                model=self.model,
+                temperature=0.2,
+                with_fallback=False,
+            )
             agent = create_agent(llm, tools=self.tools, system_prompt=sys_msg.content)
 
             result = await agent.ainvoke(

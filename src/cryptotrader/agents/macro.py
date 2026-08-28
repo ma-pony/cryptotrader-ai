@@ -41,5 +41,18 @@ def _format_etf_top_flows(top_flows: list[dict]) -> str:
 
 
 class MacroAgent(BaseAgent):
-    def __init__(self, *, prompt_builder: PromptBuilder, model: str = "") -> None:
-        super().__init__(agent_id="macro", prompt_builder=prompt_builder, model=model)
+    def __init__(
+        self,
+        *,
+        prompt_builder: PromptBuilder,
+        model: str = "",
+        llm_factory=None,
+        prompt_caching: bool | None = None,
+    ) -> None:
+        super().__init__(
+            agent_id="macro",
+            prompt_builder=prompt_builder,
+            model=model,
+            llm_factory=llm_factory,
+            prompt_caching=prompt_caching,
+        )

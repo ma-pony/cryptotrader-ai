@@ -62,7 +62,10 @@ def _config_model_costs() -> dict[str, tuple[float, float]]:
     return {e.name: (float(e.input_usd_per_mtok), float(e.output_usd_per_mtok)) for e in entries if e.name}
 
 
-def _match_cost(model: str) -> tuple[float, float]:
+def _match_cost(
+    model: str,
+    explicit_costs: dict[str, tuple[float, float]] | None = None,
+) -> tuple[float, float]:
     """Resolve a model string to (input_cost_per_mtok, output_cost_per_mtok).
 
     Resolution order (first match wins, longest-prefix inside each layer):
@@ -74,19 +77,21 @@ def _match_cost(model: str) -> tuple[float, float]:
     The longest-prefix rule prevents ``gpt-4o-mini-YYYY-MM-DD`` from matching
     ``gpt-4o`` instead of ``gpt-4o-mini`` (which is 17x cheaper).
     """
-    config_costs = _config_model_costs()
+    config_costs = _config_model_costs() if explicit_costs is None else explicit_costs
     combined = {**MODEL_COSTS, **config_costs}  # config wins on exact conflict
 
     if model in combined:
         return combined[model]
-    if model in _RESOLVED_COSTS:
+    if explicit_costs is None and model in _RESOLVED_COSTS:
         return _RESOLVED_COSTS[model]
     for key in sorted(combined, key=len, reverse=True):
         if model.startswith(key):
-            _RESOLVED_COSTS[model] = combined[key]
+            if explicit_costs is None:
+                _RESOLVED_COSTS[model] = combined[key]
             return combined[key]
     logger.info("Unknown model for cost tracking: %s — cost=$0", model)
-    _RESOLVED_COSTS[model] = (0.0, 0.0)
+    if explicit_costs is None:
+        _RESOLVED_COSTS[model] = (0.0, 0.0)
     return (0.0, 0.0)
 
 
@@ -101,8 +106,16 @@ class TokenLedger:
     cost_usd: float = 0.0
     by_model: dict[str, dict[str, float]] = field(default_factory=dict)
 
-    def record(self, *, model: str, input_tokens: int, output_tokens: int, cache_hit: bool = False) -> None:
-        in_cost_m, out_cost_m = _match_cost(model)
+    def record(
+        self,
+        *,
+        model: str,
+        input_tokens: int,
+        output_tokens: int,
+        cache_hit: bool = False,
+        model_costs: dict[str, tuple[float, float]] | None = None,
+    ) -> None:
+        in_cost_m, out_cost_m = _match_cost(model, model_costs)
         delta = (input_tokens / 1_000_000.0) * in_cost_m + (output_tokens / 1_000_000.0) * out_cost_m
         self.input_tokens += input_tokens
         self.output_tokens += output_tokens
@@ -189,6 +202,10 @@ class TokenTrackerCallback(BaseCallbackHandler):
 
     raise_error = False
 
+    def __init__(self, model_costs: dict[str, tuple[float, float]] | None = None) -> None:
+        super().__init__()
+        self.model_costs = model_costs
+
     def on_llm_end(self, response: LLMResult, **_: Any) -> None:  # type: ignore[override]
         ledger = _ledger_ctx.get()
         if ledger is None:
@@ -202,6 +219,7 @@ class TokenTrackerCallback(BaseCallbackHandler):
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 cache_hit=cache_hit,
+                model_costs=self.model_costs,
             )
         except Exception:  # pragma: no cover — never break the pipeline
             logger.info("token tracker on_llm_end failed", exc_info=True)

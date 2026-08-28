@@ -7,11 +7,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from cryptotrader.agents.base import create_llm, extract_content
 from cryptotrader.llm.json_retry import extract_json_with_retry
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 _DEBATE_ROLES = {
     "tech_agent": "technical analysis",
@@ -114,17 +118,24 @@ async def challenge_agent(
     model: str,
     timeout_seconds: float,
     round_number: int,
+    *,
+    llm_factory: Callable | None = None,
+    prompt_caching: bool = False,
 ) -> tuple[dict, dict]:
     """Run one strict cross-challenge turn; failures propagate to the committee."""
     prompt = build_challenge_prompt(agent_id, pair, analysis, others)
-    llm = create_llm(model=model, temperature=0.3)
+    llm = (llm_factory or create_llm)(model=model, temperature=0.3)
+    messages = [
+        SystemMessage(content=DEBATE_SYSTEM.format(role=_DEBATE_ROLES.get(agent_id, agent_id))),
+        HumanMessage(content=prompt),
+    ]
+    if prompt_caching:
+        from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model
+
+        if is_anthropic_model(model):
+            messages = apply_cache_control(messages)
     response = await asyncio.wait_for(
-        llm.ainvoke(
-            [
-                SystemMessage(content=DEBATE_SYSTEM.format(role=_DEBATE_ROLES.get(agent_id, agent_id))),
-                HumanMessage(content=prompt),
-            ]
-        ),
+        llm.ainvoke(messages),
         timeout=timeout_seconds,
     )
     payload = await extract_json_with_retry(

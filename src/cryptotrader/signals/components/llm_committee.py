@@ -57,14 +57,29 @@ class LLMCommitteeComponent:
 
     def __init__(
         self,
-        config: AppConfig,
+        config: AppConfig | None,
         *,
         agents: Mapping[str, Any] | None = None,
         summary: Callable[[CommitteeState], Awaitable[Mapping[str, Any]]] | None = None,
         challenger: Callable[..., Awaitable[tuple[dict, dict]]] | None = None,
         sink: CycleEventSink | None = None,
+        default_timeframe: str | None = None,
+        ohlcv_limit: int | None = None,
+        debate=None,
+        models=None,
+        llm_factory: Callable[..., Any] | None = None,
+        prompt_caching: bool | None = None,
     ) -> None:
+        if config is None and any(value is None for value in (default_timeframe, ohlcv_limit, debate, models)):
+            raise ValueError("runtime committee requires explicit market, debate, and model settings")
         self.config = config
+        self.default_timeframe = config.data.default_timeframe if config is not None else default_timeframe
+        self.ohlcv_limit = config.data.ohlcv_limit if config is not None else ohlcv_limit
+        self.debate = config.debate if config is not None else debate
+        self.models = config.models if config is not None else models
+        self._legacy_agents = config.agents if config is not None else None
+        self._llm_factory = llm_factory
+        self._prompt_caching = prompt_caching
         self.events = sink or NullCycleEventSink()
         self.agents = dict(agents) if agents is not None else self._build_agents()
         self._summary = summary or self._summarize_with_llm
@@ -73,7 +88,7 @@ class LLMCommitteeComponent:
 
     def requirements(self) -> DataRequirements:
         return DataRequirements(
-            candles=(CandleRequirement(self.config.data.default_timeframe, self.config.data.ohlcv_limit),),
+            candles=(CandleRequirement(self.default_timeframe, self.ohlcv_limit),),
             onchain=True,
             news=True,
             macro=True,
@@ -121,7 +136,7 @@ class LLMCommitteeComponent:
         return graph.compile()
 
     async def _analyze_all(self, state: CommitteeState) -> dict:
-        snapshot = state["context"].snapshots[self.config.data.default_timeframe]
+        snapshot = state["context"].snapshots[self.default_timeframe]
         names = list(self.agents)
         results = await asyncio.gather(
             *(self._analyze_one(name, self.agents[name], snapshot) for name in names),
@@ -153,7 +168,7 @@ class LLMCommitteeComponent:
         return analysis
 
     async def _debate_gate(self, state: CommitteeState) -> dict:
-        skipped, reason, metrics = debate_gate_decision(state["analyses"], self.config.debate)
+        skipped, reason, metrics = debate_gate_decision(state["analyses"], self.debate)
         return {
             "debate_skipped": skipped,
             "debate_skip_reason": reason,
@@ -203,13 +218,13 @@ class LLMCommitteeComponent:
         return {"divergence_scores": scores}
 
     def _convergence_route(self, state: CommitteeState) -> str:
-        if state["debate_round"] >= self.config.debate.max_rounds:
+        if state["debate_round"] >= self.debate.max_rounds:
             return "converged"
         scores = state["divergence_scores"]
         if len(scores) >= 2 and check_convergence(
             scores[:-1],
             scores[-1],
-            threshold=self.config.debate.convergence_threshold,
+            threshold=self.debate.convergence_threshold,
         ):
             return "converged"
         return "continue"
@@ -243,23 +258,25 @@ class LLMCommitteeComponent:
         context: SignalContext,
         round_number: int,
     ) -> tuple[dict, dict]:
-        model = self.config.models.debate or self.config.models.fallback
+        model = self.models.debate or self.models.fallback
         return await challenge_agent(
             agent_id,
             analysis,
             others,
             context.pair.display(),
             model,
-            self.config.models.timeout_seconds,
+            self.models.timeout_seconds,
             round_number,
+            llm_factory=self._llm_factory,
+            prompt_caching=bool(self._prompt_caching),
         )
 
     async def _summarize_with_llm(self, state: CommitteeState) -> Mapping[str, Any]:
         from cryptotrader.agents.base import create_llm, extract_content
         from cryptotrader.llm.json_retry import extract_json_with_retry
 
-        model = self.config.models.committee_summary or self.config.models.debate or self.config.models.fallback
-        llm = create_llm(model=model, temperature=0.1, json_mode=True)
+        model = self.models.committee_summary or self.models.debate or self.models.fallback
+        llm = (self._llm_factory or create_llm)(model=model, temperature=0.1, json_mode=True)
         system = SystemMessage(
             content=(
                 "Summarize a four-domain market debate into one market view. Return JSON with exactly "
@@ -273,7 +290,13 @@ class LLMCommitteeComponent:
             "debate_turns": state["debate_turns"],
             "consensus_metrics": state["consensus_metrics"],
         }
-        response = await llm.ainvoke([system, HumanMessage(content=json.dumps(evidence, ensure_ascii=False))])
+        messages = [system, HumanMessage(content=json.dumps(evidence, ensure_ascii=False, default=str))]
+        if self._prompt_caching:
+            from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model
+
+            if is_anthropic_model(model):
+                messages = apply_cache_control(messages)
+        response = await llm.ainvoke(messages)
         return await extract_json_with_retry(
             extract_content(response),
             llm=llm,
@@ -288,10 +311,10 @@ class LLMCommitteeComponent:
         project_root = Path(__file__).resolve().parents[4]
         provider = EvolvingSkillProvider(skill_root=project_root / "agent_skills/_internal")
         models = {
-            "tech_agent": self.config.models.tech_agent,
-            "chain_agent": self.config.models.chain_agent,
-            "news_agent": self.config.models.news_agent,
-            "macro_agent": self.config.models.macro_agent,
+            "tech_agent": self.models.tech_agent,
+            "chain_agent": self.models.chain_agent,
+            "news_agent": self.models.news_agent,
+            "macro_agent": self.models.macro_agent,
         }
         result = {}
         for agent_id, model in models.items():
@@ -301,38 +324,81 @@ class LLMCommitteeComponent:
                 skill_provider=provider,
                 model=model,
             )
-            result[agent_id] = self.config.agents.build(
-                agent_id,
-                prompt_builder=prompt_builder,
-                backtest_mode=True,
-                model_override=model,
-            )
+            if self._legacy_agents is not None:
+                result[agent_id] = self._legacy_agents.build(
+                    agent_id,
+                    prompt_builder=prompt_builder,
+                    backtest_mode=True,
+                    model_override=model,
+                )
+                continue
+            from cryptotrader.agents.chain import ChainAgent
+            from cryptotrader.agents.macro import MacroAgent
+            from cryptotrader.agents.news import NewsAgent
+            from cryptotrader.agents.tech import TechAgent
+
+            if agent_id == "tech_agent":
+                result[agent_id] = TechAgent(
+                    prompt_builder=prompt_builder,
+                    model=model,
+                    llm_factory=self._llm_factory,
+                    prompt_caching=self._prompt_caching,
+                )
+            elif agent_id == "chain_agent":
+                result[agent_id] = ChainAgent(
+                    prompt_builder=prompt_builder,
+                    model=model,
+                    backtest_mode=True,
+                    llm_factory=self._llm_factory,
+                    prompt_caching=self._prompt_caching,
+                )
+            elif agent_id == "news_agent":
+                result[agent_id] = NewsAgent(
+                    prompt_builder=prompt_builder,
+                    model=model,
+                    backtest_mode=True,
+                    llm_factory=self._llm_factory,
+                    prompt_caching=self._prompt_caching,
+                )
+            else:
+                result[agent_id] = MacroAgent(
+                    prompt_builder=prompt_builder,
+                    model=model,
+                    llm_factory=self._llm_factory,
+                    prompt_caching=self._prompt_caching,
+                )
         return result
 
     def _error(self, stage: str, cause: BaseException) -> ComponentExecutionError:
         return ComponentExecutionError(self.id, RuntimeError(f"{stage}: {cause}"))
 
 
-def create_component(document: RuntimeConfigDocument, sink: CycleEventSink) -> LLMCommitteeComponent:
+def create_component(
+    document: RuntimeConfigDocument,
+    sink: CycleEventSink,
+    *,
+    llm_factory_builder=None,
+) -> LLMCommitteeComponent:
     """Build the committee from database LLM settings without execution state."""
-    from cryptotrader.config import AppConfig, LLMConfig, LLMModelCostConfig, ModelConfig, RetryConfig
+    from cryptotrader.agents.base import create_runtime_llm_factory
+    from cryptotrader.config import DebateConfig
 
     configured = next(item for item in document.signals.components if item.component_id == LLMCommitteeComponent.id)
-    if configured.parameters:
-        unknown = ", ".join(sorted(configured.parameters))
+    parameters = dict(configured.parameters)
+    default_timeframe = str(parameters.pop("default_timeframe", "1h"))
+    ohlcv_limit = int(parameters.pop("ohlcv_limit", 100))
+    debate = DebateConfig(**dict(parameters.pop("debate", {})))
+    if parameters:
+        unknown = ", ".join(sorted(parameters))
         raise ValueError(f"unsupported llm_committee parameters: {unknown}")
-
-    runtime_llm = document.llm
-    config = AppConfig(
-        llm=LLMConfig(
-            base_url=runtime_llm.base_url,
-            streaming_models=list(runtime_llm.streaming_models),
-            default_temperature=runtime_llm.default_temperature,
-            timeout=runtime_llm.timeout,
-            prompt_caching=runtime_llm.prompt_caching,
-            retry=RetryConfig(**runtime_llm.retry.model_dump()),
-            model_costs=[LLMModelCostConfig(**item.model_dump()) for item in runtime_llm.model_costs],
-        ),
-        models=ModelConfig(**runtime_llm.models.model_dump()),
+    builder = llm_factory_builder or create_runtime_llm_factory
+    return LLMCommitteeComponent(
+        None,
+        sink=sink,
+        default_timeframe=default_timeframe,
+        ohlcv_limit=ohlcv_limit,
+        debate=debate,
+        models=document.llm.models,
+        llm_factory=builder(document.llm),
+        prompt_caching=document.llm.prompt_caching,
     )
-    return LLMCommitteeComponent(config, sink=sink)

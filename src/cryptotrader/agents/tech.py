@@ -15,8 +15,21 @@ if TYPE_CHECKING:
 class TechAgent(BaseAgent):
     """Technical analysis agent. Overrides _snapshot_to_dict to inject computed indicators."""
 
-    def __init__(self, *, prompt_builder: PromptBuilder, model: str = "") -> None:
-        super().__init__(agent_id="tech", prompt_builder=prompt_builder, model=model)
+    def __init__(
+        self,
+        *,
+        prompt_builder: PromptBuilder,
+        model: str = "",
+        llm_factory=None,
+        prompt_caching: bool | None = None,
+    ) -> None:
+        super().__init__(
+            agent_id="tech",
+            prompt_builder=prompt_builder,
+            model=model,
+            llm_factory=llm_factory,
+            prompt_caching=prompt_caching,
+        )
 
     def _snapshot_to_dict(self, snapshot: DataSnapshot) -> dict:
         # spec 017b P2-3 refactor: inject indicators at dict-build, reuse BaseAgent.analyze().

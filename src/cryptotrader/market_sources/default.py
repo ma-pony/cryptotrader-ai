@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from cryptotrader.agents._indicators import atr
@@ -11,7 +12,7 @@ from cryptotrader.data.snapshot import SnapshotAggregator
 from cryptotrader.signals.models import DataRequirements, PositionSnapshot, SignalContext
 
 if TYPE_CHECKING:
-    from datetime import datetime
+    from collections.abc import Callable
 
     from cryptotrader.models import DataSnapshot, MarketData
     from cryptotrader.pair import Pair
@@ -40,8 +41,15 @@ def _atr(snapshot: DataSnapshot) -> float:
 
 class DefaultMarketDataSource:
     id = "default"
+    _MAX_AS_OF_SKEW = timedelta(seconds=60)
 
-    def __init__(self, config: MarketDataConfig, *, aggregator=None) -> None:
+    def __init__(
+        self,
+        config: MarketDataConfig,
+        *,
+        aggregator=None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.config = config
         self.exchange_id = str(config.parameters.get("exchange_id", "binance")).strip()
         if not self.exchange_id:
@@ -49,6 +57,7 @@ class DefaultMarketDataSource:
         self.kronos_aux_symbol = str(config.parameters.get("kronos_aux_symbol", "BTCUSDT")).strip()
         self.aggregator = aggregator or SnapshotAggregator()
         self.market = self.aggregator.market
+        self._clock = clock or (lambda: datetime.now(UTC))
 
     def requirements(self) -> DataRequirements:
         return DataRequirements()
@@ -59,6 +68,11 @@ class DefaultMarketDataSource:
         as_of: datetime,
         requirements: DataRequirements,
     ) -> SignalContext:
+        now = self._clock()
+        if as_of.tzinfo is None or now.tzinfo is None:
+            raise ValueError("default market source is live-only and requires timezone-aware as_of")
+        if abs(now - as_of) > self._MAX_AS_OF_SKEW:
+            raise ValueError("default market source is live-only; historical or delayed as_of is not supported")
         if not requirements.candles:
             raise ValueError("market source requires at least one candle timeframe")
         primary = requirements.candles[0]
