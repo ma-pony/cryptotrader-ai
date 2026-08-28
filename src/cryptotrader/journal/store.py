@@ -824,22 +824,22 @@ class MultiVenueCycleStore:
     ) -> None:
         await self._ensure_write_table()
         session = await _write_session(self.database_url)
-        component_signals, fused_signal, target_position, book_results = payloads
-        row = _MultiVenueCycleRow(
-            cycle_id=record.cycle_id,
-            config_revision=record.config_revision,
-            market_data_source_id=record.market_data_source_id,
-            component_signals=component_signals,
-            fused_signal=fused_signal,
-            target_position=target_position,
-            book_results=book_results,
-            cycle_status=record.cycle_status,
-            execution_status=record.execution_status,
-            requires_attention=record.requires_attention,
-            created_at=record.created_at,
-        )
         operation_completed = False
         try:
+            component_signals, fused_signal, target_position, book_results = payloads
+            row = _MultiVenueCycleRow(
+                cycle_id=record.cycle_id,
+                config_revision=record.config_revision,
+                market_data_source_id=record.market_data_source_id,
+                component_signals=component_signals,
+                fused_signal=fused_signal,
+                target_position=target_position,
+                book_results=book_results,
+                cycle_status=record.cycle_status,
+                execution_status=record.execution_status,
+                requires_attention=record.requires_attention,
+                created_at=record.created_at,
+            )
             outcome = await self._insert_outcome(session, row, record.cycle_id)
             operation_completed = True
         finally:

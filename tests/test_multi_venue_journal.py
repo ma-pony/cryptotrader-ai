@@ -1438,6 +1438,35 @@ def _install_tracking_write_session(monkeypatch, journal_store, *, fail_add=Fals
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("close_fails", [False, True])
+async def test_save_closes_write_session_when_row_constructor_raises(tmp_path, monkeypatch, close_fails):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'row-constructor-{close_fails}.db'}")
+    await store.ensure_table()
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        close_error=RuntimeError("RAW_CLOSE_PROGRAM_ERROR") if close_fails else None,
+    )
+
+    def fail_row_constructor(**_fields):
+        raise RuntimeError("PRIMARY_ROW_CONSTRUCTOR_ERROR")
+
+    monkeypatch.setattr(journal_store, "_MultiVenueCycleRow", fail_row_constructor)
+
+    with pytest.raises(RuntimeError, match=r"^PRIMARY_ROW_CONSTRUCTOR_ERROR$") as captured:
+        await store.save(_record())
+
+    assert len(sessions) == 1
+    assert sessions[0].close_calls == 1
+    assert "RAW_CLOSE_PROGRAM_ERROR" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["save", "replace"])
 async def test_database_write_session_closes_once_on_success(tmp_path, monkeypatch, operation):
     from cryptotrader.journal import store as journal_store
