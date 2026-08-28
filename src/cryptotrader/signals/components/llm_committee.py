@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
     from cryptotrader.config import AppConfig
     from cryptotrader.cycle_events import CycleEventSink
+    from cryptotrader.runtime_config.models import RuntimeConfigDocument
 
 
 class CommitteeState(TypedDict):
@@ -310,3 +311,28 @@ class LLMCommitteeComponent:
 
     def _error(self, stage: str, cause: BaseException) -> ComponentExecutionError:
         return ComponentExecutionError(self.id, RuntimeError(f"{stage}: {cause}"))
+
+
+def create_component(document: RuntimeConfigDocument, sink: CycleEventSink) -> LLMCommitteeComponent:
+    """Build the committee from database LLM settings without execution state."""
+    from cryptotrader.config import AppConfig, LLMConfig, LLMModelCostConfig, ModelConfig, RetryConfig
+
+    configured = next(item for item in document.signals.components if item.component_id == LLMCommitteeComponent.id)
+    if configured.parameters:
+        unknown = ", ".join(sorted(configured.parameters))
+        raise ValueError(f"unsupported llm_committee parameters: {unknown}")
+
+    runtime_llm = document.llm
+    config = AppConfig(
+        llm=LLMConfig(
+            base_url=runtime_llm.base_url,
+            streaming_models=list(runtime_llm.streaming_models),
+            default_temperature=runtime_llm.default_temperature,
+            timeout=runtime_llm.timeout,
+            prompt_caching=runtime_llm.prompt_caching,
+            retry=RetryConfig(**runtime_llm.retry.model_dump()),
+            model_costs=[LLMModelCostConfig(**item.model_dump()) for item in runtime_llm.model_costs],
+        ),
+        models=ModelConfig(**runtime_llm.models.model_dump()),
+    )
+    return LLMCommitteeComponent(config, sink=sink)

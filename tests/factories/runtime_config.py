@@ -73,7 +73,7 @@ def signal_config(**overrides) -> SignalConfig:
 
 
 def market_config(**overrides) -> MarketDataConfig:
-    return MarketDataConfig(source_id="default", **overrides)
+    return MarketDataConfig(**({"source_id": "default"} | overrides))
 
 
 def runtime_document(

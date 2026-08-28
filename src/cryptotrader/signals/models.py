@@ -90,6 +90,7 @@ class SignalContext:
     current_position: PositionSnapshot
     snapshots: Mapping[str, DataSnapshot]
     portfolio: Mapping[str, Any]
+    market_data_source_id: str = "default"
 
 
 @dataclass(frozen=True)

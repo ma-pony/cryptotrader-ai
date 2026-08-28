@@ -1,0 +1,104 @@
+"""Built-in public-market source backed by the existing data collectors."""
+
+from __future__ import annotations
+
+from dataclasses import replace
+from typing import TYPE_CHECKING
+
+from cryptotrader.agents._indicators import atr
+from cryptotrader.data.market import clip_ohlcv_at
+from cryptotrader.data.snapshot import SnapshotAggregator
+from cryptotrader.signals.models import DataRequirements, PositionSnapshot, SignalContext
+
+if TYPE_CHECKING:
+    from datetime import datetime
+
+    from cryptotrader.models import DataSnapshot, MarketData
+    from cryptotrader.pair import Pair
+    from cryptotrader.runtime_config.models import MarketDataConfig
+
+
+def _materialize_snapshot(base: DataSnapshot, market: MarketData, as_of: datetime, limit: int) -> DataSnapshot:
+    clipped = replace(market, ohlcv=clip_ohlcv_at(market.ohlcv, as_of, limit))
+    return replace(base, timestamp=as_of, market=clipped)
+
+
+def _price(snapshot: DataSnapshot) -> float:
+    ticker_price = float(snapshot.market.ticker.get("last", 0.0) or 0.0)
+    if ticker_price > 0.0:
+        return ticker_price
+    if snapshot.market.ohlcv.empty:
+        raise ValueError("market snapshot has no current price")
+    return float(snapshot.market.ohlcv["close"].iloc[-1])
+
+
+def _atr(snapshot: DataSnapshot) -> float:
+    frame = snapshot.market.ohlcv
+    values = atr(frame["high"], frame["low"], frame["close"], length=14).dropna()
+    return float(values.iloc[-1]) if not values.empty else 0.0
+
+
+class DefaultMarketDataSource:
+    id = "default"
+
+    def __init__(self, config: MarketDataConfig, *, aggregator=None) -> None:
+        self.config = config
+        self.exchange_id = str(config.parameters.get("exchange_id", "binance")).strip()
+        if not self.exchange_id:
+            raise ValueError("default market source requires exchange_id")
+        self.kronos_aux_symbol = str(config.parameters.get("kronos_aux_symbol", "BTCUSDT")).strip()
+        self.aggregator = aggregator or SnapshotAggregator()
+        self.market = self.aggregator.market
+
+    def requirements(self) -> DataRequirements:
+        return DataRequirements()
+
+    async def collect(
+        self,
+        pair: Pair,
+        as_of: datetime,
+        requirements: DataRequirements,
+    ) -> SignalContext:
+        if not requirements.candles:
+            raise ValueError("market source requires at least one candle timeframe")
+        primary = requirements.candles[0]
+        base = await self.aggregator.collect(
+            pair=pair.canonical(),
+            exchange_id=self.exchange_id,
+            timeframe=primary.timeframe,
+            limit=primary.limit,
+            backtest_mode=False,
+            kronos_aux=requirements.kronos_aux,
+            kronos_aux_symbol=self.kronos_aux_symbol,
+        )
+        snapshots = {
+            primary.timeframe: _materialize_snapshot(base, base.market, as_of, primary.limit),
+        }
+        for requirement in requirements.candles[1:]:
+            market = await self.market.collect(
+                pair.canonical(),
+                self.exchange_id,
+                requirement.timeframe,
+                requirement.limit,
+            )
+            snapshots[requirement.timeframe] = _materialize_snapshot(base, market, as_of, requirement.limit)
+
+        primary_snapshot = snapshots[primary.timeframe]
+        return SignalContext(
+            pair=pair,
+            as_of=as_of,
+            mode="paper",
+            exchange_id="",
+            market_data_source_id=self.id,
+            market_type=pair.market_type,
+            equity=0.0,
+            current_price=_price(primary_snapshot),
+            atr=_atr(primary_snapshot),
+            current_position=PositionSnapshot("flat", 0.0, 0.0),
+            snapshots=snapshots,
+            portfolio={},
+        )
+
+
+def create_source(config: MarketDataConfig) -> DefaultMarketDataSource:
+    return DefaultMarketDataSource(config)

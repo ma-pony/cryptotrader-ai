@@ -68,6 +68,13 @@ otel = [
 [project.scripts]
 arena = "cli.main:app"
 
+[project.entry-points."cryptotrader.signal_components"]
+kronos = "cryptotrader.signals.components.kronos:create_component"
+llm_committee = "cryptotrader.signals.components.llm_committee:create_component"
+
+[project.entry-points."cryptotrader.market_sources"]
+default = "cryptotrader.market_sources.default:create_source"
+
 [tool.uv.sources]
 # Production runs Kronos inference on CPU.  PyPI's Linux torch wheels pull the
 # full CUDA runtime, so keep Linux installs on PyTorch's CPU-only index.

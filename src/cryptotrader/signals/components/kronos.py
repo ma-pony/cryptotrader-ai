@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     from cryptotrader.config import KronosConfig
     from cryptotrader.models import DataSnapshot
+    from cryptotrader.runtime_config.models import RuntimeConfigDocument
     from cryptotrader.signals.models import SignalContext
 
 _gate_cache: dict[Path, dict[str, Any]] = {}
@@ -251,3 +252,12 @@ class KronosComponent:
 
     def _error(self, stage: str, cause: BaseException) -> ComponentExecutionError:
         return ComponentExecutionError(self.id, RuntimeError(f"{stage}: {cause}"))
+
+
+def create_component(document: RuntimeConfigDocument, sink) -> KronosComponent:
+    """Build Kronos from its database-owned component parameters."""
+    del sink
+    from cryptotrader.config import KronosConfig
+
+    configured = next(item for item in document.signals.components if item.component_id == KronosComponent.id)
+    return KronosComponent(KronosConfig(**dict(configured.parameters)))
