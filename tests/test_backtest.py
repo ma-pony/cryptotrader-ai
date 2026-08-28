@@ -44,6 +44,20 @@ def test_snapshot_excludes_candle_at_open_and_includes_it_at_close():
     assert snapshot.market.ohlcv["close"].tolist() == [candle[4]]
 
 
+def test_one_hour_decision_excludes_still_open_four_hour_candle():
+    engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-02", interval="1h")
+    opened_at = datetime(2024, 1, 1, tzinfo=UTC)
+    candle = [int(opened_at.timestamp() * 1000), 100.0, 104.0, 99.0, 103.0, 10.0]
+    engine._candles_by_timeframe = {"4h": [candle]}
+    one_hour_decision = opened_at + timedelta(hours=1)
+
+    with pytest.raises(ValueError, match="no 4h candles available"):
+        engine._snapshot_at("4h", one_hour_decision)
+
+    closed_snapshot = engine._snapshot_at("4h", opened_at + timedelta(hours=4))
+    assert closed_snapshot.market.ohlcv["close"].tolist() == [103.0]
+
+
 @pytest.mark.asyncio
 async def test_cycle_decides_at_signal_close_and_fills_at_next_bar_open():
     bars = _candles(3)
@@ -115,7 +129,7 @@ def test_snapshot_uses_previous_completed_day_for_daily_inputs():
 
 
 @pytest.mark.asyncio
-async def test_historical_sources_fetch_required_point_in_time_lookback():
+async def test_historical_daily_sources_include_previous_day():
     engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-03", interval="1h")
     loaded_starts: list[str] = []
     engine._load_extended_data = lambda *args: loaded_starts.extend(args)
@@ -134,10 +148,10 @@ async def test_historical_sources_fetch_required_point_in_time_lookback():
         )
 
     fear_greed.assert_awaited_once_with("2023-12-31", "2024-01-03")
-    assert loaded_starts == ["2023-10-28"]
+    assert loaded_starts == ["2023-12-31"]
 
 
-def test_kronos_aux_uses_only_completed_historical_series():
+def test_inexact_historical_kronos_aux_sources_remain_absent():
     start = datetime(2024, 1, 1, tzinfo=UTC)
     bars = []
     sp500 = {}
@@ -149,6 +163,7 @@ def test_kronos_aux_uses_only_completed_historical_series():
     as_of = start + timedelta(days=31)
     previous = (as_of - timedelta(days=1)).strftime("%Y-%m-%d")
     current = as_of.strftime("%Y-%m-%d")
+    previous_sp500 = sp500[previous]
     sp500[current] = 1.0
 
     engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-02-02", interval="1d")
@@ -158,11 +173,14 @@ def test_kronos_aux_uses_only_completed_historical_series():
         previous: {"topTraderRatio": 1.7},
         current: {"topTraderRatio": 9.9},
     }
+    engine._ls_ratio = {previous: {"longShortRatio": 1.2}}
 
     snapshot = engine._snapshot_at("1d", as_of)
 
-    assert snapshot.onchain.lsr_top_count == pytest.approx(1.7)
-    assert snapshot.macro.spy_btc_corr_30d == pytest.approx(1.0)
+    assert not hasattr(snapshot.onchain, "lsr_top_count")
+    assert not hasattr(snapshot.macro, "spy_btc_corr_30d")
+    assert snapshot.onchain.liquidations_24h["long_short_ratio"] == pytest.approx(1.2)
+    assert snapshot.macro.sp500 == previous_sp500
     assert not hasattr(snapshot.market, "premium_index_5d")
 
 
