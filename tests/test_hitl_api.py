@@ -10,7 +10,7 @@ from fastapi import HTTPException
 
 from cryptotrader.decision.models import CycleOutcome, TargetPosition
 from cryptotrader.hitl.store import ApprovalStateError, ApprovalStore
-from tests.factories.signal_fusion import context, request, trade_plan
+from tests.factories.signal_fusion import context, profile, request, trade_plan
 
 
 class _Cycle:
@@ -33,7 +33,7 @@ async def _seed(cycle, approval_id="approval-1", mode="paper"):
     return await cycle.approvals.create(
         cycle_id="cycle-1",
         cycle_request=request(mode=mode),
-        profile_revision=3,
+        profile=profile(revision=3),
         signal_context=context(),
         plan=trade_plan(TargetPosition("long", 0.4), stop_loss=90.0, take_profit=120.0),
         approval_id=approval_id,
@@ -149,7 +149,7 @@ async def test_database_store_round_trips_typed_snapshot_and_claims_once(tmp_pat
     original = await store.create(
         cycle_id="cycle-1",
         cycle_request=request(),
-        profile_revision=3,
+        profile=profile(revision=3),
         signal_context=context(),
         plan=trade_plan(TargetPosition("short", 0.4), stop_loss=110.0, take_profit=80.0),
         approval_id="approval-1",

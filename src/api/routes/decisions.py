@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
 if TYPE_CHECKING:
@@ -56,6 +56,7 @@ class DecisionDetailOut(BaseModel):
     market_type: str
     status: CycleStatusValue
     profile_revision: int
+    profile: dict[str, Any]
     context: dict[str, Any]
     components: list[dict[str, Any]]
     component_error: dict[str, str] | None = None
@@ -67,7 +68,11 @@ class DecisionDetailOut(BaseModel):
     execution_result: dict[str, Any] | None = None
 
 
-def _store():
+def _store(request: Request | None = None):
+    if request is not None:
+        shared = getattr(request.app.state, "cycle_journal_store", None)
+        if shared is not None:
+            return shared
     from cryptotrader.config import load_config
     from cryptotrader.journal.store import CycleJournalStore
 
@@ -117,6 +122,7 @@ def _detail(record: TradingCycleRecord) -> DecisionDetailOut:
         market_type=market_type,
         status=record.status,
         profile_revision=record.profile_revision,
+        profile=dict(record.profile_snapshot),
         context=dict(record.context_summary),
         components=[dict(item) for item in record.component_signals],
         component_error=dict(record.component_error) if record.component_error is not None else None,
@@ -131,12 +137,13 @@ def _detail(record: TradingCycleRecord) -> DecisionDetailOut:
 
 @router.get("", response_model=PaginatedDecisions)
 async def list_decisions(
+    request: Request,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
     pair: str | None = None,
     status: CycleStatusValue | None = None,
 ) -> PaginatedDecisions:
-    store = _store()
+    store = _store(request)
     offset = (page - 1) * size
     records = await store.list(limit=size, offset=offset, pair=pair, status=status)
     total = await store.count(pair=pair, status=status)
@@ -150,8 +157,8 @@ async def list_decisions(
 
 
 @router.get("/{cycle_id}", response_model=DecisionDetailOut)
-async def get_decision(cycle_id: str) -> DecisionDetailOut:
-    record = await _store().get(cycle_id)
+async def get_decision(cycle_id: str, request: Request) -> DecisionDetailOut:
+    record = await _store(request).get(cycle_id)
     if record is None:
         raise HTTPException(status_code=404, detail=f"Trading cycle {cycle_id} not found")
     return _detail(record)

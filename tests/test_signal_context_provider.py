@@ -63,12 +63,14 @@ class FakePortfolioReader:
     def __init__(self) -> None:
         self.total_value = 10_000.0
         self.current_position = position()
+        self.latest_price = None
 
-    async def read(self, request, current_price):
+    async def read(self, request, current_price, *, refresh_price=False):
         current = self.current_position
         amount = current.amount if current.side != "short" else -current.amount
         return {
             "total_value": self.total_value,
+            "current_price": self.latest_price if refresh_price and self.latest_price else current_price,
             "positions": {
                 request.pair.canonical(): {
                     "amount": amount,
@@ -167,6 +169,7 @@ async def test_refresh_execution_state_only_updates_live_portfolio_fields():
     original = await provider.collect(CycleRequest(Pair.parse("BTC/USDT:USDT"), "paper"), _requirements())
     portfolio.current_position = position("long", 0.2, 0.2)
     portfolio.total_value = 12_000.0
+    portfolio.latest_price = 125.0
 
     refreshed = await provider.refresh_execution_state(original)
 
@@ -174,6 +177,7 @@ async def test_refresh_execution_state_only_updates_live_portfolio_fields():
     assert refreshed.as_of == original.as_of
     assert refreshed.atr == original.atr
     assert refreshed.equity == 12_000.0
+    assert refreshed.current_price == 125.0
     assert refreshed.current_position.side == "long"
 
 

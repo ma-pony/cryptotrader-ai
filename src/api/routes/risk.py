@@ -7,7 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Literal, cast
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from cryptotrader._compat import UTC
@@ -124,6 +124,7 @@ async def _known_pairs(
     database_url: str | None,
     *,
     portfolio: dict | None = None,
+    journal_store=None,
 ) -> list[str]:
     """Union of currently-open pairs and pairs active in recent completed cycles.
 
@@ -149,7 +150,7 @@ async def _known_pairs(
     try:
         from cryptotrader.journal.store import CycleJournalStore
 
-        store = CycleJournalStore(database_url)
+        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
         cycles = await store.list(limit=30, status="completed")
         for cycle in cycles:
             if cycle.pair:
@@ -165,6 +166,7 @@ async def _build_cooldowns(
     database_url: str | None,
     *,
     portfolio: dict | None = None,
+    journal_store=None,
 ) -> list[CooldownOut]:
     """Emit cooldown rows by querying Redis TTLs directly.
 
@@ -176,7 +178,7 @@ async def _build_cooldowns(
     "这些 pair 已就绪". The pair candidate set comes from open positions + recent
     journal activity (bounded); pairs the bot has never touched are skipped.
     """
-    pairs = await _known_pairs(database_url, portfolio=portfolio)
+    pairs = await _known_pairs(database_url, portfolio=portfolio, journal_store=journal_store)
     out: list[CooldownOut] = []
     try:
         for pair in pairs:
@@ -195,12 +197,12 @@ async def _build_cooldowns(
     return out
 
 
-async def _build_recent_blocks(database_url: str | None) -> list[RecentBlockOut]:
+async def _build_recent_blocks(database_url: str | None, journal_store=None) -> list[RecentBlockOut]:
     """Last 10 risk-gate rejections."""
     from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = CycleJournalStore(database_url)
+        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
         cycles = await store.list(limit=10, status="risk_rejected")
     except Exception:
         logger.info("recent blocks: journal read failed", exc_info=True)
@@ -375,7 +377,7 @@ def _build_thresholds(config: object) -> RiskThresholds:
 
 
 @router.get("/status", response_model=RiskStatusOut)
-async def get_risk_status() -> RiskStatusOut:
+async def get_risk_status(request: Request) -> RiskStatusOut:
     from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
 
@@ -413,6 +415,7 @@ async def get_risk_status() -> RiskStatusOut:
         cb = CircuitBreakerStatus(state="inactive")
 
     db_url = config.infrastructure.database_url
+    journal = getattr(request.app.state, "cycle_journal_store", None)
 
     # Fetch portfolio + snapshots + pnl_24h once, then reuse across all 7 helpers.
     # Previously: 4x get_portfolio() + 2x _load_snapshots() sequential = ~400-800ms.
@@ -440,8 +443,8 @@ async def get_risk_status() -> RiskStatusOut:
         _compute_total_exposure_pct(db_url, portfolio=portfolio),
         _compute_cvar_95(db_url, snaps=snaps),
         _build_correlation_groups(db_url, portfolio=portfolio),
-        _build_cooldowns(rsm, db_url, portfolio=portfolio),
-        _build_recent_blocks(db_url),
+        _build_cooldowns(rsm, db_url, portfolio=portfolio, journal_store=journal),
+        _build_recent_blocks(db_url, journal),
     )
     daily_loss_pct = cast("float | None", results[0])
     drawdown_pct = cast("float | None", results[1])

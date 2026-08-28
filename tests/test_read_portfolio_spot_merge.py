@@ -55,6 +55,24 @@ def _make_exchange(
 
 
 @pytest.mark.asyncio
+async def test_reader_returns_latest_pair_ticker_for_hitl_execution_refresh():
+    from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
+
+    ex = _make_exchange(
+        balances={"USDT": 10_000.0},
+        ticker_prices={"BTC/USDT:USDT": 125.0},
+    )
+
+    result = await ExchangePortfolioReader(ex).read(
+        _request("BTC/USDT:USDT"),
+        100.0,
+        refresh_price=True,
+    )
+
+    assert result["current_price"] == 125.0
+
+
+@pytest.mark.asyncio
 async def test_spot_eth_balance_appears_as_position():
     """ETH spot balance is surfaced as a position with ticker-derived avg_price."""
     from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader

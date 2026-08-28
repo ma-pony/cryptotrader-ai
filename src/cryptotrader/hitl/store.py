@@ -17,6 +17,8 @@ from cryptotrader.cycle_serialization import (
     cycle_request_payload,
     signal_context_from_payload,
     signal_context_payload,
+    signal_profile_from_payload,
+    signal_profile_payload,
     trade_plan_from_payload,
     trade_plan_payload,
 )
@@ -24,6 +26,7 @@ from cryptotrader.db import get_async_session, get_engine
 
 if TYPE_CHECKING:
     from cryptotrader.decision.models import CycleRequest, TradePlan
+    from cryptotrader.profiles.models import SignalProfile
     from cryptotrader.signals.models import SignalContext
 
 ApprovalStatus = Literal["pending", "approved", "rejected"]
@@ -40,6 +43,7 @@ class ApprovalRecord:
     cycle_id: str
     pair: str
     profile_revision: int
+    profile: SignalProfile
     cycle_request: CycleRequest
     signal_context: SignalContext
     plan: TradePlan
@@ -88,6 +92,7 @@ def _row_to_record(row: _ApprovalRow) -> ApprovalRecord:
         cycle_id=row.cycle_id,
         pair=row.pair,
         profile_revision=row.profile_revision,
+        profile=signal_profile_from_payload(row.request_payload["profile"]),
         cycle_request=cycle_request_from_payload(row.request_payload),
         signal_context=signal_context_from_payload(row.context_payload),
         plan=trade_plan_from_payload(row.trade_plan_payload),
@@ -117,7 +122,7 @@ class ApprovalStore:
         *,
         cycle_id: str,
         cycle_request: CycleRequest,
-        profile_revision: int,
+        profile: SignalProfile,
         signal_context: SignalContext,
         plan: TradePlan,
         approval_id: str | None = None,
@@ -126,13 +131,15 @@ class ApprovalStore:
         approval_id = approval_id or str(uuid4())
         created_at = created_at or datetime.now(UTC)
         request_data = cycle_request_payload(cycle_request)
+        request_data["profile"] = signal_profile_payload(profile)
         context_data = signal_context_payload(signal_context)
         plan_data = trade_plan_payload(plan)
         record = ApprovalRecord(
             approval_id=approval_id,
             cycle_id=cycle_id,
             pair=cycle_request.pair.canonical(),
-            profile_revision=profile_revision,
+            profile_revision=profile.revision,
+            profile=signal_profile_from_payload(request_data["profile"]),
             cycle_request=cycle_request_from_payload(request_data),
             signal_context=signal_context_from_payload(context_data),
             plan=trade_plan_from_payload(plan_data),

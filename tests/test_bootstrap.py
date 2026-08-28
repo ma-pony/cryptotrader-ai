@@ -51,27 +51,37 @@ async def test_paper_executor_and_context_reader_share_position_state():
 async def test_injected_runtime_state_is_shared_across_cycles_without_database():
     from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle
     from cryptotrader.hitl.store import ApprovalStore
+    from cryptotrader.journal.store import CycleJournalStore
+    from tests.factories.custom_signal_component import FakeSignalComponent
     from tests.factories.signal_fusion import profile
 
     config = AppConfig()
     profiles = SeededProfileRepository(None, profile())
     approvals = ApprovalStore()
+    journal = CycleJournalStore()
+    custom = FakeSignalComponent()
     first = build_trading_cycle(
         config,
         "paper",
         profile_repository=profiles,
         approval_store=approvals,
+        journal_store=journal,
+        custom_components=(custom,),
     )
     second = build_trading_cycle(
         config,
         "paper",
         profile_repository=profiles,
         approval_store=approvals,
+        journal_store=journal,
+        custom_components=(custom,),
     )
 
     updated = await first.profiles.replace(profile(kronos=0.75, llm=0.25))
 
     assert second.profiles is first.profiles
     assert second.approvals is first.approvals
+    assert second.journal is first.journal is journal
+    assert second.registry.get("fake") is first.registry.get("fake") is custom
     assert (await second.profiles.get()).revision == updated.revision
     assert (await second.profiles.get()).components[0].weight == 0.75

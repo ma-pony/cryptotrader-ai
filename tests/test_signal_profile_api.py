@@ -8,6 +8,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from cryptotrader.profiles.models import ComponentWeight
 from cryptotrader.signals.models import ComponentSignal, DataRequirements
 from tests.factories.signal_fusion import profile
 
@@ -144,7 +145,17 @@ async def test_app_exposes_seeded_profile_repository_without_database(monkeypatc
         *,
         profile_repository=None,
         approval_store=None,
+        journal_store=None,
+        custom_components=None,
     ):
+        registry = type(
+            "Registry",
+            (),
+            {
+                "ids": lambda self: ("kronos", "llm_committee"),
+                "components": lambda self: (),
+            },
+        )()
         cycle = type(
             "Cycle",
             (),
@@ -152,7 +163,8 @@ async def test_app_exposes_seeded_profile_repository_without_database(monkeypatc
                 "mode": mode,
                 "profiles": profile_repository,
                 "approvals": approval_store,
-                "registry": object(),
+                "registry": registry,
+                "journal": journal_store,
             },
         )()
         built.append(cycle)
@@ -168,3 +180,78 @@ async def test_app_exposes_seeded_profile_repository_without_database(monkeypatc
     assert isolated_app.state.signal_profile_repository is built[0].profiles
     assert second.profiles is built[0].profiles
     assert second.approvals is built[0].approvals
+
+
+@pytest.mark.asyncio
+async def test_startup_rejects_persisted_profile_with_uninstalled_component(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastapi import FastAPI
+
+    from api.main import _init_signal_profile
+    from cryptotrader.config import AppConfig
+    from cryptotrader.signals.registry import SignalComponentRegistry
+
+    invalid = profile(
+        ComponentWeight("kronos", True, 0.5),
+        ComponentWeight("missing", True, 0.5),
+    )
+
+    class Profiles:
+        async def get(self):
+            return invalid
+
+    registry = SignalComponentRegistry((FakeComponent("kronos", "Kronos"),))
+
+    def fake_builder(*args, **kwargs):
+        return SimpleNamespace(
+            mode="paper",
+            profiles=Profiles(),
+            approvals=kwargs.get("approval_store"),
+            registry=registry,
+            journal=kwargs.get("journal_store"),
+        )
+
+    monkeypatch.setattr("cryptotrader.config.load_config", lambda: AppConfig())
+    monkeypatch.setattr("cryptotrader.bootstrap.build_trading_cycle", fake_builder)
+
+    with pytest.raises(ValueError, match="uninstalled components: missing"):
+        await _init_signal_profile(FastAPI())
+
+
+@pytest.mark.asyncio
+async def test_api_runtime_loads_custom_factory_once_for_chat_and_backtest_assemblies(monkeypatch):
+    from fastapi import FastAPI
+
+    from api.main import _init_signal_profile
+    from cryptotrader.backtest.engine import BacktestEngine
+    from cryptotrader.config import AppConfig, SignalPluginsConfig
+    from tests.factories import custom_signal_component
+
+    config = AppConfig(
+        signal_plugins=SignalPluginsConfig(
+            factories=["tests.factories.custom_signal_component:create"],
+        )
+    )
+    custom_signal_component.factory_calls = 0
+    monkeypatch.setattr("cryptotrader.config.load_config", lambda: config)
+    isolated_app = FastAPI()
+
+    await _init_signal_profile(isolated_app)
+    first_chat = isolated_app.state.trading_cycle_builder("paper")
+    second_chat = isolated_app.state.trading_cycle_builder("paper")
+    custom = isolated_app.state.signal_custom_components[0]
+    engine = BacktestEngine(
+        "BTC/USDT:USDT",
+        "2026-01-01",
+        "2026-01-02",
+        config=config,
+        profile_repository=isolated_app.state.signal_profile_repository,
+        custom_components=isolated_app.state.signal_custom_components,
+    )
+    backtest_registry, _requirements = engine._dependencies(await isolated_app.state.signal_profile_repository.get())
+
+    assert custom_signal_component.factory_calls == 1
+    assert first_chat.registry.get("fake") is custom
+    assert second_chat.registry.get("fake") is custom
+    assert backtest_registry.get("fake") is custom

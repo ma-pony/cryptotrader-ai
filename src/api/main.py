@@ -96,18 +96,26 @@ async def _init_signal_profile(app_instance: FastAPI) -> None:
     from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle
     from cryptotrader.config import load_config
     from cryptotrader.hitl.store import ApprovalStore
+    from cryptotrader.journal.store import CycleJournalStore
+    from cryptotrader.profiles.models import validate_signal_profile
 
     config = load_config()
     database_url = config.infrastructure.database_url or None
     profiles = SeededProfileRepository(database_url, config.signal_profile_defaults.to_profile())
     approvals = ApprovalStore(database_url)
+    journal = CycleJournalStore(database_url)
     cycle = build_trading_cycle(
         config,
         config.engine,
         profile_repository=profiles,
         approval_store=approvals,
+        journal_store=journal,
     )
-    await cycle.profiles.get()
+    active_profile = await cycle.profiles.get()
+    validate_signal_profile(active_profile, cycle.registry.ids())
+    custom_components = tuple(
+        component for component in cycle.registry.components() if component.id not in {"kronos", "llm_committee"}
+    )
     app_instance.state.trading_cycle = cycle
     app_instance.state.trading_cycles = {config.engine: cycle}
     app_instance.state.trading_cycle_builder = partial(
@@ -115,9 +123,13 @@ async def _init_signal_profile(app_instance: FastAPI) -> None:
         config,
         profile_repository=profiles,
         approval_store=approvals,
+        journal_store=journal,
+        custom_components=custom_components,
     )
     app_instance.state.signal_registry = cycle.registry
     app_instance.state.signal_profile_repository = profiles
+    app_instance.state.signal_custom_components = custom_components
+    app_instance.state.cycle_journal_store = journal
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:

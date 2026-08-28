@@ -10,7 +10,7 @@ import asyncio
 import datetime
 import logging
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import Response
 from prometheus_client import CONTENT_TYPE_LATEST, REGISTRY, Gauge, generate_latest
 from pydantic import BaseModel
@@ -272,7 +272,10 @@ def _pipeline_histogram_buckets() -> list[LatencyHistogramBucketOut]:
     return out
 
 
-async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float, float, float]:
+async def _llm_accounting_last_24h(
+    database_url: str | None,
+    journal_store=None,
+) -> tuple[int, float, float, float]:
     """Aggregate committee usage metadata from completed cycle records.
 
     Returns ``(calls_24h, cost_24h, cache_hit_rate, decisions_per_day_last_30d)``.
@@ -280,7 +283,7 @@ async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float
     from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = CycleJournalStore(database_url)
+        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
         cycles = await store.list(limit=2000, status="completed")
     except Exception:
         logger.info("metrics: journal read failed", exc_info=True)
@@ -323,12 +326,12 @@ async def _llm_accounting_last_24h(database_url: str | None) -> tuple[int, float
     return calls, round(cost, 4), round(cache_hit_rate, 4), round(decisions_per_day, 2)
 
 
-async def _cost_14d_series(database_url: str | None) -> list[DailyCostPointOut]:
+async def _cost_14d_series(database_url: str | None, journal_store=None) -> list[DailyCostPointOut]:
     """Per-day cost total for the last 14 calendar days (UTC), including zero-fill days."""
     from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = CycleJournalStore(database_url)
+        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
         cycles = await store.list(limit=3000, status="completed")
     except Exception:
         logger.info("cost_14d: journal read failed", exc_info=True)
@@ -361,7 +364,7 @@ from api.routes._utils import coerce_timestamp as _metrics_coerce_ts  # noqa: E4
 
 
 @api_router.get("/summary", response_model=MetricsSummaryV2Response)
-async def metrics_summary_v2() -> MetricsSummaryV2Response:
+async def metrics_summary_v2(request: Request) -> MetricsSummaryV2Response:
     """Return key metrics in the data-model contract shape (FR-808).
 
     ``orders_placed`` mirrors ``trades_total`` (every executed trade went
@@ -384,10 +387,11 @@ async def metrics_summary_v2() -> MetricsSummaryV2Response:
 
     cfg = load_config()
     db_url = cfg.infrastructure.database_url
+    journal = getattr(request.app.state, "cycle_journal_store", None)
     # Parallel fetch: both helpers scan the journal independently — gather saves ~50% latency.
     (calls_24h, cost_24h, cache_hit_rate, decisions_per_day), cost_14d = await asyncio.gather(
-        _llm_accounting_last_24h(db_url),
-        _cost_14d_series(db_url),
+        _llm_accounting_last_24h(db_url, journal),
+        _cost_14d_series(db_url, journal),
     )
     latency_hist = _pipeline_histogram_buckets()
 

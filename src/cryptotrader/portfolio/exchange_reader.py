@@ -42,7 +42,16 @@ class ExchangePortfolioReader:
         self.exchange = exchange
         self.database_url = database_url
 
-    async def read(self, request: CycleRequest, current_price: float) -> dict[str, Any]:
+    async def read(
+        self,
+        request: CycleRequest,
+        current_price: float,
+        *,
+        refresh_price: bool = False,
+    ) -> dict[str, Any]:
+        pair = request.pair.canonical()
+        latest_price = await _market_price(self.exchange, pair) if refresh_price else 0.0
+        execution_price = latest_price if latest_price > 0.0 else current_price
         balances = await self.exchange.get_balance()
         try:
             free_balances = await self.exchange.get_free_balance()
@@ -51,7 +60,7 @@ class ExchangePortfolioReader:
 
         try:
             raw_positions = await self.exchange.get_positions(
-                current_prices={request.pair.canonical(): current_price},
+                current_prices={pair: execution_price},
             )
         except TypeError:
             raw_positions = await self.exchange.get_positions()
@@ -64,7 +73,11 @@ class ExchangePortfolioReader:
             spot_pair = f"{asset}/{request.pair.quote}"
             if spot_pair in positions:
                 continue
-            mark = await _market_price(self.exchange, spot_pair)
+            mark = (
+                execution_price
+                if refresh_price and spot_pair == pair
+                else await _market_price(self.exchange, spot_pair)
+            )
             positions[spot_pair] = {
                 "amount": amount,
                 "side": "long" if amount > 0 else "short",
@@ -83,8 +96,8 @@ class ExchangePortfolioReader:
                 total_value += float(position.get("unrealized_pnl", 0.0) or 0.0)
                 continue
             mark = float(position.get("current_price", 0.0) or position.get("avg_price", 0.0) or 0.0)
-            if pair == request.pair.canonical() and current_price > 0 and not position.get("current_price"):
-                mark = current_price
+            if pair == request.pair.canonical() and execution_price > 0 and not position.get("current_price"):
+                mark = execution_price
             total_value += amount * mark
 
         portfolio: dict[str, Any] = {
@@ -92,6 +105,7 @@ class ExchangePortfolioReader:
             "free_cash": free_cash,
             "positions": positions,
             "total_value": total_value,
+            "current_price": execution_price,
         }
         if self.database_url:
             from cryptotrader.portfolio.manager import PortfolioManager

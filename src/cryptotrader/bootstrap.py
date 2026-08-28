@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
 from cryptotrader.cycle_events import NullCycleEventSink
@@ -28,6 +29,7 @@ if TYPE_CHECKING:
     from cryptotrader.config import AppConfig
     from cryptotrader.cycle_events import CycleEventSink
     from cryptotrader.profiles.models import SignalProfile
+    from cryptotrader.signals.component import SignalComponent
     from cryptotrader.signals.models import TradingMode
 
 
@@ -37,7 +39,7 @@ class SeededProfileRepository:
     def __init__(self, database_url: str | None, default: SignalProfile) -> None:
         self.default = default
         self.repository = SignalProfileRepository(database_url) if database_url else None
-        self._memory = default
+        self._memory = default if default.updated_at is not None else replace(default, updated_at=datetime.now(UTC))
 
     async def get(self) -> SignalProfile:
         if self.repository is None:
@@ -46,7 +48,11 @@ class SeededProfileRepository:
 
     async def replace(self, profile: SignalProfile) -> SignalProfile:
         if self.repository is None:
-            self._memory = replace(profile, revision=self._memory.revision + 1)
+            self._memory = replace(
+                profile,
+                revision=self._memory.revision + 1,
+                updated_at=datetime.now(UTC),
+            )
             return self._memory
         return await self.repository.replace(profile)
 
@@ -76,7 +82,12 @@ def _build_exchange(config: AppConfig, mode: TradingMode):
     )
 
 
-def build_signal_registry(config: AppConfig, events: CycleEventSink) -> SignalComponentRegistry:
+def build_signal_registry(
+    config: AppConfig,
+    events: CycleEventSink,
+    *,
+    custom_components: tuple[SignalComponent, ...] | None = None,
+) -> SignalComponentRegistry:
     registry = SignalComponentRegistry()
 
     from cryptotrader.signals.components.kronos import KronosComponent
@@ -84,8 +95,12 @@ def build_signal_registry(config: AppConfig, events: CycleEventSink) -> SignalCo
 
     registry.register(KronosComponent(config.kronos))
     registry.register(LLMCommitteeComponent(config, sink=events))
-    for factory in config.signal_plugins.factories:
-        registry.load_factory(factory)
+    if custom_components is None:
+        for factory in config.signal_plugins.factories:
+            registry.load_factory(factory)
+    else:
+        for component in custom_components:
+            registry.register(component)
     return registry
 
 
@@ -96,11 +111,13 @@ def build_trading_cycle(
     *,
     profile_repository=None,
     approval_store=None,
+    journal_store=None,
+    custom_components: tuple[SignalComponent, ...] | None = None,
 ) -> TradingCycle:
     if mode == "backtest":
         raise ValueError("BacktestEngine must provide historical context and executor")
     events = event_sink or NullCycleEventSink()
-    registry = build_signal_registry(config, events)
+    registry = build_signal_registry(config, events, custom_components=custom_components)
 
     default_profile = config.signal_profile_defaults.to_profile()
     exchange = _build_exchange(config, mode)
@@ -138,7 +155,7 @@ def build_trading_cycle(
         risk=RiskGate(config.risk, redis_state, leverage=leverage),
         execution_planner=ExecutionPlanner(config.risk.position.max_single_pct),
         executor=ExecutionService(OrderManager(), exchange, manage_protection=True),
-        journal=CycleJournalStore(database_url),
+        journal=journal_store if journal_store is not None else CycleJournalStore(database_url),
         events=events,
         exit_requirement=DataRequirements(
             candles=(CandleRequirement(config.data.default_timeframe, max(20, config.data.ohlcv_limit)),),

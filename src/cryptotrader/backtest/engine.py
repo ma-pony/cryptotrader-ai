@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from cryptotrader.decision.models import CycleOutcome, ExecutionPlan
     from cryptotrader.journal.models import TradingCycleRecord
     from cryptotrader.profiles.models import SignalProfile
+    from cryptotrader.signals.component import SignalComponent
     from cryptotrader.signals.context import HistoricalSignalContextProvider
 
 logger = logging.getLogger(__name__)
@@ -203,6 +204,8 @@ class BacktestEngine:
         *,
         profile_repository=None,
         cycle_factory: Callable | None = None,
+        custom_components: tuple[SignalComponent, ...] | None = None,
+        journal_store=None,
         config=None,
     ) -> None:
         from cryptotrader.bootstrap import SeededProfileRepository
@@ -222,6 +225,8 @@ class BacktestEngine:
         self.lookback = lookback if lookback is not None else backtest.lookback
         self.progress_callback = progress_callback
         self.cycle_factory = cycle_factory
+        self.custom_components = custom_components
+        self.journal_store = journal_store
         database_url = self.config.infrastructure.database_url or None
         self.profile_repository = profile_repository or SeededProfileRepository(
             database_url,
@@ -269,7 +274,7 @@ class BacktestEngine:
             equity=self.capital,
             max_single_pct=self.config.risk.position.max_single_pct,
         )
-        journal = CycleJournalStore()
+        journal = self.journal_store if self.journal_store is not None else CycleJournalStore()
         if self.cycle_factory is not None:
             cycle = self.cycle_factory(frozen_profiles, contexts, executor, journal)
         else:
@@ -287,7 +292,11 @@ class BacktestEngine:
         from cryptotrader.cycle_events import NullCycleEventSink
         from cryptotrader.profiles.models import validate_signal_profile
 
-        registry = build_signal_registry(self.config, NullCycleEventSink())
+        registry = build_signal_registry(
+            self.config,
+            NullCycleEventSink(),
+            custom_components=self.custom_components,
+        )
         validate_signal_profile(profile, registry.ids())
         components = registry.enabled(profile)
         exit_requirement = DataRequirements(

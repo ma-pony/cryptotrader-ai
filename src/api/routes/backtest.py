@@ -79,7 +79,12 @@ def _new_run_id() -> str:
     return f"run_{secrets.token_hex(4)}"
 
 
-def _spawn_run(params: BacktestParams, profile_repository=None) -> str:
+def _spawn_run(
+    params: BacktestParams,
+    profile_repository=None,
+    custom_components=None,
+    journal_store=None,
+) -> str:
     """Schedule a backtest in the background. Returns the new run_id."""
     from cryptotrader.task_registry import add_background_task
 
@@ -96,14 +101,20 @@ def _spawn_run(params: BacktestParams, profile_repository=None) -> str:
     }
 
     task = add_background_task(
-        _execute_backtest(run_id, params, profile_repository),
+        _execute_backtest(run_id, params, profile_repository, custom_components, journal_store),
         name=f"backtest:{run_id}",
     )
     _TASKS[run_id] = task
     return run_id
 
 
-async def _execute_backtest(run_id: str, params: BacktestParams, profile_repository=None) -> None:
+async def _execute_backtest(
+    run_id: str,
+    params: BacktestParams,
+    profile_repository=None,
+    custom_components=None,
+    journal_store=None,
+) -> None:
     from cryptotrader.backtest.engine import BacktestEngine
 
     def _on_progress(p: float) -> None:
@@ -118,6 +129,8 @@ async def _execute_backtest(run_id: str, params: BacktestParams, profile_reposit
             initial_capital=params.initial_capital,
             progress_callback=_on_progress,
             profile_repository=profile_repository,
+            custom_components=custom_components,
+            journal_store=journal_store,
         )
         result = await engine.run()
         # Persist named session so /api/backtest/sessions can list/load it.
@@ -245,7 +258,9 @@ def _load_session(name: str) -> dict | None:
 @router.post("/run", response_model=BacktestRunResponse, status_code=202)
 async def run_backtest(params: BacktestParams, request: Request) -> BacktestRunResponse:
     profiles = getattr(request.app.state, "signal_profile_repository", None)
-    run_id = _spawn_run(params, profiles)
+    custom_components = getattr(request.app.state, "signal_custom_components", None)
+    journal = getattr(request.app.state, "cycle_journal_store", None)
+    run_id = _spawn_run(params, profiles, custom_components, journal)
     return BacktestRunResponse(run_id=run_id)
 
 

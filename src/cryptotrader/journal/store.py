@@ -39,6 +39,7 @@ class _TradingCycleRow(_Base):
 
 def _payload(record: TradingCycleRecord) -> dict[str, Any]:
     return {
+        "profile_snapshot": dict(record.profile_snapshot),
         "context_summary": dict(record.context_summary),
         "component_signals": [dict(item) for item in record.component_signals],
         "component_error": dict(record.component_error) if record.component_error is not None else None,
@@ -62,6 +63,7 @@ def _record(row: _TradingCycleRow) -> TradingCycleRecord:
         pair=row.pair,
         status=cast("CycleStatus", row.status),
         profile_revision=row.profile_revision,
+        profile_snapshot=payload["profile_snapshot"],
         context_summary=payload["context_summary"],
         component_signals=tuple(payload["component_signals"]),
         component_error=payload["component_error"],

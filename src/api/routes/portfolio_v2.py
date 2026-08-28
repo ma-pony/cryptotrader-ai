@@ -202,11 +202,11 @@ async def _load_snapshots(database_url: str | None) -> list[dict]:
         return []
 
 
-async def _load_cycles(database_url: str | None) -> list:
+async def _load_cycles(database_url: str | None, journal_store=None) -> list:
     from cryptotrader.journal.store import CycleJournalStore
 
     try:
-        store = CycleJournalStore(database_url)
+        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
         return await store.list(limit=1000, status="completed")
     except Exception:
         logger.info("cycle journal read failed for pnl stats", exc_info=True)
@@ -290,6 +290,7 @@ async def _compute_extras(
     database_url: str | None,
     current_equity: float,
     raw_positions: dict | None = None,
+    journal_store=None,
 ) -> dict[str, object]:
     """Derive (sharpe_90d, win_rate, total_trades, realized_pnl_30d, total_return, total_return_pct).
 
@@ -323,7 +324,7 @@ async def _compute_extras(
     snaps = await _load_snapshots(database_url)
     sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
 
-    cycles = await _load_cycles(database_url)
+    cycles = await _load_cycles(database_url, journal_store)
     inception_ts = _inception_timestamp(snaps)
     total, win_rate, realized_30d, avg_trade_pnl, realized_cumulative = _cycle_pnl_stats(
         cycles, now - timedelta(days=30), inception_cutoff=inception_ts
@@ -520,7 +521,11 @@ def _sum_realized_pnl_since(cycles: list[Any], cutoff: datetime) -> float:
     return realized
 
 
-async def _compute_pnl_breakdowns(database_url: str | None, current_equity: float) -> list[PnlBreakdown]:
+async def _compute_pnl_breakdowns(
+    database_url: str | None,
+    current_equity: float,
+    journal_store=None,
+) -> list[PnlBreakdown]:
     """Build 24h / 7d / 30d attribution with 4 buckets:
     realized / funding / fees / unrealized_delta.
 
@@ -528,7 +533,7 @@ async def _compute_pnl_breakdowns(database_url: str | None, current_equity: floa
     (cached 60s). unrealized_delta is derived to make the identity hold.
     """
     snaps = await _load_snapshots(database_url)
-    cycles = await _load_cycles(database_url)
+    cycles = await _load_cycles(database_url, journal_store)
     now = datetime.now(UTC)
     ex_hist = await _fetch_exchange_history(now)
     exchange_ok = bool(ex_hist and ex_hist.get("_available"))
@@ -567,6 +572,7 @@ async def get_portfolio_snapshot(request: Request) -> PortfolioSnapshotOut:
     from cryptotrader.portfolio.manager import PortfolioManager
 
     config = load_config()
+    journal = getattr(request.app.state, "cycle_journal_store", None)
     pm = PortfolioManager(config.infrastructure.database_url)
 
     # 3s budget for live exchange read + 60s cooldown after a failure. Original
@@ -619,8 +625,13 @@ async def get_portfolio_snapshot(request: Request) -> PortfolioSnapshotOut:
         config.infrastructure.database_url,
         current_equity=equity,
         raw_positions=raw_positions,
+        journal_store=journal,
     )
-    pnl_breakdowns = await _compute_pnl_breakdowns(config.infrastructure.database_url, current_equity=equity)
+    pnl_breakdowns = await _compute_pnl_breakdowns(
+        config.infrastructure.database_url,
+        current_equity=equity,
+        journal_store=journal,
+    )
 
     return PortfolioSnapshotOut(
         equity=equity,

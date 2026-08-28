@@ -3,10 +3,49 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
 from tests.factories.signal_fusion import cycle_record
+
+
+def _profile_snapshot() -> dict:
+    return {
+        "revision": 3,
+        "components": [
+            {"component_id": "kronos", "enabled": True, "weight": 0.75},
+            {"component_id": "llm_committee", "enabled": True, "weight": 0.25},
+        ],
+        "neutral_threshold": 0.3,
+        "max_target_ratio": 0.8,
+        "atr_stop_multiplier": 2.5,
+        "reward_ratio": 1.8,
+        "hitl_required": True,
+        "updated_at": "2026-08-28T01:02:03+00:00",
+    }
+
+
+def _record_with_profile(cycle_id: str):
+    from cryptotrader.journal.models import TradingCycleRecord
+
+    return TradingCycleRecord(
+        cycle_id=cycle_id,
+        created_at=datetime(2026, 8, 28, tzinfo=UTC),
+        pair="BTC/USDT:USDT",
+        status="completed",
+        profile_revision=3,
+        profile_snapshot=_profile_snapshot(),
+        context_summary={"current_price": 100.0},
+        component_signals=(),
+        component_error=None,
+        fused_signal=None,
+        target_position=None,
+        trade_plan=None,
+        hitl_result=None,
+        risk_result=None,
+        execution_result=None,
+    )
 
 
 @pytest.mark.asyncio
@@ -36,6 +75,22 @@ async def test_cycle_record_round_trips_component_contributions(tmp_path):
     await store.append(record)
 
     assert await store.get(record.cycle_id) == record
+
+
+@pytest.mark.asyncio
+async def test_complete_profile_snapshot_round_trips_through_memory_and_sqlite(tmp_path):
+    from cryptotrader.journal.store import CycleJournalStore
+
+    memory = CycleJournalStore()
+    sqlite = CycleJournalStore(f"sqlite+aiosqlite:///{tmp_path / 'profile-cycles.db'}")
+    memory_record = _record_with_profile("memory-profile")
+    sqlite_record = _record_with_profile("sqlite-profile")
+
+    await memory.append(memory_record)
+    await sqlite.append(sqlite_record)
+
+    assert (await memory.get("memory-profile")).profile_snapshot == _profile_snapshot()
+    assert (await sqlite.get("sqlite-profile")).profile_snapshot == _profile_snapshot()
 
 
 @pytest.mark.asyncio

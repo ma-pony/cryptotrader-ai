@@ -6,6 +6,7 @@ import logging
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.decision.models import TargetPosition
 from cryptotrader.risk.checks.available_margin import AvailableMargin
 from cryptotrader.risk.checks.concentration import MacroConcentrationCheck
 from cryptotrader.risk.checks.cooldown import CooldownCheck
@@ -87,9 +88,9 @@ class RiskGate:
         self,
         request: RiskRequest,
         portfolio: dict,
-    ) -> tuple[RiskDecision | None, list[float]]:
+    ) -> tuple[RiskDecision | None, list[tuple[float, str, str]]]:
         failed: RiskDecision | None = None
-        proposals: list[float] = []
+        proposals: list[tuple[float, str, str]] = []
         for check in self._checks:
             try:
                 result = await check.evaluate(request, portfolio)
@@ -116,15 +117,20 @@ class RiskGate:
                     reason=result.reason,
                 )
             if result.passed and result.size_ratio_cap is not None:
-                proposals.append(result.size_ratio_cap)
+                proposals.append((result.size_ratio_cap, check.name, result.reason))
         return failed, proposals
 
     @staticmethod
-    def _apply_cap(request: RiskRequest, proposals: list[float]) -> RiskDecision:
+    def _apply_cap(request: RiskRequest, proposals: list[tuple[float, str, str]]) -> RiskDecision:
         if proposals:
-            cap = min(proposals)
+            cap, source, reason = min(proposals, key=lambda item: item[0])
             if cap < request.target.size_ratio:
-                capped_target = replace(request.target, size_ratio=cap)
+                capped_target = TargetPosition("flat", 0.0) if cap == 0.0 else replace(request.target, size_ratio=cap)
                 capped_plan = replace(request.plan, target=capped_target)
-                return RiskDecision(passed=True, plan=capped_plan)
+                return RiskDecision(
+                    passed=True,
+                    plan=capped_plan,
+                    reason=reason or f"target size ratio capped at {cap:g}",
+                    cap_source=source,
+                )
         return RiskDecision(passed=True, plan=request.plan)

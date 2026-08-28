@@ -52,6 +52,9 @@ class SignalComponentRegistry:
     def ids(self) -> tuple[str, ...]:
         return tuple(self._components)
 
+    def components(self) -> tuple[SignalComponent, ...]:
+        return tuple(self._components.values())
+
     def enabled(self, profile: SignalProfile) -> tuple[SignalComponent, ...]:
         return tuple(self._components[item.component_id] for item in profile.components if item.enabled)
 

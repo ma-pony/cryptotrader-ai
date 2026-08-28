@@ -95,6 +95,25 @@ async def test_gate_applies_strictest_size_ratio_cap_without_mutating_request():
 
 
 @pytest.mark.asyncio
+async def test_zero_cap_flattens_target_and_records_cap_provenance():
+    from cryptotrader.risk.gate import RiskGate
+    from cryptotrader.risk.models import RiskCheckResult
+
+    gate = RiskGate(
+        RiskConfig(),
+        RedisStateManager(None),
+        checks=[FakeCheck("max_position", RiskCheckResult(True, reason="no exposure allowed", size_ratio_cap=0.0))],
+    )
+
+    result = await gate.check(risk_request(target=TargetPosition("short", 0.8)), {"total_value": 10_000.0})
+
+    assert result.passed is True
+    assert result.plan.target == TargetPosition("flat", 0.0)
+    assert result.cap_source == "max_position"
+    assert result.reason == "no exposure allowed"
+
+
+@pytest.mark.asyncio
 async def test_gate_returns_first_rejection_but_runs_all_checks():
     from cryptotrader.risk.gate import RiskGate
     from cryptotrader.risk.models import RiskCheckResult

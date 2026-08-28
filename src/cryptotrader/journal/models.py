@@ -19,6 +19,7 @@ class TradingCycleRecord:
     pair: str
     status: CycleStatus
     profile_revision: int
+    profile_snapshot: Mapping[str, Any]
     context_summary: Mapping[str, Any]
     component_signals: tuple[Mapping[str, Any], ...]
     component_error: Mapping[str, str] | None
@@ -38,3 +39,5 @@ class TradingCycleRecord:
             raise ValueError("pair is required")
         if self.profile_revision < 1:
             raise ValueError("profile_revision must be positive")
+        if self.profile_snapshot.get("revision") != self.profile_revision:
+            raise ValueError("profile_snapshot revision must match profile_revision")

@@ -12,6 +12,7 @@ from cryptotrader.cycle_serialization import (
     component_signal_payload,
     fused_signal_payload,
     signal_context_payload,
+    signal_profile_payload,
     target_payload,
     trade_plan_payload,
 )
@@ -42,6 +43,7 @@ def _risk_payload(result: RiskDecision | None) -> dict[str, Any] | None:
         "passed": result.passed,
         "rejected_by": result.rejected_by,
         "reason": result.reason,
+        "cap_source": result.cap_source,
         "target": target_payload(result.plan.target),
     }
 
@@ -125,22 +127,92 @@ class TradingCycle:
             *(component.requirements() for component in components),
             self.exit_requirement,
         )
-        context = await self.contexts.collect(request, requirements)
-        await self.events.publish(
-            CycleEvent(
-                "context_ready",
-                {"cycle_id": cycle_id, "context": signal_context_payload(context)},
-            )
-        )
+        context = None
         try:
+            context = await self.contexts.collect(request, requirements)
+            await self.events.publish(
+                CycleEvent(
+                    "context_ready",
+                    {"cycle_id": cycle_id, "context": signal_context_payload(context)},
+                )
+            )
             signals = await self.runner.run(components, context)
+            fused = self.fusion.fuse(signals, profile.components)
+            await self.events.publish(
+                CycleEvent(
+                    "fusion_completed",
+                    {"cycle_id": cycle_id, "fusion": fused_signal_payload(fused)},
+                )
+            )
+            target = self.decisions.target_for(fused, profile)
+            plan = self.exits.build_plan(context, target, signals, fused, profile)
+            await self.events.publish(
+                CycleEvent(
+                    "decision_created",
+                    {"cycle_id": cycle_id, "trade_plan": trade_plan_payload(plan)},
+                )
+            )
+            if target_matches_position(plan.target, context.current_position):
+                return await self._finish(
+                    cycle_id=cycle_id,
+                    created_at=created_at,
+                    status="no_change",
+                    profile=profile,
+                    context=context,
+                    signals=signals,
+                    fused=fused,
+                    plan=plan,
+                )
+            if requires_approval(profile, request.mode):
+                approval = await self.approvals.create(
+                    cycle_id=cycle_id,
+                    cycle_request=request,
+                    profile=profile,
+                    signal_context=context,
+                    plan=plan,
+                    created_at=created_at,
+                )
+                await self.events.publish(
+                    CycleEvent(
+                        "approval_required",
+                        {
+                            "cycle_id": cycle_id,
+                            "approval_id": approval.approval_id,
+                            "trade_plan": trade_plan_payload(plan),
+                        },
+                    )
+                )
+                return await self._finish(
+                    cycle_id=cycle_id,
+                    created_at=created_at,
+                    status="awaiting_approval",
+                    profile=profile,
+                    context=context,
+                    signals=signals,
+                    fused=fused,
+                    plan=plan,
+                    hitl_result={"approval_id": approval.approval_id, "status": "pending"},
+                    approval_id=approval.approval_id,
+                )
+            return await self._risk_plan_execute(
+                cycle_id=cycle_id,
+                created_at=created_at,
+                profile=profile,
+                context=context,
+                signals=signals,
+                fused=fused,
+                plan=plan,
+            )
         except asyncio.CancelledError:
+            existing = await self.journal.get(cycle_id)
             await self._finish(
                 cycle_id=cycle_id,
                 created_at=created_at,
                 status="cancelled",
-                profile_revision=profile.revision,
+                profile=profile,
                 context=context,
+                request=request,
+                replace_journal=existing is not None,
                 error="cycle cancelled",
             )
             raise
@@ -150,78 +222,12 @@ class TradingCycle:
                 cycle_id=cycle_id,
                 created_at=created_at,
                 status="component_failed",
-                profile_revision=profile.revision,
+                profile=profile,
                 context=context,
+                request=request,
                 component_error=errors,
                 error=str(error),
             )
-
-        fused = self.fusion.fuse(signals, profile.components)
-        await self.events.publish(
-            CycleEvent(
-                "fusion_completed",
-                {"cycle_id": cycle_id, "fusion": fused_signal_payload(fused)},
-            )
-        )
-        target = self.decisions.target_for(fused, profile)
-        plan = self.exits.build_plan(context, target, signals, fused, profile)
-        await self.events.publish(
-            CycleEvent(
-                "decision_created",
-                {"cycle_id": cycle_id, "trade_plan": trade_plan_payload(plan)},
-            )
-        )
-        if target_matches_position(plan.target, context.current_position):
-            return await self._finish(
-                cycle_id=cycle_id,
-                created_at=created_at,
-                status="no_change",
-                profile_revision=profile.revision,
-                context=context,
-                signals=signals,
-                fused=fused,
-                plan=plan,
-            )
-        if requires_approval(profile, request.mode):
-            approval = await self.approvals.create(
-                cycle_id=cycle_id,
-                cycle_request=request,
-                profile_revision=profile.revision,
-                signal_context=context,
-                plan=plan,
-                created_at=created_at,
-            )
-            await self.events.publish(
-                CycleEvent(
-                    "approval_required",
-                    {
-                        "cycle_id": cycle_id,
-                        "approval_id": approval.approval_id,
-                        "trade_plan": trade_plan_payload(plan),
-                    },
-                )
-            )
-            return await self._finish(
-                cycle_id=cycle_id,
-                created_at=created_at,
-                status="awaiting_approval",
-                profile_revision=profile.revision,
-                context=context,
-                signals=signals,
-                fused=fused,
-                plan=plan,
-                hitl_result={"approval_id": approval.approval_id, "status": "pending"},
-                approval_id=approval.approval_id,
-            )
-        return await self._risk_plan_execute(
-            cycle_id=cycle_id,
-            created_at=created_at,
-            profile_revision=profile.revision,
-            context=context,
-            signals=signals,
-            fused=fused,
-            plan=plan,
-        )
 
     async def resume_approved(self, approval_id: str, *, decision_by: str = "web") -> CycleOutcome:
         pending = await self.approvals.get(approval_id)
@@ -229,22 +235,35 @@ class TradingCycle:
             raise LookupError(f"approval {approval_id!r} does not exist")
         self._require_mode(pending.cycle_request.mode)
         approval = await self.approvals.approve(approval_id, decision_by=decision_by)
-        context = await self.contexts.refresh_execution_state(approval.signal_context)
-        return await self._risk_plan_execute(
-            cycle_id=approval.cycle_id,
-            created_at=approval.created_at,
-            profile_revision=approval.profile_revision,
-            context=context,
-            signals=approval.plan.component_signals,
-            fused=approval.plan.fused_signal,
-            plan=approval.plan,
-            hitl_result={
-                "approval_id": approval.approval_id,
-                "status": "approved",
-                "decision_by": approval.decision_by,
-            },
-            replace_journal=True,
-        )
+        context = None
+        try:
+            context = await self.contexts.refresh_execution_state(approval.signal_context)
+            return await self._risk_plan_execute(
+                cycle_id=approval.cycle_id,
+                created_at=approval.created_at,
+                profile=approval.profile,
+                context=context,
+                signals=approval.plan.component_signals,
+                fused=approval.plan.fused_signal,
+                plan=approval.plan,
+                hitl_result={
+                    "approval_id": approval.approval_id,
+                    "status": "approved",
+                    "decision_by": approval.decision_by,
+                },
+                replace_journal=True,
+            )
+        except asyncio.CancelledError:
+            await self._finish(
+                cycle_id=approval.cycle_id,
+                created_at=approval.created_at,
+                status="cancelled",
+                profile=approval.profile,
+                context=context or approval.signal_context,
+                replace_journal=True,
+                error="cycle cancelled",
+            )
+            raise
 
     async def reject_approval(self, approval_id: str, *, decision_by: str = "web") -> CycleOutcome:
         pending = await self.approvals.get(approval_id)
@@ -256,7 +275,7 @@ class TradingCycle:
             cycle_id=approval.cycle_id,
             created_at=approval.created_at,
             status="approval_rejected",
-            profile_revision=approval.profile_revision,
+            profile=approval.profile,
             context=approval.signal_context,
             signals=approval.plan.component_signals,
             fused=approval.plan.fused_signal,
@@ -281,7 +300,7 @@ class TradingCycle:
         *,
         cycle_id: str,
         created_at: datetime,
-        profile_revision: int,
+        profile,
         context: SignalContext,
         signals: tuple[ComponentSignal, ...],
         fused: FusedSignal,
@@ -291,21 +310,6 @@ class TradingCycle:
     ) -> CycleOutcome:
         try:
             risk_result = await self.risk.check(RiskRequest(context=context, plan=plan), dict(context.portfolio))
-        except asyncio.CancelledError:
-            await self._finish(
-                cycle_id=cycle_id,
-                created_at=created_at,
-                status="cancelled",
-                profile_revision=profile_revision,
-                context=context,
-                signals=signals,
-                fused=fused,
-                plan=plan,
-                hitl_result=hitl_result,
-                replace_journal=replace_journal,
-                error="cycle cancelled",
-            )
-            raise
         except Exception as error:
             risk_result = RiskDecision(
                 passed=False,
@@ -324,7 +328,7 @@ class TradingCycle:
                 cycle_id=cycle_id,
                 created_at=created_at,
                 status="risk_rejected",
-                profile_revision=profile_revision,
+                profile=profile,
                 context=context,
                 signals=signals,
                 fused=fused,
@@ -339,21 +343,6 @@ class TradingCycle:
         try:
             execution_plan = self.execution_planner.plan(context, final_plan)
             execution_result = await self.executor.execute(execution_plan, context)
-        except asyncio.CancelledError:
-            await self._finish(
-                cycle_id=cycle_id,
-                created_at=created_at,
-                status="cancelled",
-                profile_revision=profile_revision,
-                context=context,
-                signals=signals,
-                fused=fused,
-                plan=plan,
-                hitl_result=hitl_result,
-                replace_journal=replace_journal,
-                error="cycle cancelled",
-            )
-            raise
         except ExecutionPlanningError as error:
             execution_result = ExecutionResult(False, (), None, f"{type(error).__name__}: {error}")
         except Exception as error:
@@ -370,11 +359,11 @@ class TradingCycle:
             cycle_id=cycle_id,
             created_at=created_at,
             status=status,
-            profile_revision=profile_revision,
+            profile=profile,
             context=context,
             signals=signals,
             fused=fused,
-            plan=final_plan,
+            plan=plan,
             hitl_result=hitl_result,
             risk_result=risk_result,
             execution_result=execution_result,
@@ -388,8 +377,9 @@ class TradingCycle:
         cycle_id: str,
         created_at: datetime,
         status: CycleStatus,
-        profile_revision: int,
-        context: SignalContext,
+        profile,
+        context: SignalContext | None,
+        request: CycleRequest | None = None,
         signals: tuple[ComponentSignal, ...] = (),
         fused: FusedSignal | None = None,
         plan: TradePlan | None = None,
@@ -401,13 +391,27 @@ class TradingCycle:
         replace_journal: bool = False,
         error: str | None = None,
     ) -> CycleOutcome:
+        if context is None and request is None:
+            raise ValueError("context or request is required to finish a trading cycle")
+        context_summary = (
+            signal_context_payload(context)
+            if context is not None
+            else {
+                "pair": request.pair.canonical(),
+                "as_of": request.as_of.isoformat() if request.as_of is not None else None,
+                "mode": request.mode,
+                "exchange_id": request.exchange_id,
+            }
+        )
+        pair = context.pair.canonical() if context is not None else request.pair.canonical()
         record = TradingCycleRecord(
             cycle_id=cycle_id,
             created_at=created_at,
-            pair=context.pair.canonical(),
+            pair=pair,
             status=status,
-            profile_revision=profile_revision,
-            context_summary=signal_context_payload(context),
+            profile_revision=profile.revision,
+            profile_snapshot=signal_profile_payload(profile),
+            context_summary=context_summary,
             component_signals=tuple(component_signal_payload(item) for item in signals),
             component_error=component_error,
             fused_signal=fused_signal_payload(fused) if fused is not None else None,
@@ -431,7 +435,7 @@ class TradingCycle:
         return CycleOutcome(
             cycle_id=cycle_id,
             status=status,
-            profile_revision=profile_revision,
+            profile_revision=profile.revision,
             component_signals=signals,
             fused_signal=fused,
             trade_plan=plan,

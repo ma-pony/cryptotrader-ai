@@ -115,6 +115,19 @@ def cycle_record(**overrides):
         "pair": "BTC/USDT:USDT",
         "status": "no_change",
         "profile_revision": 1,
+        "profile_snapshot": {
+            "revision": 1,
+            "components": [
+                {"component_id": "kronos", "enabled": True, "weight": 0.6},
+                {"component_id": "llm_committee", "enabled": True, "weight": 0.4},
+            ],
+            "neutral_threshold": 0.2,
+            "max_target_ratio": 1.0,
+            "atr_stop_multiplier": 2.0,
+            "reward_ratio": 2.0,
+            "hitl_required": False,
+            "updated_at": None,
+        },
         "context_summary": {"current_price": 100.0, "as_of": "2026-01-01T00:00:00+00:00"},
         "component_signals": (),
         "component_error": None,
@@ -125,4 +138,10 @@ def cycle_record(**overrides):
         "risk_result": None,
         "execution_result": None,
     }
-    return TradingCycleRecord(**(values | overrides))
+    values.update(overrides)
+    if "profile_snapshot" not in overrides:
+        values["profile_snapshot"] = {
+            **values["profile_snapshot"],
+            "revision": values["profile_revision"],
+        }
+    return TradingCycleRecord(**values)

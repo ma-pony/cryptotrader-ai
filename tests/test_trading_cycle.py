@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -49,20 +50,28 @@ class _Profiles:
 
 
 class _Contexts:
-    def __init__(self) -> None:
+    def __init__(self, *, cancel_collect: bool = False) -> None:
         self.current_position = position()
         self.collect_calls = 0
         self.refresh_calls = 0
+        self.cancel_collect = cancel_collect
+        self.refresh_price = None
+        self.refresh_equity = None
 
     async def collect(self, cycle_request, requirements):
         self.collect_calls += 1
+        if self.cancel_collect:
+            raise asyncio.CancelledError
         return context(position=self.current_position)
 
     async def refresh_execution_state(self, stored_context):
-        from dataclasses import replace
-
         self.refresh_calls += 1
-        return replace(stored_context, current_position=self.current_position)
+        return replace(
+            stored_context,
+            current_price=self.refresh_price or stored_context.current_price,
+            equity=self.refresh_equity or stored_context.equity,
+            current_position=self.current_position,
+        )
 
 
 class _Runner:
@@ -82,17 +91,24 @@ class _Runner:
 
 
 class _Risk:
-    def __init__(self, *, passed=True) -> None:
+    def __init__(self, *, passed=True, adjusted_target=None) -> None:
         self.passed = passed
+        self.adjusted_target = adjusted_target
         self.calls = []
 
     async def check(self, risk_request, portfolio):
         self.calls.append((risk_request, portfolio))
+        adjusted_plan = (
+            replace(risk_request.plan, target=self.adjusted_target)
+            if self.adjusted_target is not None
+            else risk_request.plan
+        )
         return RiskDecision(
             passed=self.passed,
-            plan=risk_request.plan,
+            plan=adjusted_plan,
             rejected_by="test" if not self.passed else "",
-            reason="blocked" if not self.passed else "",
+            reason="blocked" if not self.passed else ("capped by test" if self.adjusted_target else ""),
+            cap_source="test_cap" if self.adjusted_target else "",
         )
 
 
@@ -139,6 +155,8 @@ def build_test_cycle(
     risk_passed=True,
     execution_succeeds=True,
     cancelled=False,
+    cancel_context=False,
+    adjusted_target=None,
 ):
     from cryptotrader.trading_cycle import TradingCycle
 
@@ -152,13 +170,13 @@ def build_test_cycle(
         mode="paper",
         profiles=_Profiles(selected_profile),
         registry=registry,
-        contexts=_Contexts(),
+        contexts=_Contexts(cancel_collect=cancel_context),
         runner=_Runner(signals, component_error, cancelled=cancelled),
         fusion=WeightedSignalFusion(),
         decisions=DecisionEngine(),
         exits=AtrExitPolicy(),
         approvals=ApprovalStore(),
-        risk=_Risk(passed=risk_passed),
+        risk=_Risk(passed=risk_passed, adjusted_target=adjusted_target),
         execution_planner=_Planner(),
         executor=_Executor(succeeds=execution_succeeds),
         journal=CycleJournalStore(),
@@ -182,7 +200,7 @@ async def test_approval_mode_mismatch_is_rejected_before_claim_or_execution():
     approval = await cycle.approvals.create(
         cycle_id="paper-cycle",
         cycle_request=request(mode="live"),
-        profile_revision=1,
+        profile=profile(),
         signal_context=context(),
         plan=trade_plan(TargetPosition("long", 0.4)),
         approval_id="live-approval",
@@ -260,6 +278,29 @@ async def test_hitl_stores_target_plan_and_approval_replans_from_current_positio
 
 
 @pytest.mark.asyncio
+async def test_hitl_approval_refreshes_price_equity_and_position_without_recomputing_analysis():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+    pending = await cycle.run(request())
+    frozen_plan = pending.trade_plan
+    frozen_signals = pending.component_signals
+    frozen_fusion = pending.fused_signal
+    cycle.contexts.current_position = position("long", 0.2, 0.2)
+    cycle.contexts.refresh_price = 125.0
+    cycle.contexts.refresh_equity = 12_500.0
+
+    approved = await cycle.resume_approved(pending.approval_id)
+
+    assert approved.trade_plan == frozen_plan
+    assert approved.component_signals == frozen_signals
+    assert approved.fused_signal == frozen_fusion
+    assert cycle.contexts.collect_calls == 1
+    assert cycle.runner.calls == 1
+    assert cycle.execution_planner.last_context.current_price == 125.0
+    assert cycle.execution_planner.last_context.equity == 12_500.0
+    assert cycle.execution_planner.last_context.current_position.size_ratio == 0.2
+
+
+@pytest.mark.asyncio
 async def test_rejected_approval_never_reaches_risk_or_execution():
     cycle = build_test_cycle(selected_profile=profile(hitl=True))
     pending = await cycle.run(request())
@@ -333,6 +374,39 @@ async def test_cancelled_component_stage_is_journaled_then_reraised():
 
     assert cycle.journal.records[0].status == "cancelled"
     assert all(event.name != "fusion_completed" for event in cycle.events.events)
+
+
+@pytest.mark.asyncio
+async def test_context_collection_cancellation_writes_one_empty_terminal_record_and_reraises():
+    cycle = build_test_cycle(cancel_context=True)
+
+    with pytest.raises(asyncio.CancelledError):
+        await cycle.run(request())
+
+    assert len(cycle.journal.records) == 1
+    record = cycle.journal.records[0]
+    assert record.status == "cancelled"
+    assert record.component_signals == ()
+    assert record.fused_signal is None
+    assert record.target_position is None
+    assert record.trade_plan is None
+    assert [event.name for event in cycle.events.events].count("cycle_cancelled") == 1
+
+
+@pytest.mark.asyncio
+async def test_risk_adjustment_keeps_original_plan_in_journal_and_executes_adjusted_target():
+    cycle = build_test_cycle(adjusted_target=TargetPosition("long", 0.25))
+
+    outcome = await cycle.run(request())
+
+    record = cycle.journal.records[0]
+    assert outcome.trade_plan.target.size_ratio == pytest.approx(0.65)
+    assert record.target_position == {"side": "long", "size_ratio": pytest.approx(0.65)}
+    assert record.trade_plan["target"] == {"side": "long", "size_ratio": pytest.approx(0.65)}
+    assert record.risk_result["target"] == {"side": "long", "size_ratio": 0.25}
+    assert record.risk_result["cap_source"] == "test_cap"
+    assert record.risk_result["reason"] == "capped by test"
+    assert cycle.executor.executed[0].intents[0].amount == pytest.approx(5.0)
 
 
 def test_target_position_comparison_uses_side_and_ratio():

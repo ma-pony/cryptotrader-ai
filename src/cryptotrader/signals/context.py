@@ -25,7 +25,13 @@ class SignalContextProvider(Protocol):
 
 
 class PortfolioReader(Protocol):
-    async def read(self, request: CycleRequest, current_price: float) -> dict: ...
+    async def read(
+        self,
+        request: CycleRequest,
+        current_price: float,
+        *,
+        refresh_price: bool = False,
+    ) -> dict: ...
 
 
 def _current_price(market: MarketData) -> float:
@@ -156,7 +162,13 @@ class LiveSignalContextProvider:
         from cryptotrader.decision.models import CycleRequest
 
         request = CycleRequest(context.pair, context.mode, context.exchange_id, context.as_of)
-        portfolio = dict(await self.portfolio.read(request, context.current_price))
+        portfolio = dict(
+            await self.portfolio.read(
+                request,
+                context.current_price,
+                refresh_price=True,
+            )
+        )
         portfolio.setdefault("recent_prices", context.portfolio.get("recent_prices", []))
         portfolio.setdefault("funding_rate", context.portfolio.get("funding_rate", 0.0))
         portfolio.setdefault("symbol", context.pair.base)

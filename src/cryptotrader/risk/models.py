@@ -39,3 +39,4 @@ class RiskDecision:
     plan: TradePlan
     rejected_by: str = ""
     reason: str = ""
+    cap_source: str = ""

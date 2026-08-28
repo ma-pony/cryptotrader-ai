@@ -40,7 +40,11 @@ class TestBacktestRunHappyPath:
         from api.main import app
 
         shared_profiles = object()
+        shared_custom_components = (object(),)
+        shared_journal = object()
         monkeypatch.setattr(app.state, "signal_profile_repository", shared_profiles, raising=False)
+        monkeypatch.setattr(app.state, "signal_custom_components", shared_custom_components, raising=False)
+        monkeypatch.setattr(app.state, "cycle_journal_store", shared_journal, raising=False)
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._spawn_run", return_value="run_a1b2c3") as spawn_run,
@@ -49,6 +53,8 @@ class TestBacktestRunHappyPath:
 
         assert resp.status_code == 202
         assert spawn_run.call_args.args[1] is shared_profiles
+        assert spawn_run.call_args.args[2] is shared_custom_components
+        assert spawn_run.call_args.args[3] is shared_journal
         body = resp.json()
         assert "run_id" in body
         assert body["run_id"].startswith("run_")

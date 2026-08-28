@@ -2,6 +2,8 @@
 
 from cryptotrader.signals.models import ComponentSignal, DataRequirements
 
+factory_calls = 0
+
 
 class FakeSignalComponent:
     id = "fake"
@@ -16,4 +18,6 @@ class FakeSignalComponent:
 
 
 def create() -> FakeSignalComponent:
+    global factory_calls
+    factory_calls += 1
     return FakeSignalComponent()
