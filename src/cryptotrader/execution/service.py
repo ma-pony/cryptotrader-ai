@@ -1235,7 +1235,7 @@ class VenueExecutionService:
                 execution_quote=execution_quote,
             )
         final = self._summarize(state, desired=desired)
-        exact = state.position.signed_amount == expected_amount and self._has_exact_protection(state, desired)
+        exact = state.position.signed_amount == expected_amount and self._has_exact_ambiguous_protection(state, desired)
         return self._failed(
             plan,
             "replace_protection",
@@ -1485,13 +1485,14 @@ class VenueExecutionService:
             raise ValueError("replacement protection does not match its specification")
 
     @staticmethod
-    def _has_exact_protection(state: OpenVenueState, desired: ProtectionSpec) -> bool:
+    def _has_exact_ambiguous_protection(state: OpenVenueState, desired: ProtectionSpec) -> bool:
         active = tuple(protection for protection in state.protections if protection.active and not protection.triggered)
         if len(active) != 1:
             return False
         protection = active[0]
         return (
-            protection.pair == desired.pair
+            len(protection.protection_ids) == 1
+            and protection.pair == desired.pair
             and protection.position_side == desired.position_side
             and protection.amount == desired.amount
             and protection.stop_loss == desired.stop_loss

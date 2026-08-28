@@ -926,7 +926,33 @@ async def test_reduction_replace_transport_error_is_safe_only_with_exact_desired
     assert session.signed_amount == Decimal("1")
     assert result.final_position is not None
     assert result.final_position.protections == session.protections
+    assert result.final_position.protection_ids == ("new-1",)
     assert result.trace == ("pre_read", "place_order", "replace_protection", "reconcile")
+
+
+@pytest.mark.asyncio
+async def test_reduction_replace_transport_error_with_extra_id_in_one_group_requires_attention():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("2", protections=(_venue_protection("2"),))
+    original_replace = session.replace_protection
+
+    async def install_ambiguous_group_then_fail(spec):
+        installed = await original_replace(spec)
+        session.protections = (replace(installed, protection_ids=("old", "new")),)
+        raise VenueOperationError("RAW_SECRET_REPLACE_RESPONSE")
+
+    session.replace_protection = install_ambiguous_group_then_fail
+    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+
+    assert result.status == "failed"
+    assert result.error_operation == "replace_protection"
+    assert result.requires_attention is True
+    assert result.compensation.attempted is False
+    assert len(session.orders) == 1
+    assert session.signed_amount == Decimal("1")
+    assert result.final_position is not None
+    assert result.final_position.protection_ids == ("old", "new")
 
 
 @pytest.mark.asyncio
