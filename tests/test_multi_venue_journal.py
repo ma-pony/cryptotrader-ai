@@ -98,20 +98,37 @@ def _execution(proposal: BookExecutionProposal, status: str = "completed") -> Bo
     )
 
 
-def _portfolio(proposal: BookExecutionProposal, *, after: bool = False) -> BookPortfolioSnapshot:
+def _portfolio(
+    proposal: BookExecutionProposal,
+    *,
+    after: bool = False,
+    execution: BookExecutionResult | None = None,
+) -> BookPortfolioSnapshot:
+    plans = {plan.connection_id: plan for plan in proposal.connection_plans}
+    results = {} if execution is None else {item.connection_id: item for item in execution.connection_results}
     connections = tuple(
         ConnectionPortfolioSnapshot(
-            plan.connection_id,
+            target.connection_id,
             Decimal("50"),
             {"USDT": Decimal("50")},
-            ConnectionPosition(
-                proposal.pair,
-                plan.target_signed_amount if after else Decimal("0"),
-                plan.target_signed_notional if after else Decimal("0"),
-                plan.quote.last if after else None,
+            (
+                results[target.connection_id].final_position.position
+                if after
+                and target.connection_id in results
+                and results[target.connection_id].final_position is not None
+                else ConnectionPosition(
+                    proposal.pair,
+                    plans[target.connection_id].current_signed_amount
+                    if target.connection_id in plans
+                    else Decimal("0"),
+                    plans[target.connection_id].current_signed_notional
+                    if target.connection_id in plans
+                    else Decimal("0"),
+                    None,
+                )
             ),
         )
-        for plan in proposal.connection_plans
+        for target in proposal.risk.connection_targets
     )
     return BookPortfolioSnapshot(
         proposal.book_id,
@@ -142,39 +159,48 @@ def _book_cycle(
     before = _portfolio(proposal)
     if status == "ready":
         return BookCycleResult(
-            book_id,
-            capital_scope,
-            proposal,
-            before,
-            _hitl(proposal, "not_required"),
-            None,
-            None,
-            None,
-            status,
+            book_id=book_id,
+            capital_scope=capital_scope,
+            config_revision=proposal.config_revision,
+            pair=proposal.pair,
+            proposal=proposal,
+            portfolio_before=before,
+            hitl=_hitl(proposal, "not_required"),
+            execution=None,
+            failure=None,
+            portfolio_after=None,
+            portfolio_after_available=None,
+            status=status,
         )
     if status == "awaiting_approval":
         return BookCycleResult(
-            book_id,
-            capital_scope,
-            proposal,
-            before,
-            _hitl(proposal, "pending", f"approval-{book_id}"),
-            None,
-            None,
-            None,
-            status,
+            book_id=book_id,
+            capital_scope=capital_scope,
+            config_revision=proposal.config_revision,
+            pair=proposal.pair,
+            proposal=proposal,
+            portfolio_before=before,
+            hitl=_hitl(proposal, "pending", f"approval-{book_id}"),
+            execution=None,
+            failure=None,
+            portfolio_after=None,
+            portfolio_after_available=None,
+            status=status,
         )
     if status == "approval_rejected":
         return BookCycleResult(
-            book_id,
-            capital_scope,
-            proposal,
-            before,
-            _hitl(proposal, "rejected", f"approval-{book_id}"),
-            None,
-            None,
-            None,
-            status,
+            book_id=book_id,
+            capital_scope=capital_scope,
+            config_revision=proposal.config_revision,
+            pair=proposal.pair,
+            proposal=proposal,
+            portfolio_before=before,
+            hitl=_hitl(proposal, "rejected", f"approval-{book_id}"),
+            execution=None,
+            failure=None,
+            portfolio_after=None,
+            portfolio_after_available=None,
+            status=status,
         )
     execution = _execution(proposal, status)
     hitl = (
@@ -183,15 +209,18 @@ def _book_cycle(
         else _hitl(proposal, "not_required")
     )
     return BookCycleResult(
-        book_id,
-        capital_scope,
-        proposal,
-        before,
-        hitl,
-        execution,
-        _portfolio(proposal, after=True),
-        True,
-        status,
+        book_id=book_id,
+        capital_scope=capital_scope,
+        config_revision=proposal.config_revision,
+        pair=proposal.pair,
+        proposal=proposal,
+        portfolio_before=before,
+        hitl=hitl,
+        execution=execution,
+        failure=None,
+        portfolio_after=_portfolio(proposal, after=True, execution=execution),
+        portfolio_after_available=True,
+        status=status,
     )
 
 
@@ -270,15 +299,18 @@ def test_book_cycle_result_closes_proposal_hitl_execution_and_portfolios():
         replace(completed, portfolio_after=None)
     with pytest.raises(ValueError, match="portfolio_after"):
         BookCycleResult(
-            completed.book_id,
-            completed.capital_scope,
-            completed.proposal,
-            completed.portfolio_before,
-            completed.hitl,
-            completed.execution,
-            completed.portfolio_after,
-            False,
-            "completed",
+            book_id=completed.book_id,
+            capital_scope=completed.capital_scope,
+            config_revision=completed.config_revision,
+            pair=completed.pair,
+            proposal=completed.proposal,
+            portfolio_before=completed.portfolio_before,
+            hitl=completed.hitl,
+            execution=completed.execution,
+            failure=None,
+            portfolio_after=completed.portfolio_after,
+            portfolio_after_available=False,
+            status="completed",
         )
 
 
@@ -371,7 +403,7 @@ def test_multi_venue_cycle_record_supports_only_simple_empty_book_terminal_matri
         requires_attention=False,
     )
     assert record.book_results == ()
-    for status in ("component_failed", "cycle_failed", "risk_rejected", "cancelled"):
+    for status in ("cycle_failed", "cancelled"):
         assert replace(record, cycle_status=status).cycle_status == status
     with pytest.raises(ValueError, match="cycle_status"):
         replace(record, cycle_status="completed")
@@ -705,3 +737,514 @@ async def test_replace_requires_existing_cycle(tmp_path, database):
     store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'missing.db'}" if database else None)
     with pytest.raises(LookupError, match="cycle was not found"):
         await store.replace(_record())
+
+
+def _preparation_failure_book(
+    stage: str,
+    *,
+    book_id: str = "live",
+    capital_scope: str = "real",
+    connection_ids: tuple[str, str] = ("live-first", "live-second"),
+):
+    from cryptotrader.journal.models import BookCycleResult, BookHitlSnapshot, BookPreparationFailure
+
+    ready = _proposal_for(book_id, capital_scope, connection_ids)
+    proposal = None if stage in {"portfolio", "allocation"} else replace(ready, connection_plans=(), ready=False)
+    before = None if stage == "portfolio" else _portfolio(ready)
+    return BookCycleResult(
+        book_id=book_id,
+        capital_scope=capital_scope,
+        config_revision=ready.config_revision,
+        pair=ready.pair,
+        proposal=proposal,
+        portfolio_before=before,
+        hitl=BookHitlSnapshot(None, "not_required", ready.config_revision),
+        execution=None,
+        failure=BookPreparationFailure(stage),
+        portfolio_after=None,
+        portfolio_after_available=None,
+        status="failed",
+    )
+
+
+def test_book_preparation_failure_is_safe_and_supports_truthful_partial_cycle():
+    from cryptotrader.journal.models import BookPreparationFailure
+
+    with pytest.raises(ValueError, match="stage"):
+        BookPreparationFailure("raw_exchange_error")
+    sim = _book_cycle(status="completed")
+    live = _preparation_failure_book("risk")
+
+    record = _record(
+        book_results=(sim, live),
+        cycle_status="partial",
+        execution_status="partial",
+        requires_attention=False,
+    )
+
+    assert record.book_results[1].proposal is not None
+    assert record.book_results[1].proposal.ready is False
+    assert record.book_results[1].execution is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_preparation_failure_and_completed_sibling_round_trip_truthfully(tmp_path, database):
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'prep-roundtrip.db'}" if database else None)
+    record = _record(
+        cycle_id=f"prep-roundtrip-{database}",
+        book_results=(_book_cycle(status="completed"), _preparation_failure_book("risk")),
+        cycle_status="partial",
+        execution_status="partial",
+        requires_attention=False,
+    )
+
+    await store.save(record)
+
+    assert await store.get(record.cycle_id) == record
+
+
+def test_risk_rejected_requires_nonempty_per_book_risk_failure_evidence():
+    risk_failure = _preparation_failure_book("risk")
+    rejected = _record(
+        book_results=(risk_failure,),
+        cycle_status="risk_rejected",
+        execution_status="not_started",
+        requires_attention=False,
+    )
+    assert rejected.cycle_status == "risk_rejected"
+    with pytest.raises(ValueError, match="risk_rejected"):
+        replace(rejected, book_results=())
+    with pytest.raises(ValueError, match="cycle_status"):
+        _record(
+            book_results=(_preparation_failure_book("planning"),),
+            cycle_status="risk_rejected",
+            execution_status="not_started",
+            requires_attention=True,
+        )
+
+
+def _proposal_with_unavailable_reduction() -> BookExecutionProposal:
+    proposal = _proposal_for()
+    failed = ConnectionRiskDecision(
+        proposal.connection_risks[1].connection_id,
+        False,
+        False,
+        "venue unavailable",
+        "fetch_quote",
+    )
+    return replace(
+        proposal,
+        connection_risks=(proposal.connection_risks[0], failed),
+        connection_plans=(proposal.connection_plans[0],),
+        unavailable_connections=(proposal.connection_risks[1].connection_id,),
+        errors=(f"connection {proposal.connection_risks[1].connection_id}: fetch_quote failed",),
+    )
+
+
+def test_before_portfolio_uses_complete_risk_target_set_for_unavailable_reduction():
+    from cryptotrader.journal.models import BookCycleResult, BookHitlSnapshot
+
+    proposal = _proposal_with_unavailable_reduction()
+    before = _portfolio(_proposal_for())
+
+    result = BookCycleResult(
+        book_id=proposal.book_id,
+        capital_scope=proposal.capital_scope,
+        config_revision=proposal.config_revision,
+        pair=proposal.pair,
+        proposal=proposal,
+        portfolio_before=before,
+        hitl=BookHitlSnapshot(None, "not_required", proposal.config_revision),
+        execution=None,
+        failure=None,
+        portfolio_after=None,
+        portfolio_after_available=None,
+        status="ready",
+    )
+
+    assert tuple(item.connection_id for item in result.portfolio_before.connections) == (
+        "sim-first",
+        "sim-second",
+    )
+
+
+def test_unavailable_connection_position_remains_unchanged_after_reduction_execution():
+    from cryptotrader.journal.models import BookCycleResult, BookHitlSnapshot
+
+    proposal = _proposal_with_unavailable_reduction()
+    before = _portfolio(_proposal_for())
+    execution = BookExecutionResult(
+        proposal,
+        (_result(proposal, 0, "completed"),),
+        "partial",
+        False,
+    )
+    after = _portfolio(proposal, after=True, execution=execution)
+
+    result = BookCycleResult(
+        book_id=proposal.book_id,
+        capital_scope=proposal.capital_scope,
+        config_revision=proposal.config_revision,
+        pair=proposal.pair,
+        proposal=proposal,
+        portfolio_before=before,
+        hitl=BookHitlSnapshot(None, "not_required", proposal.config_revision),
+        execution=execution,
+        failure=None,
+        portfolio_after=after,
+        portfolio_after_available=True,
+        status="partial",
+    )
+
+    assert result.portfolio_after is not None
+    assert result.portfolio_after.connections[1].position == before.connections[1].position
+
+
+def test_before_portfolio_must_match_risk_equity_and_plan_current_position():
+    book = _book_cycle(status="ready")
+    first = book.portfolio_before.connections[0]
+    mismatched = replace(
+        first,
+        position=replace(first.position, signed_amount=Decimal("1"), signed_notional=Decimal("100")),
+    )
+    bad_before = replace(
+        book.portfolio_before,
+        connections=(mismatched, *book.portfolio_before.connections[1:]),
+        total_signed_notional=Decimal("100"),
+    )
+
+    with pytest.raises(ValueError, match="current"):
+        replace(book, portfolio_before=bad_before)
+    first_with_more_equity = replace(book.portfolio_before.connections[0], equity=Decimal("51"))
+    bad_equity = replace(
+        book.portfolio_before,
+        total_equity=Decimal("101"),
+        connections=(first_with_more_equity, *book.portfolio_before.connections[1:]),
+    )
+    with pytest.raises(ValueError, match="book_equity"):
+        replace(book, portfolio_before=bad_equity)
+
+
+def test_after_portfolio_positions_match_execution_finals_or_unchanged_before():
+    book = _book_cycle(status="partial")
+    assert book.execution is not None
+    assert book.portfolio_after is not None
+    first = book.portfolio_after.connections[0]
+    bad_after = replace(
+        book.portfolio_after,
+        connections=(
+            replace(first, position=book.portfolio_before.connections[0].position),
+            replace(
+                book.portfolio_after.connections[1],
+                position=book.portfolio_before.connections[1].position,
+            ),
+        ),
+        total_signed_notional=book.portfolio_before.total_signed_notional,
+    )
+    with pytest.raises(ValueError, match="final_position"):
+        replace(book, portfolio_after=bad_after)
+
+
+@pytest.mark.parametrize(
+    "fused",
+    [
+        FusedSignal(
+            -0.3,
+            (
+                ComponentContribution("kronos", -0.1, 0.8, -0.08),
+                ComponentContribution("llm_committee", 1.1, -0.2, -0.22),
+            ),
+            "invalid negative weight",
+        ),
+        FusedSignal(
+            0.22000000000000003,
+            (
+                ComponentContribution("kronos", 0.4, 0.8, 0.32000000000000006),
+                ComponentContribution("llm_committee", 0.5, -0.2, -0.1),
+            ),
+            "invalid weight sum",
+        ),
+        FusedSignal(
+            0.24999999999999997,
+            (
+                ComponentContribution("kronos", 0.5, 0.7, 0.35),
+                ComponentContribution("llm_committee", 0.5, -0.2, -0.1),
+            ),
+            "forged signed score",
+        ),
+        FusedSignal(
+            0.30000000000005,
+            (
+                ComponentContribution("kronos", 0.5, 0.8000000000001, 0.40000000000005),
+                ComponentContribution("llm_committee", 0.5, -0.2, -0.1),
+            ),
+            "slightly forged signed score",
+        ),
+    ],
+)
+def test_fusion_rejects_invalid_weights_and_forged_component_scores(fused):
+    with pytest.raises(ValueError, match=r"weight|signed_score"):
+        replace(_record(), fused_signal=fused)
+
+
+@pytest.mark.parametrize(
+    ("target", "weights"),
+    [
+        (TargetPosition("long", 0.3), (0.0, 1.0)),
+        (TargetPosition("short", 0.3), (1.0, 0.0)),
+        (TargetPosition("long", 0.3), (0.2, 0.8)),
+    ],
+)
+def test_target_direction_must_match_fused_score(target, weights):
+    weighted = (weights[0] * 0.8, weights[1] * -0.2)
+    fused = FusedSignal(
+        sum(weighted),
+        contributions=(
+            ComponentContribution("kronos", weights[0], 0.8, weighted[0]),
+            ComponentContribution("llm_committee", weights[1], -0.2, weighted[1]),
+        ),
+        reasoning="target sign mismatch",
+    )
+    with pytest.raises(ValueError, match="target_position"):
+        replace(_record(), fused_signal=fused, target_position=target)
+
+
+def test_component_failed_and_empty_global_statuses_have_truthful_field_matrix():
+    component_failed = replace(
+        _record(),
+        fused_signal=None,
+        target_position=None,
+        book_results=(),
+        cycle_status="component_failed",
+        execution_status="not_started",
+        requires_attention=False,
+    )
+    assert component_failed.fused_signal is None
+    with pytest.raises(ValueError, match="component_failed"):
+        replace(component_failed, fused_signal=_fused(), target_position=TargetPosition("long", 0.3))
+    with pytest.raises(ValueError, match="risk_rejected"):
+        replace(component_failed, cycle_status="risk_rejected")
+
+
+def _record_with_secret_balance_key():
+    book = _book_cycle(status="partial")
+    secret_connection = replace(
+        book.portfolio_before.connections[0],
+        balances={"api_key": Decimal("1")},  # pragma: allowlist secret
+    )
+    before = replace(book.portfolio_before, connections=(secret_connection, *book.portfolio_before.connections[1:]))
+    return replace(_record(), book_results=(replace(book, portfolio_before=before),))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_journal_rejects_secret_shaped_portfolio_balance_keys_before_encoding(tmp_path, database):
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'secret-balance.db'}" if database else None)
+    with pytest.raises(ValueError, match=r"^secret field$") as captured:
+        await store.save(_record_with_secret_balance_key())
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_journal_rejects_injected_secret_balance_key_after_decode(tmp_path):
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    path = tmp_path / "read-secret-balance.db"
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    record = _record()
+    await store.save(record)
+    with sqlite3.connect(path) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT book_results FROM multi_venue_cycles WHERE cycle_id = ?",
+                (record.cycle_id,),
+            ).fetchone()[0]
+        )
+        payload["items"][0]["portfolio_before"]["connections"][0]["balances"][0][0] = (
+            "api_key"  # pragma: allowlist secret
+        )
+        connection.execute(
+            "UPDATE multi_venue_cycles SET book_results = ? WHERE cycle_id = ?",
+            (json.dumps(payload), record.cycle_id),
+        )
+
+    with pytest.raises(ValueError, match=r"^secret field$") as captured:
+        await store.get(record.cycle_id)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_replace_cannot_rewrite_terminal_execution_or_portfolio(tmp_path, database):
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'terminal-rewrite.db'}" if database else None)
+    original = _record()
+    await store.save(original)
+    book = original.book_results[0]
+    assert book.execution is not None
+    changed_result = replace(book.execution.connection_results[1], trace=("pre_read", "place_order"))
+    changed_execution = replace(
+        book.execution,
+        connection_results=(book.execution.connection_results[0], changed_result),
+    )
+    changed = replace(original, book_results=(replace(book, execution=changed_execution),))
+
+    with pytest.raises(ValueError, match=r"terminal|immutable"):
+        await store.replace(changed)
+    assert await store.get(original.cycle_id) == original
+
+    assert book.portfolio_after is not None
+    changed_after_connection = replace(
+        book.portfolio_after.connections[0],
+        balances={"USDT": Decimal("49")},
+    )
+    changed_after = replace(
+        book.portfolio_after,
+        connections=(changed_after_connection, *book.portfolio_after.connections[1:]),
+    )
+    changed_portfolio = replace(original, book_results=(replace(book, portfolio_after=changed_after),))
+    with pytest.raises(ValueError, match=r"terminal|immutable"):
+        await store.replace(changed_portfolio)
+    assert await store.get(original.cycle_id) == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_replace_cannot_rewrite_awaiting_approval_identity(tmp_path, database):
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'approval-rewrite.db'}" if database else None)
+    live = _book_cycle(
+        book_id="live",
+        capital_scope="real",
+        connection_ids=("live-first", "live-second"),
+        status="awaiting_approval",
+    )
+    original = _record(
+        book_results=(live,),
+        cycle_status="awaiting_approval",
+        execution_status="not_started",
+        requires_attention=False,
+    )
+    await store.save(original)
+    changed_hitl = replace(live.hitl, approval_id="different-approval")
+    changed = replace(original, book_results=(replace(live, hitl=changed_hitl),))
+
+    with pytest.raises(ValueError, match=r"approval|idempotent"):
+        await store.replace(changed)
+    assert await store.get(original.cycle_id) == original
+
+    completed = _book_cycle(
+        book_id="live",
+        capital_scope="real",
+        connection_ids=("live-first", "live-second"),
+        status="completed",
+    )
+    completed_with_other_approval = replace(
+        completed,
+        hitl=replace(completed.hitl, approval_id="different-approval"),
+    )
+    progressed = replace(
+        original,
+        book_results=(completed_with_other_approval,),
+        cycle_status="completed",
+        execution_status="completed",
+    )
+    with pytest.raises(ValueError, match="approval"):
+        await store.replace(progressed)
+    assert await store.get(original.cycle_id) == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "replace"])
+async def test_sqlalchemy_write_failures_are_redacted_without_params_or_context(tmp_path, operation):
+    from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
+
+    path = tmp_path / f"abort-{operation}.db"
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    await store.ensure_table()
+    record = _record()
+    replacement = record
+    if operation == "replace":
+        live = _book_cycle(
+            book_id="live",
+            capital_scope="real",
+            connection_ids=("live-first", "live-second"),
+            status="awaiting_approval",
+        )
+        record = _record(
+            book_results=(live,),
+            cycle_status="awaiting_approval",
+            execution_status="not_started",
+            requires_attention=False,
+        )
+        await store.save(record)
+        completed = _book_cycle(
+            book_id="live",
+            capital_scope="real",
+            connection_ids=("live-first", "live-second"),
+            status="completed",
+        )
+        replacement = replace(
+            record,
+            book_results=(completed,),
+            cycle_status="completed",
+            execution_status="completed",
+        )
+    action = "INSERT" if operation == "save" else "UPDATE"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            f"CREATE TRIGGER abort_cycle_{operation} BEFORE {action} ON multi_venue_cycles "
+            "BEGIN SELECT RAISE(ABORT, 'RAW_SECRET_MARKER'); END"
+        )
+
+    async def write():
+        if operation == "save":
+            return await store.save(record)
+        return await store.replace(replacement)
+
+    with pytest.raises(JournalPersistenceError, match=r"^journal persistence failed$") as captured:
+        await write()
+    assert not hasattr(captured.value, "params")
+    assert "RAW_SECRET_MARKER" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "replace"])
+async def test_sqlalchemy_session_creation_failures_are_redacted(tmp_path, monkeypatch, operation):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
+
+    path = tmp_path / f"session-{operation}.db"
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    await store.ensure_table()
+    record = _record()
+    if operation == "replace":
+        await store.save(record)
+
+    async def fail_session(_database_url):
+        raise SQLAlchemyError("RAW_SECRET_MARKER")
+
+    async def write():
+        if operation == "save":
+            return await store.save(record)
+        return await store.replace(record)
+
+    monkeypatch.setattr(journal_store, "get_async_session", fail_session)
+    with pytest.raises(JournalPersistenceError, match=r"^journal persistence failed$") as captured:
+        await write()
+    assert "RAW_SECRET_MARKER" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None

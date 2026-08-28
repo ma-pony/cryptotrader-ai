@@ -365,6 +365,79 @@ async def test_sqlite_proposal_json_is_a_strict_versioned_identity_envelope(tmp_
 
 
 @pytest.mark.asyncio
+async def test_sqlite_envelope_rejects_bool_revision_even_when_equal_to_integer_one(tmp_path):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    path = tmp_path / "bool-envelope-revision.db"
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    approval = await store.create(_book_proposal(config_revision=1), cycle_id="cycle-bool-revision")
+    with sqlite3.connect(path) as connection:
+        envelope = json.loads(
+            connection.execute(
+                "SELECT proposal_json FROM book_approvals WHERE approval_id = ?",
+                (approval.id,),
+            ).fetchone()[0]
+        )
+        envelope["config_revision"] = True
+        connection.execute(
+            "UPDATE book_approvals SET proposal_json = ? WHERE approval_id = ?",
+            (json.dumps(envelope), approval.id),
+        )
+
+    with pytest.raises(ValueError, match="stored approval payload"):
+        await store.get(approval.id)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("field_name", "invalid_value"), [("cycle_id", ""), ("book_id", 1)])
+async def test_sqlite_envelope_rejects_invalid_identity_types(tmp_path, field_name, invalid_value):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    path = tmp_path / f"invalid-envelope-{field_name}.db"
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    approval = await store.create(_book_proposal(), cycle_id="cycle-invalid-identity")
+    with sqlite3.connect(path) as connection:
+        envelope = json.loads(
+            connection.execute(
+                "SELECT proposal_json FROM book_approvals WHERE approval_id = ?",
+                (approval.id,),
+            ).fetchone()[0]
+        )
+        envelope[field_name] = invalid_value
+        connection.execute(
+            "UPDATE book_approvals SET proposal_json = ? WHERE approval_id = ?",
+            (json.dumps(envelope), approval.id),
+        )
+
+    with pytest.raises(ValueError, match="stored approval payload"):
+        await store.get(approval.id)
+
+
+@pytest.mark.asyncio
+async def test_sqlite_envelope_rejects_extra_fields(tmp_path):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    path = tmp_path / "extra-envelope-field.db"
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    approval = await store.create(_book_proposal(), cycle_id="cycle-extra-field")
+    with sqlite3.connect(path) as connection:
+        envelope = json.loads(
+            connection.execute(
+                "SELECT proposal_json FROM book_approvals WHERE approval_id = ?",
+                (approval.id,),
+            ).fetchone()[0]
+        )
+        envelope["extra"] = "forbidden"
+        connection.execute(
+            "UPDATE book_approvals SET proposal_json = ? WHERE approval_id = ?",
+            (json.dumps(envelope), approval.id),
+        )
+
+    with pytest.raises(ValueError, match="stored approval payload"):
+        await store.get(approval.id)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("target", "field_name", "invalid_value"),
     [

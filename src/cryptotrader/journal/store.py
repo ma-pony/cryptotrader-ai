@@ -6,13 +6,14 @@ import asyncio
 import math
 import re
 from collections.abc import Mapping
+from contextlib import suppress
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 
 from sqlalchemy import JSON, BigInteger, Boolean, DateTime, String, func, select, update
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from cryptotrader.db import get_async_session, get_engine
@@ -26,6 +27,7 @@ from cryptotrader.execution.codec import (
 from cryptotrader.journal.models import (
     BookCycleResult,
     BookHitlSnapshot,
+    BookPreparationFailure,
     MultiVenueCycleRecord,
     TradingCycleRecord,
 )
@@ -40,6 +42,35 @@ if TYPE_CHECKING:
 
 _ready: set[str] = set()
 _multi_venue_ready: set[str] = set()
+
+
+class JournalPersistenceError(RuntimeError):
+    """A redacted failure at the new Journal database write boundary."""
+
+
+async def _safe_rollback(session: Any) -> bool:
+    try:
+        await session.rollback()
+    except SQLAlchemyError:
+        return False
+    return True
+
+
+async def _safe_close(session: Any) -> bool:
+    try:
+        await session.close()
+    except SQLAlchemyError:
+        return False
+    return True
+
+
+async def _write_session(database_url: str) -> Any:
+    session = None
+    with suppress(SQLAlchemyError):
+        session = await get_async_session(database_url)
+    if session is None:
+        raise JournalPersistenceError("journal persistence failed")
+    return session
 
 
 class _Base(DeclarativeBase):
@@ -607,10 +638,15 @@ def _book_cycle_result_payload(value: BookCycleResult) -> dict[str, Any]:
     return {
         "book_id": value.book_id,
         "capital_scope": value.capital_scope,
-        "proposal": book_execution_proposal_payload(value.proposal),
-        "portfolio_before": _book_portfolio_payload(value.portfolio_before),
+        "config_revision": value.config_revision,
+        "pair": value.pair.canonical(),
+        "proposal": None if value.proposal is None else book_execution_proposal_payload(value.proposal),
+        "portfolio_before": (
+            None if value.portfolio_before is None else _book_portfolio_payload(value.portfolio_before)
+        ),
         "hitl": _hitl_payload(value.hitl),
         "execution": None if value.execution is None else book_execution_result_payload(value.execution),
+        "failure": None if value.failure is None else {"stage": value.failure.stage},
         "portfolio_after": (None if value.portfolio_after is None else _book_portfolio_payload(value.portfolio_after)),
         "portfolio_after_available": value.portfolio_after_available,
         "status": value.status,
@@ -623,25 +659,41 @@ def _book_cycle_result_from_payload(value: Any) -> BookCycleResult:
         {
             "book_id",
             "capital_scope",
+            "config_revision",
+            "pair",
             "proposal",
             "portfolio_before",
             "hitl",
             "execution",
+            "failure",
             "portfolio_after",
             "portfolio_after_available",
             "status",
         },
     )
+    if type(payload["pair"]) is not str:
+        raise ValueError("invalid book cycle pair")
+    failure_payload = payload["failure"]
+    failure = None
+    if failure_payload is not None:
+        failure = BookPreparationFailure(_codec_object(failure_payload, {"stage"})["stage"])
     return BookCycleResult(
-        payload["book_id"],
-        payload["capital_scope"],
-        book_execution_proposal_from_payload(payload["proposal"]),
-        _book_portfolio_from_payload(payload["portfolio_before"]),
-        _hitl_from_payload(payload["hitl"]),
-        None if payload["execution"] is None else book_execution_result_from_payload(payload["execution"]),
-        (None if payload["portfolio_after"] is None else _book_portfolio_from_payload(payload["portfolio_after"])),
-        payload["portfolio_after_available"],
-        payload["status"],
+        book_id=payload["book_id"],
+        capital_scope=payload["capital_scope"],
+        config_revision=payload["config_revision"],
+        pair=Pair.parse(payload["pair"]),
+        proposal=(None if payload["proposal"] is None else book_execution_proposal_from_payload(payload["proposal"])),
+        portfolio_before=(
+            None if payload["portfolio_before"] is None else _book_portfolio_from_payload(payload["portfolio_before"])
+        ),
+        hitl=_hitl_from_payload(payload["hitl"]),
+        execution=(None if payload["execution"] is None else book_execution_result_from_payload(payload["execution"])),
+        failure=failure,
+        portfolio_after=(
+            None if payload["portfolio_after"] is None else _book_portfolio_from_payload(payload["portfolio_after"])
+        ),
+        portfolio_after_available=payload["portfolio_after_available"],
+        status=payload["status"],
     )
 
 
@@ -667,6 +719,34 @@ def _record_payloads(record: MultiVenueCycleRecord) -> tuple[dict[str, Any], ...
     )
 
 
+def _contains_secret_balance_key(record: MultiVenueCycleRecord) -> bool:
+    snapshots = (
+        snapshot
+        for book in record.book_results
+        for snapshot in (book.portfolio_before, book.portfolio_after)
+        if snapshot is not None
+    )
+    return any(
+        _is_secret_field(asset)
+        for snapshot in snapshots
+        for connection in snapshot.connections
+        for asset in connection.balances
+    )
+
+
+def _validated_record_payloads(record: MultiVenueCycleRecord) -> tuple[dict[str, Any], ...]:
+    if not isinstance(record, MultiVenueCycleRecord):
+        raise ValueError("record must be a MultiVenueCycleRecord")
+    if any(
+        _contains_secret_field(signal.details) for signal in record.component_signals
+    ) or _contains_secret_balance_key(record):
+        raise ValueError("secret field")
+    payloads = _record_payloads(record)
+    if _contains_secret_field(payloads):
+        raise ValueError("secret field")
+    return payloads
+
+
 def _multi_venue_record(row: _MultiVenueCycleRow) -> MultiVenueCycleRecord:
     raw_payloads = (row.component_signals, row.fused_signal, row.target_position, row.book_results)
     if _contains_secret_field(raw_payloads):
@@ -690,7 +770,7 @@ def _multi_venue_record(row: _MultiVenueCycleRow) -> MultiVenueCycleRecord:
             row.requires_attention,
             created_at,
         )
-        if _contains_secret_field(_record_payloads(record)):
+        if _contains_secret_field(_record_payloads(record)) or _contains_secret_balance_key(record):
             raise ValueError("secret field")
     except (ArithmeticError, KeyError, TypeError, ValueError) as error:
         secret = str(error) == "secret field"
@@ -718,107 +798,131 @@ class MultiVenueCycleStore:
             await connection.run_sync(_MultiVenueBase.metadata.create_all)
         _multi_venue_ready.add(self.database_url)
 
+    async def _ensure_write_table(self) -> None:
+        failed = False
+        try:
+            await self.ensure_table()
+        except SQLAlchemyError:
+            failed = True
+        if failed:
+            raise JournalPersistenceError("journal persistence failed")
+
     async def save(self, record: MultiVenueCycleRecord) -> None:
-        if not isinstance(record, MultiVenueCycleRecord):
-            raise ValueError("record must be a MultiVenueCycleRecord")
-        if any(_contains_secret_field(signal.details) for signal in record.component_signals):
-            raise ValueError("secret field")
-        component_signals, fused_signal, target_position, book_results = _record_payloads(record)
-        if _contains_secret_field((component_signals, fused_signal, target_position, book_results)):
-            raise ValueError("secret field")
+        payloads = _validated_record_payloads(record)
 
         if self.database_url is None:
             if any(item.cycle_id == record.cycle_id for item in self.records):
                 raise ValueError("cycle already exists")
             self.records.append(record)
             return
+        await self._save_database(record, payloads)
 
-        await self.ensure_table()
-        session = await get_async_session(self.database_url)
-        duplicate = False
-        try:
-            session.add(
-                _MultiVenueCycleRow(
-                    cycle_id=record.cycle_id,
-                    config_revision=record.config_revision,
-                    market_data_source_id=record.market_data_source_id,
-                    component_signals=component_signals,
-                    fused_signal=fused_signal,
-                    target_position=target_position,
-                    book_results=book_results,
-                    cycle_status=record.cycle_status,
-                    execution_status=record.execution_status,
-                    requires_attention=record.requires_attention,
-                    created_at=record.created_at,
-                )
-            )
-            await session.commit()
-        except IntegrityError:
-            await session.rollback()
-            duplicate = True
-        finally:
-            await session.close()
-        if duplicate:
+    async def _save_database(
+        self,
+        record: MultiVenueCycleRecord,
+        payloads: tuple[dict[str, Any], ...],
+    ) -> None:
+        await self._ensure_write_table()
+        session = await _write_session(self.database_url)
+        component_signals, fused_signal, target_position, book_results = payloads
+        row = _MultiVenueCycleRow(
+            cycle_id=record.cycle_id,
+            config_revision=record.config_revision,
+            market_data_source_id=record.market_data_source_id,
+            component_signals=component_signals,
+            fused_signal=fused_signal,
+            target_position=target_position,
+            book_results=book_results,
+            cycle_status=record.cycle_status,
+            execution_status=record.execution_status,
+            requires_attention=record.requires_attention,
+            created_at=record.created_at,
+        )
+        outcome = await self._insert_outcome(session, row, record.cycle_id)
+        if not await _safe_close(session):
+            outcome = "failed"
+        if outcome == "failed":
+            raise JournalPersistenceError("journal persistence failed")
+        if outcome == "duplicate":
             raise ValueError("cycle already exists")
 
     @staticmethod
+    async def _insert_outcome(session: Any, row: _MultiVenueCycleRow, cycle_id: str) -> str:
+        try:
+            session.add(row)
+            await session.commit()
+        except IntegrityError:
+            if not await _safe_rollback(session):
+                return "failed"
+            try:
+                duplicate = await session.get(_MultiVenueCycleRow, cycle_id) is not None
+            except SQLAlchemyError:
+                return "failed"
+            return "duplicate" if duplicate else "failed"
+        except SQLAlchemyError:
+            await _safe_rollback(session)
+            return "failed"
+        return "saved"
+
+    @staticmethod
     def _validate_replacement(current: MultiVenueCycleRecord, replacement: MultiVenueCycleRecord) -> None:
-        frozen_current = (
-            current.cycle_id,
-            current.config_revision,
-            current.market_data_source_id,
-            current.component_signals,
-            current.fused_signal,
-            current.target_position,
-            current.created_at,
-        )
-        frozen_replacement = (
-            replacement.cycle_id,
-            replacement.config_revision,
-            replacement.market_data_source_id,
-            replacement.component_signals,
-            replacement.fused_signal,
-            replacement.target_position,
-            replacement.created_at,
-        )
-        if frozen_current != frozen_replacement:
+        if MultiVenueCycleStore._frozen_cycle_identity(current) != MultiVenueCycleStore._frozen_cycle_identity(
+            replacement
+        ):
             raise ValueError("frozen cycle identity cannot change")
-        current_books = tuple(
-            (item.book_id, item.capital_scope, item.proposal, item.portfolio_before) for item in current.book_results
-        )
-        replacement_books = tuple(
-            (item.book_id, item.capital_scope, item.proposal, item.portfolio_before)
-            for item in replacement.book_results
-        )
+        current_books = tuple(MultiVenueCycleStore._frozen_book_identity(item) for item in current.book_results)
+        replacement_books = tuple(MultiVenueCycleStore._frozen_book_identity(item) for item in replacement.book_results)
         if current_books != replacement_books:
             raise ValueError("frozen book identity cannot change")
-        allowed = {
-            "ready": {"ready", "completed", "partial", "failed"},
-            "awaiting_approval": {
-                "awaiting_approval",
-                "approval_rejected",
-                "completed",
-                "partial",
-                "failed",
-            },
-            "approval_rejected": {"approval_rejected"},
-            "completed": {"completed"},
-            "partial": {"partial"},
-            "failed": {"failed"},
-        }
-        if any(
-            new.status not in allowed[old.status]
-            for old, new in zip(current.book_results, replacement.book_results, strict=True)
-        ):
-            raise ValueError("book cycle state cannot regress")
+        for old, new in zip(current.book_results, replacement.book_results, strict=True):
+            MultiVenueCycleStore._validate_book_transition(old, new)
+
+    @staticmethod
+    def _frozen_cycle_identity(record: MultiVenueCycleRecord) -> tuple[Any, ...]:
+        return (
+            record.cycle_id,
+            record.config_revision,
+            record.market_data_source_id,
+            record.component_signals,
+            record.fused_signal,
+            record.target_position,
+            record.created_at,
+        )
+
+    @staticmethod
+    def _frozen_book_identity(item: BookCycleResult) -> tuple[Any, ...]:
+        return (
+            item.book_id,
+            item.capital_scope,
+            item.config_revision,
+            item.pair,
+            item.proposal,
+            item.portfolio_before,
+        )
+
+    @staticmethod
+    def _validate_book_transition(old: BookCycleResult, new: BookCycleResult) -> None:
+        if old == new:
+            return
+        if old.failure is not None or old.status in {"approval_rejected", "completed", "partial", "failed"}:
+            raise ValueError("terminal book audit facts are immutable")
+        if old.status == "ready":
+            if new.status not in {"completed", "partial", "failed"} or new.hitl != old.hitl:
+                raise ValueError("ready book may only advance to execution with unchanged HITL identity")
+            return
+        if old.status != "awaiting_approval" or new.status not in {
+            "approval_rejected",
+            "completed",
+            "partial",
+            "failed",
+        }:
+            raise ValueError("same-state replacement must be completely idempotent")
+        if old.hitl.approval_id != new.hitl.approval_id or old.hitl.config_revision != new.hitl.config_revision:
+            raise ValueError("approval identity must not change")
 
     async def replace(self, record: MultiVenueCycleRecord) -> None:
         """Advance mutable per-book outcomes while keeping cycle evidence frozen."""
-        if not isinstance(record, MultiVenueCycleRecord):
-            raise ValueError("record must be a MultiVenueCycleRecord")
-        component_signals, fused_signal, target_position, book_results = _record_payloads(record)
-        if _contains_secret_field((component_signals, fused_signal, target_position, book_results)):
-            raise ValueError("secret field")
+        payloads = _validated_record_payloads(record)
 
         if self.database_url is None:
             async with self._lock:
@@ -831,53 +935,89 @@ class MultiVenueCycleStore:
                 self._validate_replacement(self.records[index], record)
                 self.records[index] = record
             return
+        await self._replace_database(record, payloads)
 
-        await self.ensure_table()
-        session = await get_async_session(self.database_url)
+    async def _replace_database(
+        self,
+        record: MultiVenueCycleRecord,
+        payloads: tuple[dict[str, Any], ...],
+    ) -> None:
+        await self._ensure_write_table()
+        session = await _write_session(self.database_url)
+        outcome = await self._replace_outcome(session, record, payloads[3])
+        if not await _safe_close(session):
+            outcome = "failed"
+        if outcome == "saved":
+            return
+        errors = {
+            "missing": LookupError("cycle was not found"),
+            "concurrent": ValueError("cycle changed concurrently"),
+            "invalid": ValueError("stored cycle payload is invalid"),
+            "failed": JournalPersistenceError("journal persistence failed"),
+        }
+        raise errors[outcome]
+
+    async def _replace_outcome(
+        self,
+        session: Any,
+        record: MultiVenueCycleRecord,
+        book_results: dict[str, Any],
+    ) -> str:
         try:
             row = await session.get(_MultiVenueCycleRow, record.cycle_id)
             if row is None:
-                raise LookupError("cycle was not found")
+                await _safe_rollback(session)
+                return "missing"
             current = _multi_venue_record(row)
             self._validate_replacement(current, record)
-            statement = (
-                update(_MultiVenueCycleRow)
-                .where(
-                    _MultiVenueCycleRow.cycle_id == current.cycle_id,
-                    _MultiVenueCycleRow.config_revision == current.config_revision,
-                    _MultiVenueCycleRow.market_data_source_id == current.market_data_source_id,
-                    _MultiVenueCycleRow.component_signals == _component_signals_payload(current.component_signals),
-                    _MultiVenueCycleRow.fused_signal == _fused_signal_payload(current.fused_signal),
-                    _MultiVenueCycleRow.target_position == _target_position_payload(current.target_position),
-                    _MultiVenueCycleRow.created_at == current.created_at,
-                    _MultiVenueCycleRow.book_results == _book_results_payload(current.book_results),
-                    _MultiVenueCycleRow.cycle_status == current.cycle_status,
-                    _MultiVenueCycleRow.execution_status == current.execution_status,
-                    _MultiVenueCycleRow.requires_attention == current.requires_attention,
-                )
-                .values(
-                    book_results=book_results,
-                    cycle_status=record.cycle_status,
-                    execution_status=record.execution_status,
-                    requires_attention=record.requires_attention,
-                )
-                .returning(_MultiVenueCycleRow)
-                .execution_options(populate_existing=True)
-            )
+            statement = self._replace_statement(current, record, book_results)
             returned = (await session.execute(statement)).scalar_one_or_none()
             if returned is None:
-                await session.rollback()
-                raise ValueError("cycle changed concurrently")
+                await _safe_rollback(session)
+                return "concurrent"
             persisted = _multi_venue_record(returned)
             if persisted != record:
-                await session.rollback()
-                raise ValueError("stored cycle payload is invalid")
+                await _safe_rollback(session)
+                return "invalid"
             await session.commit()
         except (LookupError, ValueError):
-            await session.rollback()
+            await _safe_rollback(session)
             raise
-        finally:
-            await session.close()
+        except SQLAlchemyError:
+            await _safe_rollback(session)
+            return "failed"
+        return "saved"
+
+    @staticmethod
+    def _replace_statement(
+        current: MultiVenueCycleRecord,
+        replacement: MultiVenueCycleRecord,
+        book_results: dict[str, Any],
+    ) -> Any:
+        return (
+            update(_MultiVenueCycleRow)
+            .where(
+                _MultiVenueCycleRow.cycle_id == current.cycle_id,
+                _MultiVenueCycleRow.config_revision == current.config_revision,
+                _MultiVenueCycleRow.market_data_source_id == current.market_data_source_id,
+                _MultiVenueCycleRow.component_signals == _component_signals_payload(current.component_signals),
+                _MultiVenueCycleRow.fused_signal == _fused_signal_payload(current.fused_signal),
+                _MultiVenueCycleRow.target_position == _target_position_payload(current.target_position),
+                _MultiVenueCycleRow.created_at == current.created_at,
+                _MultiVenueCycleRow.book_results == _book_results_payload(current.book_results),
+                _MultiVenueCycleRow.cycle_status == current.cycle_status,
+                _MultiVenueCycleRow.execution_status == current.execution_status,
+                _MultiVenueCycleRow.requires_attention == current.requires_attention,
+            )
+            .values(
+                book_results=book_results,
+                cycle_status=replacement.cycle_status,
+                execution_status=replacement.execution_status,
+                requires_attention=replacement.requires_attention,
+            )
+            .returning(_MultiVenueCycleRow)
+            .execution_options(populate_existing=True)
+        )
 
     async def get(self, cycle_id: str) -> MultiVenueCycleRecord | None:
         if self.database_url is None:

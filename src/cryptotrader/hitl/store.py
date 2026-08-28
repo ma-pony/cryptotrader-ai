@@ -377,6 +377,13 @@ def _decode_book_record(row: _BookApprovalRow) -> BookApproval | None:
             raise ValueError("invalid approval envelope")
         if type(envelope["version"]) is not int or envelope["version"] != _APPROVAL_ENVELOPE_VERSION:
             raise ValueError("unsupported approval envelope version")
+        if any(
+            type(envelope[field_name]) is not str or not envelope[field_name].strip()
+            for field_name in ("approval_id", "cycle_id", "book_id")
+        ):
+            raise ValueError("invalid approval envelope identity")
+        if type(envelope["config_revision"]) is not int or envelope["config_revision"] < 0:
+            raise ValueError("invalid approval envelope revision")
         if (
             envelope["approval_id"] != row.approval_id
             or envelope["cycle_id"] != row.cycle_id

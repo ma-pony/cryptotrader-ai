@@ -41,7 +41,7 @@ async def _init_engine(database_url: str) -> None:
     kwargs: dict = {}
     if not database_url.startswith("sqlite"):
         kwargs.update(pool_size=5, max_overflow=10)
-    engine = create_async_engine(database_url, **kwargs)
+    engine = create_async_engine(database_url, hide_parameters=True, **kwargs)
     sm = async_sessionmaker(engine, expire_on_commit=False)
     _engines[_cache_key(database_url)] = (engine, sm)
 
