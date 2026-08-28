@@ -29,7 +29,7 @@ def connection(
         "adapter_id": "paper" if environment == "paper" else "okx",
         "environment": environment,
         "enabled": True,
-        "credential_ref": None,
+        "credential_ref": "live-credentials" if environment == "live" else None,
         "leverage": 1,
         "margin_mode": "isolated",
     }

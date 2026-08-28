@@ -102,8 +102,8 @@ def test_active_document_requires_credential_for_enabled_non_paper_connection():
 
     document = runtime_document(
         system=SystemConfig(active=True),
-        connections=(connection("okx-live", "live", adapter_id="okx"),),
-        books=(book("live", "real", allocation("okx-live", 1.0)),),
+        connections=(connection("okx-demo", "demo", adapter_id="okx"),),
+        books=(book("simulation", "simulated", allocation("okx-demo", 1.0)),),
     )
 
     with pytest.raises(ValueError, match="credential_ref"):
