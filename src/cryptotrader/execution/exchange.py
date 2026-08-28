@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from cryptotrader.ccxt_options import fetch_market_types
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from cryptotrader.models import Order
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,7 @@ class ExchangeAdapter(Protocol):
         sl_trigger_px: float,
         tp_trigger_px: float,
         pos_side: str,
+        created_as_of: datetime | None = None,
     ) -> str: ...
 
     async def cancel_algo(self, algo_id: str, pair: str) -> None: ...
@@ -793,6 +796,7 @@ class LiveExchange:
         sl_trigger_px: float,
         tp_trigger_px: float,
         pos_side: str,
+        created_as_of: datetime | None = None,
     ) -> str:
         """Submit an OCO algo (stop-loss + take-profit) with reduceOnly.
 
@@ -815,6 +819,7 @@ class LiveExchange:
         market on trigger (``slOrdPx="-1"`` / ``tpOrdPx="-1"``).
         """
         self._require_okx("place_algo_oco")
+        _ = created_as_of
         await self._ensure_markets()
 
         inst_id = self._to_okx_inst_id(pair)

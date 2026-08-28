@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -272,7 +273,12 @@ async def test_paper_protection_runs_before_components_and_refreshes_position_on
         call_order.append("protection")
         assert signal_context.current_position.side == "long"
         cycle.contexts.current_position = position()
-        return True
+        return SimpleNamespace(
+            algo_id="paper-oco",
+            trigger_reason="stop_loss",
+            trigger_price=90.0,
+            order_id="paper-close",
+        )
 
     async def fail_components(components, signal_context):
         call_order.append("components")
@@ -288,6 +294,50 @@ async def test_paper_protection_runs_before_components_and_refreshes_position_on
     assert call_order == ["protection", "components"]
     assert cycle.contexts.refresh_calls == 1
     assert seen_positions == [position()]
+    assert cycle.journal.records[0].execution_result["protection_trigger"] == {
+        "algo_id": "paper-oco",
+        "trigger_reason": "stop_loss",
+        "trigger_price": 90.0,
+        "order_id": "paper-close",
+    }
+
+
+@pytest.mark.asyncio
+async def test_paper_protection_refresh_failure_writes_execution_failed_terminal_audit():
+    cycle = build_test_cycle()
+    cycle.contexts.current_position = position("long", 2.0, 0.5)
+
+    async def process_pending_protection(signal_context):
+        cycle.contexts.current_position = position()
+        return SimpleNamespace(
+            algo_id="paper-oco",
+            trigger_reason="take_profit",
+            trigger_price=120.0,
+            order_id="paper-close",
+        )
+
+    async def fail_refresh(stored_context):
+        cycle.contexts.refresh_calls += 1
+        raise RuntimeError("portfolio refresh down")
+
+    cycle.executor.process_pending_protection = process_pending_protection
+    cycle.contexts.refresh_execution_state = fail_refresh
+
+    outcome = await cycle.run(request())
+
+    assert outcome.status == "execution_failed"
+    assert outcome.execution_result.succeeded is False
+    assert "portfolio refresh down" in outcome.execution_result.error
+    assert cycle.runner.calls == 0
+    assert len(cycle.journal.records) == 1
+    record = cycle.journal.records[0]
+    assert record.status == "execution_failed"
+    assert record.execution_result["protection_trigger"] == {
+        "algo_id": "paper-oco",
+        "trigger_reason": "take_profit",
+        "trigger_price": 120.0,
+        "order_id": "paper-close",
+    }
 
 
 @pytest.mark.asyncio

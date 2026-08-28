@@ -190,6 +190,7 @@ describe('Decision list + detail schemas', () => {
         succeeded: true,
         algo_id: 'oco-1',
         error: null,
+        retained_algo_ids: ['old-oco'],
         orders: [
         {
           intent: { pair: 'BTC/USDT', side: 'buy', amount: 0.1, reduce_only: false },
@@ -204,6 +205,7 @@ describe('Decision list + detail schemas', () => {
     expect(parsed.components[0]?.details.debate_turns).toHaveLength(1);
     expect(parsed.fusion?.score).toBe(0.48);
     expect(parsed.target_position?.side).toBe('long');
+    expect(parsed.execution_result?.retained_algo_ids).toEqual(['old-oco']);
   });
 
   it('rejects the removed legacy verdict contract', () => {

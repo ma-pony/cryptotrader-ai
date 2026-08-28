@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+from datetime import UTC, datetime
 
 import pytest
 
 from cryptotrader.decision.models import ExecutionPlan, OrderIntent
 from cryptotrader.execution.order import OrderManager
+from cryptotrader.models import OrderStatus
 from tests.factories.signal_fusion import context, position
 
 
@@ -60,6 +62,24 @@ class _Exchange:
         return "new-oco"
 
 
+class _DirectOrderManager:
+    """Expose service behavior when OrderManager.place itself raises or reports fills."""
+
+    def __init__(self, *outcomes) -> None:
+        self.outcomes = iter(outcomes)
+        self.orders = []
+
+    async def place(self, order, exchange):
+        self.orders.append(order)
+        outcome = next(self.outcomes)
+        if isinstance(outcome, Exception):
+            raise outcome
+        status, raw = outcome
+        order.status = status
+        order.exchange_id = f"direct-{len(self.orders)}"
+        return order, {"id": order.exchange_id, "status": status.value, **raw}
+
+
 @pytest.mark.asyncio
 async def test_reversal_fills_in_order_then_replaces_protection():
     from cryptotrader.execution.service import ExecutionService
@@ -86,6 +106,7 @@ async def test_reversal_fills_in_order_then_replaces_protection():
         "sl_trigger_px": 110.0,
         "tp_trigger_px": 80.0,
         "pos_side": "short",
+        "created_as_of": datetime(2026, 1, 1, tzinfo=UTC),
     }
     assert result.algo_id == "new-oco"
 
@@ -287,6 +308,150 @@ async def test_failed_later_reversal_leg_compensates_prior_fill_and_retains_old_
     assert exchange.ocos == []
     assert exchange.pending_algos == ["old-oco"]
     assert result.retained_algo_ids == ("old-oco",)
+
+
+@pytest.mark.asyncio
+async def test_later_order_manager_exception_compensates_known_fills_and_returns_audit():
+    from cryptotrader.execution.service import ExecutionService
+
+    manager = _DirectOrderManager(
+        (OrderStatus.FILLED, {}),
+        RuntimeError("manager state transition failed"),
+        (OrderStatus.FILLED, {}),
+    )
+    exchange = _Exchange()
+    service = ExecutionService(manager, exchange)
+    plan = ExecutionPlan(
+        intents=(
+            OrderIntent("BTC/USDT:USDT", "sell", 1.0, True),
+            OrderIntent("BTC/USDT:USDT", "sell", 2.0, False),
+        ),
+        stop_loss=110.0,
+        take_profit=80.0,
+    )
+
+    result = await service.execute(plan, context(position=position("long", 1.0, 0.5)))
+
+    assert result.succeeded is False
+    assert "manager state transition failed" in result.error
+    assert "original position restored" in result.error
+    assert [(order.side, order.amount, order.reduce_only) for order in manager.orders] == [
+        ("sell", 1.0, True),
+        ("sell", 2.0, False),
+        ("buy", 1.0, False),
+    ]
+    assert [(item.intent.side, item.filled_amount) for item in result.orders] == [
+        ("sell", 1.0),
+        ("buy", 1.0),
+    ]
+    assert result.retained_algo_ids == ("old-oco",)
+
+
+@pytest.mark.asyncio
+async def test_compensation_order_manager_exception_becomes_explicit_audited_failure():
+    from cryptotrader.execution.service import ExecutionService
+
+    manager = _DirectOrderManager(
+        (OrderStatus.FILLED, {}),
+        RuntimeError("compensation transport failed"),
+    )
+    exchange = _Exchange(oco_error=RuntimeError("replacement rejected"))
+    service = ExecutionService(manager, exchange)
+    plan = ExecutionPlan(
+        intents=(OrderIntent("BTC/USDT:USDT", "buy", 1.0, False),),
+        stop_loss=90.0,
+        take_profit=120.0,
+    )
+
+    result = await service.execute(plan, context())
+
+    assert result.succeeded is False
+    assert "position compensation failed" in result.error
+    assert "compensation transport failed" in result.error
+    assert [(item.intent.side, item.filled_amount) for item in result.orders] == [("buy", 1.0)]
+    assert result.retained_algo_ids == ("old-oco",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_status", [OrderStatus.PARTIALLY_FILLED, OrderStatus.CANCELLED])
+async def test_actual_partial_fill_is_compensated_before_failure_returns(failed_status):
+    from cryptotrader.execution.service import ExecutionService
+
+    manager = _DirectOrderManager(
+        (OrderStatus.FILLED, {}),
+        (failed_status, {"filled": 0.5}),
+        (OrderStatus.FILLED, {}),
+        (OrderStatus.FILLED, {}),
+    )
+    exchange = _Exchange()
+    service = ExecutionService(manager, exchange)
+    plan = ExecutionPlan(
+        intents=(
+            OrderIntent("BTC/USDT:USDT", "sell", 1.0, True),
+            OrderIntent("BTC/USDT:USDT", "sell", 2.0, False),
+        ),
+        stop_loss=110.0,
+        take_profit=80.0,
+    )
+
+    result = await service.execute(plan, context(position=position("long", 1.0, 0.5)))
+
+    assert result.succeeded is False
+    assert [(order.side, order.amount, order.reduce_only) for order in manager.orders] == [
+        ("sell", 1.0, True),
+        ("sell", 2.0, False),
+        ("buy", 0.5, True),
+        ("buy", 1.0, False),
+    ]
+    assert [(item.status, item.filled_amount) for item in result.orders] == [
+        ("filled", 1.0),
+        (failed_status.value, 0.5),
+        ("filled", 0.5),
+        ("filled", 1.0),
+    ]
+    assert result.retained_algo_ids == ("old-oco",)
+
+
+@pytest.mark.asyncio
+async def test_replacement_cleanup_failure_reports_old_and_new_algos_as_unresolved():
+    from cryptotrader.execution.service import ExecutionService
+
+    exchange = _Exchange(("closed", "closed"), cancel_errors=("old-oco", "new-oco"))
+    service = ExecutionService(OrderManager(), exchange)
+    plan = ExecutionPlan(
+        intents=(OrderIntent("BTC/USDT:USDT", "buy", 1.0, False),),
+        stop_loss=90.0,
+        take_profit=120.0,
+    )
+
+    result = await service.execute(plan, context())
+
+    assert result.succeeded is False
+    assert exchange.pending_algos == ["old-oco", "new-oco"]
+    assert result.retained_algo_ids == ("old-oco", "new-oco")
+
+
+@pytest.mark.asyncio
+async def test_multiple_old_algos_report_only_not_confirmed_cancelled_ids():
+    from cryptotrader.execution.service import ExecutionService
+
+    exchange = _Exchange(
+        ("closed", "closed"),
+        old_algos=("old-1", "old-2", "old-3"),
+        cancel_errors=("old-2",),
+    )
+    service = ExecutionService(OrderManager(), exchange)
+    plan = ExecutionPlan(
+        intents=(OrderIntent("BTC/USDT:USDT", "buy", 1.0, False),),
+        stop_loss=90.0,
+        take_profit=120.0,
+    )
+
+    result = await service.execute(plan, context())
+
+    assert result.succeeded is False
+    assert exchange.pending_algos == ["old-2", "old-3"]
+    assert result.retained_algo_ids == ("old-2", "old-3")
 
 
 @pytest.mark.asyncio

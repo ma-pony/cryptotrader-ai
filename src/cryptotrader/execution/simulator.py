@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+import pandas as pd
+
+from cryptotrader.data.market import _timeframe_ms
+from cryptotrader.execution.service import ProtectionTriggerResult
 from cryptotrader.models import Order
 from cryptotrader.pair import Pair
 
@@ -252,6 +257,7 @@ class PaperExchange:
         sl_trigger_px: float,
         tp_trigger_px: float,
         pos_side: str,
+        created_as_of: datetime | None = None,
     ) -> str:
         async with self._lock:
             algo_id = str(uuid.uuid4())
@@ -264,15 +270,12 @@ class PaperExchange:
                 "tp_trigger_px": tp_trigger_px,
                 "pos_side": pos_side,
                 "status": "pending",
+                "bar_watermark": created_as_of or datetime.now(UTC),
             }
             return algo_id
 
-    async def process_pending_protection(self, context: SignalContext) -> bool:
-        """Trigger at most one pending OCO from the latest closed context bar."""
-        latest = self._latest_closed_bar(context)
-        if latest is None:
-            return False
-        high, low = latest
+    async def process_pending_protection(self, context: SignalContext) -> ProtectionTriggerResult | None:
+        """Trigger at most one pending OCO from a bar closed after its creation."""
         pair = context.pair.canonical()
         async with self._lock:
             pending = [
@@ -280,18 +283,23 @@ class PaperExchange:
             ]
 
         for algo in pending:
-            trigger = self._protection_trigger(algo, high, low)
-            if trigger is None:
+            latest = self._latest_new_closed_bar(context, algo["bar_watermark"])
+            if latest is None:
                 continue
-            trigger_price, trigger_reason = trigger
+            closed_at, high, low = latest
+            trigger = self._protection_trigger(algo, high, low)
 
             algo_id = str(algo["algoId"])
             async with self._lock:
                 current = self._algos.get(algo_id)
                 if current is None or current["status"] != "pending":
                     continue
+                current["bar_watermark"] = closed_at
+                if trigger is None:
+                    continue
                 current["status"] = "triggering"
 
+            trigger_price, trigger_reason = trigger
             result = await self.place_order(
                 Order(
                     pair=pair,
@@ -310,10 +318,15 @@ class PaperExchange:
                         trigger_price=float(trigger_price),
                         trigger_order_id=result.get("id"),
                     )
-                    return True
+                    return ProtectionTriggerResult(
+                        algo_id=algo_id,
+                        trigger_reason=trigger_reason,
+                        trigger_price=float(trigger_price),
+                        order_id=str(result.get("id")),
+                    )
                 current["status"] = "pending"
                 current["trigger_error"] = result.get("reason") or result.get("status")
-        return False
+        return None
 
     @staticmethod
     def _protection_trigger(
@@ -334,17 +347,24 @@ class PaperExchange:
         return None
 
     @staticmethod
-    def _latest_closed_bar(context: SignalContext) -> tuple[float, float] | None:
-        candidates = []
-        for snapshot in context.snapshots.values():
+    def _latest_new_closed_bar(
+        context: SignalContext,
+        watermark: datetime,
+    ) -> tuple[datetime, float, float] | None:
+        candidates: list[tuple[pd.Timestamp, Any]] = []
+        watermark_ns = pd.Timestamp(watermark).value
+        as_of_ns = pd.Timestamp(context.as_of).value
+        for timeframe, snapshot in context.snapshots.items():
             frame = snapshot.market.ohlcv
             if frame.empty:
                 continue
-            candidates.append((frame.index[-1], frame.iloc[-1]))
+            closed_at = pd.Timestamp(frame.index[-1]) + pd.Timedelta(milliseconds=_timeframe_ms(timeframe))
+            if watermark_ns < closed_at.value <= as_of_ns:
+                candidates.append((closed_at, frame.iloc[-1]))
         if not candidates:
             return None
-        _, bar = max(candidates, key=lambda item: item[0])
-        return float(bar["high"]), float(bar["low"])
+        closed_at, bar = max(candidates, key=lambda item: item[0].value)
+        return closed_at.to_pydatetime(), float(bar["high"]), float(bar["low"])
 
     async def cancel_algo(self, algo_id: str, pair: str) -> None:
         async with self._lock:

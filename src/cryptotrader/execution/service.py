@@ -11,6 +11,7 @@ from cryptotrader.models import Order, OrderStatus
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
+    from datetime import datetime
 
     from cryptotrader.decision.models import ExecutionPlan
     from cryptotrader.execution.exchange import ExchangeAdapter
@@ -24,6 +25,15 @@ class ExecutionOrderResult:
     status: str
     exchange_id: str | None
     raw: Mapping[str, Any] = field(default_factory=dict)
+    filled_amount: float = 0.0
+
+
+@dataclass(frozen=True)
+class ProtectionTriggerResult:
+    algo_id: str
+    trigger_reason: str
+    trigger_price: float
+    order_id: str
 
 
 @dataclass(frozen=True)
@@ -33,6 +43,7 @@ class ExecutionResult:
     algo_id: str | None
     error: str | None
     retained_algo_ids: tuple[str, ...] = ()
+    protection_trigger: ProtectionTriggerResult | None = None
 
 
 class ExecutionService:
@@ -82,14 +93,15 @@ class ExecutionService:
             old_algo_ids,
             filled_intents,
             context.current_price,
+            context.as_of,
             results,
         )
 
-    async def process_pending_protection(self, context: SignalContext) -> bool:
+    async def process_pending_protection(self, context: SignalContext) -> ProtectionTriggerResult | None:
         processor = getattr(self.exchange, "process_pending_protection", None)
         if processor is None:
-            return False
-        return bool(await processor(context))
+            return None
+        return await processor(context)
 
     @staticmethod
     def _final_signed_amount(plan: ExecutionPlan, context: SignalContext) -> float:
@@ -133,9 +145,28 @@ class ExecutionService:
     ) -> tuple[list[OrderIntent], ExecutionResult | None]:
         filled_intents: list[OrderIntent] = []
         for intent in intents:
-            placed = await self._place_intent(intent, price, results)
-            if placed.status == OrderStatus.FILLED:
-                filled_intents.append(intent)
+            try:
+                placed = await self._place_intent(intent, price, results)
+            except Exception as error:
+                reason = f"order placement failed: {type(error).__name__}: {error}"
+                if filled_intents:
+                    reason = self._failure_with_compensation(
+                        reason,
+                        await self._compensate(filled_intents, price, results),
+                    )
+                return filled_intents, ExecutionResult(False, tuple(results), None, reason, old_algo_ids)
+
+            actual_fill = results[-1].filled_amount
+            if actual_fill > 0.0:
+                filled_intents.append(
+                    OrderIntent(
+                        pair=intent.pair,
+                        side=intent.side,
+                        amount=actual_fill,
+                        reduce_only=intent.reduce_only,
+                    )
+                )
+            if placed.status == OrderStatus.FILLED and math.isclose(actual_fill, intent.amount, rel_tol=1e-9):
                 continue
             raw = results[-1].raw
             reason = str(raw.get("reason") or raw.get("error_msg") or placed.status.value)
@@ -156,9 +187,8 @@ class ExecutionService:
         price: float,
         results: list[ExecutionOrderResult],
     ) -> ExecutionResult:
-        try:
-            await self._cancel_algos(old_algo_ids, pair)
-        except Exception as error:
+        retained_algo_ids, error = await self._cancel_algos(old_algo_ids, pair)
+        if error is not None:
             compensation_error = await self._compensate(filled_intents, price, results)
             return ExecutionResult(
                 False,
@@ -168,7 +198,7 @@ class ExecutionService:
                     f"cannot cancel existing protection: {type(error).__name__}: {error}",
                     compensation_error,
                 ),
-                old_algo_ids,
+                retained_algo_ids,
             )
         return ExecutionResult(True, tuple(results), None, None)
 
@@ -180,6 +210,7 @@ class ExecutionService:
         old_algo_ids: tuple[str, ...],
         filled_intents: list[OrderIntent],
         price: float,
+        created_as_of: datetime,
         results: list[ExecutionOrderResult],
     ) -> ExecutionResult:
         pos_side = "long" if final_signed_amount > 0.0 else "short"
@@ -191,6 +222,7 @@ class ExecutionService:
                 sl_trigger_px=float(plan.stop_loss),
                 tp_trigger_px=float(plan.take_profit),
                 pos_side=pos_side,
+                created_as_of=created_as_of,
             )
         except Exception as error:
             compensation_error = await self._compensate(filled_intents, price, results)
@@ -222,13 +254,11 @@ class ExecutionService:
         price: float,
         results: list[ExecutionOrderResult],
     ) -> ExecutionResult:
-        try:
-            await self._cancel_algos(old_algo_ids, pair)
-        except Exception as error:
+        retained_old_ids, error = await self._cancel_algos(old_algo_ids, pair)
+        if error is not None:
             cleanup_errors: list[str] = []
-            try:
-                await self.exchange.cancel_algo(algo_id, pair)
-            except Exception as cleanup_error:
+            retained_new_ids, cleanup_error = await self._cancel_algos((algo_id,), pair)
+            if cleanup_error is not None:
                 cleanup_errors.append(f"replacement cleanup failed: {type(cleanup_error).__name__}: {cleanup_error}")
             compensation_error = await self._compensate(filled_intents, price, results)
             if compensation_error is not None:
@@ -236,7 +266,13 @@ class ExecutionService:
             detail = f"cannot cancel existing protection: {type(error).__name__}: {error}"
             if cleanup_errors:
                 detail = f"{detail}; {'; '.join(cleanup_errors)}"
-            return ExecutionResult(False, tuple(results), None, detail, old_algo_ids)
+            return ExecutionResult(
+                False,
+                tuple(results),
+                None,
+                detail,
+                retained_old_ids + retained_new_ids,
+            )
         return ExecutionResult(True, tuple(results), algo_id, None)
 
     async def _execute_intents(
@@ -267,12 +303,14 @@ class ExecutionService:
             reduce_only=intent.reduce_only,
         )
         placed, raw = await self.orders.place(order, self.exchange)
+        filled_amount = self._filled_amount(intent, placed, raw)
         results.append(
             ExecutionOrderResult(
                 intent=intent,
                 status=placed.status.value,
                 exchange_id=placed.exchange_id,
                 raw=raw,
+                filled_amount=filled_amount,
             )
         )
         return placed
@@ -290,12 +328,31 @@ class ExecutionService:
                 amount=intent.amount,
                 reduce_only=not intent.reduce_only,
             )
-            placed = await self._place_intent(compensation, price, results)
-            if placed.status != OrderStatus.FILLED:
+            try:
+                placed = await self._place_intent(compensation, price, results)
+            except Exception as error:
+                return f"position compensation failed: {type(error).__name__}: {error}"
+            actual_fill = results[-1].filled_amount
+            if placed.status != OrderStatus.FILLED or not math.isclose(
+                actual_fill,
+                compensation.amount,
+                rel_tol=1e-9,
+            ):
                 raw = results[-1].raw
                 reason = str(raw.get("reason") or raw.get("error_msg") or placed.status.value)
                 return f"position compensation failed: {reason}"
         return None
+
+    @staticmethod
+    def _filled_amount(intent: OrderIntent, placed: Order, raw: Mapping[str, Any]) -> float:
+        reported = raw.get("filled")
+        if reported is None:
+            return intent.amount if placed.status == OrderStatus.FILLED else 0.0
+        try:
+            filled = float(reported)
+        except (TypeError, ValueError):
+            return 0.0
+        return filled if math.isfinite(filled) and filled > 0.0 else 0.0
 
     @staticmethod
     def _failure_with_compensation(reason: str, compensation_error: str | None) -> str:
@@ -322,6 +379,14 @@ class ExecutionService:
         pending = await self.exchange.list_pending_algos(pair=pair)
         return tuple(str(algo_id) for item in pending for algo_id in (item.get("algoId") or item.get("id"),) if algo_id)
 
-    async def _cancel_algos(self, algo_ids: tuple[str, ...], pair: str) -> None:
-        for algo_id in algo_ids:
-            await self.exchange.cancel_algo(algo_id, pair)
+    async def _cancel_algos(
+        self,
+        algo_ids: tuple[str, ...],
+        pair: str,
+    ) -> tuple[tuple[str, ...], Exception | None]:
+        for index, algo_id in enumerate(algo_ids):
+            try:
+                await self.exchange.cancel_algo(algo_id, pair)
+            except Exception as error:
+                return algo_ids[index:], error
+        return (), None

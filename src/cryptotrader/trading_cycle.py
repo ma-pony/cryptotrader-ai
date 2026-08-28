@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -56,6 +57,16 @@ def _execution_payload(result: ExecutionResult | None) -> dict[str, Any] | None:
         "algo_id": result.algo_id,
         "error": result.error,
         "retained_algo_ids": list(result.retained_algo_ids),
+        "protection_trigger": (
+            {
+                "algo_id": result.protection_trigger.algo_id,
+                "trigger_reason": result.protection_trigger.trigger_reason,
+                "trigger_price": result.protection_trigger.trigger_price,
+                "order_id": result.protection_trigger.order_id,
+            }
+            if result.protection_trigger is not None
+            else None
+        ),
         "orders": [
             {
                 "intent": {
@@ -67,6 +78,7 @@ def _execution_payload(result: ExecutionResult | None) -> dict[str, Any] | None:
                 "status": item.status,
                 "exchange_id": item.exchange_id,
                 "raw": dict(item.raw),
+                "filled_amount": item.filled_amount,
             }
             for item in result.orders
         ],
@@ -130,13 +142,44 @@ class TradingCycle:
         )
         context = None
         approval_id = None
+        paper_execution_result = None
         try:
             context = await self.contexts.collect(request, requirements)
             protection_processor = getattr(self.executor, "process_pending_protection", None)
             if self.mode == "paper" and protection_processor is not None:
-                protection_triggered = await protection_processor(context)
-                if protection_triggered:
-                    context = await self.contexts.refresh_execution_state(context)
+                protection_trigger = await protection_processor(context)
+                if protection_trigger is not None:
+                    paper_execution_result = ExecutionResult(
+                        succeeded=True,
+                        orders=(),
+                        algo_id=None,
+                        error=None,
+                        protection_trigger=protection_trigger,
+                    )
+                    await self.events.publish(
+                        CycleEvent(
+                            "paper_protection_triggered",
+                            {
+                                "cycle_id": cycle_id,
+                                "execution_result": _execution_payload(paper_execution_result),
+                            },
+                        )
+                    )
+                    try:
+                        context = await self.contexts.refresh_execution_state(context)
+                    except Exception as error:
+                        reason = f"execution state refresh failed: {type(error).__name__}: {error}"
+                        failed_result = replace(paper_execution_result, succeeded=False, error=reason)
+                        return await self._finish(
+                            cycle_id=cycle_id,
+                            created_at=created_at,
+                            status="execution_failed",
+                            profile=profile,
+                            context=context,
+                            request=request,
+                            execution_result=failed_result,
+                            error=reason,
+                        )
             await self.events.publish(
                 CycleEvent(
                     "context_ready",
@@ -169,6 +212,7 @@ class TradingCycle:
                     signals=signals,
                     fused=fused,
                     plan=plan,
+                    execution_result=paper_execution_result,
                 )
             if requires_approval(profile, request.mode):
                 approval_id = str(uuid4())
@@ -201,6 +245,7 @@ class TradingCycle:
                     fused=fused,
                     plan=plan,
                     hitl_result={"approval_id": approval.approval_id, "status": "pending"},
+                    execution_result=paper_execution_result,
                     approval_id=approval.approval_id,
                 )
             return await self._risk_plan_execute(
@@ -211,6 +256,7 @@ class TradingCycle:
                 signals=signals,
                 fused=fused,
                 plan=plan,
+                prior_execution_result=paper_execution_result,
             )
         except asyncio.CancelledError:
             if approval_id is not None:
@@ -223,6 +269,7 @@ class TradingCycle:
                 profile=profile,
                 context=context,
                 request=request,
+                execution_result=paper_execution_result,
                 replace_journal=existing is not None,
                 error="cycle cancelled",
             )
@@ -237,6 +284,7 @@ class TradingCycle:
                 context=context,
                 request=request,
                 component_error=errors,
+                execution_result=paper_execution_result,
                 error=str(error),
             )
 
@@ -347,6 +395,7 @@ class TradingCycle:
         plan: TradePlan,
         hitl_result: dict[str, Any] | None = None,
         replace_journal: bool = False,
+        prior_execution_result: ExecutionResult | None = None,
     ) -> CycleOutcome:
         try:
             risk_result = await self.risk.check(RiskRequest(context=context, plan=plan), dict(context.portfolio))
@@ -375,6 +424,7 @@ class TradingCycle:
                 plan=plan,
                 hitl_result=hitl_result,
                 risk_result=risk_result,
+                execution_result=prior_execution_result,
                 replace_journal=replace_journal,
                 error=risk_result.reason,
             )
@@ -387,6 +437,11 @@ class TradingCycle:
             execution_result = ExecutionResult(False, (), None, f"{type(error).__name__}: {error}")
         except Exception as error:
             execution_result = ExecutionResult(False, (), None, f"{type(error).__name__}: {error}")
+        if prior_execution_result is not None:
+            execution_result = replace(
+                execution_result,
+                protection_trigger=prior_execution_result.protection_trigger,
+            )
 
         await self.events.publish(
             CycleEvent(

@@ -194,12 +194,20 @@ export const ExecutionOrderResultSchema = z.object({
   status: z.string(),
   exchange_id: z.string().nullable(),
   raw: z.record(z.unknown()),
+  filled_amount: z.number().nonnegative().default(0),
 });
 
 export const CycleExecutionResultSchema = z.object({
   succeeded: z.boolean(),
   algo_id: z.string().nullable(),
   error: z.string().nullable(),
+  retained_algo_ids: z.array(z.string()).default([]),
+  protection_trigger: z.object({
+    algo_id: z.string(),
+    trigger_reason: z.string(),
+    trigger_price: z.number(),
+    order_id: z.string(),
+  }).nullable().optional(),
   orders: z.array(ExecutionOrderResultSchema),
 });
 
