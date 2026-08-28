@@ -15,6 +15,7 @@ from cryptotrader.scheduler import Scheduler
 class _Cycle:
     def __init__(self):
         self.requests = []
+        self._startup_validated = True
 
     async def run(self, request):
         from cryptotrader.decision.models import CycleOutcome
@@ -65,6 +66,82 @@ async def test_scheduler_start_rejects_invalid_active_profile_before_registering
 
     with pytest.raises(ValueError, match="missing_component"):
         task.result()
+    assert scheduler._scheduler.get_jobs() == []
+
+
+async def test_scheduler_start_builds_and_validates_standalone_paper_cycle_before_jobs():
+    """A lazy paper scheduler must reject an active profile absent from its registry."""
+    from cryptotrader.profiles.models import ComponentWeight
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.custom_signal_component import FakeSignalComponent
+    from tests.factories.signal_fusion import profile
+
+    class Profiles:
+        async def get(self):
+            return profile(ComponentWeight("missing_component", True, 1.0))
+
+    cycle = SimpleNamespace(
+        profiles=Profiles(),
+        registry=SignalComponentRegistry((FakeSignalComponent(),)),
+    )
+    config = SimpleNamespace(
+        engine="paper",
+        exchange_id="binance",
+        scheduler=SimpleNamespace(exchange_id="binance"),
+    )
+    scheduler = Scheduler(["BTC/USDT"])
+
+    with (
+        patch("cryptotrader.config.load_config", return_value=config),
+        patch("cryptotrader.bootstrap.build_trading_cycle", return_value=cycle),
+        patch.object(
+            scheduler._scheduler,
+            "add_job",
+            side_effect=AssertionError("job registered before active profile validation"),
+        ),
+        pytest.raises(ValueError, match="missing_component"),
+    ):
+        await scheduler.start()
+
+    assert scheduler.cycle is cycle
+    assert scheduler._scheduler.get_jobs() == []
+
+
+async def test_scheduler_start_does_not_swallow_live_cycle_validation_before_jobs():
+    """Live reconciliation cannot turn an invalid cycle into a running scheduler."""
+    from cryptotrader.profiles.models import ComponentWeight
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.custom_signal_component import FakeSignalComponent
+    from tests.factories.signal_fusion import profile
+
+    class Profiles:
+        async def get(self):
+            return profile(ComponentWeight("missing_component", True, 1.0))
+
+    cycle = SimpleNamespace(
+        profiles=Profiles(),
+        registry=SignalComponentRegistry((FakeSignalComponent(),)),
+    )
+    config = SimpleNamespace(
+        engine="live",
+        exchange_id="binance",
+        scheduler=SimpleNamespace(exchange_id="binance"),
+    )
+    scheduler = Scheduler(["BTC/USDT"], mode="live")
+
+    with (
+        patch("cryptotrader.config.load_config", return_value=config),
+        patch("cryptotrader.bootstrap.build_trading_cycle", return_value=cycle),
+        patch.object(
+            scheduler._scheduler,
+            "add_job",
+            side_effect=AssertionError("job registered after live validation failure"),
+        ),
+        pytest.raises(ValueError, match="missing_component"),
+    ):
+        await scheduler.start()
+
+    assert scheduler.cycle is cycle
     assert scheduler._scheduler.get_jobs() == []
 
 

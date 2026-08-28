@@ -70,10 +70,7 @@ class Scheduler:
         _slog.info("pair_init", spot=spot, swap=swap, future=future)
 
     async def start(self) -> None:
-        if self.cycle is not None:
-            from cryptotrader.bootstrap import initialize_trading_cycle
-
-            await initialize_trading_cycle(self.cycle)
+        await self._ensure_trading_cycle()
 
         # Startup reconciliation for live mode
         await self._startup_reconcile()
@@ -390,6 +387,19 @@ class Scheduler:
         except Exception:
             logger.info("Failed to close scheduler exchange", exc_info=True)
 
+    async def _ensure_trading_cycle(self) -> Any:
+        """Build and validate the configured cycle before it can run work."""
+        from cryptotrader.bootstrap import build_trading_cycle, initialize_trading_cycle
+        from cryptotrader.config import load_config
+
+        config = load_config()
+        if self.cycle is None:
+            self.mode = config.engine
+            self.exchange_id = self.exchange_id or config.scheduler.exchange_id or config.exchange_id
+            self.cycle = build_trading_cycle(config, self.mode)
+        await initialize_trading_cycle(self.cycle)
+        return config
+
     async def _startup_reconcile(self) -> None:
         """Run startup reconciliation to detect orphaned orders (live mode only)."""
         from cryptotrader.config import load_config
@@ -398,16 +408,12 @@ class Scheduler:
         if self.mode != "live" and config.engine != "live":
             return
 
+        if self.cycle is None:
+            await self._ensure_trading_cycle()
+
         try:
             from cryptotrader.execution.reconcile import Reconciler
 
-            if self.cycle is None:
-                from cryptotrader.bootstrap import build_trading_cycle, initialize_trading_cycle
-
-                self.mode = "live"
-                self.exchange_id = self.exchange_id or config.scheduler.exchange_id or config.exchange_id
-                self.cycle = build_trading_cycle(config, "live")
-                await initialize_trading_cycle(self.cycle)
             exchange = self.cycle.executor.exchange
             reconciler = Reconciler(exchange)
             orphans = await reconciler.detect_orphans(set())
@@ -469,16 +475,7 @@ class Scheduler:
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:
-            from cryptotrader.config import load_config
-
-            config = load_config()
-            if self.cycle is None:
-                from cryptotrader.bootstrap import build_trading_cycle, initialize_trading_cycle
-
-                self.mode = config.engine
-                self.exchange_id = self.exchange_id or config.scheduler.exchange_id or config.exchange_id
-                self.cycle = build_trading_cycle(config, self.mode)
-                await initialize_trading_cycle(self.cycle)
+            config = await self._ensure_trading_cycle()
 
             from cryptotrader.decision.models import CycleRequest
             from cryptotrader.pair import Pair
