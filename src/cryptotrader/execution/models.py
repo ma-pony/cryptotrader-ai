@@ -411,6 +411,7 @@ _EXECUTION_OPERATIONS = frozenset(
         "replace_protection",
         "reconcile",
         "compensate_order",
+        "restore_protection",
         "compensate_reconcile",
         "execute",
         "incomplete_fill",
@@ -427,6 +428,7 @@ class ExecutionFinalPosition:
     position: ConnectionPosition
     protected: bool
     protection_ids: tuple[str, ...]
+    protections: tuple[ProtectionState, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.position, ConnectionPosition):
@@ -439,10 +441,35 @@ class ExecutionFinalPosition:
             raise ValueError("protection_ids must be a tuple of non-empty strings")
         if len(self.protection_ids) != len(set(self.protection_ids)):
             raise ValueError("protection_ids must be unique")
-        if self.position.signed_amount == 0 and self.protected:
-            raise ValueError("a flat final position cannot be protected")
+        self._validate_protections()
+
+    def _validate_protections(self) -> None:
+        if type(self.protections) is not tuple or not all(
+            isinstance(protection, ProtectionState) for protection in self.protections
+        ):
+            raise ValueError("protections must be a tuple of ProtectionState")
+        if any(
+            protection.pair != self.position.pair or not protection.active or protection.triggered
+            for protection in self.protections
+        ):
+            raise ValueError("final protections must be active, untriggered, and match the position pair")
+        active_ids = tuple(
+            protection_id for protection in self.protections for protection_id in protection.protection_ids
+        )
+        if active_ids != self.protection_ids:
+            raise ValueError("protection_ids must exactly match final active protections")
+        if self.position.signed_amount == 0 and (self.protected or self.protections):
+            raise ValueError("a flat final position cannot carry active protection")
         if self.protected and not self.protection_ids:
             raise ValueError("protected final position requires active protection IDs")
+        if self.position.signed_amount != 0:
+            expected_side = "long" if self.position.signed_amount > 0 else "short"
+            matching = any(
+                protection.position_side == expected_side and protection.amount == abs(self.position.signed_amount)
+                for protection in self.protections
+            )
+            if self.protected is not matching:
+                raise ValueError("protected must exactly reflect a matching active protection group")
 
 
 @dataclass(frozen=True)
@@ -453,6 +480,8 @@ class CompensationResult:
     succeeded: bool
     order: NormalizedOrder | None = None
     operation: str = ""
+    safe_signed_amount: Decimal | None = None
+    required_protection: ProtectionState | None = None
 
     def __post_init__(self) -> None:
         if type(self.attempted) is not bool or type(self.succeeded) is not bool:
@@ -461,8 +490,36 @@ class CompensationResult:
             raise ValueError("compensation order must be a NormalizedOrder or None")
         if type(self.operation) is not str:
             raise ValueError("compensation operation must be a string")
-        if not self.attempted and (self.succeeded or self.order is not None or self.operation):
+        if not self.attempted and (
+            self.succeeded
+            or self.order is not None
+            or self.operation
+            or self.safe_signed_amount is not None
+            or self.required_protection is not None
+        ):
             raise ValueError("unattempted compensation must not carry an outcome")
+        if self.attempted:
+            _require_decimal(self.safe_signed_amount, "safe_signed_amount")
+        self._validate_required_protection()
+        self._validate_success()
+        if self.attempted and not self.succeeded and self.operation not in _EXECUTION_OPERATIONS:
+            raise ValueError("failed compensation requires a safe operation category")
+
+    def _validate_required_protection(self) -> None:
+        if self.required_protection is not None:
+            if not isinstance(self.required_protection, ProtectionState):
+                raise ValueError("required_protection must be a ProtectionState or None")
+            if not self.required_protection.active or self.required_protection.triggered:
+                raise ValueError("required compensation protection must be active and untriggered")
+            expected_side = "long" if self.safe_signed_amount > 0 else "short"
+            if (
+                self.safe_signed_amount == 0
+                or self.required_protection.position_side != expected_side
+                or self.required_protection.amount != abs(self.safe_signed_amount)
+            ):
+                raise ValueError("required compensation protection must match the safe amount")
+
+    def _validate_success(self) -> None:
         if (
             self.attempted
             and self.succeeded
@@ -475,8 +532,6 @@ class CompensationResult:
             )
         ):
             raise ValueError("successful compensation requires one complete reduce-only fill")
-        if self.attempted and not self.succeeded and self.operation not in _EXECUTION_OPERATIONS:
-            raise ValueError("failed compensation requires a safe operation category")
 
 
 NO_COMPENSATION = CompensationResult(False, False)
@@ -499,6 +554,7 @@ class ConnectionExecutionResult:
     error_operation: str
     requires_attention: bool
     trace: tuple[str, ...]
+    execution_quote: VenueQuote | None = None
 
     def __post_init__(self) -> None:
         self._validate_identity_and_target()
@@ -516,6 +572,10 @@ class ConnectionExecutionResult:
         _require_decimal(self.target_signed_amount, "target_signed_amount")
         if self.status not in _CONNECTION_EXECUTION_STATUSES:
             raise ValueError("unsupported connection execution status")
+        if self.execution_quote is not None and (
+            not isinstance(self.execution_quote, VenueQuote) or self.execution_quote.pair != self.pair
+        ):
+            raise ValueError("execution_quote must match the result pair")
 
     def _validate_outcomes(self) -> None:
         if type(self.orders) is not tuple or not all(isinstance(order, NormalizedOrder) for order in self.orders):
@@ -525,10 +585,16 @@ class ConnectionExecutionResult:
         order_ids = tuple(order.id for order in self.orders)
         if len(order_ids) != len(set(order_ids)):
             raise ValueError("order IDs must be unique and preserve execution order")
+        self._validate_protection_and_final_position()
+        self._validate_diagnostics()
+
+    def _validate_protection_and_final_position(self) -> None:
         if self.protection is not None and (
             not isinstance(self.protection, ProtectionState) or self.protection.pair != self.pair
         ):
             raise ValueError("protection must match the result pair")
+        if self.protection is not None and (not self.protection.active or self.protection.triggered):
+            raise ValueError("protection must be active and untriggered")
         if not isinstance(self.compensation, CompensationResult):
             raise ValueError("compensation must be a CompensationResult")
         if self.final_position is not None and (
@@ -536,6 +602,8 @@ class ConnectionExecutionResult:
             or self.final_position.position.pair != self.pair
         ):
             raise ValueError("final_position must match the result pair")
+
+    def _validate_diagnostics(self) -> None:
         if type(self.error_operation) is not str:
             raise ValueError("error_operation must be a string")
         if type(self.requires_attention) is not bool:
@@ -548,28 +616,90 @@ class ConnectionExecutionResult:
             self._validate_completed()
         elif self.error_operation not in _EXECUTION_OPERATIONS:
             raise ValueError("failed result requires a safe operation category")
+        elif self.execution_quote is None and self.error_operation not in {"pre_read", "fetch_quote"}:
+            raise ValueError("failed result after quote acquisition requires an execution quote")
         if self.compensation.succeeded and self.requires_attention:
             raise ValueError("successful compensation cannot require attention")
+        if self.compensation.succeeded:
+            self._validate_successful_compensation()
 
     def _validate_completed(self) -> None:
-        if self.error_operation or self.requires_attention or self.final_position is None:
-            raise ValueError("completed result must have a safe exact final position")
+        if (
+            self.error_operation
+            or self.requires_attention
+            or self.final_position is None
+            or self.execution_quote is None
+        ):
+            raise ValueError("completed result requires an execution quote and safe exact final position")
         if self.compensation.attempted:
             raise ValueError("completed result must not carry compensation")
         if any(
             order.status not in {"filled", "closed"} or order.filled_amount != order.amount for order in self.orders
         ):
             raise ValueError("completed result orders must be complete fills")
+        self._validate_completed_target()
+        self._validate_completed_protection()
+
+    def _validate_completed_target(self) -> None:
         if self.final_position.position.signed_amount != self.target_signed_amount:
             raise ValueError("completed result must reach the exact target amount")
-        if self.pair.market_type != "spot" and self.target_signed_amount != 0 and not self.final_position.protected:
-            raise ValueError("completed derivative result must be protected")
+        if self.target_signed_notional == 0 or self.target_signed_amount == 0:
+            if self.target_signed_notional != 0 or self.target_signed_amount != 0:
+                raise ValueError("completed flat target must have exact zero notional and amount")
+        else:
+            implied_price = self.target_signed_notional / self.target_signed_amount
+            if not self.execution_quote.bid <= implied_price <= self.execution_quote.ask:
+                raise ValueError("completed target amount must imply target notional within the execution quote")
+
+    def _validate_completed_protection(self) -> None:
+        if (
+            self.pair.market_type != "spot"
+            and self.target_signed_amount != 0
+            and (not self.final_position.protected or self.protection is None)
+        ):
+            raise ValueError("completed derivative result requires returned replacement protection")
+        if self.pair.market_type == "spot" and (self.protection is not None or self.final_position.protections):
+            raise ValueError("completed spot result must not carry native protection")
         if self.target_signed_amount == 0 and self.protection is not None:
             raise ValueError("completed flat result must not carry protection")
-        if self.protection is not None and not set(self.protection.protection_ids) <= set(
-            self.final_position.protection_ids
+        if self.protection is not None:
+            expected_side = "long" if self.target_signed_amount > 0 else "short"
+            implied_price = self.target_signed_notional / self.target_signed_amount
+            if self.protection.position_side != expected_side or self.protection.amount != abs(
+                self.target_signed_amount
+            ):
+                raise ValueError("completed protection must match target side and amount")
+            ProtectionSpec(
+                self.pair,
+                expected_side,
+                abs(self.target_signed_amount),
+                self.protection.stop_loss,
+                self.protection.take_profit,
+            ).validate_geometry(implied_price)
+            if (
+                self.final_position.protection_ids != self.protection.protection_ids
+                or self.final_position.protections != (self.protection,)
+            ):
+                raise ValueError("completed result requires the exact replacement protection state")
+
+    def _validate_successful_compensation(self) -> None:
+        if self.final_position is None:
+            raise ValueError("successful compensation requires a final position")
+        safe_amount = self.compensation.safe_signed_amount
+        if self.final_position.position.signed_amount != safe_amount:
+            raise ValueError("successful compensation final position must equal the explicit safe amount")
+        required = self.compensation.required_protection
+        if required is None:
+            if self.pair.market_type != "spot" and safe_amount != 0:
+                raise ValueError("successful derivative compensation requires restored protection")
+            if self.final_position.protections:
+                raise ValueError("successful compensation without protection requires an empty active set")
+        elif (
+            self.final_position.protections != (required,)
+            or self.final_position.protection_ids != required.protection_ids
+            or not self.final_position.protected
         ):
-            raise ValueError("completed protection must appear in the final position")
+            raise ValueError("successful compensation requires the exact required protection state")
 
     @classmethod
     def failed(
@@ -583,6 +713,7 @@ class ConnectionExecutionResult:
         requires_attention: bool = False,
         trace: tuple[str, ...] = (),
         target_signed_amount: Decimal | None = None,
+        execution_quote: VenueQuote | None = None,
     ) -> ConnectionExecutionResult:
         return cls(
             plan.book_id,
@@ -598,6 +729,7 @@ class ConnectionExecutionResult:
             operation,
             requires_attention,
             trace,
+            execution_quote,
         )
 
 
@@ -648,13 +780,7 @@ class BookExecutionResult:
         results: tuple[ConnectionExecutionResult, ...],
     ) -> Literal["completed", "partial", "failed"]:
         target_ids = tuple(target.connection_id for target in proposal.risk.connection_targets)
-        result_by_id = {result.connection_id: result for result in results}
-        unavailable = set(proposal.unavailable_connections)
-        reached = sum(
-            connection_id not in unavailable
-            and (connection_id not in result_by_id or result_by_id[connection_id].status == "completed")
-            for connection_id in target_ids
-        )
+        reached = sum(result.status == "completed" for result in results)
         failed = len(target_ids) - reached
         if failed == 0:
             return "completed"

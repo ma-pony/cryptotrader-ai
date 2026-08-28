@@ -472,7 +472,11 @@ class VenueExecutionService:
     ) -> _FreshTransition | ConnectionExecutionResult:
         current = initial.position.signed_amount
         target, delta, side = self._target_transition(plan, current, quote)
-        if target != 0 and (plan.stop_loss is not None or plan.take_profit is not None):
+        if (
+            plan.pair.market_type != "spot"
+            and target != 0
+            and (plan.stop_loss is not None or plan.take_profit is not None)
+        ):
             protection = ProtectionSpec(
                 plan.pair,
                 "long" if target > 0 else "short",
@@ -490,9 +494,32 @@ class VenueExecutionService:
             try:
                 normalized = await self.session.normalize_amount(plan.pair, abs(delta))
             except VenueOperationError:
-                return self._failed(plan, "normalize_amount", trace=tuple(trace), target_amount=target)
+                return self._failed(
+                    plan,
+                    "normalize_amount",
+                    trace=tuple(trace),
+                    target_amount=target,
+                    execution_quote=quote,
+                )
             self._validate_normalized_amount(normalized, abs(delta))
             expected = current + (normalized if side == "buy" else -normalized)
+            if not sign_flip and not self._notional_within_spread(
+                expected,
+                plan.target_signed_notional,
+                quote,
+            ):
+                final = self._summarize(initial)
+                return self._failed(
+                    plan,
+                    "incomplete_fill",
+                    final_position=final,
+                    requires_attention=(
+                        plan.pair.market_type != "spot" and initial.position.signed_amount != 0 and not final.protected
+                    ),
+                    trace=tuple(trace),
+                    target_amount=target,
+                    execution_quote=quote,
+                )
         return _FreshTransition(initial, quote, target, delta, side, normalized, expected, risk_increase, sign_flip)
 
     async def _execute_direct(
@@ -509,7 +536,8 @@ class VenueExecutionService:
                 transition.normalized_amount,
                 "market",
                 None,
-                self._is_reduction(transition.initial_state.position.signed_amount, transition.target_amount),
+                plan.pair.market_type != "spot"
+                and self._is_reduction(transition.initial_state.position.signed_amount, transition.target_amount),
             )
             trace.append("place_order")
             try:
@@ -523,6 +551,8 @@ class VenueExecutionService:
 
         if transition.target_amount == 0:
             return await self._finish_flat(plan, transition, orders, trace)
+        if plan.pair.market_type == "spot":
+            return await self._finish_spot_nonflat(plan, transition, orders, trace)
         return await self._finish_nonflat(plan, transition, orders, trace)
 
     async def _execute_flip(
@@ -536,7 +566,13 @@ class VenueExecutionService:
         try:
             close_amount = await self.session.normalize_amount(plan.pair, abs(current))
         except VenueOperationError:
-            return self._failed(plan, "normalize_amount", trace=tuple(trace), target_amount=transition.target_amount)
+            return self._failed(
+                plan,
+                "normalize_amount",
+                trace=tuple(trace),
+                target_amount=transition.target_amount,
+                execution_quote=transition.quote,
+            )
         self._validate_normalized_amount(close_amount, abs(current), exact=True)
         close_intent = VenueOrderIntent(
             plan.pair,
@@ -579,6 +615,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
         if flat_state.position.signed_amount != 0:
             return self._failed(
@@ -589,6 +626,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
 
         old_ids = self._active_protection_ids(transition.initial_state)
@@ -605,17 +643,14 @@ class VenueExecutionService:
                 requires_attention=False,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
 
         open_side = "buy" if transition.target_amount > 0 else "sell"
-        open_amount_requested = abs(
-            plan.target_signed_notional / (transition.quote.ask if open_side == "buy" else transition.quote.bid)
-        )
-        try:
-            open_amount = await self.session.normalize_amount(plan.pair, open_amount_requested)
-        except VenueOperationError:
-            return await self._failed_while_flat(plan, orders, trace, "normalize_amount", transition.target_amount)
-        self._validate_normalized_amount(open_amount, open_amount_requested)
+        prepared_open = await self._prepare_flip_open_amount(plan, transition, orders, trace, open_side)
+        if isinstance(prepared_open, ConnectionExecutionResult):
+            return prepared_open
+        open_amount = prepared_open
         open_intent = VenueOrderIntent(plan.pair, open_side, open_amount, "market", None, False)
         trace.append("open_target_side")
         try:
@@ -647,6 +682,40 @@ class VenueExecutionService:
             )
         return await self._finish_nonflat(plan, flip_transition, orders, trace, safe_amount=Decimal("0"))
 
+    async def _prepare_flip_open_amount(
+        self,
+        plan: ConnectionExecutionPlan,
+        transition: _FreshTransition,
+        orders: list[NormalizedOrder],
+        trace: list[str],
+        open_side: str,
+    ) -> Decimal | ConnectionExecutionResult:
+        execution_price = transition.quote.ask if open_side == "buy" else transition.quote.bid
+        requested = abs(plan.target_signed_notional / execution_price)
+        try:
+            amount = await self.session.normalize_amount(plan.pair, requested)
+        except VenueOperationError:
+            return await self._failed_while_flat(
+                plan,
+                orders,
+                trace,
+                "normalize_amount",
+                transition.target_amount,
+                transition.quote,
+            )
+        self._validate_normalized_amount(amount, requested)
+        signed_amount = amount if open_side == "buy" else -amount
+        if not self._notional_within_spread(signed_amount, plan.target_signed_notional, transition.quote):
+            return await self._failed_while_flat(
+                plan,
+                orders,
+                trace,
+                "incomplete_fill",
+                transition.target_amount,
+                transition.quote,
+            )
+        return amount
+
     async def _finish_flat(
         self,
         plan: ConnectionExecutionPlan,
@@ -664,6 +733,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=Decimal("0"),
+                execution_quote=transition.quote,
             )
         if state_while_flat.position.signed_amount != 0:
             return self._failed(
@@ -674,6 +744,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=Decimal("0"),
+                execution_quote=transition.quote,
             )
         trace.append("cancel_old_protection")
         try:
@@ -687,6 +758,7 @@ class VenueExecutionService:
                 requires_attention=False,
                 trace=tuple(trace),
                 target_amount=Decimal("0"),
+                execution_quote=transition.quote,
             )
         trace.append("reconcile")
         try:
@@ -699,6 +771,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=Decimal("0"),
+                execution_quote=transition.quote,
             )
         final = self._summarize(final_state)
         if final_state.position.signed_amount != 0 or self._active_protection_ids(final_state):
@@ -710,8 +783,17 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=Decimal("0"),
+                execution_quote=transition.quote,
             )
-        return self._completed(plan, Decimal("0"), tuple(orders), None, final, tuple(trace))
+        return self._completed(
+            plan,
+            Decimal("0"),
+            tuple(orders),
+            None,
+            final,
+            tuple(trace),
+            transition.quote,
+        )
 
     async def _finish_nonflat(
         self,
@@ -750,6 +832,7 @@ class VenueExecutionService:
                 trace,
                 "replace_protection",
                 transition.target_amount,
+                transition.quote,
             )
         self._validate_protection_response(protection, spec)
         trace.append("reconcile")
@@ -773,9 +856,11 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=expected,
+                execution_quote=transition.quote,
             )
         final = self._summarize(final_state, desired=spec)
-        if final_state.position.signed_amount != expected or not final.protected:
+        exact_protection = final.protections == (protection,)
+        if final_state.position.signed_amount != expected or not final.protected or not exact_protection:
             if transition.risk_increase and orders and orders[-1].filled_amount > 0:
                 return await self._compensate(
                     plan,
@@ -793,11 +878,74 @@ class VenueExecutionService:
                 "protection_mismatch" if final_state.position.signed_amount == expected else "position_mismatch",
                 orders=tuple(orders),
                 final_position=final,
-                requires_attention=not final.protected,
+                requires_attention=True,
                 trace=tuple(trace),
                 target_amount=expected,
+                execution_quote=transition.quote,
             )
-        return self._completed(plan, expected, tuple(orders), protection, final, tuple(trace))
+        return self._completed(plan, expected, tuple(orders), protection, final, tuple(trace), transition.quote)
+
+    async def _finish_spot_nonflat(
+        self,
+        plan: ConnectionExecutionPlan,
+        transition: _FreshTransition,
+        orders: list[NormalizedOrder],
+        trace: list[str],
+    ) -> ConnectionExecutionResult:
+        trace.append("reconcile")
+        try:
+            final_state = await self.session.list_open_state(plan.pair)
+        except VenueOperationError:
+            if transition.risk_increase and orders and orders[-1].filled_amount > 0:
+                return await self._compensate(
+                    plan,
+                    transition,
+                    orders,
+                    trace,
+                    orders[-1],
+                    safe_amount=transition.initial_state.position.signed_amount,
+                    operation="reconcile",
+                )
+            return self._failed(
+                plan,
+                "reconcile",
+                orders=tuple(orders),
+                requires_attention=True,
+                trace=tuple(trace),
+                target_amount=transition.expected_amount,
+                execution_quote=transition.quote,
+            )
+        final = self._summarize(final_state)
+        if final_state.position.signed_amount != transition.expected_amount:
+            if transition.risk_increase and orders and orders[-1].filled_amount > 0:
+                return await self._compensate(
+                    plan,
+                    transition,
+                    orders,
+                    trace,
+                    orders[-1],
+                    safe_amount=transition.initial_state.position.signed_amount,
+                    operation="position_mismatch",
+                )
+            return self._failed(
+                plan,
+                "position_mismatch",
+                orders=tuple(orders),
+                final_position=final,
+                requires_attention=False,
+                trace=tuple(trace),
+                target_amount=transition.expected_amount,
+                execution_quote=transition.quote,
+            )
+        return self._completed(
+            plan,
+            transition.expected_amount,
+            tuple(orders),
+            None,
+            final,
+            tuple(trace),
+            transition.quote,
+        )
 
     async def _handle_incomplete_order(
         self,
@@ -825,6 +973,7 @@ class VenueExecutionService:
             trace,
             "incomplete_fill",
             transition.target_amount,
+            transition.quote,
         )
 
     async def _compensate(
@@ -881,22 +1030,40 @@ class VenueExecutionService:
             compensation_operation = "compensate_order"
         trace.append("compensate_reconcile")
         try:
-            final_state = await self.session.list_open_state(plan.pair)
+            position_state = await self.session.list_open_state(plan.pair)
         except VenueOperationError:
-            final_state = None
+            position_state = None
             compensation_operation = compensation_operation or "compensate_reconcile"
+        required_protection: ProtectionState | None = None
+        if (
+            compensation_operation == ""
+            and position_state is not None
+            and position_state.position.signed_amount == safe_amount
+        ):
+            final_state, required_protection, compensation_operation = await self._restore_compensation_state(
+                plan,
+                transition,
+                position_state,
+                safe_amount,
+                trace,
+            )
+        else:
+            final_state = position_state
         final = self._summarize(final_state) if final_state is not None else None
         restored = (
-            compensation_operation == ""
+            compensation_order is not None
+            and self._fully_filled(compensation_order)
             and final_state is not None
             and final_state.position.signed_amount == safe_amount
-            and self._restored_safe_state(transition.initial_state, final_state, safe_amount)
+            and self._compensation_state_matches(plan, final_state, safe_amount, required_protection)
         )
         compensation = CompensationResult(
             True,
             restored,
             compensation_order,
             "" if restored else (compensation_operation or "compensate_reconcile"),
+            safe_amount,
+            required_protection,
         )
         return self._failed(
             plan,
@@ -907,7 +1074,48 @@ class VenueExecutionService:
             requires_attention=not restored,
             trace=tuple(trace),
             target_amount=transition.target_amount,
+            execution_quote=transition.quote,
         )
+
+    async def _restore_compensation_state(
+        self,
+        plan: ConnectionExecutionPlan,
+        transition: _FreshTransition,
+        position_state: OpenVenueState,
+        safe_amount: Decimal,
+        trace: list[str],
+    ) -> tuple[OpenVenueState | None, ProtectionState | None, str]:
+        trace.append("restore_protection")
+        operation = ""
+        required: ProtectionState | None = None
+        if safe_amount == 0:
+            try:
+                await self.session.cancel_protection(self._active_protection_ids(position_state))
+            except VenueOperationError:
+                operation = "restore_protection"
+        elif plan.pair.market_type != "spot":
+            prior = self._initial_safe_protection(transition.initial_state, safe_amount)
+            required = prior
+            if prior is None:
+                operation = "restore_protection"
+            else:
+                spec = ProtectionSpec(
+                    plan.pair,
+                    prior.position_side,
+                    prior.amount,
+                    prior.stop_loss,
+                    prior.take_profit,
+                )
+                try:
+                    required = await self.session.replace_protection(spec)
+                    self._validate_protection_response(required, spec)
+                except VenueOperationError:
+                    operation = "restore_protection"
+        try:
+            final_state = await self.session.list_open_state(plan.pair)
+        except VenueOperationError:
+            return None, required, operation or "compensate_reconcile"
+        return final_state, required, operation
 
     async def _failed_after_order_error(
         self,
@@ -924,9 +1132,10 @@ class VenueExecutionService:
                 plan,
                 operation,
                 orders=tuple(orders),
-                requires_attention=transition.risk_increase,
+                requires_attention=True,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
         observed_delta = state.position.signed_amount - transition.initial_state.position.signed_amount
         observed_added_risk = observed_delta != 0 and (observed_delta > 0) == (transition.side == "buy")
@@ -941,15 +1150,23 @@ class VenueExecutionService:
                 safe_amount=transition.initial_state.position.signed_amount,
                 operation=operation,
             )
+        final = self._summarize(state)
+        unprotected_derivative = (
+            plan.pair.market_type != "spot" and state.position.signed_amount != 0 and not final.protected
+        )
         return self._failed(
             plan,
             operation,
             orders=tuple(orders),
-            final_position=self._summarize(state),
-            requires_attention=transition.risk_increase
-            and state.position.signed_amount != transition.initial_state.position.signed_amount,
+            final_position=final,
+            requires_attention=unprotected_derivative
+            or (
+                transition.risk_increase
+                and state.position.signed_amount != transition.initial_state.position.signed_amount
+            ),
             trace=tuple(trace),
             target_amount=transition.target_amount,
+            execution_quote=transition.quote,
         )
 
     async def _failed_after_risk_reduction(
@@ -959,6 +1176,7 @@ class VenueExecutionService:
         trace: list[str],
         operation: str,
         target_amount: Decimal,
+        execution_quote: VenueQuote,
     ) -> ConnectionExecutionResult:
         try:
             state = await self.session.list_open_state(plan.pair)
@@ -970,6 +1188,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=target_amount,
+                execution_quote=execution_quote,
             )
         final = self._summarize(state)
         return self._failed(
@@ -977,9 +1196,12 @@ class VenueExecutionService:
             operation,
             orders=tuple(orders),
             final_position=final,
-            requires_attention=state.position.signed_amount != 0 and not final.protected,
+            requires_attention=(
+                plan.pair.market_type != "spot" and state.position.signed_amount != 0 and not final.protected
+            ),
             trace=tuple(trace),
             target_amount=target_amount,
+            execution_quote=execution_quote,
         )
 
     async def _failed_after_flip_close(
@@ -1000,6 +1222,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
         if state.position.signed_amount != 0:
             final = self._summarize(state)
@@ -1011,6 +1234,7 @@ class VenueExecutionService:
                 requires_attention=not final.protected,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
 
         trace.append("reconcile_flat")
@@ -1026,6 +1250,7 @@ class VenueExecutionService:
                 requires_attention=False,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
         trace.append("reconcile")
         try:
@@ -1038,6 +1263,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
         final = self._summarize(final_state)
         safely_flat = final_state.position.signed_amount == 0 and not self._active_protection_ids(final_state)
@@ -1049,6 +1275,7 @@ class VenueExecutionService:
             requires_attention=not safely_flat,
             trace=tuple(trace),
             target_amount=transition.target_amount,
+            execution_quote=transition.quote,
         )
 
     async def _failed_while_flat(
@@ -1058,6 +1285,7 @@ class VenueExecutionService:
         trace: list[str],
         operation: str,
         target_amount: Decimal,
+        execution_quote: VenueQuote,
     ) -> ConnectionExecutionResult:
         try:
             state = await self.session.list_open_state(plan.pair)
@@ -1069,6 +1297,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=target_amount,
+                execution_quote=execution_quote,
             )
         final = self._summarize(state)
         safely_flat = state.position.signed_amount == 0 and not self._active_protection_ids(state)
@@ -1080,6 +1309,7 @@ class VenueExecutionService:
             requires_attention=not safely_flat,
             trace=tuple(trace),
             target_amount=target_amount,
+            execution_quote=execution_quote,
         )
 
     async def _failed_after_flip_open_error(
@@ -1099,6 +1329,7 @@ class VenueExecutionService:
                 requires_attention=True,
                 trace=tuple(trace),
                 target_amount=transition.target_amount,
+                execution_quote=transition.quote,
             )
         observed = state.position.signed_amount
         opened_target_side = observed != 0 and (observed > 0) == (transition.target_amount > 0)
@@ -1123,6 +1354,7 @@ class VenueExecutionService:
             requires_attention=not safely_flat,
             trace=tuple(trace),
             target_amount=transition.target_amount,
+            execution_quote=transition.quote,
         )
 
     @staticmethod
@@ -1143,6 +1375,9 @@ class VenueExecutionService:
             if current == 0:
                 return target, Decimal("0"), plan.side
             return target, -current, "sell" if current > 0 else "buy"
+        current_values = (current * quote.bid, current * quote.ask)
+        if min(current_values) <= plan.target_signed_notional <= max(current_values):
+            return current, Decimal("0"), plan.side
         current_notional = current * quote.last
         side = "buy" if plan.target_signed_notional > current_notional else "sell"
         execution_price = quote.ask if side == "buy" else quote.bid
@@ -1153,6 +1388,11 @@ class VenueExecutionService:
         if (delta > 0) != (side == "buy"):
             raise ValueError("latest quote produces an incoherent target transition")
         return target, delta, side
+
+    @staticmethod
+    def _notional_within_spread(amount: Decimal, target_notional: Decimal, quote: VenueQuote) -> bool:
+        executable_values = (amount * quote.bid, amount * quote.ask)
+        return min(executable_values) <= target_notional <= max(executable_values)
 
     @staticmethod
     def _validate_normalized_amount(normalized: Decimal, requested: Decimal, *, exact: bool = False) -> None:
@@ -1214,7 +1454,8 @@ class VenueExecutionService:
                 )
                 for protection in state.protections
             )
-        return ExecutionFinalPosition(state.position, protected, ids)
+        active = tuple(protection for protection in state.protections if protection.active and not protection.triggered)
+        return ExecutionFinalPosition(state.position, protected, ids, active)
 
     @staticmethod
     def _active_protection_ids(state: OpenVenueState) -> tuple[str, ...]:
@@ -1227,21 +1468,31 @@ class VenueExecutionService:
             )
         )
 
+    @staticmethod
+    def _initial_safe_protection(initial: OpenVenueState, safe_amount: Decimal) -> ProtectionState | None:
+        active = tuple(
+            protection for protection in initial.protections if protection.active and not protection.triggered
+        )
+        expected_side = "long" if safe_amount > 0 else "short"
+        if len(active) != 1:
+            return None
+        protection = active[0]
+        if protection.position_side != expected_side or protection.amount != abs(safe_amount):
+            return None
+        return protection
+
     @classmethod
-    def _restored_safe_state(
+    def _compensation_state_matches(
         cls,
-        initial: OpenVenueState,
+        plan: ConnectionExecutionPlan,
         final: OpenVenueState,
         safe_amount: Decimal,
+        required_protection: ProtectionState | None,
     ) -> bool:
-        if safe_amount == 0:
-            return not cls._active_protection_ids(final)
-        initial_active = tuple(
-            protection
-            for protection in initial.protections
-            if protection.active and not protection.triggered and protection.amount == abs(safe_amount)
-        )
-        return bool(initial_active) and any(protection in final.protections for protection in initial_active)
+        active = tuple(protection for protection in final.protections if protection.active and not protection.triggered)
+        if safe_amount == 0 or plan.pair.market_type == "spot":
+            return active == ()
+        return required_protection is not None and active == (required_protection,)
 
     @staticmethod
     def _is_reduction(current: Decimal, target: Decimal) -> bool:
@@ -1258,6 +1509,7 @@ class VenueExecutionService:
         requires_attention: bool = False,
         trace: tuple[str, ...] = (),
         target_amount: Decimal | None = None,
+        execution_quote: VenueQuote | None = None,
     ) -> ConnectionExecutionResult:
         return ConnectionExecutionResult.failed(
             plan,
@@ -1268,6 +1520,7 @@ class VenueExecutionService:
             requires_attention=requires_attention,
             trace=trace,
             target_signed_amount=target_amount,
+            execution_quote=execution_quote,
         )
 
     @staticmethod
@@ -1278,6 +1531,7 @@ class VenueExecutionService:
         protection: ProtectionState | None,
         final_position: ExecutionFinalPosition,
         trace: tuple[str, ...],
+        execution_quote: VenueQuote,
     ) -> ConnectionExecutionResult:
         return ConnectionExecutionResult(
             plan.book_id,
@@ -1293,4 +1547,5 @@ class VenueExecutionService:
             "",
             False,
             trace,
+            execution_quote,
         )

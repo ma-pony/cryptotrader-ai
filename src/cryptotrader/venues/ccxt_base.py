@@ -192,6 +192,8 @@ class CcxtVenueBase:
         signed_notional = Decimal("0")
         weighted_entry = Decimal("0")
         absolute_amount = Decimal("0")
+        long_amount = Decimal("0")
+        short_amount = Decimal("0")
         contract_size = await self._contract_size(pair)
         for raw in raw_positions:
             if not isinstance(raw, dict):
@@ -203,12 +205,19 @@ class CcxtVenueBase:
             side = str(raw.get("side") or "long").lower()
             sign = Decimal("-1") if side == "short" else Decimal("1")
             signed = amount * sign
+            if amount != 0:
+                if sign > 0:
+                    long_amount += abs(amount)
+                else:
+                    short_amount += abs(amount)
             entry = self._decimal(raw.get("entryPrice"), "entry price", default=Decimal("0"))
             raw_notional = self._decimal(raw.get("notional"), "position notional", default=amount * entry)
             signed_amount += signed
             signed_notional += abs(raw_notional) * sign
             weighted_entry += entry * abs(amount)
             absolute_amount += abs(amount)
+        if long_amount != 0 and short_amount != 0:
+            raise VenueOperationError(f"{self.connection_id}: simultaneous hedge legs are unsupported")
         entry_price = weighted_entry / absolute_amount if absolute_amount else None
         return self._sync(
             "normalize position",

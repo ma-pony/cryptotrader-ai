@@ -501,6 +501,14 @@ VENUE_CAPABILITIES = VenueCapabilities(
     reduce_only=True,
     supported_order_types=frozenset({"market"}),
 )
+SPOT_PAIR = Pair.parse("BTC/USDT")
+SPOT_CAPABILITIES = VenueCapabilities(
+    frozenset({"spot"}),
+    native_protection=False,
+    hedge_mode=False,
+    reduce_only=True,
+    supported_order_types=frozenset({"market"}),
+)
 
 
 def _venue_protection(amount: str, *, side: str = "long", protection_id: str = "old") -> ProtectionState:
@@ -663,6 +671,60 @@ async def test_venue_service_reloads_state_and_uses_platform_protection_replacem
 
 
 @pytest.mark.asyncio
+async def test_spot_nonflat_execution_reconciles_without_native_protection():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    quote = VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("100"), Decimal("99.5"))
+    session = _VenueSession("0", quote=quote)
+    session.capabilities = SPOT_CAPABILITIES
+    plan = replace(
+        _venue_plan("0", "1", old_protection_ids=()),
+        pair=SPOT_PAIR,
+        quote=quote,
+        execution_price=Decimal("100"),
+        target_signed_notional=Decimal("100"),
+        delta_signed_notional=Decimal("100"),
+        market_type="spot",
+        stop_loss=None,
+        take_profit=None,
+        capabilities=SPOT_CAPABILITIES,
+    )
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "completed"
+    assert result.protection is None
+    assert result.final_position is not None
+    assert result.final_position.protected is False
+    assert result.final_position.position.signed_amount == Decimal("1")
+    assert "replace_protection" not in session.calls
+    assert result.trace == ("pre_read", "place_order", "reconcile")
+
+
+@pytest.mark.asyncio
+async def test_spot_never_validates_or_installs_plan_protection_at_latest_quote():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    latest = VenueQuote(SPOT_PAIR, Decimal("130"), Decimal("130"), Decimal("130"))
+    capabilities = replace(SPOT_CAPABILITIES, native_protection=True)
+    session = _VenueSession("0", quote=latest)
+    session.capabilities = capabilities
+    plan = replace(
+        _venue_plan("0", "1", old_protection_ids=()),
+        pair=SPOT_PAIR,
+        quote=VenueQuote(SPOT_PAIR, Decimal("100"), Decimal("100"), Decimal("100")),
+        market_type="spot",
+        capabilities=capabilities,
+    )
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "completed"
+    assert result.protection is None
+    assert "replace_protection" not in session.calls
+
+
+@pytest.mark.asyncio
 async def test_venue_service_flat_target_cancels_old_protection_while_flat():
     from cryptotrader.execution.service import VenueExecutionService
 
@@ -766,6 +828,68 @@ async def test_partial_risk_reduction_never_reincreases_position():
 
 
 @pytest.mark.asyncio
+async def test_ambiguous_derivative_reduction_marks_unprotected_residual_for_attention():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("2", protections=(_venue_protection("2"),))
+    original_place = session.place_order
+
+    async def fill_then_fail(intent):
+        await original_place(intent)
+        raise VenueOperationError("RAW_SECRET_REDUCTION")
+
+    session.place_order = fill_then_fail
+    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+
+    assert result.status == "failed"
+    assert result.final_position is not None
+    assert result.final_position.position.signed_amount == Decimal("1")
+    assert result.final_position.protected is False
+    assert result.requires_attention is True
+
+
+@pytest.mark.asyncio
+async def test_unreadable_state_after_failed_reduction_requires_attention():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession(
+        "2",
+        protections=(_venue_protection("2"),),
+        failures=("place_order", "list_open_state"),
+    )
+    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+
+    assert result.status == "failed"
+    assert result.final_position is None
+    assert result.requires_attention is True
+
+
+@pytest.mark.asyncio
+async def test_partial_spot_reduction_does_not_require_native_protection_attention():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    quote = VenueQuote(SPOT_PAIR, Decimal("100"), Decimal("100"), Decimal("100"))
+    session = _VenueSession("2", partial_fill=Decimal("0.5"), quote=quote)
+    session.capabilities = SPOT_CAPABILITIES
+    plan = replace(
+        _venue_plan("2", "1", old_protection_ids=()),
+        pair=SPOT_PAIR,
+        quote=quote,
+        market_type="spot",
+        stop_loss=None,
+        take_profit=None,
+        capabilities=SPOT_CAPABILITIES,
+    )
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "failed"
+    assert result.final_position is not None
+    assert result.final_position.position.signed_amount == Decimal("1.5")
+    assert result.requires_attention is False
+
+
+@pytest.mark.asyncio
 async def test_venue_quote_failure_has_safe_category_while_programmer_error_propagates():
     from cryptotrader.execution.service import VenueExecutionService
 
@@ -812,3 +936,94 @@ async def test_latest_quote_invalidating_protection_fails_closed_before_mutation
     with pytest.raises(ValueError, match="geometry"):
         await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
     assert session.orders == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("current", "planned_target", "pair", "quote", "expected_trace"),
+    [
+        (
+            "1",
+            "1.005",
+            VENUE_PAIR,
+            VenueQuote(VENUE_PAIR, Decimal("99"), Decimal("101"), Decimal("100")),
+            ("pre_read", "replace_protection", "reconcile"),
+        ),
+        (
+            "-1",
+            "-1.005",
+            VENUE_PAIR,
+            VenueQuote(VENUE_PAIR, Decimal("99"), Decimal("101"), Decimal("100")),
+            ("pre_read", "replace_protection", "reconcile"),
+        ),
+        (
+            "0.123",
+            "0.123005",
+            VENUE_PAIR,
+            VenueQuote(VENUE_PAIR, Decimal("99.99"), Decimal("100.01"), Decimal("100")),
+            ("pre_read", "replace_protection", "reconcile"),
+        ),
+        (
+            "1",
+            "1.005",
+            SPOT_PAIR,
+            VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("101"), Decimal("100")),
+            ("pre_read", "reconcile"),
+        ),
+    ],
+)
+async def test_target_notional_inside_current_spread_band_is_audited_no_trade(
+    current, planned_target, pair, quote, expected_trace
+):
+    from cryptotrader.execution.service import VenueExecutionService
+
+    is_spot = pair.market_type == "spot"
+    protections = (
+        ()
+        if is_spot
+        else (_venue_protection(str(abs(Decimal(current))), side="long" if Decimal(current) > 0 else "short"),)
+    )
+    session = _VenueSession(current, protections=protections, quote=quote)
+    plan = _venue_plan(current, planned_target, old_protection_ids=tuple(p.protection_ids[0] for p in protections))
+    if is_spot:
+        session.capabilities = SPOT_CAPABILITIES
+        plan = replace(
+            plan,
+            pair=pair,
+            quote=VenueQuote(pair, Decimal("100"), Decimal("100"), Decimal("100")),
+            market_type="spot",
+            stop_loss=None,
+            take_profit=None,
+            capabilities=SPOT_CAPABILITIES,
+        )
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "completed"
+    assert result.orders == ()
+    assert result.target_signed_notional == Decimal(planned_target) * Decimal("100")
+    assert result.target_signed_amount == Decimal(current)
+    assert result.final_position is not None
+    assert result.final_position.position.signed_amount == Decimal(current)
+    assert result.trace == expected_trace
+
+
+@pytest.mark.asyncio
+async def test_runtime_precision_that_cannot_reach_target_band_fails_before_mutation():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    quote = VenueQuote(VENUE_PAIR, Decimal("100"), Decimal("101"), Decimal("100"))
+    session = _VenueSession("1", protections=(_venue_protection("1"),), quote=quote)
+
+    async def coarse_precision(pair, amount):
+        return Decimal("0.005")
+
+    session.normalize_amount = coarse_precision
+    result = await VenueExecutionService(session).execute(_venue_plan("1", "1.02"))
+
+    assert result.status == "failed"
+    assert result.error_operation == "incomplete_fill"
+    assert result.execution_quote == quote
+    assert session.orders == []
+    assert session.signed_amount == Decimal("1")
+    assert result.requires_attention is False

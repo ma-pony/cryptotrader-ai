@@ -70,6 +70,91 @@ async def test_ccxt_error_boundary_does_not_expose_raw_exchange_message_or_cause
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("adapter_module", "adapter_name", "exchange_id", "environment", "amounts"),
+    [
+        ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo", ("2", "1")),
+        ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet", ("0.02", "0.01")),
+    ],
+)
+async def test_ccxt_rejects_simultaneous_nonzero_hedge_legs_before_flat_execution(
+    adapter_module, adapter_name, exchange_id, environment, amounts
+):
+    from dataclasses import replace
+
+    from cryptotrader.execution.service import VenueExecutionService
+    from tests.test_execution_service import _venue_plan
+
+    fake_factory = FakeCcxtFactory(exchange_id)
+    adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
+    session = await adapter_class(client_factory=fake_factory).connect(
+        connection("dual", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+    client = fake_factory.clients[-1]
+    pair = Pair.parse("BTC/USDT:USDT")
+
+    async def dual_positions(*_args):
+        return [
+            {
+                "symbol": pair.to_ccxt(),
+                "contracts": amounts[0],
+                "side": "long",
+                "entryPrice": "50000",
+                "notional": "1000",
+                "info": {"positionIdx": 1, "stopLoss": "0", "takeProfit": "0"},
+            },
+            {
+                "symbol": pair.to_ccxt(),
+                "contracts": amounts[1],
+                "side": "short",
+                "entryPrice": "51000",
+                "notional": "500",
+                "info": {"positionIdx": 2, "stopLoss": "0", "takeProfit": "0"},
+            },
+        ]
+
+    client.fetch_positions = dual_positions
+    plan = replace(
+        _venue_plan("1", "0", old_protection_ids=()),
+        connection_id="dual",
+        capabilities=session.capabilities,
+    )
+
+    result = await VenueExecutionService(session).execute(plan)
+
+    assert result.status == "failed"
+    assert result.error_operation == "pre_read"
+    assert not any(
+        name in {"create_order", "private_post_trade_cancel_algos", "private_post_v5_position_trading_stop"}
+        for name, _ in client.calls
+    )
+    assert "secret" not in repr(result).lower()
+    assert "raw" not in repr(result).lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("adapter_module", "adapter_name", "exchange_id", "environment"),
+    [
+        ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo"),
+        ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet"),
+    ],
+)
+async def test_ccxt_keeps_one_nonzero_hedge_leg_supported(adapter_module, adapter_name, exchange_id, environment):
+    fake_factory = FakeCcxtFactory(exchange_id)
+    adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
+    session = await adapter_class(client_factory=fake_factory).connect(
+        connection("one-leg", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+
+    position = await session.fetch_position(Pair.parse("BTC/USDT:USDT"))
+
+    assert position.signed_amount == Decimal("0.02")
+
+
+@pytest.mark.asyncio
 async def test_ccxt_session_has_no_public_client_or_plaintext_credential_surface():
     from cryptotrader.venues.okx import OkxVenueAdapter
 

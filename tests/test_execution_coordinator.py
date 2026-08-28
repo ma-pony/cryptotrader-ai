@@ -16,7 +16,12 @@ from cryptotrader.execution.models import (
 from cryptotrader.risk.models import BookRiskDecision, ConnectionRiskDecision
 from cryptotrader.venues.models import ConnectionPosition, NormalizedOrder, ProtectionState
 from cryptotrader.venues.protocol import VenueOperationError
-from tests.test_execution_service import _venue_plan
+from tests.test_execution_service import (
+    SPOT_CAPABILITIES,
+    SPOT_PAIR,
+    _venue_plan,
+    _VenueSession,
+)
 
 
 def _proposal() -> BookExecutionProposal:
@@ -70,7 +75,7 @@ class _Service:
 def _result(proposal: BookExecutionProposal, index: int, status: str) -> ConnectionExecutionResult:
     plan = proposal.connection_plans[index]
     if status == "failed":
-        return ConnectionExecutionResult.failed(plan, "place_order")
+        return ConnectionExecutionResult.failed(plan, "place_order", execution_quote=plan.quote)
     protection = ProtectionState(
         (f"protection-{plan.connection_id}",),
         plan.pair,
@@ -90,6 +95,7 @@ def _result(proposal: BookExecutionProposal, index: int, status: str) -> Connect
         ),
         True,
         protection.protection_ids,
+        (protection,),
     )
     return ConnectionExecutionResult(
         plan.book_id,
@@ -105,6 +111,7 @@ def _result(proposal: BookExecutionProposal, index: int, status: str) -> Connect
         "",
         False,
         ("pre_read", "reconcile"),
+        plan.quote,
     )
 
 
@@ -156,6 +163,49 @@ async def test_coordinator_starts_planned_connections_concurrently_and_preserves
     gate.set()
     result = await task
     assert tuple(item.connection_id for item in result.connection_results) == ("first", "second")
+
+
+@pytest.mark.asyncio
+async def test_coordinator_executes_real_spot_service_without_protection_path():
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+    from cryptotrader.execution.service import VenueExecutionService
+    from cryptotrader.venues.models import VenueQuote
+
+    quote = VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("100"), Decimal("99.5"))
+    plan = replace(
+        _venue_plan("0", "1", old_protection_ids=()),
+        pair=SPOT_PAIR,
+        quote=quote,
+        execution_price=Decimal("100"),
+        market_type="spot",
+        stop_loss=None,
+        take_profit=None,
+        capabilities=SPOT_CAPABILITIES,
+    )
+    target = ConnectionTarget("simulation", "paper-a", Decimal("1"), Decimal("100"), Decimal("1"), Decimal("100"))
+    risk = BookRiskDecision(True, Decimal("1"), Decimal("1"), (Decimal("1"),), (target,))
+    proposal = BookExecutionProposal(
+        "simulation",
+        "simulated",
+        9,
+        SPOT_PAIR,
+        Decimal("1"),
+        Decimal("1"),
+        risk,
+        (ConnectionRiskDecision("paper-a", True, True),),
+        (plan,),
+        (),
+        (),
+        True,
+    )
+    session = _VenueSession("0", quote=quote)
+    session.capabilities = SPOT_CAPABILITIES
+
+    result = await ExecutionCoordinator({"paper-a": VenueExecutionService(session)}).execute(proposal)
+
+    assert result.status == "completed"
+    assert result.connection_results[0].protection is None
+    assert "replace_protection" not in session.calls
 
 
 @pytest.mark.asyncio
@@ -225,6 +275,27 @@ async def test_coordinator_counts_unavailable_target_as_failed_book_outcome():
     assert tuple(item.connection_id for item in result.connection_results) == ("first",)
 
 
+@pytest.mark.asyncio
+async def test_coordinator_counts_risk_rejected_target_without_plan_as_failed():
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+
+    proposal = _proposal()
+    partial_proposal = replace(
+        proposal,
+        connection_risks=(
+            proposal.connection_risks[0],
+            ConnectionRiskDecision("second", False, False, "risk rejected", "risk_gate"),
+        ),
+        connection_plans=(proposal.connection_plans[0],),
+        errors=("connection second: risk_gate failed",),
+    )
+    service = _Service("first", _result(partial_proposal, 0, "completed"))
+
+    result = await ExecutionCoordinator({"first": service}).execute(partial_proposal)
+
+    assert result.status == "partial"
+
+
 def test_result_models_reject_status_order_and_mutation_inconsistency():
     from cryptotrader.execution.models import BookExecutionResult
 
@@ -255,3 +326,76 @@ def test_result_models_reject_status_order_and_mutation_inconsistency():
     )
     with pytest.raises(ValueError, match="complete fills"):
         replace(completed, orders=(partial_order,))
+
+
+def test_completed_result_requires_latest_execution_quote():
+    proposal = _proposal()
+    completed = _result(proposal, 0, "completed")
+
+    quoted = replace(completed, execution_quote=proposal.connection_plans[0].quote)
+
+    assert quoted.execution_quote == proposal.connection_plans[0].quote
+    with pytest.raises(ValueError, match="quote"):
+        replace(quoted, execution_quote=None)
+
+
+@pytest.mark.parametrize(("active", "triggered"), [(False, False), (True, True)])
+def test_completed_result_rejects_inactive_or_triggered_protection(active, triggered):
+    proposal = _proposal()
+    completed = _result(proposal, 0, "completed")
+    invalid = replace(completed.protection, active=active, triggered=triggered)
+
+    with pytest.raises(ValueError, match="protection"):
+        replace(completed, protection=invalid)
+
+
+def test_completed_result_rejects_target_amount_outside_quote_implied_band():
+    proposal = _proposal()
+    completed = _result(proposal, 0, "completed")
+    invalid_protection = replace(completed.protection, amount=Decimal("999"))
+    invalid_position = ExecutionFinalPosition(
+        ConnectionPosition(completed.pair, Decimal("999"), Decimal("99900"), Decimal("100")),
+        True,
+        invalid_protection.protection_ids,
+        (invalid_protection,),
+    )
+
+    with pytest.raises(ValueError, match="notional"):
+        replace(
+            completed,
+            target_signed_amount=Decimal("999"),
+            protection=invalid_protection,
+            final_position=invalid_position,
+        )
+
+
+def test_completed_result_requires_exact_final_protection_ids():
+    proposal = _proposal()
+    completed = _result(proposal, 0, "completed")
+
+    with pytest.raises(ValueError, match="exact"):
+        replace(
+            completed.final_position,
+            protection_ids=(*completed.final_position.protection_ids, "ambiguous-extra"),
+        )
+
+
+def test_completed_derivative_result_requires_returned_replacement_group():
+    proposal = _proposal()
+    completed = _result(proposal, 0, "completed")
+
+    with pytest.raises(ValueError, match="replacement protection"):
+        replace(completed, protection=None)
+
+
+def test_final_position_protected_flag_requires_matching_active_group():
+    proposal = _proposal()
+    completed = _result(proposal, 0, "completed")
+    wrong_side = replace(completed.protection, position_side="short")
+
+    with pytest.raises(ValueError, match="protected"):
+        replace(
+            completed.final_position,
+            protection_ids=wrong_side.protection_ids,
+            protections=(wrong_side,),
+        )

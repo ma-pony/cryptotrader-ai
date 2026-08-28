@@ -61,6 +61,7 @@ class ExecutionCoordinator:
                         "execute",
                         requires_attention=True,
                         trace=("execute",),
+                        execution_quote=plan.quote,
                     )
                 )
                 continue
