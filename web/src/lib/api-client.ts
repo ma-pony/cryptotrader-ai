@@ -1,6 +1,7 @@
 import type { z } from 'zod';
 
 import { env } from './env';
+import { buildApiUrl } from './api-url';
 import { useSettingsStore } from '@/stores/use-settings-store';
 import { ApiErrorSchema, type ApiError as ApiErrorShape } from '@/types/api.schema';
 
@@ -25,13 +26,6 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
   signal?: AbortSignal;
   skipApiKey?: boolean;
 }
-
-const buildUrl = (path: string): string => {
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
-  const base = env.VITE_API_BASE_URL.replace(/\/$/, '');
-  const suffix = path.startsWith('/') ? path : `/${path}`;
-  return `${base}${suffix}`;
-};
 
 const resolveApiKey = (): string => useSettingsStore.getState().apiKey;
 
@@ -66,7 +60,7 @@ async function request<S extends z.ZodTypeAny>(path: string, schema: S, options:
   if (body !== undefined) init.body = JSON.stringify(body);
   if (signal) init.signal = signal;
 
-  const res = await fetch(buildUrl(path), init);
+  const res = await fetch(buildApiUrl(path, env.VITE_API_BASE_URL), init);
   if (!res.ok) throw await parseError(res);
 
   if (res.status === 204) return undefined as z.output<S>;

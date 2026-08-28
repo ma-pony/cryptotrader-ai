@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: cryptotrader
       POSTGRES_USER: ${POSTGRES_USER:-cryptotrader}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-cryptotrader-local-dev}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -34,18 +34,19 @@ services:
   api:
     build: .
     ports:
-      - "8003:8003"
+      - "${API_BIND_ADDRESS:-127.0.0.1}:8003:8003"
     environment:
-      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
+      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
       CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
-      # SEC-I5: API_KEY is required unless AUTH_MODE is explicitly set to "disabled".
-      # Setting AUTH_MODE=disabled in production logs a WARNING on every request.
-      AUTH_MODE: ${AUTH_MODE:-enabled}
+      # Local Compose is loopback-only and runnable without a secret file.
+      # Production MUST override AUTH_MODE=enabled and set a strong API_KEY.
+      AUTH_MODE: ${AUTH_MODE:-disabled}
       API_KEY: ${API_KEY:-}
       # Disable Swagger UI and ReDoc in production to prevent schema leakage (Req 7.6)
       DOCS_ENABLED: "false"
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ctdata:/home/appuser/.cryptotrader
     depends_on:
@@ -75,9 +76,7 @@ services:
       context: ./web
       dockerfile: Dockerfile
     ports:
-      - "5173:80"
-    environment:
-      VITE_API_BASE_URL: http://api:8003
+      - "${WEB_BIND_ADDRESS:-127.0.0.1}:5173:80"
     depends_on:
       api:
         condition: service_healthy
@@ -92,11 +91,12 @@ services:
     build: .
     command: arena scheduler start
     environment:
-      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD}@postgres:5432/cryptotrader
+      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
       CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
       HF_HOME: /home/appuser/.cache/huggingface
     env_file:
-      - .env
+      - path: .env
+        required: false
     volumes:
       - ctdata:/home/appuser/.cryptotrader
       - hf_cache:/home/appuser/.cache/huggingface

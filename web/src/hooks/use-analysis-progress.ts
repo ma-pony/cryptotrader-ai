@@ -1,8 +1,6 @@
 import { useCallback, useRef, useState } from 'react';
 
-import { env } from '@/lib/env';
 import type { SSEEvent } from '@/lib/stream-fetch';
-import { useSettingsStore } from '@/stores/use-settings-store';
 import type { ComponentSignal, FusedSignal } from '@/types/api';
 import type {
   AgentAnalysisCompletedData,
@@ -26,7 +24,6 @@ export interface AgentProgress {
   status: 'thinking' | 'done' | 'failed';
   direction: string;
   confidence: number;
-  steered: boolean;
 }
 
 export interface AnalysisProgressState {
@@ -84,17 +81,17 @@ export function useAnalysisProgress() {
       }
       case 'committee_agent_started': {
         const { agent_id } = payload as { agent_id: string };
-        setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'thinking', direction: '', confidence: 0, steered: false } }, lastEventId }));
+        setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'thinking', direction: '', confidence: 0 } }, lastEventId }));
         break;
       }
       case 'agent_analysis_completed': {
         const data = payload as unknown as AgentAnalysisCompletedData;
-        setProgress((current) => ({ ...current, agents: { ...current.agents, [data.agent_id]: { status: 'done', direction: data.analysis.direction, confidence: data.analysis.confidence, steered: false } }, lastEventId }));
+        setProgress((current) => ({ ...current, agents: { ...current.agents, [data.agent_id]: { status: 'done', direction: data.analysis.direction, confidence: data.analysis.confidence } }, lastEventId }));
         break;
       }
       case 'committee_agent_failed': {
         const { agent_id } = payload as { agent_id: string };
-        setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'failed', direction: '', confidence: 0, steered: false } }, lastEventId }));
+        setProgress((current) => ({ ...current, agents: { ...current.agents, [agent_id]: { status: 'failed', direction: '', confidence: 0 } }, lastEventId }));
         break;
       }
       case 'debate_round_started':
@@ -136,19 +133,5 @@ export function useAnalysisProgress() {
     lastEventIdRef.current = 0;
   }, []);
 
-  const sendInterrupt = useCallback(async (sessionId: string) => {
-    const apiKey = useSettingsStore.getState().apiKey;
-    await fetch(`${env.VITE_API_BASE_URL}/api/chat/interrupt/${encodeURIComponent(sessionId)}`, { method: 'POST', headers: { 'X-API-Key': apiKey } });
-  }, []);
-
-  const sendSteer = useCallback(async (sessionId: string, target: string, instruction: string) => {
-    const apiKey = useSettingsStore.getState().apiKey;
-    await fetch(`${env.VITE_API_BASE_URL}/api/chat/steer/${encodeURIComponent(sessionId)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
-      body: JSON.stringify({ target, instruction }),
-    });
-  }, []);
-
-  return { progress, handleProgressEvent, reset, sendInterrupt, sendSteer };
+  return { progress, handleProgressEvent, reset };
 }

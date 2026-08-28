@@ -24,7 +24,7 @@ const ChatPage = () => {
 
   const { sessions, activeSessionId, setActiveSession, removeSession } = useChatStore();
   const currentSessionId = sessionId ?? activeSessionId;
-  const { progress, handleProgressEvent, reset: resetProgress, sendInterrupt, sendSteer } = useAnalysisProgress();
+  const { progress, handleProgressEvent, reset: resetProgress } = useAnalysisProgress();
   const { messages, status, error, sendMessage, stopStream, clearMessages } = useChatMessages(currentSessionId, handleProgressEvent);
   const [mobileSessionsOpen, setMobileSessionsOpen] = useState(false);
 
@@ -44,11 +44,12 @@ const ChatPage = () => {
 
   const handleSelectSession = useCallback(
     (id: string) => {
+      clearMessages();
       setActiveSession(id);
       void navigate(`/chat/${id}`);
       setMobileSessionsOpen(false);
     },
-    [setActiveSession, navigate],
+    [clearMessages, setActiveSession, navigate],
   );
 
   const handleNewSession = useCallback(() => {
@@ -129,13 +130,7 @@ const ChatPage = () => {
 
         <AnalysisProgressPanel
           progress={progress}
-          sessionId={currentSessionId ?? null}
-          onSteer={currentSessionId
-            ? (target, instruction) => void sendSteer(currentSessionId, target, instruction)
-            : undefined}
-          onInterrupt={currentSessionId
-            ? () => void sendInterrupt(currentSessionId)
-            : undefined}
+          onInterrupt={status === 'connecting' || status === 'streaming' ? stopStream : undefined}
         />
 
         <div className="flex-1 overflow-hidden">

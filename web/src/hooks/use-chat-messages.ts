@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { interruptChatSession } from '@/lib/chat-control';
 import { streamFetch, type SSEEvent } from '@/lib/stream-fetch';
 import { useChatStore } from '@/stores/use-chat-store';
 import type { ChatMessage } from '@/types/api';
@@ -24,17 +25,40 @@ export function useChatMessages(
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [status, setStatus] = useState<StreamStatus>('idle');
   const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const activeRequestRef = useRef<{ sessionId: string; controller: AbortController } | null>(null);
+  const previousSessionIdRef = useRef(sessionId);
   const { upsertSession, setPendingMessage } = useChatStore();
 
+  const interruptAndAbortActiveRequest = useCallback(() => {
+    const activeRequest = activeRequestRef.current;
+    if (!activeRequest) return false;
+
+    activeRequestRef.current = null;
+    void interruptChatSession(activeRequest.sessionId).catch(() => undefined);
+    activeRequest.controller.abort();
+    return true;
+  }, []);
+
   const stopStream = useCallback(() => {
-    abortRef.current?.abort();
-    abortRef.current = null;
+    if (!interruptAndAbortActiveRequest()) return;
     setStatus('idle');
     setPendingMessage(null);
-  }, [setPendingMessage]);
+  }, [interruptAndAbortActiveRequest, setPendingMessage]);
 
-  useEffect(() => () => stopStream(), [stopStream]);
+  useEffect(() => () => {
+    interruptAndAbortActiveRequest();
+  }, [interruptAndAbortActiveRequest]);
+
+  useEffect(() => {
+    const previousSessionId = previousSessionIdRef.current;
+    previousSessionIdRef.current = sessionId;
+    if (previousSessionId === sessionId) return;
+
+    const activeRequest = activeRequestRef.current;
+    if (activeRequest && activeRequest.sessionId !== sessionId) {
+      stopStream();
+    }
+  }, [sessionId, stopStream]);
 
   const handleEvent = useCallback((event: SSEEvent) => {
     onCycleEvent?.(event);
@@ -85,7 +109,7 @@ export function useChatMessages(
   }, [onCycleEvent, setPendingMessage, upsertSession]);
 
   const sendMessage = useCallback((text: string, additionalContext?: AdditionalContext) => {
-    if (status === 'streaming' || status === 'connecting') return;
+    if (activeRequestRef.current) return;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -98,11 +122,12 @@ export function useChatMessages(
     setError(null);
     setPendingMessage(userMessage);
 
+    const requestSessionId = sessionId ?? crypto.randomUUID();
     const controller = new AbortController();
-    abortRef.current = controller;
+    activeRequestRef.current = { sessionId: requestSessionId, controller };
     void streamFetch('/api/chat/stream', {
       body: {
-        session_id: sessionId ?? '',
+        session_id: requestSessionId,
         message: text,
         ...(additionalContext ? { additional_context: additionalContext } : {}),
       },
@@ -118,8 +143,12 @@ export function useChatMessages(
       setError((streamError as Error).message);
       setStatus('error');
       setPendingMessage(null);
+    }).finally(() => {
+      if (activeRequestRef.current?.controller === controller) {
+        activeRequestRef.current = null;
+      }
     });
-  }, [handleEvent, sessionId, setPendingMessage, status]);
+  }, [handleEvent, sessionId, setPendingMessage]);
 
   const clearMessages = useCallback(() => {
     stopStream();

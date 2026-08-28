@@ -9,6 +9,9 @@ Validates:
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -119,3 +122,52 @@ def test_api_docs_enabled_false(compose):
         assert str(env.get("DOCS_ENABLED", "")).lower() == "false", (
             f"api service DOCS_ENABLED should be 'false', got: {env.get('DOCS_ENABLED')}"
         )
+
+
+def test_clean_compose_config_needs_no_dotenv_and_exposes_no_browser_api_hostname(tmp_path):
+    """A clean checkout must resolve to an explicit, same-origin local web stack."""
+    if shutil.which("docker") is None:
+        pytest.skip("docker CLI is unavailable")
+
+    empty_env = tmp_path / "empty.env"
+    empty_env.write_text("")
+    clean_env = os.environ.copy()
+    for name in (
+        "API_KEY",
+        "AUTH_MODE",
+        "COMPOSE_ENV_FILES",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_USER",
+        "VITE_API_BASE_URL",
+    ):
+        clean_env.pop(name, None)
+
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "--env-file",
+            str(empty_env),
+            "-f",
+            str(COMPOSE_PATH),
+            "config",
+        ],
+        cwd=COMPOSE_PATH.parent,
+        env=clean_env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    resolved = yaml.safe_load(result.stdout)
+    services = resolved["services"]
+    postgres_password = services["postgres"]["environment"]["POSTGRES_PASSWORD"]
+    assert postgres_password
+    assert postgres_password in services["api"]["environment"]["CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL"]
+    assert services["api"]["environment"]["AUTH_MODE"] == "disabled"
+    assert services["api"]["environment"]["API_KEY"] == ""
+    assert services["api"]["ports"][0]["host_ip"] == "127.0.0.1"
+    assert services["web"]["ports"][0]["host_ip"] == "127.0.0.1"
+    assert "VITE_API_BASE_URL" not in services["web"].get("environment", {})
+    assert "http://api:8003" not in str(services["web"])

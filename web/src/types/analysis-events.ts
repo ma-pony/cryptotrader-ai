@@ -27,10 +27,7 @@ export type AnalysisEventType =
   | 'stream_error'
   | 'interrupt_received'
   | 'interrupt_noop'
-  | 'interrupt_rejected'
-  | 'steer_queued'
-  | 'steer_too_late'
-  | 'steer_truncated';
+  | 'interrupt_rejected';
 
 export interface SSEEnvelope<T = Record<string, unknown>> {
   event_id: number;
@@ -82,11 +79,6 @@ export interface CycleFinishedData {
   cycle_id: string;
   status: string;
   error?: string | null;
-}
-
-export interface SteerQueuedData {
-  target: string;
-  queue_position: number;
 }
 
 export interface StreamResumeData {

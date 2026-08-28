@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/lib/i18n';
@@ -8,13 +8,16 @@ const mockStopStream = vi.fn();
 const mockClearMessages = vi.fn();
 const mockNavigate = vi.fn();
 let mockCancelled = false;
+let mockSessionId: string | undefined;
+let mockAgentThinking = false;
+let mockStreamStatus: 'idle' | 'connecting' | 'streaming' = 'idle';
 
 vi.mock('react-router', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   let locationState: unknown = null;
   return {
     ...actual,
-    useParams: () => ({}),
+    useParams: () => ({ sessionId: mockSessionId }),
     useNavigate: () => mockNavigate,
     useLocation: () => ({ state: locationState, pathname: '/chat', search: '', hash: '', key: 'default' }),
     __setLocationState: (s: unknown) => { locationState = s; },
@@ -24,7 +27,7 @@ vi.mock('react-router', async (importOriginal) => {
 vi.mock('@/hooks/use-chat-messages', () => ({
   useChatMessages: () => ({
     messages: [],
-    status: 'idle' as const,
+    status: mockStreamStatus,
     error: null,
     sendMessage: mockSendMessage,
     stopStream: mockStopStream,
@@ -38,7 +41,9 @@ vi.mock('@/hooks/use-analysis-progress', () => ({
       cycleId: null,
       status: mockCancelled ? 'cancelled' : 'idle',
       components: {},
-      agents: {},
+      agents: mockAgentThinking
+        ? { tech_agent: { status: 'thinking', direction: '', confidence: 0 } }
+        : {},
       debateRound: 0,
       fusion: null,
       target: null,
@@ -48,8 +53,6 @@ vi.mock('@/hooks/use-analysis-progress', () => ({
     },
     handleProgressEvent: vi.fn(),
     reset: vi.fn(),
-    sendInterrupt: vi.fn(),
-    sendSteer: vi.fn(),
   }),
 }));
 
@@ -71,7 +74,9 @@ vi.mock('./components/message-stream', () => ({
 }));
 
 vi.mock('./components/session-list', () => ({
-  SessionList: () => <div data-testid="session-list" />,
+  SessionList: ({ onSelect }: { onSelect: (id: string) => void }) => (
+    <button data-testid="session-list" onClick={() => onSelect('session-2')}>sessions</button>
+  ),
 }));
 
 describe('ChatPage', () => {
@@ -79,6 +84,9 @@ describe('ChatPage', () => {
     await i18n.changeLanguage('zh-CN');
     vi.clearAllMocks();
     mockCancelled = false;
+    mockSessionId = undefined;
+    mockAgentThinking = false;
+    mockStreamStatus = 'idle';
     vi.useFakeTimers();
   });
 
@@ -149,5 +157,27 @@ describe('ChatPage', () => {
 
     expect(screen.getByText('本轮分析已取消')).toBeInTheDocument();
     expect(screen.queryByText('部分裁决')).not.toBeInTheDocument();
+  });
+
+  it('shows committee progress without exposing steering controls', async () => {
+    mockSessionId = 'session-1';
+    mockAgentThinking = true;
+    const ChatPage = (await import('./index')).default;
+    render(<ChatPage />);
+
+    expect(screen.getByText('tech agent')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox', { name: /steering input/i })).not.toBeInTheDocument();
+  });
+
+  it('stops an active request before navigating to another session', async () => {
+    mockSessionId = 'session-1';
+    mockStreamStatus = 'streaming';
+    const ChatPage = (await import('./index')).default;
+    render(<ChatPage />);
+
+    fireEvent.click(screen.getByTestId('session-list'));
+
+    expect(mockClearMessages).toHaveBeenCalledOnce();
+    expect(mockNavigate).toHaveBeenCalledWith('/chat/session-2');
   });
 });

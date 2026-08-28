@@ -9,8 +9,6 @@ import { AgentCard } from './agent-card';
 
 interface AnalysisProgressPanelProps {
   progress: AnalysisProgressState;
-  sessionId: string | null;
-  onSteer?: ((target: string, instruction: string) => void) | undefined;
   onInterrupt?: (() => void) | undefined;
 }
 
@@ -18,8 +16,6 @@ const componentLabel = (id: string) => id === 'kronos' ? 'Kronos' : id === 'llm_
 
 export function AnalysisProgressPanel({
   progress,
-  sessionId,
-  onSteer,
   onInterrupt,
 }: AnalysisProgressPanelProps) {
   const { t } = useTranslation('chat');
@@ -48,7 +44,7 @@ export function AnalysisProgressPanel({
           <span className={cn('rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase', progress.status === 'running' ? 'border-amber-500/40 text-amber-500' : progress.status === 'completed' ? 'border-success/40 text-success' : progress.status === 'failed' ? 'border-destructive/40 text-destructive' : 'border-border text-muted-foreground')}>
             {progress.status}
           </span>
-          {sessionId && progress.status === 'running' && onInterrupt ? (
+          {progress.status === 'running' && onInterrupt ? (
             <button type="button" onClick={onInterrupt} className="rounded border border-border px-2 py-1 text-xs hover:bg-muted" aria-label={t('interrupt', { defaultValue: 'Interrupt' })}>
               {t('interrupt', { defaultValue: 'Interrupt' })}
             </button>
@@ -80,7 +76,7 @@ export function AnalysisProgressPanel({
           <div className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">委员会内部分析</div>
           <div className="grid grid-cols-2 gap-2">
             {agents.map(([agentId, agent]) => (
-              <AgentCard key={agentId} agentId={agentId} agent={agent} onSteer={agent.status === 'thinking' && onSteer ? (instruction) => onSteer(agentId, instruction) : undefined} />
+              <AgentCard key={agentId} agentId={agentId} agent={agent} />
             ))}
           </div>
         </div>

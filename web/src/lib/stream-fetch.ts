@@ -1,4 +1,5 @@
 import { env } from './env';
+import { buildApiUrl } from './api-url';
 import { useSettingsStore } from '@/stores/use-settings-store';
 
 // SSE event envelope per contracts/sse-events.md
@@ -32,12 +33,6 @@ export class SSEError extends Error {
 }
 
 const RETRYABLE_STATUSES = new Set([429, 502, 503, 504]);
-
-const buildUrl = (path: string): string => {
-  if (path.startsWith('http://') || path.startsWith('https://')) return path;
-  const base = env.VITE_API_BASE_URL.replace(/\/$/, '');
-  return `${base}${path.startsWith('/') ? path : `/${path}`}`;
-};
 
 const resolveApiKey = (): string => useSettingsStore.getState().apiKey;
 
@@ -95,7 +90,7 @@ export async function streamFetch(path: string, options: StreamFetchOptions): Pr
   if (options.body !== undefined) init.body = JSON.stringify(options.body);
   if (options.signal) init.signal = options.signal;
 
-  const res = await fetch(buildUrl(path), init);
+  const res = await fetch(buildApiUrl(path, env.VITE_API_BASE_URL), init);
   if (!res.ok) {
     const retryable = RETRYABLE_STATUSES.has(res.status);
     const text = await res.text().catch(() => '');
