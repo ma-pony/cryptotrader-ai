@@ -18,6 +18,7 @@ import pytest
 import yaml
 
 COMPOSE_PATH = Path(__file__).parent.parent / "docker-compose.yml"
+WEB_DOCKERFILE_PATH = Path(__file__).parent.parent / "web" / "Dockerfile"
 
 
 @pytest.fixture(scope="module")
@@ -171,3 +172,11 @@ def test_clean_compose_config_needs_no_dotenv_and_exposes_no_browser_api_hostnam
     assert services["web"]["ports"][0]["host_ip"] == "127.0.0.1"
     assert "VITE_API_BASE_URL" not in services["web"].get("environment", {})
     assert "http://api:8003" not in str(services["web"])
+
+
+def test_web_healthcheck_targets_nginx_ipv4_listener():
+    """Alpine resolves localhost to ::1 while this Nginx image listens on IPv4."""
+    dockerfile = WEB_DOCKERFILE_PATH.read_text()
+
+    assert "wget -q --spider http://127.0.0.1/" in dockerfile
+    assert "wget -q --spider http://localhost/" not in dockerfile
