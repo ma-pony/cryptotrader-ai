@@ -9,8 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from cryptotrader.decision.models import ExecutionPlan, OrderIntent
 from cryptotrader.execution.exchange import LiveExchange
+from cryptotrader.execution.order import OrderManager
+from cryptotrader.execution.service import ExecutionService
 from cryptotrader.models import Order
+from tests.factories.signal_fusion import context
 
 
 def _make_okx_exchange() -> LiveExchange:
@@ -64,6 +68,99 @@ async def test_reduce_only_order_reaches_exchange_params():
 
     params = ex._exchange.create_order.await_args.args[-1]
     assert params["reduceOnly"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("status", "filled_contracts", "expected_succeeded", "expected_sent_contracts"),
+    [
+        ("closed", 10.0, True, [10.0]),
+        ("partially_filled", 4.0, False, [10.0, 4.0]),
+        ("canceled", 4.0, False, [10.0, 4.0]),
+    ],
+)
+async def test_okx_swap_fills_are_base_normalized_before_execution_compensation(
+    status,
+    filled_contracts,
+    expected_succeeded,
+    expected_sent_contracts,
+):
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    ex._exchange.markets["BTC/USDT:USDT"]["contractSize"] = 0.01
+    ex.get_balance = AsyncMock(return_value={"USDT": 10_000.0})
+    ex._derive_pos_side = AsyncMock(return_value="long")
+    initial = {
+        "id": "entry",
+        "status": status,
+        "filled": filled_contracts,
+        "info": {"accFillSz": str(filled_contracts)},
+    }
+    responses = [initial]
+    if status != "closed":
+        responses.append(
+            {
+                "id": "compensation",
+                "status": "closed",
+                "filled": filled_contracts,
+                "info": {"accFillSz": str(filled_contracts)},
+            }
+        )
+        ex._wait_or_cancel = AsyncMock(return_value=initial)
+    ex._exchange.create_order = AsyncMock(side_effect=responses)
+    ex.list_pending_algos = AsyncMock(return_value=[])
+    ex.place_algo_oco = AsyncMock(return_value="new-oco")
+    service = ExecutionService(OrderManager(), ex)
+    plan = ExecutionPlan(
+        intents=(OrderIntent("BTC/USDT:USDT", "buy", 0.1, False),),
+        stop_loss=90.0,
+        take_profit=120.0,
+    )
+
+    result = await service.execute(plan, context())
+
+    assert result.succeeded is expected_succeeded
+    assert [call.args[3] for call in ex._exchange.create_order.await_args_list] == expected_sent_contracts
+    expected_base_fills = [0.1] if status == "closed" else [0.04, 0.04]
+    assert [item.filled_amount for item in result.orders] == pytest.approx(expected_base_fills)
+    assert result.orders[0].raw["filled"] == pytest.approx(filled_contracts * 0.01)
+    assert result.orders[0].raw["filled_contracts"] == pytest.approx(filled_contracts)
+    assert result.orders[0].raw["info"] == {"accFillSz": str(filled_contracts)}
+
+
+@pytest.mark.asyncio
+async def test_spot_fill_amount_keeps_base_units_without_contract_audit_field():
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    ex._exchange.markets["BTC/USDT"] = {"id": "BTC-USDT"}
+    ex.get_balance = AsyncMock(return_value={"USDT": 10_000.0})
+    ex._exchange.create_order = AsyncMock(return_value={"id": "spot", "status": "closed", "filled": 0.1})
+
+    result = await ex.place_order(Order(pair="BTC/USDT", side="buy", amount=0.1, price=100.0))
+
+    assert result["filled"] == pytest.approx(0.1)
+    assert "filled_contracts" not in result
+    assert ex._exchange.create_order.await_args.args[3] == pytest.approx(0.1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("contract_size", [None, 0, "invalid"])
+async def test_invalid_or_missing_swap_contract_size_keeps_existing_one_to_one_fallback(contract_size):
+    ex = _make_okx_exchange()
+    ex._markets_loaded = True
+    if contract_size is None:
+        ex._exchange.markets["BTC/USDT:USDT"].pop("contractSize", None)
+    else:
+        ex._exchange.markets["BTC/USDT:USDT"]["contractSize"] = contract_size
+    ex.get_balance = AsyncMock(return_value={"USDT": 10_000.0})
+    ex._derive_pos_side = AsyncMock(return_value="long")
+    ex._exchange.create_order = AsyncMock(return_value={"id": "swap", "status": "closed", "filled": 0.1})
+
+    result = await ex.place_order(Order(pair="BTC/USDT:USDT", side="buy", amount=0.1, price=100.0))
+
+    assert result["filled"] == pytest.approx(0.1)
+    assert result["filled_contracts"] == pytest.approx(0.1)
+    assert ex._exchange.create_order.await_args.args[3] == pytest.approx(0.1)
 
 
 # ── place_algo_oco ──────────────────────────────────────────────────────

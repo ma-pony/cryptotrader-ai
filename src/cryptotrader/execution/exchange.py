@@ -50,6 +50,19 @@ _trade_unavailable_until: dict[str, float] = {}
 _TRADE_UNAVAIL_TTL_S = 300
 
 
+def _contract_size(market: dict[str, Any]) -> float:
+    """Return base units per contract using the adapter's existing 1:1 fallback."""
+    raw = market.get("contractSize")
+    if raw is not None:
+        try:
+            value = float(raw)
+            if value > 0.0:
+                return value
+        except (TypeError, ValueError):
+            pass
+    return 1.0
+
+
 def _mark_trade_unavailable(exchange_id: str) -> None:
     """Record that the venue's trade endpoint is currently rejecting orders."""
     _trade_unavailable_until[exchange_id] = time.time() + _TRADE_UNAVAIL_TTL_S
@@ -337,16 +350,7 @@ class LiveExchange:
         # × 1000 ctVal = 60M DOGE notional → sCode=51008 "Insufficient
         # USDT margin" even with healthy cash balance. Convert base→contracts
         # before handing to ccxt; spot keeps base-unit semantics.
-        contract_size = 1.0
-        if pair.market_type != "spot":
-            cs = market.get("contractSize")
-            if cs is not None:
-                try:
-                    cs_f = float(cs)
-                    if cs_f > 0:
-                        contract_size = cs_f
-                except (TypeError, ValueError):
-                    contract_size = 1.0
+        contract_size = _contract_size(market) if pair.market_type != "spot" else 1.0
         raw_amount = order.amount / contract_size if contract_size != 1.0 else order.amount
         amount = self._exchange.amount_to_precision(order.pair, raw_amount) if market else raw_amount
         price = (
@@ -432,6 +436,14 @@ class LiveExchange:
                 wait_s = load_config().execution.order_wait_seconds
                 result = await self._wait_or_cancel(order_id, order.pair, wait_seconds=wait_s)
 
+        if pair.market_type != "spot" and result.get("filled") is not None:
+            result = dict(result)
+            filled_contracts = result["filled"]
+            result["filled_contracts"] = filled_contracts
+            try:
+                result["filled"] = float(filled_contracts) * contract_size
+            except (TypeError, ValueError):
+                pass
         return result
 
     # ── oversized-market handling ────────────────────────────────────────
@@ -682,15 +694,7 @@ class LiveExchange:
                 # multiply contracts → base units. Spot markets have no
                 # contractSize and the field stays 1.0 by convention.
                 market = (self._exchange.markets or {}).get(symbol, {}) or {}
-                cs_raw = market.get("contractSize")
-                contract_size = 1.0
-                if cs_raw is not None:
-                    try:
-                        cs_f = float(cs_raw)
-                        if cs_f > 0:
-                            contract_size = cs_f
-                    except (TypeError, ValueError):
-                        contract_size = 1.0
+                contract_size = _contract_size(market)
                 base_amount = contracts * contract_size
                 side = p.get("side", "long")
                 amount = base_amount if side == "long" else -base_amount
@@ -827,15 +831,7 @@ class LiveExchange:
         # metadata. Without this, OKX rejects with code 51121 "Order quantity
         # must be a multiple of the lot size" — see audit 2026-05-14 DOGE.
         market = self._exchange.markets.get(pair, {})
-        contract_size = 1.0
-        raw_contract_size = market.get("contractSize")
-        if raw_contract_size is not None:
-            try:
-                parsed_contract_size = float(raw_contract_size)
-                if parsed_contract_size > 0.0:
-                    contract_size = parsed_contract_size
-            except (TypeError, ValueError):
-                pass
+        contract_size = _contract_size(market)
         contract_amount = amount / contract_size
         sz_str = self._exchange.amount_to_precision(pair, contract_amount)
         if float(sz_str) <= 0:

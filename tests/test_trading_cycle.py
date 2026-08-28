@@ -340,6 +340,87 @@ async def test_paper_protection_refresh_failure_writes_execution_failed_terminal
     }
 
 
+_HITL_PROTECTION_TRIGGER = {
+    "algo_id": "paper-hitl-oco",
+    "trigger_reason": "stop_loss",
+    "trigger_price": 90.0,
+    "order_id": "paper-hitl-close",
+}
+
+
+async def _run_to_hitl_after_paper_protection(cycle):
+    cycle.contexts.current_position = position("long", 2.0, 0.5)
+
+    async def process_pending_protection(signal_context):
+        cycle.contexts.current_position = position()
+        return SimpleNamespace(**_HITL_PROTECTION_TRIGGER)
+
+    cycle.executor.process_pending_protection = process_pending_protection
+    pending = await cycle.run(request())
+    assert pending.status == "awaiting_approval"
+    assert cycle.journal.records[0].execution_result["protection_trigger"] == _HITL_PROTECTION_TRIGGER
+    return pending
+
+
+def _assert_hitl_terminal_retains_protection_trigger(cycle, expected_status):
+    record = cycle.journal.records[0]
+    assert record.status == expected_status
+    assert record.execution_result is not None
+    assert record.execution_result["protection_trigger"] == _HITL_PROTECTION_TRIGGER
+
+
+@pytest.mark.asyncio
+async def test_hitl_approval_completion_retains_prior_paper_protection_trigger():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+    pending = await _run_to_hitl_after_paper_protection(cycle)
+
+    outcome = await cycle.resume_approved(pending.approval_id)
+
+    assert outcome.status == "completed"
+    _assert_hitl_terminal_retains_protection_trigger(cycle, "completed")
+
+
+@pytest.mark.asyncio
+async def test_hitl_rejection_retains_prior_paper_protection_trigger():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+    pending = await _run_to_hitl_after_paper_protection(cycle)
+
+    outcome = await cycle.reject_approval(pending.approval_id, decision_by="web")
+
+    assert outcome.status == "approval_rejected"
+    _assert_hitl_terminal_retains_protection_trigger(cycle, "approval_rejected")
+
+
+@pytest.mark.asyncio
+async def test_hitl_approval_refresh_failure_retains_prior_paper_protection_trigger():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+    pending = await _run_to_hitl_after_paper_protection(cycle)
+
+    async def fail_refresh(stored_context):
+        raise RuntimeError("approval refresh unavailable")
+
+    cycle.contexts.refresh_execution_state = fail_refresh
+    outcome = await cycle.resume_approved(pending.approval_id)
+
+    assert outcome.status == "risk_rejected"
+    _assert_hitl_terminal_retains_protection_trigger(cycle, "risk_rejected")
+
+
+@pytest.mark.asyncio
+async def test_hitl_approval_cancellation_retains_prior_paper_protection_trigger():
+    cycle = build_test_cycle(selected_profile=profile(hitl=True))
+    pending = await _run_to_hitl_after_paper_protection(cycle)
+
+    async def cancel_execution(execution_plan, signal_context):
+        raise asyncio.CancelledError
+
+    cycle.executor.execute = cancel_execution
+    with pytest.raises(asyncio.CancelledError):
+        await cycle.resume_approved(pending.approval_id)
+
+    _assert_hitl_terminal_retains_protection_trigger(cycle, "cancelled")
+
+
 @pytest.mark.asyncio
 async def test_hitl_stores_target_plan_and_approval_replans_from_current_position():
     cycle = build_test_cycle(selected_profile=profile(hitl=True))

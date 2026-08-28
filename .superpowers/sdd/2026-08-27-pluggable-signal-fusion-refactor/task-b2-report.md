@@ -96,3 +96,34 @@
 - 普通取消异常表示当前及后续 ID 的取消状态未确认，因此均进入 `retained_algo_ids`；`CancelledError`、`KeyboardInterrupt` 等基础异常继续向上层传播，不被安全结果吞掉。
 - Paper watermark 是简单的每单闭合时点水位，不是撮合或 reconciliation 子系统；它避免历史 bar 回放，但仍不模拟 bar 内价格路径。
 - 若补偿本身被拒绝、部分成交或抛出异常，结果会明确报告 `position compensation failed` 并保留已获得的订单审计；真实仓位仍需人工/后续交易所事实对账。
+
+## 最终独立审查修正（2026-08-28）
+
+- 修正基线：`b306981b26f2e5df34de2133633f2fcd211a1978`；本轮最终提交哈希在任务交接消息中记录，避免提交自引用。
+- LiveExchange 现在在 swap 适配器边界把 ccxt 合约张数回报统一为基础币单位：`filled_contracts` 保留原始 `filled`，`filled` 改为 `filled_contracts * contractSize`，原始 `info` 不变。ExecutionService 因此只消费统一的基础币 `filled`。
+- 下单、持仓读取、OCO 创建共用同一简单 `contractSize` 解析合同：缺失、非数字或非正数继续回退为 `1.0`；Spot 不归一化且保持原始基础币回报。
+- `contractSize=0.01` 的完整 0.1 BTC 成交只发送 10 张并成功安装保护；4 张 partial/cancelled fill 归一化为 0.04 BTC，逆序补偿只发送 4 张，不再放大为 400 张。
+- 所有 `replace_journal=True` 的最终写入会在当前执行结果缺少 trigger 时，从同周期旧 Journal 合并结构化 `protection_trigger`。该最小合并覆盖 HITL 批准完成、拒绝、批准后 refresh 失败、批准后取消，无需修改审批表或新增工作流状态。
+- Decisions API 与前端 schema contract 测试明确断言最终 `protection_trigger` 仍可见。
+
+### 最终修正 TDD 证据
+
+#### RED
+
+- `uv run pytest tests/test_exchange_algo_oco.py tests/test_trading_cycle.py --no-cov -q` → `10 failed, 40 passed`。
+- OKX 完整成交被误判失败；partial/cancelled 的 4 张实际成交产生 400 张补偿；无效/缺失 contract size 缺少原始合约张数审计。HITL approve 把 trigger 改为 `None`，reject/refresh failure/cancellation 把整个 `execution_result` 改为 `None`。
+
+#### GREEN
+
+- 初始聚焦：同一命令 → `50 passed`。
+- B2 聚焦：ExecutionService、Paper protection、TradingCycle、Decisions detail、OKX OCO、OrderManager → `89 passed`。
+- 邻接：perp close、live pair、exchange protocol、HITL API/gate、Cycle Journal、Decisions list、Bootstrap、live/backtest parity → `53 passed, 1 warning`。
+- 后端全量：`uv run pytest -q` → `1829 passed, 36 warnings`，覆盖率 `74.51%`。
+- 前端：Vitest `16 files passed, 100 tests passed`；`pnpm typecheck` → `TypeScript: No errors found`。
+- 质量门禁：`ruff check .`、`ruff format --check .`（`357 files already formatted`）、`git diff --check` 全部通过。
+
+### 最终修正假设与剩余关注点
+
+- ccxt swap 的订单 `amount` 与 `filled` 均为合约张数；`info` 和新增 `filled_contracts` 提供原始交易所审计，内部 `filled` 坚持基础币单位。
+- 对缺失或无效 `contractSize` 继续使用既有 1:1 回退，避免引入新的市场元数据兼容层；交易所元数据本身错误仍属于外部事实风险。
+- HITL 合并只恢复不可逆的保护触发事实；当前终态已有 trigger 时以当前值为准，不合并或重写其他旧 execution 字段。

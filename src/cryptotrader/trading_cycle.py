@@ -19,7 +19,7 @@ from cryptotrader.cycle_serialization import (
 )
 from cryptotrader.decision.models import CycleOutcome
 from cryptotrader.execution.planner import ExecutionPlanningError
-from cryptotrader.execution.service import ExecutionResult
+from cryptotrader.execution.service import ExecutionResult, ProtectionTriggerResult
 from cryptotrader.hitl.gate import requires_approval
 from cryptotrader.journal.models import TradingCycleRecord
 from cryptotrader.profiles.models import validate_signal_profile
@@ -83,6 +83,21 @@ def _execution_payload(result: ExecutionResult | None) -> dict[str, Any] | None:
             for item in result.orders
         ],
     }
+
+
+def _protection_trigger_from_payload(payload: dict[str, Any] | None) -> ProtectionTriggerResult | None:
+    raw = (payload or {}).get("protection_trigger")
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return ProtectionTriggerResult(
+            algo_id=str(raw["algo_id"]),
+            trigger_reason=str(raw["trigger_reason"]),
+            trigger_price=float(raw["trigger_price"]),
+            order_id=str(raw["order_id"]),
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
 
 
 class TradingCycle:
@@ -488,6 +503,22 @@ class TradingCycle:
     ) -> CycleOutcome:
         if context is None and request is None:
             raise ValueError("context or request is required to finish a trading cycle")
+        if replace_journal and (execution_result is None or execution_result.protection_trigger is None):
+            existing = await self.journal.get(cycle_id)
+            prior_trigger = _protection_trigger_from_payload(
+                existing.execution_result if existing is not None else None
+            )
+            if prior_trigger is not None:
+                if execution_result is None:
+                    execution_result = ExecutionResult(
+                        succeeded=True,
+                        orders=(),
+                        algo_id=None,
+                        error=None,
+                        protection_trigger=prior_trigger,
+                    )
+                else:
+                    execution_result = replace(execution_result, protection_trigger=prior_trigger)
         context_summary = (
             signal_context_payload(context)
             if context is not None
