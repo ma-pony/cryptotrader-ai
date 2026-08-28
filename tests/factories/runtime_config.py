@@ -32,6 +32,7 @@ def connection(
         "credential_ref": "live-credentials" if environment == "live" else None,
         "leverage": 1,
         "margin_mode": "isolated",
+        "parameters": {"initial_equity": "10000"} if environment == "paper" else {},
     }
     return VenueConnection(**(values | overrides))
 

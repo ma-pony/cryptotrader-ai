@@ -31,6 +31,16 @@ def test_live_connection_requires_credential_reference():
         VenueConnection("live", "Live", "okx", "live", True, None, 1, "isolated")
 
 
+def test_connection_parameters_default_to_an_immutable_empty_mapping():
+    first = connection("first", "demo")
+    second = connection("second", "demo")
+
+    assert first.parameters == {}
+    assert first.parameters is not second.parameters
+    with pytest.raises(TypeError):
+        first.parameters["leak"] = True
+
+
 def test_capabilities_are_immutable_and_validate_declared_values():
     from cryptotrader.venues.models import VenueCapabilities
 

@@ -96,3 +96,27 @@ async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionE
     fake_client = fake_factory.clients[-1]
     assert fake_client.load_markets_calls == 1
     assert fake_client.close_calls == 1
+
+
+async def assert_paper_session_contract(adapter_factory) -> None:
+    """Exercise the normalized DTO surface without credentials or a client fake."""
+    from cryptotrader.venues.models import OpenVenueState, OrderIntent
+
+    pair = Pair.parse("BTC/USDT:USDT")
+    session = await adapter_factory().connect(
+        connection("paper-contract", "paper", parameters={"initial_equity": "20000"}),
+        None,
+    )
+    await session.set_quote(pair, Decimal("50000"))
+
+    portfolio = await session.fetch_portfolio(pair)
+    order = await session.place_order(OrderIntent(pair, "buy", Decimal("0.2"), "market", None, False))
+    state = await session.list_open_state(pair)
+
+    assert isinstance(portfolio, ConnectionPortfolioSnapshot)
+    assert portfolio.equity == Decimal("20000")
+    assert order.amount == order.filled_amount == Decimal("0.2")
+    assert order.average_price == Decimal("50000")
+    assert isinstance(state, OpenVenueState)
+    assert state.position.signed_notional == Decimal("10000.0")
+    await session.close()

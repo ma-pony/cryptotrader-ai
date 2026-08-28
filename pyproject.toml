@@ -75,6 +75,11 @@ llm_committee = "cryptotrader.signals.components.llm_committee:create_component"
 [project.entry-points."cryptotrader.market_sources"]
 default = "cryptotrader.market_sources.default:create_source"
 
+[project.entry-points."cryptotrader.venue_adapters"]
+okx = "cryptotrader.venues.okx:create_adapter"
+bybit = "cryptotrader.venues.bybit:create_adapter"
+paper = "cryptotrader.venues.paper:create_adapter"
+
 [tool.uv.sources]
 # Production runs Kronos inference on CPU.  PyPI's Linux torch wheels pull the
 # full CUDA runtime, so keep Linux installs on PyTorch's CPU-only index.

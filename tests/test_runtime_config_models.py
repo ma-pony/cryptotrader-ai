@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from pydantic import ValidationError
@@ -165,6 +166,53 @@ def test_document_recursively_freezes_market_and_signal_parameters():
         document.market_data.parameters["nested"]["values"] = ()
     with pytest.raises(TypeError):
         document.signals.components[0].parameters["nested"]["values"] = ()
+
+
+def test_venue_connection_parameters_are_json_safe_deeply_immutable_and_round_trip():
+    from cryptotrader.runtime_config.models import RuntimeConfigDocument
+
+    source = {
+        "initial_equity": "12500.50",
+        "matching": {"levels": [1, 2, 3], "enabled": True, "note": None},
+    }
+    document = runtime_document(connections=(connection(parameters=source),))
+    source["matching"]["levels"].append(4)
+
+    parameters = document.execution.connections[0].parameters
+    assert parameters["matching"]["levels"] == (1, 2, 3)
+    with pytest.raises(TypeError):
+        parameters["matching"]["levels"] += (4,)
+    with pytest.raises(TypeError):
+        parameters["matching"]["enabled"] = False
+
+    serialized = document.model_dump(mode="json")
+    assert serialized["execution"]["connections"][0]["parameters"] == {
+        "initial_equity": "12500.50",
+        "matching": {"levels": [1, 2, 3], "enabled": True, "note": None},
+    }
+    loaded = RuntimeConfigDocument.model_validate(serialized)
+    assert loaded == document
+    with pytest.raises(TypeError):
+        loaded.execution.connections[0].parameters["matching"]["levels"] += (4,)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"initial_equity": Decimal("10000")},
+        {"initial_equity": float("nan")},
+        {"initial_equity": float("inf")},
+        {"nested": ("not", "json")},
+        {"nested": {1: "non-string-key"}},
+        {" ": "blank-key"},
+        {"api_key": "must-not-live-in-runtime-document"},  # pragma: allowlist secret
+        {"apiSecret": "must-not-live-in-runtime-document"},  # pragma: allowlist secret
+        {"nested": {"password": "must-not-live-in-runtime-document"}},  # pragma: allowlist secret
+    ],
+)
+def test_venue_connection_parameters_reject_non_json_and_secret_values(parameters):
+    with pytest.raises(ValueError, match="parameters"):
+        connection(parameters=parameters)
 
 
 @pytest.mark.parametrize("enabled", ["false", 0, 1])

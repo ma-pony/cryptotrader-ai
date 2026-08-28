@@ -175,6 +175,23 @@ class ExecutionConfig(_FrozenConfigModel):
     books: tuple[ExecutionBook, ...] = ()
     allocation_policy: str = "weighted"
 
+    @field_serializer("connections")
+    def _serialize_connections(self, connections: tuple[VenueConnection, ...]) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": connection.id,
+                "label": connection.label,
+                "adapter_id": connection.adapter_id,
+                "environment": connection.environment,
+                "enabled": connection.enabled,
+                "credential_ref": connection.credential_ref,
+                "leverage": connection.leverage,
+                "margin_mode": connection.margin_mode,
+                "parameters": _thaw_parameters(connection.parameters),
+            }
+            for connection in connections
+        ]
+
 
 class HitlConfig(_FrozenConfigModel):
     approval_ttl_minutes: int = 60

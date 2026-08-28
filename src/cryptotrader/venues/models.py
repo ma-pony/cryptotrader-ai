@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Literal
+from types import MappingProxyType
+from typing import Any, Literal
 
 from cryptotrader.pair import MarketType, Pair
 
@@ -16,6 +19,47 @@ PositionSide = Literal["long", "short"]
 _ENVIRONMENTS = frozenset({"paper", "demo", "testnet", "live"})
 _MARGIN_MODES = frozenset({"isolated", "cross"})
 _MARKET_TYPES = frozenset({"spot", "swap", "future", "option"})
+_SECRET_PARAMETER_KEYS = frozenset(
+    {
+        "apikey",
+        "apisecret",
+        "secret",
+        "passphrase",
+        "password",
+        "authorization",
+        "accesstoken",
+        "refreshtoken",
+        "privatekey",
+        "credential",
+        "credentials",
+    }
+)
+
+
+def _freeze_json_value(value: Any, path: str) -> Any:
+    if isinstance(value, Mapping):
+        frozen: dict[str, Any] = {}
+        for key, item in value.items():
+            if type(key) is not str:
+                raise ValueError(f"{path} keys must be strings")
+            normalized_key = "".join(character for character in key.lower() if character.isalnum())
+            if not key.strip() or normalized_key in _SECRET_PARAMETER_KEYS:
+                raise ValueError(f"{path} contains a forbidden parameter key")
+            frozen[key] = _freeze_json_value(item, f"{path}.{key}")
+        return MappingProxyType(frozen)
+    if type(value) is list:
+        return tuple(_freeze_json_value(item, f"{path}[]") for item in value)
+    if value is None or type(value) in {str, bool, int}:
+        return value
+    if type(value) is float and math.isfinite(value):
+        return value
+    raise ValueError(f"{path} must contain only JSON-safe values")
+
+
+def _freeze_connection_parameters(parameters: object) -> Mapping[str, Any]:
+    if not isinstance(parameters, Mapping):
+        raise ValueError("venue connection parameters must be a mapping")
+    return _freeze_json_value(parameters, "venue connection parameters")
 
 
 def _require_decimal(value: object, field_name: str, *, positive: bool = False) -> None:
@@ -44,6 +88,7 @@ class VenueConnection:
     credential_ref: str | None
     leverage: int
     margin_mode: MarginMode
+    parameters: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if type(self.id) is not str or not self.id.strip():
@@ -66,6 +111,7 @@ class VenueConnection:
             raise ValueError("leverage must be at least one")
         if type(self.margin_mode) is not str or self.margin_mode not in _MARGIN_MODES:
             raise ValueError("unsupported margin_mode")
+        object.__setattr__(self, "parameters", _freeze_connection_parameters(self.parameters))
 
 
 @dataclass(frozen=True)
