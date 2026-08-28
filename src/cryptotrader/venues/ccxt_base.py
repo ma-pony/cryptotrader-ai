@@ -276,7 +276,7 @@ class CcxtVenueBase:
             average_raw = raw.get("average")
             average = self._decimal(average_raw, "average price") if average_raw not in (None, "") else None
             info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
-            reduce_only = self._boolean(raw.get("reduceOnly", info.get("reduceOnly", fallback_reduce_only)))
+            reduce_only = fallback_reduce_only or self._boolean(raw.get("reduceOnly", info.get("reduceOnly", False)))
             return NormalizedOrder(
                 str(raw.get("id") or ""),
                 pair,
@@ -310,8 +310,10 @@ class CcxtVenueBase:
             self._call("fetch open orders", self._client.fetch_open_orders, pair.to_ccxt()),
             self._fetch_protections(pair),
         )
+        if not isinstance(raw_orders, (list, tuple)):
+            raise VenueOperationError(f"{self.connection_id}: invalid open orders response")
         orders = []
-        for raw in raw_orders or ():
+        for raw in raw_orders:
             if not isinstance(raw, dict):
                 raise VenueOperationError(f"{self.connection_id}: invalid open order")
             orders.append(await self._normalize_order(raw, pair))

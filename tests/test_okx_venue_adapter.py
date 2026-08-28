@@ -41,7 +41,7 @@ async def test_okx_client_uses_passphrase_and_scoped_market_types():
 
 
 @pytest.mark.asyncio
-async def test_okx_swap_order_uses_contracts_td_mode_position_side_and_reduce_only():
+async def test_okx_hedge_reduce_keeps_normalized_semantics_without_exchange_reduce_only_param():
     _, session, factory = await _connect()
     intent = OrderIntent(Pair.parse("BTC/USDT:USDT"), "sell", Decimal("0.1"), "market", None, True)
 
@@ -49,7 +49,7 @@ async def test_okx_swap_order_uses_contracts_td_mode_position_side_and_reduce_on
 
     create = next(payload for name, payload in factory.clients[-1].calls if name == "create_order")
     assert create[3] == 10.0
-    assert create[5] == {"tdMode": "isolated", "posSide": "long", "reduceOnly": True}
+    assert create[5] == {"tdMode": "isolated", "posSide": "long"}
     assert order.amount == Decimal("0.1")
     assert order.filled_amount == Decimal("0.1")
     assert order.reduce_only is True
@@ -106,28 +106,47 @@ async def test_okx_replacement_confirms_new_protection_before_cancelling_old():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("hedged", "side", "reduce_only", "expected"),
+    ("hedged", "side", "amount", "reduce_only", "expected"),
     [
-        (False, "buy", False, "net"),
-        (False, "sell", True, "net"),
-        (True, "buy", False, "long"),
-        (True, "sell", False, "short"),
-        (True, "sell", True, "long"),
-        (True, "buy", True, "short"),
+        pytest.param(False, "buy", "0.1", False, {"tdMode": "isolated", "posSide": "net"}, id="net-open"),
+        pytest.param(
+            False,
+            "sell",
+            "0.04",
+            True,
+            {"tdMode": "isolated", "posSide": "net", "reduceOnly": True},
+            id="net-reduce",
+        ),
+        pytest.param(
+            False,
+            "sell",
+            "0.02",
+            True,
+            {"tdMode": "isolated", "posSide": "net", "reduceOnly": True},
+            id="net-close",
+        ),
+        pytest.param(True, "buy", "0.1", False, {"tdMode": "isolated", "posSide": "long"}, id="hedge-open-long"),
+        pytest.param(True, "sell", "0.1", False, {"tdMode": "isolated", "posSide": "short"}, id="hedge-open-short"),
+        pytest.param(True, "sell", "0.04", True, {"tdMode": "isolated", "posSide": "long"}, id="hedge-reduce-long"),
+        pytest.param(True, "buy", "0.04", True, {"tdMode": "isolated", "posSide": "short"}, id="hedge-reduce-short"),
+        pytest.param(True, "sell", "0.02", True, {"tdMode": "isolated", "posSide": "long"}, id="hedge-close-long"),
+        pytest.param(True, "buy", "0.02", True, {"tdMode": "isolated", "posSide": "short"}, id="hedge-close-short"),
     ],
 )
-async def test_okx_order_position_side_comes_from_account_mode_and_intent(hedged, side, reduce_only, expected):
+async def test_okx_order_params_follow_account_mode_and_open_reduce_close_intent(
+    hedged, side, amount, reduce_only, expected
+):
     _, session, factory = await _connect()
     client = factory.clients[-1]
     client.hedged = hedged
     client.position_side = "short" if side == "buy" else "long"
 
     await session.place_order(
-        OrderIntent(Pair.parse("BTC/USDT:USDT"), side, Decimal("0.1"), "market", None, reduce_only)
+        OrderIntent(Pair.parse("BTC/USDT:USDT"), side, Decimal(amount), "market", None, reduce_only)
     )
 
     request = next(payload for name, payload in client.calls if name == "create_order")
-    assert request[5]["posSide"] == expected
+    assert request[5] == expected
 
 
 @pytest.mark.asyncio

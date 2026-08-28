@@ -145,6 +145,27 @@ async def test_failed_close_can_be_retried_and_successful_close_is_idempotent():
 
 
 @pytest.mark.asyncio
+async def test_malformed_open_orders_top_level_shape_is_a_safe_operation_error():
+    from cryptotrader.venues.okx import OkxVenueAdapter
+
+    fake_factory = FakeCcxtFactory("okx")
+    session = await OkxVenueAdapter(client_factory=fake_factory).connect(
+        connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+
+    async def malformed_open_orders(*_args):
+        return 7
+
+    fake_factory.clients[-1].fetch_open_orders = malformed_open_orders
+
+    with pytest.raises(VenueOperationError, match="invalid open orders response") as caught:
+        await session.list_open_state(Pair.parse("BTC/USDT:USDT"))
+
+    assert caught.value.__cause__ is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("adapter_module", "adapter_name", "exchange_id", "environment"),
     [

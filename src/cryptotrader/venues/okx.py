@@ -40,7 +40,8 @@ class OkxVenueSession(CcxtVenueBase):
     async def _order_params(self, intent: OrderIntent) -> dict[str, Any]:
         if intent.pair.market_type == "spot":
             return {}
-        if not await self._position_mode_is_hedged():
+        hedged = await self._position_mode_is_hedged()
+        if not hedged:
             position_side = "net"
         elif intent.reduce_only:
             position_side = "long" if intent.side == "sell" else "short"
@@ -50,7 +51,7 @@ class OkxVenueSession(CcxtVenueBase):
             "tdMode": self.connection.margin_mode,
             "posSide": position_side,
         }
-        if intent.reduce_only:
+        if intent.reduce_only and not hedged:
             params["reduceOnly"] = True
         return params
 

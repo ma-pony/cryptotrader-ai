@@ -186,3 +186,44 @@ async def test_bybit_invalid_native_return_code_is_normalized_without_raw_payloa
 
     assert "raw-secret-value" not in str(caught.value)
     assert caught.value.__cause__ is None
+
+
+@pytest.mark.asyncio
+async def test_bybit_one_way_short_does_not_confirm_requested_long_protection():
+    from cryptotrader.venues.ccxt_base import VenueOperationError
+
+    _, session, factory = await _connect()
+    client = factory.clients[-1]
+    client.hedged = False
+    client.position_index = 0
+    client.position_side = "short"
+    spec = ProtectionSpec(
+        Pair.parse("BTC/USDT:USDT"),
+        "long",
+        Decimal("0.02"),
+        Decimal("48000"),
+        Decimal("55000"),
+    )
+
+    with pytest.raises(VenueOperationError, match="not confirmed"):
+        await session.replace_protection(spec)
+
+
+@pytest.mark.asyncio
+async def test_bybit_one_way_short_confirms_requested_short_protection():
+    _, session, factory = await _connect()
+    client = factory.clients[-1]
+    client.hedged = False
+    client.position_index = 0
+    client.position_side = "short"
+    spec = ProtectionSpec(
+        Pair.parse("BTC/USDT:USDT"),
+        "short",
+        Decimal("0.02"),
+        Decimal("56000"),
+        Decimal("45000"),
+    )
+
+    protection = await session.replace_protection(spec)
+
+    assert protection.position_side == "short"

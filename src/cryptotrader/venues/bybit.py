@@ -147,6 +147,7 @@ class BybitVenueSession(CcxtVenueBase):
         for protection in state.protections:
             if (
                 expected_id in protection.protection_ids
+                and protection.position_side == spec.position_side
                 and protection.amount == normalized_amount
                 and protection.stop_loss == stop_loss
                 and protection.take_profit == take_profit
