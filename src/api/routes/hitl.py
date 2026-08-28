@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from cryptotrader.cycle_serialization import trade_plan_payload
-from cryptotrader.hitl.store import ApprovalRecord, ApprovalStateError
+from cryptotrader.hitl.store import ApprovalRecord, ApprovalStateError, ApprovalStatus
 
 router = APIRouter(prefix="/api/hitl", tags=["hitl"])
 
@@ -19,7 +19,7 @@ class ApprovalRequestOut(BaseModel):
     pair: str
     profile_revision: int
     trade_plan: dict
-    status: Literal["pending", "approved", "rejected"]
+    status: ApprovalStatus
     decision_by: str | None
     created_at: str
     decided_at: str | None

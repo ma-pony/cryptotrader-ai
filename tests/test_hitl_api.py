@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -141,6 +142,59 @@ async def test_unknown_approval_returns_not_found():
         await get_approval("missing", _request_for(cycle))
 
     assert error.value.status_code == 404
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_sqlite", [False, True])
+async def test_cancelled_approval_remains_visible_but_not_approvable(tmp_path, use_sqlite):
+    from fastapi import FastAPI
+
+    from api.routes.hitl import router
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'cancelled-api.db'}" if use_sqlite else None
+    approvals = ApprovalStore(database_url)
+    cycle = _Cycle(approvals=approvals)
+    approval = await _seed(cycle)
+    await approvals.cancel_pending(approval.approval_id)
+
+    async def refuse_approve(approval_id, *, decision_by):
+        await approvals.approve(approval_id, decision_by=decision_by)
+
+    async def refuse_reject(approval_id, *, decision_by):
+        await approvals.reject(approval_id, decision_by=decision_by)
+
+    cycle.resume_approved.side_effect = refuse_approve
+    cycle.reject_approval.side_effect = refuse_reject
+    app = FastAPI()
+    app.include_router(router)
+    app.state.trading_cycle = cycle
+    app.state.trading_cycles = {cycle.mode: cycle}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app, raise_app_exceptions=False),
+        base_url="http://test",
+    ) as client:
+        detail = await client.get(f"/api/hitl/{approval.approval_id}")
+        pending = await client.get("/api/hitl/pending")
+        approve = await client.post(
+            f"/api/hitl/{approval.approval_id}/respond",
+            json={"decision": "approve"},
+        )
+        reject = await client.post(
+            f"/api/hitl/{approval.approval_id}/respond",
+            json={"decision": "reject"},
+        )
+
+    assert detail.status_code == 200
+    assert detail.json()["status"] == "cancelled"
+    assert pending.status_code == 200
+    assert pending.json() == []
+    assert approve.status_code == 409
+    assert reject.status_code == 409
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await approvals.approve(approval.approval_id, decision_by="test")
+    with pytest.raises(ApprovalStateError, match="not pending"):
+        await approvals.reject(approval.approval_id, decision_by="test")
 
 
 @pytest.mark.asyncio
