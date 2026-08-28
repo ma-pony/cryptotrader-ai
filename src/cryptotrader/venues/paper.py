@@ -231,16 +231,27 @@ class PaperVenueSession:
             return False
         next_amount = current.signed_amount + delta
         opens_opposite_leg = current.signed_amount * next_amount < 0
-        if opens_opposite_leg or abs(next_amount) > abs(current.signed_amount):
-            required_margin = self._required_margin_locked(intent.pair, next_amount, fill_price)
-            if required_margin > self._equity_locked():
-                return False
-
         realized = Decimal("0")
         if current.signed_amount * delta < 0 and current.entry_price is not None:
             closed_amount = min(abs(current.signed_amount), abs(delta))
             direction = Decimal("1") if current.signed_amount > 0 else Decimal("-1")
             realized = (fill_price - current.entry_price) * closed_amount * direction
+        if opens_opposite_leg or abs(next_amount) > abs(current.signed_amount):
+            mark_price = self._quote_locked(intent.pair).last
+            margin_price = mark_price if opens_opposite_leg else fill_price
+            required_margin = self._required_margin_locked(intent.pair, next_amount, margin_price)
+            available_equity = self._equity_locked()
+            if opens_opposite_leg:
+                current_unrealized = (
+                    (mark_price - current.entry_price) * current.signed_amount
+                    if current.entry_price is not None
+                    else Decimal("0")
+                )
+                next_unrealized = (mark_price - fill_price) * next_amount
+                available_equity = available_equity - current_unrealized + realized + next_unrealized
+            if required_margin > available_equity:
+                return False
+
         settlement = intent.pair.settle or intent.pair.quote
         self._account.balances[settlement] = self._account.balances.get(settlement, Decimal("0")) + realized
 

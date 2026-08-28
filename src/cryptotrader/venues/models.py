@@ -35,7 +35,7 @@ _SECRET_PARAMETER_COMPOUNDS = (
     frozenset({"credential", "payload"}),
     frozenset({"credentials", "payload"}),
 )
-_COMPACT_SECRET_PARAMETER_KEYS = frozenset(
+_COMPACT_SECRET_PARAMETER_PREFIXES = frozenset(
     {
         "apikey",
         "apisecret",
@@ -62,8 +62,19 @@ def _is_secret_parameter_key(key: str) -> bool:
         bool(tokens & _ALWAYS_SECRET_PARAMETER_TOKENS)
         or tokens in _EXACT_SECRET_PARAMETER_TOKENS
         or any(compound <= tokens for compound in _SECRET_PARAMETER_COMPOUNDS)
-        or compact_key in _COMPACT_SECRET_PARAMETER_KEYS
+        or any(compact_key.startswith(prefix) for prefix in _COMPACT_SECRET_PARAMETER_PREFIXES)
     )
+
+
+def _contains_secret_parameter_key(value: object) -> bool:
+    if isinstance(value, Mapping):
+        return any(
+            (type(key) is str and _is_secret_parameter_key(key)) or _contains_secret_parameter_key(item)
+            for key, item in value.items()
+        )
+    if type(value) in {list, tuple}:
+        return any(_contains_secret_parameter_key(item) for item in value)
+    return False
 
 
 def _freeze_json_value(value: Any, path: str) -> Any:

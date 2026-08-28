@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_valid
 
 from cryptotrader.execution.models import ExecutionBook  # noqa: TC001
 from cryptotrader.profiles.models import ComponentWeight, SignalProfile, validate_signal_profile
-from cryptotrader.venues.models import VenueConnection  # noqa: TC001
+from cryptotrader.venues.models import VenueConnection, _contains_secret_parameter_key
 
 
 class _FrozenConfigModel(BaseModel):
@@ -174,6 +174,33 @@ class ExecutionConfig(_FrozenConfigModel):
     connections: tuple[VenueConnection, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
     allocation_policy: str = "weighted"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _replace_rejected_connection_inputs(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        connections = value.get("connections")
+        if type(connections) not in {list, tuple}:
+            return value
+        safe_connections = list(connections)
+        changed = False
+        for index, connection in enumerate(connections):
+            if not isinstance(connection, Mapping) or not _contains_secret_parameter_key(connection.get("parameters")):
+                continue
+            safe_connections[index] = {
+                "id": "rejected-connection",
+                "label": "Rejected connection",
+                "adapter_id": "paper",
+                "environment": "paper",
+                "enabled": False,
+                "credential_ref": None,
+                "leverage": 1,
+                "margin_mode": "isolated",
+                "parameters": {"secret": "[redacted]"},  # pragma: allowlist secret
+            }
+            changed = True
+        return {**value, "connections": safe_connections} if changed else value
 
     @field_serializer("connections")
     def _serialize_connections(self, connections: tuple[VenueConnection, ...]) -> list[dict[str, Any]]:

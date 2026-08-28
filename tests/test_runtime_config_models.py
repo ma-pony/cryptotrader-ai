@@ -221,10 +221,12 @@ def test_venue_connection_parameters_reject_non_json_and_secret_values(parameter
         "auth_token",
         "accessToken",
         "apikey",
+        "apikeyid",
         "api_key_id",
         "credentials_payload",
         "authorization_header",
         "privatekey",
+        "privatekeypem",
         "private_key_pem",
         "credential_payload",
     ],
@@ -239,6 +241,8 @@ def test_venue_connection_parameters_reject_compound_secret_keys_without_echoing
 
 
 def test_venue_connection_parameters_keep_nonsecret_compound_names_usable_and_serializable():
+    from cryptotrader.runtime_config.models import RuntimeConfigDocument
+
     parameters = {
         "tokenization_method": "bpe",
         "keyframe_interval": 12,
@@ -248,20 +252,32 @@ def test_venue_connection_parameters_keep_nonsecret_compound_names_usable_and_se
 
     document = runtime_document(connections=(connection(parameters=parameters),))
 
-    assert document.model_dump(mode="json")["execution"]["connections"][0]["parameters"] == parameters
+    payload = document.model_dump(mode="json")
+    loaded = RuntimeConfigDocument.model_validate(payload)
+
+    assert payload["execution"]["connections"][0]["parameters"] == parameters
+    assert loaded.model_dump(mode="json")["execution"]["connections"][0]["parameters"] == parameters
 
 
 def test_runtime_document_validation_hides_rejected_parameter_input_values():
     from cryptotrader.runtime_config.models import RuntimeConfigDocument
 
     marker = "api-boundary-secret-marker"
-    payload = runtime_document(connections=(connection(),)).model_dump(mode="json")
+    connection_id = "tenant-account-42"
+    payload = runtime_document(connections=(connection(connection_id),)).model_dump(mode="json")
     payload["execution"]["connections"][0]["parameters"] = {"nested": {"authorization_header": marker}}
 
     with pytest.raises(ValidationError, match="forbidden parameter key") as error:
         RuntimeConfigDocument.model_validate(payload)
 
-    assert marker not in str(error.value)
+    details = error.value.errors()
+    renderings = (str(error.value), repr(details), error.value.json())
+
+    assert details[0]["loc"] == ("execution", "connections", 0)
+    assert details[0]["type"] == "value_error"
+    assert "forbidden parameter key" in details[0]["msg"]
+    assert all(marker not in rendering for rendering in renderings)
+    assert all(connection_id not in rendering for rendering in renderings)
 
 
 @pytest.mark.parametrize("enabled", ["false", 0, 1])

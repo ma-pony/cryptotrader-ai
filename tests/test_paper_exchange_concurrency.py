@@ -88,6 +88,20 @@ async def test_sign_changing_order_rechecks_margin_for_the_new_opposite_leg():
     assert (await session.fetch_portfolio(PAIR)).position.signed_amount == Decimal("100")
 
 
+async def test_limit_flip_uses_post_fill_equity_and_leaves_state_unchanged_when_rejected():
+    session = await _session(initial_equity="1000", leverage=10)
+    assert (await session.place_order(_amount_intent("buy", "100"))).status == "filled"
+
+    rejected = await session.place_order(OrderIntent(PAIR, "sell", Decimal("199"), "limit", Decimal("95"), False))
+
+    snapshot = await session.fetch_portfolio(PAIR)
+    assert rejected.status == "rejected"
+    assert rejected.filled_amount == Decimal("0")
+    assert snapshot.equity == Decimal("1000")
+    assert snapshot.position.signed_amount == Decimal("100")
+    assert snapshot.position.entry_price == Decimal("100")
+
+
 async def test_affordable_small_flip_and_pure_reduce_only_order_remain_allowed():
     flip_session = await _session(initial_equity="1000", leverage=10)
     await flip_session.place_order(_amount_intent("buy", "100"))
