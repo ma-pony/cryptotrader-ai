@@ -318,6 +318,14 @@ class BookCycleResult:
             raise ValueError("allocation failure must precede proposal")
         if self.proposal is not None and self.proposal.ready is not False:
             raise ValueError("preparation failure proposal must be non-ready")
+        self._validate_risk_failure_evidence()
+
+    def _validate_risk_failure_evidence(self) -> None:
+        assert self.failure is not None
+        if self.failure.stage == "risk" and self.proposal is not None:
+            risk = self.proposal.risk
+            if risk.passed or not (risk.rejected_by.strip() or risk.reason.strip()):
+                raise ValueError("risk preparation failure requires rejected risk evidence")
 
     def _expected_hitl_states(self) -> set[str]:
         if self.status == "ready":
@@ -354,11 +362,12 @@ class BookCycleResult:
         results_by_id = {item.connection_id: item for item in self.execution.connection_results}
         for connection_id, before in before_by_id.items():
             result = results_by_id.get(connection_id)
-            expected = (
-                result.final_position.position
-                if result is not None and result.final_position is not None
-                else before.position
-            )
+            if result is None:
+                expected = before.position
+            elif result.final_position is not None:
+                expected = result.final_position.position
+            else:
+                continue
             if after_by_id[connection_id].position != expected:
                 raise ValueError("portfolio_after position must match final_position or portfolio_before")
 
@@ -369,10 +378,6 @@ class BookCycleResult:
         if self.proposal is not None:
             return tuple(item.connection_id for item in self.proposal.risk.connection_targets)
         return ()
-
-    @property
-    def preparation_requires_attention(self) -> bool:
-        return self.failure is not None and self.failure.stage != "risk"
 
 
 @dataclass(frozen=True)
@@ -440,10 +445,10 @@ class MultiVenueCycleRecord:
         if any(not 0.0 <= item.weight <= 1.0 for item in self.fused_signal.contributions):
             raise ValueError("fused contribution weight must be in [0, 1]")
         if not math.isclose(
-            sum(item.weight for item in self.fused_signal.contributions),
+            math.fsum(item.weight for item in self.fused_signal.contributions),
             1.0,
-            rel_tol=1e-12,
-            abs_tol=1e-12,
+            rel_tol=0.0,
+            abs_tol=1e-9,
         ):
             raise ValueError("fused contribution weights must sum to one")
         expected_scores = {
@@ -524,8 +529,7 @@ class MultiVenueCycleRecord:
         if self.execution_status != expected_execution:
             raise ValueError("execution_status must be derived from book states")
         expected_attention = any(
-            (item.execution is not None and item.execution.requires_attention) or item.preparation_requires_attention
-            for item in self.book_results
+            item.execution is not None and item.execution.requires_attention for item in self.book_results
         )
         if self.requires_attention != expected_attention:
             raise ValueError("requires_attention must equal the OR of execution results")
@@ -546,31 +550,27 @@ class MultiVenueCycleRecord:
         terminal = tuple(item for item in self.book_results if item.execution is not None)
         if not terminal:
             return "not_started"
-        if len(terminal) != len(self.book_results):
-            return "partial"
-        execution_statuses = tuple(item.status for item in terminal)
-        if all(status == "completed" for status in execution_statuses):
-            return "completed"
+        execution_statuses = tuple(item.execution.status for item in terminal)
         if all(status == "failed" for status in execution_statuses):
             return "failed"
+        if len(terminal) != len(self.book_results):
+            return "partial"
+        if all(status == "completed" for status in execution_statuses):
+            return "completed"
         return "partial"
 
     def _expected_cycle_status(self) -> str:
-        preparation_failures = tuple(item.failure for item in self.book_results if item.failure is not None)
-        if len(preparation_failures) == len(self.book_results) and all(
-            failure.stage == "risk" for failure in preparation_failures
-        ):
-            return "risk_rejected"
-        if preparation_failures:
-            if len(preparation_failures) == len(self.book_results):
-                return "failed"
-            return "partial"
         statuses = tuple(item.status for item in self.book_results)
         for state in ("awaiting_approval", "approval_rejected", "ready"):
             if state in statuses:
                 return state
+        preparation_failures = tuple(item.failure for item in self.book_results if item.failure is not None)
+        if all(status == "failed" for status in statuses):
+            if len(preparation_failures) == len(self.book_results) and all(
+                failure.stage == "risk" for failure in preparation_failures
+            ):
+                return "risk_rejected"
+            return "failed"
         if all(status == "completed" for status in statuses):
             return "completed"
-        if all(status == "failed" for status in statuses):
-            return "failed"
         return "partial"

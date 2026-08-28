@@ -838,9 +838,13 @@ class MultiVenueCycleStore:
             requires_attention=record.requires_attention,
             created_at=record.created_at,
         )
-        outcome = await self._insert_outcome(session, row, record.cycle_id)
-        if not await _safe_close(session):
-            outcome = "failed"
+        operation_completed = False
+        try:
+            outcome = await self._insert_outcome(session, row, record.cycle_id)
+            operation_completed = True
+        finally:
+            if not await _safe_close(session) and operation_completed:
+                raise JournalPersistenceError("journal persistence failed") from None
         if outcome == "failed":
             raise JournalPersistenceError("journal persistence failed")
         if outcome == "duplicate":
@@ -944,9 +948,13 @@ class MultiVenueCycleStore:
     ) -> None:
         await self._ensure_write_table()
         session = await _write_session(self.database_url)
-        outcome = await self._replace_outcome(session, record, payloads[3])
-        if not await _safe_close(session):
-            outcome = "failed"
+        operation_completed = False
+        try:
+            outcome = await self._replace_outcome(session, record, payloads[3])
+            operation_completed = True
+        finally:
+            if not await _safe_close(session) and operation_completed:
+                raise JournalPersistenceError("journal persistence failed") from None
         if outcome == "saved":
             return
         errors = {

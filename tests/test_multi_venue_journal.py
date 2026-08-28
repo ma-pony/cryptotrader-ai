@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
+from sqlalchemy.exc import SQLAlchemyError
 
 from cryptotrader.decision.models import TargetPosition
 from cryptotrader.execution.models import BookExecutionProposal, BookExecutionResult, ConnectionExecutionResult
@@ -64,6 +65,27 @@ def _proposal_for(
         (),
         (),
         True,
+    )
+
+
+def _rejected_proposal_for(
+    book_id: str = "live",
+    capital_scope: str = "real",
+    connection_ids: tuple[str, str] = ("live-first", "live-second"),
+) -> BookExecutionProposal:
+    ready = _proposal_for(book_id, capital_scope, connection_ids)
+    rejected_risk = replace(
+        ready.risk,
+        passed=False,
+        rejected_by="book_risk",
+        reason="configured book risk limit",
+    )
+    return replace(
+        ready,
+        risk=rejected_risk,
+        connection_risks=(),
+        connection_plans=(),
+        ready=False,
     )
 
 
@@ -731,12 +753,19 @@ async def test_replace_rejects_frozen_identity_change_without_mutating_original(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("database", [False, True])
-async def test_replace_requires_existing_cycle(tmp_path, database):
+async def test_replace_requires_existing_cycle(tmp_path, monkeypatch, database):
+    from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
     store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'missing.db'}" if database else None)
+    sessions = []
+    if database:
+        await store.ensure_table()
+        sessions = _install_tracking_write_session(monkeypatch, journal_store)
     with pytest.raises(LookupError, match="cycle was not found"):
         await store.replace(_record())
+    if database:
+        assert sessions[0].close_calls == 1
 
 
 def _preparation_failure_book(
@@ -749,7 +778,12 @@ def _preparation_failure_book(
     from cryptotrader.journal.models import BookCycleResult, BookHitlSnapshot, BookPreparationFailure
 
     ready = _proposal_for(book_id, capital_scope, connection_ids)
-    proposal = None if stage in {"portfolio", "allocation"} else replace(ready, connection_plans=(), ready=False)
+    if stage in {"portfolio", "allocation"}:
+        proposal = None
+    elif stage == "risk":
+        proposal = _rejected_proposal_for(book_id, capital_scope, connection_ids)
+    else:
+        proposal = replace(ready, connection_plans=(), ready=False)
     before = None if stage == "portfolio" else _portfolio(ready)
     return BookCycleResult(
         book_id=book_id,
@@ -785,6 +819,102 @@ def test_book_preparation_failure_is_safe_and_supports_truthful_partial_cycle():
     assert record.book_results[1].proposal is not None
     assert record.book_results[1].proposal.ready is False
     assert record.book_results[1].execution is None
+
+
+def test_risk_preparation_failure_rejects_a_contradictory_passed_risk_proposal():
+    failure = _preparation_failure_book("risk")
+    contradictory = replace(
+        _proposal_for("live", "real", ("live-first", "live-second")),
+        connection_plans=(),
+        ready=False,
+    )
+
+    with pytest.raises(ValueError, match="risk"):
+        replace(failure, proposal=contradictory)
+
+
+@pytest.mark.parametrize("stage", ["portfolio", "allocation", "risk", "planning"])
+def test_preparation_failures_never_require_attention(stage):
+    failure = _preparation_failure_book(stage)
+    cycle_status = "risk_rejected" if stage == "risk" else "failed"
+    record = _record(
+        book_results=(failure,),
+        cycle_status=cycle_status,
+        execution_status="not_started",
+        requires_attention=False,
+    )
+
+    assert record.requires_attention is False
+    with pytest.raises(ValueError, match="requires_attention"):
+        replace(record, requires_attention=True)
+
+
+def test_only_actual_execution_attention_contributes_to_cycle_attention():
+    completed = _book_cycle(status="completed")
+    preparation = _preparation_failure_book("planning")
+    quiet = _record(
+        book_results=(completed, preparation),
+        cycle_status="partial",
+        execution_status="partial",
+        requires_attention=False,
+    )
+    assert quiet.requires_attention is False
+
+    partial_execution = _book_cycle(status="partial")
+    attention = replace(
+        quiet,
+        book_results=(partial_execution, preparation),
+        requires_attention=True,
+    )
+    assert attention.requires_attention is True
+
+
+@pytest.mark.parametrize(
+    ("action_status", "expected_cycle"),
+    [
+        ("awaiting_approval", "awaiting_approval"),
+        ("approval_rejected", "approval_rejected"),
+    ],
+)
+def test_user_action_cycle_status_has_priority_over_preparation_failure(action_status, expected_cycle):
+    action = _book_cycle(status=action_status)
+    risk_failure = _preparation_failure_book("risk")
+
+    record = _record(
+        book_results=(action, risk_failure),
+        cycle_status=expected_cycle,
+        execution_status="not_started",
+        requires_attention=False,
+    )
+
+    assert record.cycle_status == expected_cycle
+
+
+def test_all_failed_books_derive_failed_execution_and_cycle_status():
+    execution_failed = _book_cycle(status="failed")
+    preparation_failed = _preparation_failure_book("planning")
+
+    record = _record(
+        book_results=(execution_failed, preparation_failed),
+        cycle_status="failed",
+        execution_status="failed",
+        requires_attention=True,
+    )
+
+    assert record.cycle_status == "failed"
+    assert record.execution_status == "failed"
+
+
+def test_completed_and_preparation_failed_books_are_partial_without_attention():
+    record = _record(
+        book_results=(_book_cycle(status="completed"), _preparation_failure_book("planning")),
+        cycle_status="partial",
+        execution_status="partial",
+        requires_attention=False,
+    )
+
+    assert record.cycle_status == "partial"
+    assert record.execution_status == "partial"
 
 
 @pytest.mark.asyncio
@@ -948,6 +1078,65 @@ def test_after_portfolio_positions_match_execution_finals_or_unchanged_before():
         replace(book, portfolio_after=bad_after)
 
 
+def test_failed_execution_with_unknown_final_position_accepts_real_after_snapshot():
+    book = _book_cycle(status="failed")
+    assert book.execution is not None
+    assert all(result.final_position is None for result in book.execution.connection_results)
+    assert book.portfolio_after is not None
+    changed = replace(
+        book.portfolio_after.connections[0],
+        position=ConnectionPosition(book.pair, Decimal("0.1"), Decimal("10"), Decimal("100")),
+    )
+    after = replace(
+        book.portfolio_after,
+        connections=(changed, *book.portfolio_after.connections[1:]),
+        total_signed_notional=Decimal("10"),
+    )
+
+    result = replace(book, portfolio_after=after)
+
+    assert result.portfolio_after.connections[0].position == changed.position
+
+
+def test_connection_without_execution_result_must_remain_unchanged_in_after_snapshot():
+    from cryptotrader.journal.models import BookCycleResult, BookHitlSnapshot
+
+    proposal = _proposal_with_unavailable_reduction()
+    before = _portfolio(_proposal_for())
+    execution = BookExecutionResult(
+        proposal,
+        (_result(proposal, 0, "completed"),),
+        "partial",
+        False,
+    )
+    after = _portfolio(proposal, after=True, execution=execution)
+    changed_unavailable = replace(
+        after.connections[1],
+        position=ConnectionPosition(proposal.pair, Decimal("0.1"), Decimal("10"), Decimal("100")),
+    )
+    changed_after = replace(
+        after,
+        connections=(after.connections[0], changed_unavailable),
+        total_signed_notional=after.connections[0].position.signed_notional + Decimal("10"),
+    )
+
+    with pytest.raises(ValueError, match="portfolio_before"):
+        BookCycleResult(
+            book_id=proposal.book_id,
+            capital_scope=proposal.capital_scope,
+            config_revision=proposal.config_revision,
+            pair=proposal.pair,
+            proposal=proposal,
+            portfolio_before=before,
+            hitl=BookHitlSnapshot(None, "not_required", proposal.config_revision),
+            execution=execution,
+            failure=None,
+            portfolio_after=changed_after,
+            portfolio_after_available=True,
+            status="partial",
+        )
+
+
 @pytest.mark.parametrize(
     "fused",
     [
@@ -988,6 +1177,21 @@ def test_after_portfolio_positions_match_execution_finals_or_unchanged_before():
 def test_fusion_rejects_invalid_weights_and_forged_component_scores(fused):
     with pytest.raises(ValueError, match=r"weight|signed_score"):
         replace(_record(), fused_signal=fused)
+
+
+def test_fusion_weight_sum_uses_runtime_configuration_tolerance():
+    fused = FusedSignal(
+        0.30000000032,
+        (
+            ComponentContribution("kronos", 0.5000000004, 0.8, 0.40000000032),
+            ComponentContribution("llm_committee", 0.5, -0.2, -0.1),
+        ),
+        "validated runtime weights",
+    )
+
+    record = replace(_record(), fused_signal=fused)
+
+    assert record.fused_signal == fused
 
 
 @pytest.mark.parametrize(
@@ -1163,9 +1367,186 @@ async def test_replace_cannot_rewrite_awaiting_approval_identity(tmp_path, datab
     assert await store.get(original.cycle_id) == original
 
 
+class _TrackingSession:
+    def __init__(self, inner, *, fail_add=False, fail_close=False):
+        self.inner = inner
+        self.fail_add = fail_add
+        self.fail_close = fail_close
+        self.close_calls = 0
+
+    def __getattr__(self, name):
+        return getattr(self.inner, name)
+
+    def add(self, row):
+        if self.fail_add:
+            raise RuntimeError("program add failure")
+        return self.inner.add(row)
+
+    async def close(self):
+        self.close_calls += 1
+        await self.inner.close()
+        if self.fail_close:
+            raise SQLAlchemyError("RAW_CLOSE_MARKER")
+
+
+def _install_tracking_write_session(monkeypatch, journal_store, *, fail_add=False, fail_close=False):
+    original = journal_store._write_session
+    sessions = []
+
+    async def tracked(database_url):
+        session = _TrackingSession(
+            await original(database_url),
+            fail_add=fail_add,
+            fail_close=fail_close,
+        )
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(journal_store, "_write_session", tracked)
+    return sessions
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ["save", "replace"])
-async def test_sqlalchemy_write_failures_are_redacted_without_params_or_context(tmp_path, operation):
+async def test_database_write_session_closes_once_on_success(tmp_path, monkeypatch, operation):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'close-success-{operation}.db'}")
+    await store.ensure_table()
+    record = _record()
+    if operation == "replace":
+        await store.save(record)
+    sessions = _install_tracking_write_session(monkeypatch, journal_store)
+
+    if operation == "save":
+        await store.save(record)
+    else:
+        await store.replace(record)
+
+    assert len(sessions) == 1
+    assert sessions[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "replace"])
+async def test_normal_database_write_close_failure_is_redacted(tmp_path, monkeypatch, operation):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'close-failure-{operation}.db'}")
+    await store.ensure_table()
+    record = _record()
+    if operation == "replace":
+        await store.save(record)
+    sessions = _install_tracking_write_session(monkeypatch, journal_store, fail_close=True)
+
+    async def write():
+        if operation == "save":
+            return await store.save(record)
+        return await store.replace(record)
+
+    with pytest.raises(JournalPersistenceError, match=r"^journal persistence failed$") as captured:
+        await write()
+
+    assert sessions[0].close_calls == 1
+    assert "RAW_CLOSE_MARKER" not in repr(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+
+
+@pytest.mark.asyncio
+async def test_illegal_terminal_replace_closes_once_and_preserves_domain_error(tmp_path, monkeypatch):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'close-domain.db'}")
+    original = _record()
+    await store.save(original)
+    book = original.book_results[0]
+    changed_result = replace(book.execution.connection_results[1], trace=("pre_read", "place_order"))
+    changed_execution = replace(
+        book.execution,
+        connection_results=(book.execution.connection_results[0], changed_result),
+    )
+    changed = replace(original, book_results=(replace(book, execution=changed_execution),))
+    sessions = _install_tracking_write_session(monkeypatch, journal_store, fail_close=True)
+
+    with pytest.raises(ValueError, match=r"terminal|immutable"):
+        await store.replace(changed)
+
+    assert sessions[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_corrupt_replace_row_closes_write_session_once(tmp_path, monkeypatch):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    path = tmp_path / "close-corrupt.db"
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    record = _record()
+    await store.save(record)
+    with sqlite3.connect(path) as connection:
+        payload = json.loads(
+            connection.execute(
+                "SELECT book_results FROM multi_venue_cycles WHERE cycle_id = ?",
+                (record.cycle_id,),
+            ).fetchone()[0]
+        )
+        payload["items"][0]["book_id"] = "corrupt-book"
+        connection.execute(
+            "UPDATE multi_venue_cycles SET book_results = ? WHERE cycle_id = ?",
+            (json.dumps(payload), record.cycle_id),
+        )
+    sessions = _install_tracking_write_session(monkeypatch, journal_store)
+
+    with pytest.raises(ValueError, match="stored cycle payload"):
+        await store.replace(record)
+
+    assert sessions[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["add", "validate"])
+async def test_program_write_failure_closes_once_without_close_overwrite(tmp_path, monkeypatch, failure):
+    from cryptotrader.journal import store as journal_store
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'close-program-{failure}.db'}")
+    await store.ensure_table()
+    record = _record()
+    if failure == "validate":
+        await store.save(record)
+    sessions = _install_tracking_write_session(
+        monkeypatch,
+        journal_store,
+        fail_add=failure == "add",
+        fail_close=True,
+    )
+    if failure == "validate":
+
+        def fail_validation(*_args):
+            raise RuntimeError("program validation failure")
+
+        monkeypatch.setattr(MultiVenueCycleStore, "_validate_replacement", staticmethod(fail_validation))
+
+    async def write():
+        if failure == "add":
+            return await store.save(record)
+        return await store.replace(record)
+
+    message = "program add failure" if failure == "add" else "program validation failure"
+    with pytest.raises(RuntimeError, match=message):
+        await write()
+
+    assert sessions[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["save", "replace"])
+async def test_sqlalchemy_write_failures_are_redacted_without_params_or_context(tmp_path, monkeypatch, operation):
+    from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
 
     path = tmp_path / f"abort-{operation}.db"
@@ -1205,6 +1586,7 @@ async def test_sqlalchemy_write_failures_are_redacted_without_params_or_context(
             f"CREATE TRIGGER abort_cycle_{operation} BEFORE {action} ON multi_venue_cycles "
             "BEGIN SELECT RAISE(ABORT, 'RAW_SECRET_MARKER'); END"
         )
+    sessions = _install_tracking_write_session(monkeypatch, journal_store)
 
     async def write():
         if operation == "save":
@@ -1217,6 +1599,7 @@ async def test_sqlalchemy_write_failures_are_redacted_without_params_or_context(
     assert "RAW_SECRET_MARKER" not in repr(captured.value)
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
+    assert sessions[0].close_calls == 1
 
 
 @pytest.mark.asyncio
