@@ -242,3 +242,18 @@ async def test_database_replace_moves_pending_cycle_to_its_terminal_state(tmp_pa
     await store.replace(completed)
 
     assert await store.get(pending.cycle_id) == completed
+
+
+@pytest.mark.asyncio
+async def test_legacy_cycle_store_remains_independent_when_new_table_exists(tmp_path):
+    from cryptotrader.journal.store import CycleJournalStore, MultiVenueCycleStore
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'coexist.db'}"
+    await MultiVenueCycleStore(database_url).ensure_table()
+    legacy = CycleJournalStore(database_url)
+    record = cycle_record(cycle_id="legacy-cycle")
+
+    await legacy.append(record)
+
+    assert await legacy.get(record.cycle_id) == record
+    assert await MultiVenueCycleStore(database_url).get(record.cycle_id) is None
