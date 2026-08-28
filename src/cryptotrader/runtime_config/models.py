@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003
+from types import MappingProxyType
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
 from cryptotrader.execution.models import ExecutionBook  # noqa: TC001
 from cryptotrader.profiles.models import ComponentWeight, SignalProfile, validate_signal_profile
@@ -18,13 +20,43 @@ class _FrozenConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+def _freeze_parameters(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze_parameters(item) for key, item in value.items()})
+    if isinstance(value, list | tuple):
+        return tuple(_freeze_parameters(item) for item in value)
+    if isinstance(value, set | frozenset):
+        return frozenset(_freeze_parameters(item) for item in value)
+    return value
+
+
+def _thaw_parameters(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw_parameters(item) for key, item in value.items()}
+    if isinstance(value, tuple | frozenset):
+        return [_thaw_parameters(item) for item in value]
+    return value
+
+
+class _ParameterConfigModel(_FrozenConfigModel):
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _freeze_nested_parameters(self):
+        object.__setattr__(self, "parameters", _freeze_parameters(self.parameters))
+        return self
+
+    @field_serializer("parameters")
+    def _serialize_parameters(self, value: Mapping[str, Any]) -> dict[str, Any]:
+        return _thaw_parameters(value)
+
+
 class SystemConfig(_FrozenConfigModel):
     active: bool = False
 
 
-class MarketDataConfig(_FrozenConfigModel):
+class MarketDataConfig(_ParameterConfigModel):
     source_id: str = "default"
-    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class LlmRetryConfig(_FrozenConfigModel):
@@ -63,11 +95,10 @@ class LlmConfig(_FrozenConfigModel):
     models: LlmModelsConfig = Field(default_factory=LlmModelsConfig)
 
 
-class SignalComponentConfig(_FrozenConfigModel):
+class SignalComponentConfig(_ParameterConfigModel):
     component_id: str
     enabled: bool
     weight: float
-    parameters: dict[str, Any] = Field(default_factory=dict)
 
 
 class SignalConfig(_FrozenConfigModel):
@@ -209,6 +240,7 @@ def validate_runtime_document(
     document: RuntimeConfigDocument,
     installed_signal_ids: set[str],
     installed_adapter_ids: set[str],
+    installed_market_source_ids: set[str],
 ) -> None:
     """Validate the entire runtime document without silently repairing it."""
 
@@ -217,7 +249,7 @@ def validate_runtime_document(
     _validate_book_weights(document.execution.books)
     _validate_capital_scopes(document.execution.connections, document.execution.books)
     _validate_unique_enabled_membership(document.execution.books)
-    _validate_active_document(document)
+    _validate_active_document(document, installed_market_source_ids)
 
 
 def _validate_connection_ids(connections: tuple[VenueConnection, ...], installed_adapter_ids: set[str]) -> None:
@@ -276,11 +308,11 @@ def _validate_unique_enabled_membership(books: tuple[ExecutionBook, ...]) -> Non
             memberships.add(allocation.connection_id)
 
 
-def _validate_active_document(document: RuntimeConfigDocument) -> None:
+def _validate_active_document(document: RuntimeConfigDocument, installed_market_source_ids: set[str]) -> None:
     if not document.system.active:
         return
-    if not document.market_data.source_id.strip():
-        raise ValueError("active document requires a resolvable market source")
+    if document.market_data.source_id not in installed_market_source_ids:
+        raise ValueError(f"uninstalled market source: {document.market_data.source_id}")
     if not any(component.enabled for component in document.signals.components):
         raise ValueError("active document requires an enabled signal component")
     if not any(book.enabled for book in document.execution.books):

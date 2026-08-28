@@ -2,6 +2,7 @@
 
 from tests.factories.runtime_config import (
     INSTALLED_ADAPTERS,
+    INSTALLED_MARKET_SOURCES,
     INSTALLED_SIGNALS,
     active_document,
     allocation,
@@ -15,6 +16,7 @@ from tests.factories.runtime_config import (
 
 __all__ = [
     "INSTALLED_ADAPTERS",
+    "INSTALLED_MARKET_SOURCES",
     "INSTALLED_SIGNALS",
     "active_document",
     "allocation",

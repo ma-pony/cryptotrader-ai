@@ -15,6 +15,7 @@ from cryptotrader.venues.models import VenueConnection
 
 INSTALLED_SIGNALS = {"kronos", "llm_committee"}
 INSTALLED_ADAPTERS = {"paper", "okx", "bybit"}
+INSTALLED_MARKET_SOURCES = {"default", "fixture-market"}
 
 
 def connection(
