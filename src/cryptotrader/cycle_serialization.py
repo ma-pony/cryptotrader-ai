@@ -24,7 +24,16 @@ def json_value(value: Any) -> Any:
         if isinstance(item, Mapping):
             return dict(item)
         if isinstance(item, set | frozenset):
-            return list(item)
+            encoded = (json_value(member) for member in item)
+            return sorted(
+                encoded,
+                key=lambda member: json.dumps(
+                    member,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
         return str(item)
 
     return json.loads(json.dumps(value, default=encode))
