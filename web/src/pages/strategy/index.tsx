@@ -24,6 +24,8 @@ const StrategyPage = () => {
   const [draft, setDraft] = useState<Draft>();
   const [customId, setCustomId] = useState('');
   const [saved, setSaved] = useState(false);
+  const [parameterText, setParameterText] = useState<Record<string, string>>({});
+  const [parameterErrors, setParameterErrors] = useState<Record<string, boolean>>({});
   // A query cache revision may change while this editor is open.  Only an empty
   // editor hydrates from it; explicit reload is the sole path that discards a draft.
   useEffect(() => {
@@ -34,7 +36,7 @@ const StrategyPage = () => {
   const valid =
     enabled.length > 0 &&
     Math.abs(total - 1) < 1e-9 &&
-    Boolean(
+    !Object.values(parameterErrors).some(Boolean) && Boolean(
       draft &&
       draft.neutral_threshold >= 0 &&
       draft.neutral_threshold < 1 &&
@@ -138,16 +140,15 @@ const StrategyPage = () => {
             <div className="grid gap-4 xl:grid-cols-2">
               {draft.components.map((component, index) => {
                 const label = labels[component.component_id as keyof typeof labels];
-                return (
-                  <ComponentWeightCard
-                    key={component.component_id}
+                return (<div key={component.component_id} className="rounded-xl border border-border p-3"><ComponentWeightCard
                     component={component}
                     displayName={label?.[0] ?? component.component_id}
                     description={label?.[1] ?? '自定义运行时信号组件'}
                     accent={ACCENTS[index % ACCENTS.length] ?? '#f59e0b'}
                     onChange={updateComponent}
                   />
-                );
+                  <label className="block text-xs text-muted-foreground">参数 JSON<textarea aria-label={`${component.component_id} 参数`} value={parameterText[component.component_id] ?? JSON.stringify(component.parameters)} onChange={(event) => { const text = event.target.value; setParameterText((current) => ({ ...current, [component.component_id]: text })); try { const parameters = JSON.parse(text) as RuntimeJsonObject; if (!parameters || Array.isArray(parameters)) throw new Error(); setDraft((current) => current && ({ ...current, components: current.components.map((item) => item.component_id === component.component_id ? { ...item, parameters } : item) })); setParameterErrors((current) => ({ ...current, [component.component_id]: false })); } catch { setParameterErrors((current) => ({ ...current, [component.component_id]: true })); } }} className="mt-1 min-h-20 w-full rounded border bg-background p-2 font-mono" /></label>
+                </div>);
               })}
             </div>
             <div className="mt-4 flex gap-2">

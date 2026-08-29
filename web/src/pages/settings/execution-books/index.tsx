@@ -1,5 +1,5 @@
 import { Plus, Save } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
@@ -15,8 +15,9 @@ const ExecutionBooksPage = () => {
   const [equity, setEquity] = useState(100000);
   const [exposure, setExposure] = useState(0.5);
   const [saveError, setSaveError] = useState('');
+  const hydrated = useRef(false);
   useEffect(() => {
-    if (document) setBooks(document.execution.books);
+    if (document && !hydrated.current) { setBooks(document.execution.books); hydrated.current = true; }
   }, [document]);
   const errors = document ? validateBooks(books, document.execution.connections) : [];
   const save = async () => {
@@ -114,6 +115,9 @@ const ExecutionBooksPage = () => {
           <Button variant="outline" onClick={() => setBooks((current) => [...current, newBook()])}>
             <Plus className="h-4 w-4" />
             新增资金池
+          </Button>
+          <Button variant="outline" onClick={() => void reload()}>
+            重新加载
           </Button>
           {errors.map((error) => (
             <p key={error} role="alert" className="text-sm text-trade-short">

@@ -5,7 +5,7 @@ import { ConnectionHealthSchema, CredentialMutationSchema, RuntimeConfigSchema, 
 import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
 import { setRuntimeConfigConflict } from './runtime-config-conflict';
 import { ApiError } from '@/lib/api-client';
-import type { RuntimeJsonObject } from '@/types/api';
+import type { RuntimeConfig, RuntimeJsonObject } from '@/types/api';
 
 type ConnectionInput = {
   expected_revision: number;
@@ -27,19 +27,28 @@ export const useVenueConnections = () => {
     queryFn: () => apiClient.get('/api/config', RuntimeConfigSchema),
     staleTime: 0,
   });
+  const applyMutation = (mutation: { revision: number; connection: RuntimeConfig['document']['execution']['connections'][number] }) => {
+    client.setQueryData<RuntimeConfig>(RUNTIME_CONFIG_QUERY_KEY, (current) => current ? {
+      ...current,
+      revision: mutation.revision,
+      document: { ...current.document, execution: { ...current.document.execution, connections: current.document.execution.connections.some((item) => item.id === mutation.connection.id) ? current.document.execution.connections.map((item) => item.id === mutation.connection.id ? mutation.connection : item) : [...current.document.execution.connections, mutation.connection] } },
+    } : current);
+  };
+  const writeThenRefresh = async (write: () => Promise<{ revision: number; connection: RuntimeConfig['document']['execution']['connections'][number] }>) => {
+    const mutation = await write();
+    applyMutation(mutation);
+    try { await refreshConfig(); return { ...mutation, savedNeedsReload: false }; }
+    catch { return { ...mutation, savedNeedsReload: true }; }
+  };
   const conflict = (error: unknown) => {
     if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
   };
   const create = useMutation({
-    mutationFn: (body: ConnectionInput & { id: string }) =>
-      apiClient.post('/api/venue-connections', body, VenueMutationSchema),
-    onSuccess: refreshConfig,
+    mutationFn: (body: ConnectionInput & { id: string }) => writeThenRefresh(() => apiClient.post('/api/venue-connections', body, VenueMutationSchema)),
     onError: conflict,
   });
   const update = useMutation({
-    mutationFn: ({ id, body }: { id: string; body: ConnectionInput }) =>
-      apiClient.put(`/api/venue-connections/${id}`, body, VenueMutationSchema),
-    onSuccess: refreshConfig,
+    mutationFn: ({ id, body }: { id: string; body: ConnectionInput }) => writeThenRefresh(() => apiClient.put(`/api/venue-connections/${id}`, body, VenueMutationSchema)),
     onError: conflict,
   });
   // Credential material must never become mutation variables: this plain async boundary is intentionally not cached.

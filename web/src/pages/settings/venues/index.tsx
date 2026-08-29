@@ -9,11 +9,16 @@ import { VenueForm } from './venue-form';
 const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
   const runtime = useRuntimeConfig();
   const [adding, setAdding] = useState(false);
+  const [editorGeneration, setEditorGeneration] = useState(0);
+  const reload = async () => {
+    const result = await runtime.reload();
+    if (result.isSuccess && !result.error && result.data) setEditorGeneration((current) => current + 1);
+  };
   return (
     <PageBoundary
       loading={runtime.isLoading}
       isError={runtime.isError}
-      onRetry={() => void runtime.reload()}
+      onRetry={() => void reload()}
       errorTitle="无法读取连接配置"
       errorDescription="请检查配置服务后重试。"
     >
@@ -48,6 +53,7 @@ const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
                   </div>
                 </div>
                 <VenueForm
+                  key={`${connection.id}-${editorGeneration}`}
                   revision={runtime.revision ?? 0}
                   connection={connection}
                   onSaved={() => void runtime.reload()}
@@ -60,6 +66,7 @@ const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
             <section className="rounded-2xl border border-dashed border-amber-500/40 bg-card p-5">
               <h2 className="mb-4 font-semibold">新增平台连接</h2>
               <VenueForm
+                key={`new-${editorGeneration}`}
                 revision={runtime.revision}
                 onSaved={() => {
                   setAdding(false);
@@ -74,6 +81,9 @@ const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
               新增连接
             </Button>
           )}
+          <Button variant="outline" onClick={() => void reload()}>
+            重新加载
+          </Button>
           {runtime.conflict ? (
             <p role="alert" className="text-sm text-trade-short">
               配置已被其他操作更新，请重新加载

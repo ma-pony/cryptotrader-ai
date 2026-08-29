@@ -5,9 +5,16 @@ import { describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/lib/i18n';
 import { App } from '@/App';
+import { validateRiskSection } from './index';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 
 describe('SetupPage', () => {
+  it('rejects malformed or unknown risk JSON instead of accepting an arbitrary object', () => {
+    expect(validateRiskSection({})).toBeUndefined();
+    expect(validateRiskSection({ ...runtimeConfigFixture().document.risk, unexpected: true })).toBeUndefined();
+    expect(validateRiskSection(runtimeConfigFixture().document.risk)).toEqual(runtimeConfigFixture().document.risk);
+  });
+
   it('routes setup_required users into the ordered setup flow', async () => {
     await i18n.changeLanguage('zh-CN');
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(runtimeConfigFixture({ setup_required: true, document: { ...runtimeConfigFixture().document, system: { active: false } } })), { status: 200 })));

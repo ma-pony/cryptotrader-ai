@@ -1,5 +1,5 @@
 import { FlaskConical, Save } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useVenueConnections } from '@/hooks/use-venue-connections';
 import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/api';
@@ -44,7 +44,11 @@ export const VenueForm = ({
   const [passphrase, setPassphrase] = useState('');
   const [credentialSaving, setCredentialSaving] = useState(false);
   const [error, setError] = useState('');
+  const [savedNeedsReload, setSavedNeedsReload] = useState(false);
+  const hydratedConnectionId = useRef(connection?.id);
   useEffect(() => {
+    if (hydratedConnectionId.current === connection?.id) return;
+    hydratedConnectionId.current = connection?.id;
     setDraft(connection ? { ...connection } : emptyDraft());
     setApiKey('');
     setSecret('');
@@ -60,6 +64,7 @@ export const VenueForm = ({
         ? await venues.update.mutateAsync({ id: draft.id, body: { ...draft, expected_revision: revision } })
         : await venues.create.mutateAsync({ ...draft, expected_revision: revision });
       onSaved?.(saved.connection);
+      setSavedNeedsReload(saved.savedNeedsReload);
     } catch {
       setError('保存连接失败，请重新加载后重试。');
     }
@@ -235,7 +240,8 @@ export const VenueForm = ({
           {error}
         </p>
       ) : null}
-      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending}>
+      {savedNeedsReload ? <p role="status" className="text-sm text-amber-500">连接已保存，但配置刷新失败；请重新加载后继续。</p> : null}
+      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload}>
         <Save className="h-4 w-4" />
         {existing ? '保存连接' : '创建连接'}
       </Button>

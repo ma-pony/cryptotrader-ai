@@ -12,6 +12,39 @@ const STEPS = ['LLM', '信号组件', '行情来源', '平台连接', '执行资
 type DraftConnection = RuntimeDocument['execution']['connections'][number];
 type ResponseConnection = RuntimeConfig['document']['execution']['connections'][number];
 
+const hasExactFiniteNumbers = (value: unknown, fields: readonly string[]) =>
+  typeof value === 'object' &&
+  value !== null &&
+  !Array.isArray(value) &&
+  Object.keys(value).length === fields.length &&
+  fields.every(
+    (field) =>
+      Object.prototype.hasOwnProperty.call(value, field) &&
+      typeof (value as Record<string, unknown>)[field] === 'number' &&
+      Number.isFinite((value as Record<string, number>)[field]),
+  );
+
+/** The risk editor accepts the whole strict runtime section, never an arbitrary JSON object. */
+export const validateRiskSection = (value: unknown): RuntimeDocument['risk'] | undefined => {
+  if (
+    typeof value !== 'object' || value === null || Array.isArray(value) ||
+    typeof (value as Record<string, unknown>).max_stop_loss_pct !== 'number' ||
+    !Number.isFinite((value as Record<string, number>).max_stop_loss_pct) ||
+    !hasExactFiniteNumbers((value as Record<string, unknown>).position, [
+      'max_single_pct', 'max_total_exposure_pct', 'max_margin_used_pct', 'max_correlated_positions', 'max_same_direction_positions',
+    ]) ||
+    !hasExactFiniteNumbers((value as Record<string, unknown>).loss, [
+      'max_daily_loss_pct', 'max_drawdown_pct', 'max_cvar_95', 'cvar_min_returns',
+    ]) ||
+    !hasExactFiniteNumbers((value as Record<string, unknown>).cooldown, ['same_pair_minutes', 'post_loss_minutes']) ||
+    !hasExactFiniteNumbers((value as Record<string, unknown>).volatility, ['flash_crash_threshold', 'funding_rate_threshold', 'flash_crash_lookback']) ||
+    !hasExactFiniteNumbers((value as Record<string, unknown>).exchange, ['max_api_latency_ms', 'health_check_interval_s']) ||
+    !hasExactFiniteNumbers((value as Record<string, unknown>).rate_limit, ['max_trades_per_hour', 'max_trades_per_day']) ||
+    Object.keys(value as Record<string, unknown>).length !== 7
+  ) return undefined;
+  return value as RuntimeDocument['risk'];
+};
+
 const testFingerprint = (connection: DraftConnection, credentialUpdatedAt?: string | null) =>
   JSON.stringify({
     id: connection.id,
@@ -50,6 +83,8 @@ const SetupEditor = ({
   const [customId, setCustomId] = useState('');
   const [customParameters, setCustomParameters] = useState('{}');
   const [signalError, setSignalError] = useState('');
+  const [componentParameterText, setComponentParameterText] = useState<Record<string, string>>({});
+  const [componentParameterErrors, setComponentParameterErrors] = useState<Record<string, boolean>>({});
   const [riskText, setRiskText] = useState(JSON.stringify(initialDocument.risk, null, 2));
   const [riskError, setRiskError] = useState('');
   const [riskDirty, setRiskDirty] = useState(false);
@@ -83,7 +118,8 @@ const SetupEditor = ({
     !marketDirty &&
     !marketError &&
     !riskDirty &&
-    !riskError;
+    !riskError &&
+    !Object.values(componentParameterErrors).some(Boolean);
 
   const applyMarketParameters = () => {
     try {
@@ -182,6 +218,7 @@ const SetupEditor = ({
                   }))
                 }
               />
+              <label className="col-span-3 block text-xs text-muted-foreground">{component.component_id} 参数 JSON<textarea aria-label={`${component.component_id} 参数`} value={componentParameterText[component.component_id] ?? JSON.stringify(component.parameters)} onChange={(event) => { const text = event.target.value; setComponentParameterText((current) => ({ ...current, [component.component_id]: text })); try { const parameters = JSON.parse(text) as RuntimeJsonObject; if (!parameters || Array.isArray(parameters)) throw new Error(); setDraft((current) => ({ ...current, signals: { ...current.signals, components: current.signals.components.map((item) => item.component_id === component.component_id ? { ...item, parameters } : item) } })); setComponentParameterErrors((current) => ({ ...current, [component.component_id]: false })); } catch { setComponentParameterErrors((current) => ({ ...current, [component.component_id]: true })); } }} className="mt-1 min-h-20 w-full rounded border bg-background p-2 font-mono" /></label>
               <input
                 aria-label={`${component.component_id} 权重`}
                 className="h-9 w-24 rounded border bg-background px-2"
@@ -377,7 +414,7 @@ const SetupEditor = ({
             />
           </label>
           <label className="md:col-span-2">完整风控 JSON（position/loss/cooldown/volatility/exchange/rate_limit）<textarea aria-label="完整风控 JSON" value={riskText} onChange={(event) => { setRiskText(event.target.value); setRiskDirty(true); }} className="mt-1 min-h-36 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
-          <Button type="button" variant="outline" onClick={() => { try { const risk = JSON.parse(riskText) as RuntimeDocument['risk']; if (!risk || Array.isArray(risk)) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); setRiskDirty(false); } catch { setRiskError('风控配置必须是 JSON 对象。'); } }}>应用完整风控配置</Button>
+          <Button type="button" variant="outline" onClick={() => { try { const risk = validateRiskSection(JSON.parse(riskText)); if (!risk) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); setRiskDirty(false); } catch { setRiskError('风控配置必须是完整且有效的 JSON 对象。'); } }}>应用完整风控配置</Button>
           {riskError ? <p role="alert" className="text-sm text-trade-short">{riskError}</p> : null}
         </div>
       );
