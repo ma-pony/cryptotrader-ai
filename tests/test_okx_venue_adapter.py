@@ -181,6 +181,29 @@ async def test_minimum_amount_never_rounds_below_platform_amount_or_cost_limit()
 
 
 @pytest.mark.asyncio
+async def test_minimum_amount_retries_after_precision_rounds_first_candidate_to_zero(monkeypatch):
+    from cryptotrader.venues.ccxt_base import VenueOperationError
+
+    _, session, _factory = await _connect()
+    original = session.normalize_amount
+    calls = 0
+
+    async def rounds_first_candidate_to_zero(pair, amount):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise VenueOperationError("okx: amount rounds to zero")
+        return await original(pair, amount)
+
+    monkeypatch.setattr(session, "normalize_amount", rounds_first_candidate_to_zero)
+
+    amount = await session.minimum_amount(Pair.parse("BTC/USDT:USDT"), Decimal("100"), Decimal("10"))
+
+    assert calls >= 2
+    assert amount * Decimal("100") >= Decimal("10")
+
+
+@pytest.mark.asyncio
 async def test_okx_replacing_long_protection_does_not_cancel_short_leg():
     _, session, factory = await _connect()
     pair = Pair.parse("BTC/USDT:USDT")

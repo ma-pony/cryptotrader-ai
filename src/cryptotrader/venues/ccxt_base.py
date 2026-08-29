@@ -163,7 +163,13 @@ class CcxtVenueBase:
         quote_min = max(cost_min, minimum_quote_notional)
         candidate = max(base_min, quote_min / reference_price, Decimal("0.00000001"))
         for _ in range(4):
-            normalized = await self.normalize_amount(pair, candidate * Decimal("1.01"))
+            try:
+                normalized = await self.normalize_amount(pair, candidate * Decimal("1.01"))
+            except VenueOperationError as error:
+                if "rounds to zero" not in str(error):
+                    raise
+                candidate *= Decimal("2")
+                continue
             if normalized >= base_min and normalized * reference_price >= quote_min:
                 return normalized
             candidate *= Decimal("2")
