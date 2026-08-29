@@ -239,6 +239,42 @@ async def test_inactive_runtime_lease_uses_dedicated_unavailable_error():
         async with runtime.cycle_lease():
             pass
 
+
+@pytest.mark.asyncio
+async def test_setup_runtime_activates_the_published_candidate_revision_in_process():
+    runtime, repository, adapter, _ = await _build(_document(active=False))
+
+    activated = repository.publish(_document(_connection("paper-a")))
+    async with runtime.cycle_lease() as cycle:
+        assert cycle.snapshot == activated
+        assert cycle is runtime.cycle
+
+    assert runtime.snapshot == activated
+    assert [connection.id for connection, _credentials in adapter.connect_calls] == ["paper-a"]
+    await runtime.close()
+
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_changed_revision_rebuilds_registry_graph_before_publishing_cycle():
+    runtime, repository, _adapter, _markets = await _build(_document(_connection("paper-a")))
+    discovered_markets = _MarketRegistry()
+    discovered: list[object] = []
+
+    def discover(_document):
+        discovered.append(_document)
+        return _InstalledRegistry({"kronos", "llm_committee"}), _VenueRegistry(_Adapter()), discovered_markets
+
+    runtime._registry_discoverer = discover
+    next_document = _document(_connection("paper-a"), market_source="candidate")
+    repository.publish(next_document)
+
+    cycle = await runtime.reload_for_cycle()
+
+    assert discovered == [next_document]
+    assert runtime.market_registry is discovered_markets
+    assert cycle.market_source.id == "candidate"
     await runtime.close()
 
 
@@ -584,17 +620,18 @@ async def test_inactive_reload_close_failure_returns_none_and_retries_retired_se
 
 
 @pytest.mark.asyncio
-async def test_setup_runtime_does_not_hot_activate_after_configuration_write():
+async def test_setup_runtime_activates_after_configuration_write():
     setup = _document(active=False)
     runtime, repository, adapter, _ = await _build(setup)
     repository.publish(_document(_connection("paper-a")))
 
     cycle = await runtime.reload_for_cycle()
 
-    assert cycle is None
-    assert runtime.snapshot.setup_required is True
-    assert runtime.sessions == {}
-    assert adapter.connect_calls == []
+    assert cycle is runtime.cycle
+    assert runtime.snapshot.setup_required is False
+    assert set(runtime.sessions) == {"paper-a"}
+    assert [connection.id for connection, _credentials in adapter.connect_calls] == ["paper-a"]
+    await runtime.close()
 
 
 @pytest.mark.asyncio

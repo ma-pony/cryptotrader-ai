@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from collections.abc import Mapping as MappingABC
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -71,6 +72,9 @@ class Runtime:
     venue_registry: VenueAdapterRegistry
     events: MultiplexedCycleEventSink
     _session_keys: dict[str, tuple[object, ...]] = field(default_factory=dict, repr=False)
+    _registry_discoverer: (
+        Callable[[object], tuple[SignalComponentRegistry, VenueAdapterRegistry, MarketSourceRegistry]] | None
+    ) = field(default=None, repr=False)
     _pending_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
     _deferred_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
     _active_leases: int = field(default=0, init=False, repr=False)
@@ -78,11 +82,9 @@ class Runtime:
     _closing: bool = field(default=False, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _close_completion: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
-    _started_setup_required: bool = field(default=False, init=False, repr=False)
     _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
-        self._started_setup_required = self.snapshot.setup_required
         self._leases_drained.set()
 
     @asynccontextmanager
@@ -139,29 +141,44 @@ class Runtime:
             return await self._reload_for_cycle_locked()
 
     async def _reload_for_cycle_locked(self) -> TradingCycle | None:
-        if self._started_setup_required:
-            return None
-
         if self._active_leases == 0:
             await self._cleanup_retired_sessions()
         candidate_snapshot = await self.repository.get_or_create()
-        _validate_snapshot(candidate_snapshot, self.signal_registry, self.venue_registry, self.market_registry)
+        if candidate_snapshot.revision == self.snapshot.revision:
+            candidate_signals = self.signal_registry
+            candidate_venues = self.venue_registry
+            candidate_markets = self.market_registry
+        elif self._registry_discoverer is None:
+            candidate_signals, candidate_venues, candidate_markets = _discover_registry_graph(
+                candidate_snapshot.document,
+                self.events,
+            )
+        else:
+            candidate_signals, candidate_venues, candidate_markets = self._registry_discoverer(
+                candidate_snapshot.document
+            )
+        _validate_snapshot(candidate_snapshot, candidate_signals, candidate_venues, candidate_markets)
         if candidate_snapshot.setup_required:
             retired = tuple(self.sessions.values())
             self.snapshot, self.sessions, self.cycle, self._session_keys = candidate_snapshot, {}, None, {}
+            self.signal_registry, self.venue_registry, self.market_registry = (
+                candidate_signals,
+                candidate_venues,
+                candidate_markets,
+            )
             await self._retire_sessions(retired)
             return None
 
         candidate_sessions, candidate_keys, opened = await _candidate_sessions(
-            candidate_snapshot, self.repository, self.venue_registry, self.sessions, self._session_keys
+            candidate_snapshot, self.repository, candidate_venues, self.sessions, self._session_keys
         )
         try:
             candidate_cycle = _assemble_cycle(
                 candidate_snapshot,
                 self.repository,
                 candidate_sessions,
-                self.signal_registry,
-                self.market_registry,
+                candidate_signals,
+                candidate_markets,
                 self.events,
             )
         except BaseException:
@@ -178,6 +195,11 @@ class Runtime:
             candidate_sessions,
             candidate_cycle,
             candidate_keys,
+        )
+        self.signal_registry, self.venue_registry, self.market_registry = (
+            candidate_signals,
+            candidate_venues,
+            candidate_markets,
         )
         await self._retire_sessions(retired)
         return candidate_cycle
@@ -266,11 +288,22 @@ async def build_runtime(
         if isinstance(event_sink, MultiplexedCycleEventSink)
         else MultiplexedCycleEventSink(event_sink or NullCycleEventSink())
     )
-    signals = signal_registry or SignalComponentRegistry.discover(frozen.document, routed_events)
-    venues = venue_registry or VenueAdapterRegistry.discover(
-        connection.adapter_id for connection in frozen.document.execution.connections
-    )
-    markets = market_registry or MarketSourceRegistry.discover(frozen.document.market_data)
+    if signal_registry is None and venue_registry is None and market_registry is None:
+
+        def registry_discoverer(document):
+            return _discover_registry_graph(document, routed_events)
+
+        signals, venues, markets = registry_discoverer(frozen.document)
+    else:
+        signals = signal_registry or SignalComponentRegistry.discover(frozen.document, routed_events)
+        venues = venue_registry or VenueAdapterRegistry.discover(
+            connection.adapter_id for connection in frozen.document.execution.connections
+        )
+        markets = market_registry or MarketSourceRegistry.discover(frozen.document.market_data)
+
+        def registry_discoverer(_document):
+            return signals, venues, markets
+
     validate_runtime_document(
         frozen.document,
         set(signals.installed_ids()),
@@ -278,7 +311,17 @@ async def build_runtime(
         set(markets.installed_ids()),
     )
     if frozen.setup_required:
-        return Runtime(frozen, runtime_repository, None, {}, signals, markets, venues, routed_events)
+        return Runtime(
+            frozen,
+            runtime_repository,
+            None,
+            {},
+            signals,
+            markets,
+            venues,
+            routed_events,
+            _registry_discoverer=registry_discoverer,
+        )
 
     sessions, session_keys, opened = await _candidate_sessions(
         frozen,
@@ -301,7 +344,16 @@ async def build_runtime(
         markets,
         venues,
         routed_events,
-        session_keys,
+        _registry_discoverer=registry_discoverer,
+        _session_keys=session_keys,
+    )
+
+
+def _discover_registry_graph(document, events):
+    return (
+        SignalComponentRegistry.discover(document, events),
+        VenueAdapterRegistry.discover(connection.adapter_id for connection in document.execution.connections),
+        MarketSourceRegistry.discover(document.market_data),
     )
 
 
