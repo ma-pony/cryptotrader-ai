@@ -1,4 +1,5 @@
 import { ArrowDown, ArrowUp, Pause, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 export type Direction =
   | 'bullish'
@@ -11,16 +12,10 @@ export type Direction =
   | 'buy'
   | 'sell';
 
-const MAP: Record<Direction, { label: string; tone: 'long' | 'short' | 'hold' | 'amber'; Icon: typeof ArrowUp }> = {
-  long: { label: '看多', tone: 'long', Icon: ArrowUp },
-  buy: { label: '买入', tone: 'long', Icon: ArrowUp },
-  bullish: { label: '看多', tone: 'long', Icon: ArrowUp },
-  short: { label: '看空', tone: 'short', Icon: ArrowDown },
-  sell: { label: '卖出', tone: 'short', Icon: ArrowDown },
-  bearish: { label: '看空', tone: 'short', Icon: ArrowDown },
-  hold: { label: '观望', tone: 'hold', Icon: Pause },
-  neutral: { label: '中性', tone: 'hold', Icon: Pause },
-  close: { label: '平仓', tone: 'amber', Icon: X },
+const MAP: Record<Direction, { tone: 'long' | 'short' | 'hold' | 'amber'; Icon: typeof ArrowUp }> = {
+  long: { tone: 'long', Icon: ArrowUp }, buy: { tone: 'long', Icon: ArrowUp }, bullish: { tone: 'long', Icon: ArrowUp },
+  short: { tone: 'short', Icon: ArrowDown }, sell: { tone: 'short', Icon: ArrowDown }, bearish: { tone: 'short', Icon: ArrowDown },
+  hold: { tone: 'hold', Icon: Pause }, neutral: { tone: 'hold', Icon: Pause }, close: { tone: 'amber', Icon: X },
 };
 
 const TONE = {
@@ -37,6 +32,7 @@ interface Props {
 }
 
 export const DirChip = ({ dir, confidence, size = 'sm' }: Props) => {
+  const { t } = useTranslation('debate');
   const key = (dir?.toLowerCase() ?? 'hold') as Direction;
   const m = MAP[key] ?? MAP.hold;
   const Icon = m.Icon;
@@ -47,7 +43,7 @@ export const DirChip = ({ dir, confidence, size = 'sm' }: Props) => {
       className={`inline-flex items-center gap-1.5 rounded-full border font-medium whitespace-nowrap tracking-wide ${pad} ${cls}`}
     >
       <Icon size={size === 'md' ? 12 : 10} strokeWidth={2.4} />
-      {m.label}
+      {t(`direction.${key in MAP ? key : 'hold'}`)}
       {confidence != null ? (
         <span className="font-mono opacity-75 ml-0.5">{(confidence * 100).toFixed(0)}%</span>
       ) : null}

@@ -94,9 +94,15 @@ describe('debate canonical cycle details', () => {
       expect(screen.getAllByText(text, { exact: false }).length).toBeGreaterThan(0);
     }
     expect(screen.getByText(/触发辩论.*dispersion crossed gate/)).toBeInTheDocument();
+    await i18n.changeLanguage('en-US');
+    for (const text of ['Four-agent committee · Post-debate summary', 'Round 1 · Cross challenge', 'Debate triggered', 'Bullish']) {
+      expect((await screen.findAllByText(text, { exact: false })).length).toBeGreaterThan(0);
+    }
+    expect(screen.queryByText('四智能体委员会 · 辩论后总结')).not.toBeInTheDocument();
   });
 
   it('renders controlled unavailable state for schema-valid but malformed committee details', async () => {
+    await i18n.changeLanguage('en-US');
     const malformed = CycleSchema.parse({
       ...cycle,
       shared_signals: { ...cycle.shared_signals, components: [{ ...cycle.shared_signals.components[0]!, details: [{ key: 'analyses', value: jsonString('not a committee object') }] }] },
@@ -111,6 +117,6 @@ describe('debate canonical cycle details', () => {
         <MemoryRouter initialEntries={['/debate/cycle-debate']}><Routes><Route path="/debate/:cycleId" element={<DebatePage />} /></Routes></MemoryRouter>
       </QueryClientProvider>,
     );
-    expect(await screen.findByText('无法加载周期 cycle-debate 的辩论详情')).toBeInTheDocument();
+    expect(await screen.findByText('Unable to load debate details for cycle cycle-debate.')).toBeInTheDocument();
   });
 });

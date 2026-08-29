@@ -1,0 +1,22 @@
+{
+  "empty": "No decisions recorded. New decisions will appear here automatically.",
+  "loadError": "Unable to load debate details for cycle {{cycleId}}.",
+  "gate": { "label": "Debate gate", "triggered": "Debate triggered", "skipped": "Debate skipped", "noReason": "No reason supplied" },
+  "steps": {
+    "gate": "Gate", "roundOne": "Round 1", "roundTwo": "Round 2", "convergence": "Convergence", "summary": "Summary",
+    "triggered": "Debate triggered", "skipped": "Skipped", "roundOneSub": "Four-agent cross challenge", "roundTwoSub": "Strengthen / concede / hold"
+  },
+  "header": {
+    "eyebrow": "Debate view · Cycle {{cycleId}}", "title": "{{count}} rounds of cross-challenge debate", "skippedTitle": "No debate (gate skipped)",
+    "subtitle": "Initial divergence {{divergence}} triggered debate"
+  },
+  "round": { "title": "Round {{round}} · Cross challenge", "firstDescription": "Each agent identifies the weakest argument from another agent.", "laterDescription": "Defend the stance or state which data changed it (anti-convergence rule)." },
+  "noDebate": "This decision did not trigger debate.",
+  "noArgument": "No argument text supplied.",
+  "committee": { "label": "Four-agent committee", "afterDebate": "Post-debate summary", "direct": "Direct summary" },
+  "agent": { "tech": "Tech", "chain": "Chain", "news": "News", "macro": "Macro", "verdict": "Verdict", "other": "Other" },
+  "direction": { "bullish": "Bullish", "bearish": "Bearish", "neutral": "Neutral", "long": "Long", "short": "Short", "hold": "Hold", "close": "Close", "buy": "Buy", "sell": "Sell" },
+  "turn": { "respondsTo": "Responds to", "monologue": "Monologue", "aria": "{{from}} to {{to}}: {{move}}" },
+  "moves": { "strengthen": "Strengthen", "concede": "Concede", "hold": "Hold", "unknown": "Move: {{move}}" },
+  "meter": { "divergence": "Divergence", "target": "Convergence target {{target}}", "start": "Start {{value}}", "end": "End {{value}}" }
+}

@@ -1,5 +1,6 @@
 import { Check, Filter, MessageSquare, Zap } from 'lucide-react';
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router';
 
 import { EmptyState } from '@/components/ui/empty-state';
@@ -93,7 +94,7 @@ const toScenario = (d: Cycle): DebateScenario | null => {
       turns: turns.map((t) => ({
         from: normalizeKind(t.from),
         to: t.to ? normalizeKind(t.to) : null,
-        critique: [t.reasoning, t.new_findings].filter(Boolean).join(' · ') || '（无论点文本）',
+        critique: [t.reasoning, t.new_findings].filter(Boolean).join(' · '),
         dir: normalizeDir(t.after.direction),
         conf: t.after.confidence,
         move: t.move,
@@ -159,6 +160,7 @@ const DebateEmpty = ({ message }: { message: string }) => (
 );
 
 const DebateContent = () => {
+  const { t } = useTranslation('debate');
   const navigate = useNavigate();
   const { cycleId } = useParams<{ cycleId?: string }>();
   const cycles = useMultiVenueCycles(1, 20);
@@ -184,27 +186,27 @@ const DebateContent = () => {
   }
 
   if (!targetCycleId) {
-    return <DebateEmpty message="暂无决策记录，新决策将自动出现在此" />;
+    return <DebateEmpty message={t('empty')} />;
   }
 
   if (detail.isError || !detail.data || d === null) {
-    return <DebateEmpty message={`无法加载周期 ${targetCycleId} 的辩论详情`} />;
+    return <DebateEmpty message={t('loadError', { cycleId: targetCycleId })} />;
   }
   const hasDebate = d.rounds.length > 0;
 
   const steps: { label: string; sub: string; Icon: typeof Filter; tone: StepTone }[] = [
-    { label: '门控', sub: hasDebate ? '触发辩论' : '跳过', Icon: Filter, tone: 'flow' },
-    { label: '第 1 轮', sub: '4 Agent 交叉挑战', Icon: MessageSquare, tone: 'flow' },
-    { label: '第 2 轮', sub: '强化 / 让步 / 保持', Icon: MessageSquare, tone: 'flow' },
+    { label: t('steps.gate'), sub: hasDebate ? t('steps.triggered') : t('steps.skipped'), Icon: Filter, tone: 'flow' },
+    { label: t('steps.roundOne'), sub: t('steps.roundOneSub'), Icon: MessageSquare, tone: 'flow' },
+    { label: t('steps.roundTwo'), sub: t('steps.roundTwoSub'), Icon: MessageSquare, tone: 'flow' },
     {
-      label: '收敛',
+      label: t('steps.convergence'),
       sub: `${d.convergence.before.toFixed(2)} → ${d.convergence.after.toFixed(2)}`,
       Icon: Check,
       tone: 'pivot',
     },
     {
-      label: '总结',
-      sub: `${d.final_signal.direction === 'bullish' ? '看多' : d.final_signal.direction === 'bearish' ? '看空' : '中性'} ${(d.final_signal.confidence * 100).toFixed(0)}%`,
+      label: t('steps.summary'),
+      sub: `${t(`direction.${d.final_signal.direction}`)} ${(d.final_signal.confidence * 100).toFixed(0)}%`,
       Icon: Zap,
       tone: 'final',
     },
@@ -214,12 +216,12 @@ const DebateContent = () => {
     <div className="flex flex-col gap-6">
       <PageHeader
         onBack={() => void navigate(-1)}
-        eyebrow={`辩论可视化 · 周期 ${d.id.slice(0, 10)}`}
-        title={hasDebate ? `${d.rounds.length} 轮交叉挑战辩论` : '无辩论（门控跳过）'}
+        eyebrow={t('header.eyebrow', { cycleId: d.id.slice(0, 10) })}
+        title={hasDebate ? t('header.title', { count: d.rounds.length }) : t('header.skippedTitle')}
         subtitle={
           <>
             <span className="font-mono">{d.pair}</span>
-            {hasDebate ? <> · 初始分歧度 {d.convergence.before.toFixed(2)} 触发辩论</> : null}
+            {hasDebate ? <> · {t('header.subtitle', { divergence: d.convergence.before.toFixed(2) })}</> : null}
           </>
         }
         actions={
@@ -255,10 +257,10 @@ const DebateContent = () => {
         <AgentBadge kind={d.initial[0]?.kind ?? 'chain'} size={40} />
         <div className="flex-1">
           <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wider text-cyan-500">
-            debate_gate 裁定
+            {t('gate.label')}
           </div>
           <div className="text-sm font-medium">
-            {hasDebate ? '触发辩论' : '跳过辩论'} · {d.gate.reason || '（无说明）'}
+            {hasDebate ? t('gate.triggered') : t('gate.skipped')} · {d.gate.reason || t('gate.noReason')}
           </div>
         </div>
         <div className="flex flex-wrap gap-1.5">
@@ -276,7 +278,7 @@ const DebateContent = () => {
                 className="min-w-[72px] rounded-md border border-border bg-card px-2.5 py-1.5 text-center"
               >
                 <div className="text-[10px] font-medium" style={{ color: agent.color }}>
-                  {agent.zh}
+                  {t(`agent.${a.kind}`)}
                 </div>
                 <div className={cn('mt-0.5 font-mono text-[11px]', dirClass)}>
                   {a.dir === 'bullish' ? '↑' : a.dir === 'bearish' ? '↓' : '—'} {a.conf.toFixed(2)}
@@ -296,12 +298,12 @@ const DebateContent = () => {
               </div>
               <div>
                 <div className="text-[15px] font-semibold tracking-tight">
-                  第 {round.n} 轮 · 交叉挑战
+                  {t('round.title', { round: round.n })}
                 </div>
                 <div className="text-[11px] text-muted-foreground">
                   {round.n === 1
-                    ? '每个 Agent 必须指出他人最弱论点'
-                    : '必须捍卫立场或说明被什么数据改变（反趋同规则）'}
+                    ? t('round.firstDescription')
+                    : t('round.laterDescription')}
                 </div>
               </div>
             </div>
@@ -316,8 +318,8 @@ const DebateContent = () => {
         <DebateEmpty
           message={
             d.gate.reason
-              ? `debate_gate 跳过辩论 — ${d.gate.reason}`
-              : '此决策未触发辩论'
+              ? `${t('gate.skipped')} — ${d.gate.reason}`
+              : t('noDebate')
           }
         />
       )}
@@ -326,7 +328,7 @@ const DebateContent = () => {
         <AgentBadge kind="other" size={48} />
         <div className="flex-1">
           <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-amber-500">
-            四智能体委员会 · {hasDebate ? '辩论后总结' : '直接总结'}
+            {t('committee.label')} · {hasDebate ? t('committee.afterDebate') : t('committee.direct')}
           </div>
           <div className="flex items-center gap-2.5 mb-2.5">
             <DirChip dir={d.final_signal.direction} confidence={d.final_signal.confidence} />

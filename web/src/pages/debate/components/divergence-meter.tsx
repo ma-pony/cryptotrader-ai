@@ -1,14 +1,18 @@
+import { useTranslation } from 'react-i18next';
+
 interface Props {
   before: number;
   after: number;
   target: number;
 }
 
-export const DivergenceMeter = ({ before, after, target }: Props) => (
-  <div className="flex flex-col gap-2 w-[280px]">
+export const DivergenceMeter = ({ before, after, target }: Props) => {
+  const { t } = useTranslation('debate');
+  return (
+    <div className="flex flex-col gap-2 w-[280px]">
     <div className="flex justify-between text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
-      <span>分歧度</span>
-      <span>收敛目标 {target.toFixed(2)}</span>
+      <span>{t('meter.divergence')}</span>
+      <span>{t('meter.target', { target: target.toFixed(2) })}</span>
     </div>
     <div className="relative h-2 rounded overflow-hidden bg-muted">
       <div
@@ -25,8 +29,9 @@ export const DivergenceMeter = ({ before, after, target }: Props) => (
       />
     </div>
     <div className="flex justify-between text-[11px]">
-      <span className="font-mono text-muted-foreground">开始 {before.toFixed(2)}</span>
-      <span className="font-mono font-medium text-amber-400">→ 结束 {after.toFixed(2)}</span>
+      <span className="font-mono text-muted-foreground">{t('meter.start', { value: before.toFixed(2) })}</span>
+      <span className="font-mono font-medium text-amber-400">→ {t('meter.end', { value: after.toFixed(2) })}</span>
     </div>
-  </div>
-);
+    </div>
+  );
+};

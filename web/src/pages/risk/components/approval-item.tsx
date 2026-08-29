@@ -7,6 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { ConfirmDialog } from '@/components/ui/dialog';
 import { useHitlRespond } from '@/hooks/use-hitl-approvals';
 import { formatDateTime } from '@/lib/format';
+import { formatCycleStatus } from '@/lib/cycle-status';
 import type { ApprovalRequest } from '@/types/api';
 
 interface Props {
@@ -66,7 +67,7 @@ export const ApprovalItem = ({ approval, onOutcome }: Props) => {
                 {t('hitl.scope')}: {proposal.capital_scope}
               </div>
               <div>
-                {t('hitl.status')}: {approval.status}
+                {t('hitl.status')}: {formatCycleStatus(t, approval.status)}
               </div>
               <div>
                 {t('hitl.created_at')}: {approval.created_at}

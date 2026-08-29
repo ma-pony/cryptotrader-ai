@@ -14,6 +14,7 @@ import schedulerZh from '@/locales/zh-CN/scheduler.json';
 import strategyZh from '@/locales/zh-CN/strategy.json';
 import configurationZh from '@/locales/zh-CN/configuration.json';
 import cyclesZh from '@/locales/zh-CN/cycles.json';
+import debateZh from '@/locales/zh-CN/debate.json';
 
 import commonEn from '@/locales/en-US/common.json';
 import dashboardEn from '@/locales/en-US/dashboard.json';
@@ -28,6 +29,7 @@ import schedulerEn from '@/locales/en-US/scheduler.json';
 import strategyEn from '@/locales/en-US/strategy.json';
 import configurationEn from '@/locales/en-US/configuration.json';
 import cyclesEn from '@/locales/en-US/cycles.json';
+import debateEn from '@/locales/en-US/debate.json';
 
 const STORAGE_KEY = 'cryptotrader-locale';
 
@@ -69,6 +71,7 @@ await i18next.use(initReactI18next).init({
       strategy: strategyZh,
       configuration: configurationZh,
       cycles: cyclesZh,
+      debate: debateZh,
     },
     'en-US': {
       common: commonEn,
@@ -84,6 +87,7 @@ await i18next.use(initReactI18next).init({
       strategy: strategyEn,
       configuration: configurationEn,
       cycles: cyclesEn,
+      debate: debateEn,
     },
   },
   lng: detectLocale(),
@@ -103,6 +107,7 @@ await i18next.use(initReactI18next).init({
     'strategy',
     'configuration',
     'cycles',
+    'debate',
   ],
   interpolation: { escapeValue: false },
   returnNull: false,

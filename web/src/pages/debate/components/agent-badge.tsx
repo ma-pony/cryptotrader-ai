@@ -1,4 +1,5 @@
 import { Activity, Flame, Link2, Scale, Zap } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 
 import { AGENTS, type AgentKind } from '../constants';
 
@@ -18,6 +19,7 @@ interface Props {
 }
 
 export const AgentBadge = ({ kind, size = 28, showName = false }: Props) => {
+  const { t } = useTranslation('debate');
   const a = AGENTS[kind];
   const Icon = ICONS[kind];
   const inner = Math.round(size * 0.55);
@@ -37,7 +39,7 @@ export const AgentBadge = ({ kind, size = 28, showName = false }: Props) => {
       </span>
       {showName ? (
         <span className="text-xs font-medium" style={{ color: a.color }}>
-          {a.zh}
+          {t(`agent.${kind}`)}
         </span>
       ) : null}
     </span>

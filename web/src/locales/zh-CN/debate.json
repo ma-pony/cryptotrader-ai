@@ -1,0 +1,22 @@
+{
+  "empty": "暂无决策记录，新决策将自动出现在此。",
+  "loadError": "无法加载周期 {{cycleId}} 的辩论详情。",
+  "gate": { "label": "辩论门控", "triggered": "触发辩论", "skipped": "跳过辩论", "noReason": "无说明" },
+  "steps": {
+    "gate": "门控", "roundOne": "第 1 轮", "roundTwo": "第 2 轮", "convergence": "收敛", "summary": "总结",
+    "triggered": "触发辩论", "skipped": "跳过", "roundOneSub": "四智能体交叉挑战", "roundTwoSub": "强化 / 让步 / 保持"
+  },
+  "header": {
+    "eyebrow": "辩论可视化 · 周期 {{cycleId}}", "title": "{{count}} 轮交叉挑战辩论", "skippedTitle": "无辩论（门控跳过）",
+    "subtitle": "初始分歧度 {{divergence}} 触发辩论"
+  },
+  "round": { "title": "第 {{round}} 轮 · 交叉挑战", "firstDescription": "每个智能体必须指出他人最弱论点。", "laterDescription": "必须捍卫立场或说明被什么数据改变（反趋同规则）。" },
+  "noDebate": "此决策未触发辩论。",
+  "noArgument": "无论点文本。",
+  "committee": { "label": "四智能体委员会", "afterDebate": "辩论后总结", "direct": "直接总结" },
+  "agent": { "tech": "技术面", "chain": "链上", "news": "新闻", "macro": "宏观", "verdict": "AI 决策者", "other": "其他" },
+  "direction": { "bullish": "看多", "bearish": "看空", "neutral": "中性", "long": "看多", "short": "看空", "hold": "观望", "close": "平仓", "buy": "买入", "sell": "卖出" },
+  "turn": { "respondsTo": "回应", "monologue": "独白", "aria": "{{from}} 到 {{to}}：{{move}}" },
+  "moves": { "strengthen": "强化", "concede": "让步", "hold": "保持", "unknown": "动作：{{move}}" },
+  "meter": { "divergence": "分歧度", "target": "收敛目标 {{target}}", "start": "开始 {{value}}", "end": "结束 {{value}}" }
+}

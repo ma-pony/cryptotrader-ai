@@ -97,7 +97,7 @@ describe('approval book plan', () => {
 
     renderQueue();
     await screen.findByText('real-book · ETH/USDT');
-    for (const text of ['配置版本 8', '资金范围: real', '状态: pending', '创建时间: 2026-08-29T00:00:00Z', '请求敞口: 0.40', '目标敞口: 0.35', 'okx-live 0.35', 'okx-live leverage cap', 'bybit-live', 'bybit-live unavailable', 'okx-live · ETH/USDT', '3999/4001/4000', '数量: 2.375', '名义价值: 10500', '方向: buy', '只减仓: false', '保护: 3800/4400', '既有保护单: sl-old, tp-old', 'swap', 'market, stop_market']) {
+    for (const text of ['配置版本 8', '资金范围: real', '状态: 等待中', '创建时间: 2026-08-29T00:00:00Z', '请求敞口: 0.40', '目标敞口: 0.35', 'okx-live 0.35', 'okx-live leverage cap', 'bybit-live', 'bybit-live unavailable', 'okx-live · ETH/USDT', '3999/4001/4000', '数量: 2.375', '名义价值: 10500', '方向: buy', '只减仓: false', '保护: 3800/4400', '既有保护单: sl-old, tp-old', 'swap', 'market, stop_market']) {
       expect(screen.getAllByText(text, { exact: false }).length).toBeGreaterThan(0);
     }
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
@@ -112,9 +112,13 @@ describe('approval book plan', () => {
     expect(await screen.findByText('已批准 · 部分完成 · 部分完成')).toBeInTheDocument();
     expect(screen.getByText('需要关注')).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '查看周期' })).toHaveAttribute('href', '/cycles/cycle-partial');
-    await waitFor(() => expect(screen.getByText('暂无待审批请求。')).toBeInTheDocument());
-    await user.click(screen.getByRole('button', { name: '关闭' }));
-    expect(screen.queryByText('已批准 · 部分完成 · 部分完成')).not.toBeInTheDocument();
+    await i18n.changeLanguage('en-US');
+    expect(await screen.findByText('Approved · Partial · Partial')).toBeInTheDocument();
+    expect(screen.getByText('Requires attention')).toBeInTheDocument();
+    expect(screen.queryByText('requires_attention')).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('No approvals pending.')).toBeInTheDocument());
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }));
+    expect(screen.queryByText('Approved · Partial · Partial')).not.toBeInTheDocument();
   });
 
   it.each([409, 500])('keeps the proposal and reports a localized error when respond returns %i', async (status) => {
