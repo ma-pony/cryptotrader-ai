@@ -12,8 +12,8 @@ const cycleQuery = vi.fn();
 const cyclesQuery = vi.fn();
 
 vi.mock('@/hooks/use-multi-venue-cycles', () => ({
-  useMultiVenueCycle: () => cycleQuery(),
-  useMultiVenueCycles: () => cyclesQuery(),
+  useMultiVenueCycle: () => cycleQuery() as never,
+  useMultiVenueCycles: () => cyclesQuery() as never,
 }));
 
 const jsonString = (string_value: string) => ({

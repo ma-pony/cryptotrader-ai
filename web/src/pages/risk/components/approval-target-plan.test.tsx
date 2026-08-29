@@ -31,8 +31,8 @@ describe('target plan approval', () => {
     );
 
     expect(screen.getByText('book-real · ETH/USDT')).toBeInTheDocument();
-    expect(screen.getByText(/Config revision 8/)).toBeInTheDocument();
-    expect(screen.getByText('OKX Live · swap')).toBeInTheDocument();
+    expect(screen.getByText(/配置版本 8/)).toBeInTheDocument();
+    expect(screen.getByText('OKX Live · ETH/USDT')).toBeInTheDocument();
     expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 });

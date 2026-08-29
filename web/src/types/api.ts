@@ -25,8 +25,6 @@ import type {
   CycleRiskResultSchema,
   CycleStatusSchema,
   DailyCostPointSchema,
-  DecisionDetailSchema,
-  DecisionListItemSchema,
   EquityCurveSchema,
   EquityPointSchema,
   FusedSignalSchema,
@@ -35,7 +33,6 @@ import type {
   MetricsCountersSchema,
   MetricsPercentilesSchema,
   MetricsSummarySchema,
-  PaginatedDecisionsSchema,
   PaginatedTriggerEventsSchema,
   PortfolioSchema,
   PositionSchema,
@@ -69,8 +66,6 @@ export type SchedulerStatus = z.output<typeof SchedulerStatusSchema>;
 
 // §3 Decisions
 export type CycleStatus = z.output<typeof CycleStatusSchema>;
-export type DecisionListItem = z.output<typeof DecisionListItemSchema>;
-export type PaginatedDecisions = z.output<typeof PaginatedDecisionsSchema>;
 export type CommitteeAgentAnalysis = z.output<typeof CommitteeAgentAnalysisSchema>;
 export type CommitteeDebateTurn = z.output<typeof CommitteeDebateTurnSchema>;
 export type ConsensusMetrics = z.output<typeof ConsensusMetricsSchema>;
@@ -81,7 +76,6 @@ export type TargetPosition = z.output<typeof TargetPositionSchema>;
 export type TradePlan = z.output<typeof TradePlanSchema>;
 export type CycleRiskResult = z.output<typeof CycleRiskResultSchema>;
 export type CycleExecutionResult = z.output<typeof CycleExecutionResultSchema>;
-export type DecisionDetail = z.output<typeof DecisionDetailSchema>;
 
 // §4 Backtest
 export type BacktestParams = z.output<typeof BacktestParamsSchema>;

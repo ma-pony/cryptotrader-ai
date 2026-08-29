@@ -12,7 +12,11 @@ type Cycle = z.infer<typeof CycleSchema>;
 type Book = Cycle['books'][number];
 type Connection = Book['connections'][number];
 
-const scalar = (item: unknown) => (item === null || item === undefined ? '—' : String(item));
+const scalar = (item: unknown) => {
+  if (item === null || item === undefined) return '—';
+  if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') return `${item}`;
+  return '—';
+};
 
 const Field = ({ label, children }: { label: string; children: unknown }) => (
   <div className="grid grid-cols-[minmax(9rem,auto)_1fr] gap-x-3 text-sm">

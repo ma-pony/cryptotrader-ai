@@ -222,31 +222,6 @@ export const CycleExecutionResultSchema = z.object({
   orders: z.array(ExecutionOrderResultSchema),
 });
 
-export const DecisionListItemSchema = z.object({
-  cycle_id: z.string(),
-  ts: z.string(),
-  pair: z.string(),
-  pair_display: z.string(),
-  market_type: MarketTypeSchema,
-  status: CycleStatusSchema,
-  profile_revision: z.number(),
-  price: z.number().nullable(),
-  fused_score: z.number().nullable(),
-  target_position: TargetPositionSchema.nullable(),
-  component_error: z.record(z.string()).nullable(),
-  error: z.string().nullable(),
-  risk_result: CycleRiskResultSchema.nullable(),
-  execution_result: CycleExecutionResultSchema.nullable(),
-});
-
-export const PaginatedDecisionsSchema = z.object({
-  items: z.array(DecisionListItemSchema),
-  total: z.number(),
-  page: z.number(),
-  size: z.number(),
-  has_next: z.boolean(),
-});
-
 const SignalContextPositionSchema = z
   .object({
     side: z.enum(['long', 'short', 'flat']),
@@ -287,32 +262,6 @@ export const DecisionContextSchema = z.discriminatedUnion('available', [
   AvailableSignalContextSchema,
   UnavailableSignalContextSchema,
 ]);
-
-export const DecisionDetailSchema = z.object({
-  cycle_id: z.string(),
-  ts: z.string(),
-  pair: z.string(),
-  pair_display: z.string(),
-  market_type: MarketTypeSchema,
-  status: CycleStatusSchema,
-  profile_revision: z.number(),
-  context: DecisionContextSchema,
-  components: z.array(ComponentSignalSchema),
-  component_error: z.record(z.string()).nullable(),
-  error: z.string().nullable(),
-  fusion: FusedSignalSchema.nullable(),
-  target_position: TargetPositionSchema.nullable(),
-  trade_plan: TradePlanSchema.nullable(),
-  hitl_result: z
-    .object({
-      approval_id: z.string(),
-      status: z.enum(['pending', 'approved', 'rejected']),
-      decision_by: z.string().optional(),
-    })
-    .nullable(),
-  risk_result: CycleRiskResultSchema.nullable(),
-  execution_result: CycleExecutionResultSchema.nullable(),
-});
 
 // ── §4 Backtest (matches BacktestParams / BacktestRunStatus / sessions) ──
 

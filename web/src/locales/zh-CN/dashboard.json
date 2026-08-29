@@ -1,5 +1,20 @@
 {
   "title": "总览",
+  "books": {
+    "simulated": "模拟资金",
+    "real": "真实资金",
+    "loading": "正在加载执行账本…",
+    "error": "执行账本不可用。",
+    "empty": "此资金范围暂无执行账本。",
+    "total": "范围合计",
+    "equity": "权益",
+    "notional": "名义价值",
+    "book": "执行账本",
+    "connection": "连接",
+    "balances": "余额",
+    "position": "仓位",
+    "entry": "开仓价"
+  },
   "metrics": {
     "region": "核心指标",
     "total_equity": "总权益",

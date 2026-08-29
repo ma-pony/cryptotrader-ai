@@ -14,13 +14,48 @@ const DashboardContent = () => {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t('title', { defaultValue: '总览' })} />
-
+      <PageHeader title={t('title')} />
       <div className="grid gap-4 lg:grid-cols-2">
         {(['simulated', 'real'] as const).map((scope) => (
-          <section key={scope} className="rounded-lg border border-border bg-card p-4" aria-label={t(`scopes.${scope}`, { defaultValue: scope })}>
-            <h2 className="text-sm font-semibold">{t(`scopes.${scope}`, { defaultValue: scope === 'simulated' ? 'Simulated capital' : 'Real capital' })}</h2>
-            {portfolio.isLoading ? <p className="mt-3 text-sm text-muted-foreground">{t('scopes.loading', { defaultValue: 'Loading portfolio books…' })}</p> : portfolio.isError ? <p className="mt-3 text-sm text-destructive">{t('scopes.error', { defaultValue: 'Portfolio books are unavailable.' })}</p> : portfolio.data?.[scope].books.length ? <><p className="mt-2 font-mono text-lg">{t('scopes.total', { defaultValue: 'Scope equity' })}: {portfolio.data[scope].totals.equity} · {portfolio.data[scope].totals.signed_notional}</p>{portfolio.data[scope].books.map((book) => <div key={book.book_id} className="mt-3 rounded border border-border p-3"><div className="font-mono text-xs">{book.book_id}</div><div className="mt-1 text-lg font-semibold">{book.total_equity} USDT</div>{book.connections.map((connection) => <div key={connection.connection_id} className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground"><div>{connection.connection_id} · {connection.equity} · {connection.position.signed_notional}</div><div>{connection.balances.map((balance) => `${balance.asset}: ${balance.amount}`).join(' · ')}</div><div>{connection.position.pair} · {connection.position.signed_amount} @ {connection.position.entry_price ?? '—'}</div></div>)}</div>)}</> : <p className="mt-3 text-sm text-muted-foreground">{t('scopes.empty', { defaultValue: 'No execution books in this scope.' })}</p>}
+          <section key={scope} className="rounded-lg border border-border bg-card p-4" aria-label={t(`books.${scope}`)}>
+            <h2 className="text-sm font-semibold">{t(`books.${scope}`)}</h2>
+            {portfolio.isLoading ? <p className="mt-3 text-sm text-muted-foreground">{t('books.loading')}</p> : null}
+            {portfolio.isError ? <p className="mt-3 text-sm text-destructive">{t('books.error')}</p> : null}
+            {!portfolio.isLoading && !portfolio.isError && portfolio.data?.[scope].books.length === 0 ? (
+              <p className="mt-3 text-sm text-muted-foreground">{t('books.empty')}</p>
+            ) : null}
+            {portfolio.data?.[scope].books.map((book) => (
+              <article key={book.book_id} className="mt-3 rounded border border-border p-3">
+                <h3 className="font-mono text-xs">
+                  {t('books.book')}: {book.book_id}
+                </h3>
+                <p className="mt-1 text-sm">
+                  {t('books.equity')}: {book.total_equity}
+                </p>
+                <p className="text-sm">
+                  {t('books.notional')}: {book.total_signed_notional}
+                </p>
+                {book.connections.map((connection) => (
+                  <div
+                    key={connection.connection_id}
+                    className="mt-2 border-t border-border pt-2 text-xs text-muted-foreground"
+                  >
+                    <p>
+                      {t('books.connection')}: {connection.connection_id} · {t('books.equity')}: {connection.equity}
+                    </p>
+                    <p>
+                      {t('books.balances')}:{' '}
+                      {connection.balances.map((balance) => `${balance.asset}: ${balance.amount}`).join(' · ')}
+                    </p>
+                    <p>
+                      {t('books.position')}: {connection.position.pair} · {connection.position.signed_amount} ·{' '}
+                      {connection.position.signed_notional} · {t('books.entry')}:{' '}
+                      {connection.position.entry_price ?? '—'}
+                    </p>
+                  </div>
+                ))}
+              </article>
+            ))}
           </section>
         ))}
       </div>
@@ -29,10 +64,10 @@ const DashboardContent = () => {
   );
 };
 
-const DashboardPage = () => (
-  <PageBoundary>
-    <DashboardContent />
-  </PageBoundary>
-);
-
-export default DashboardPage;
+export default function DashboardPage() {
+  return (
+    <PageBoundary>
+      <DashboardContent />
+    </PageBoundary>
+  );
+}

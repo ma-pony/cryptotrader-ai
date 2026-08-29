@@ -1,5 +1,20 @@
 {
   "title": "Dashboard",
+  "books": {
+    "simulated": "Simulated capital",
+    "real": "Real capital",
+    "loading": "Loading portfolio books…",
+    "error": "Portfolio books are unavailable.",
+    "empty": "No execution books in this scope.",
+    "total": "Scope total",
+    "equity": "Equity",
+    "notional": "Notional",
+    "book": "Execution book",
+    "connection": "Connection",
+    "balances": "Balances",
+    "position": "Position",
+    "entry": "Entry"
+  },
   "metrics": {
     "region": "Key Metrics",
     "total_equity": "Total Equity",
