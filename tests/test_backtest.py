@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -57,6 +58,7 @@ def test_one_hour_decision_excludes_still_open_four_hour_candle():
 @pytest.mark.asyncio
 async def test_backtest_replaces_configured_connections_with_one_hundred_percent_paper_book(monkeypatch):
     from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
+    from cryptotrader.runtime import Runtime
     from cryptotrader.runtime_config.models import (
         MarketDataConfig,
         RuntimeConfigSnapshot,
@@ -147,6 +149,13 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
         engine._candles = engine._candles_by_timeframe["1h"]
 
     monkeypatch.setattr(engine, "_fetch_historical_data", fake_fetch)
+
+    @asynccontextmanager
+    async def reject_production_execution_lease(_runtime, _pair):
+        raise AssertionError("backtest must never acquire a production execution lease")
+        yield
+
+    monkeypatch.setattr(Runtime, "execution_lease", reject_production_execution_lease)
 
     result = await engine.run()
 

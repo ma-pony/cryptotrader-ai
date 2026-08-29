@@ -131,6 +131,15 @@ def test_active_document_accepts_an_installed_market_source():
     validate_runtime_document(active_document(), INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
 
 
+def test_active_document_rejects_disabled_redis_sentinel():
+    from cryptotrader.runtime_config.models import InfrastructureConfig, validate_runtime_document
+
+    document = active_document(infrastructure=InfrastructureConfig(redis_url="DISABLED"))
+
+    with pytest.raises(ValueError, match="redis:// or rediss://"):
+        validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
+
+
 def test_document_is_frozen_and_rejects_unknown_top_level_fields():
     from cryptotrader.runtime_config.models import RuntimeConfigDocument
 

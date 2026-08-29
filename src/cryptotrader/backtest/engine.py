@@ -194,9 +194,9 @@ class BacktestEngine:
                 ),
                 "execution": ExecutionConfig(connections=(connection,), books=(book,)),
                 # Historical Paper execution never enters Runtime.execution_lease.
-                # Mark the isolated graph explicitly so strict production Redis
-                # admission remains mandatory for every deployed owner.
-                "infrastructure": InfrastructureConfig(redis_url="DISABLED"),
+                # This isolated, unroutable endpoint keeps the frozen document
+                # structurally valid without becoming a production escape hatch.
+                "infrastructure": InfrastructureConfig(redis_url="redis://backtest.invalid:6379/0"),
             }
         )
         return RuntimeConfigSnapshot(source_snapshot.revision, document, source_snapshot.updated_at)

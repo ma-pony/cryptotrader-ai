@@ -102,9 +102,14 @@ def runtime_document_with_weights(first: float, second: float) -> RuntimeConfigD
 
 
 def active_document(**overrides) -> RuntimeConfigDocument:
+    from cryptotrader.runtime_config.models import InfrastructureConfig
+
+    values = {
+        "connections": (connection(),),
+        "books": (book(),),
+        "system": SystemConfig(active=True),
+        "infrastructure": InfrastructureConfig(redis_url="redis://runtime-test:6379/0"),
+    }
     return runtime_document(
-        connections=(connection(),),
-        books=(book(),),
-        system=SystemConfig(active=True),
-        **overrides,
+        **(values | overrides),
     )

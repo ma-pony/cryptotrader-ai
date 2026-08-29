@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
 
@@ -388,12 +389,17 @@ def _validate_active_document(document: RuntimeConfigDocument, installed_market_
         raise ValueError("active document requires an enabled signal component")
     if not any(book.enabled for book in document.execution.books):
         raise ValueError("active document requires an enabled execution book")
+    for connection in document.execution.connections:
+        if connection.enabled and connection.environment != "paper" and not connection.credential_ref:
+            raise ValueError(f"enabled {connection.environment} connection {connection.id} requires credential_ref")
     if (
         any(book.enabled for book in document.execution.books)
         or document.scheduler.enabled
         or document.triggers.enabled
-    ) and not document.infrastructure.redis_url.strip():
-        raise ValueError("active execution, scheduler, or triggers require infrastructure.redis_url")
-    for connection in document.execution.connections:
-        if connection.enabled and connection.environment != "paper" and not connection.credential_ref:
-            raise ValueError(f"enabled {connection.environment} connection {connection.id} requires credential_ref")
+    ):
+        redis_url = document.infrastructure.redis_url.strip()
+        parsed_redis_url = urlparse(redis_url)
+        if parsed_redis_url.scheme not in {"redis", "rediss"} or not parsed_redis_url.hostname:
+            raise ValueError(
+                "active execution, scheduler, or triggers require infrastructure.redis_url using redis:// or rediss://"
+            )
