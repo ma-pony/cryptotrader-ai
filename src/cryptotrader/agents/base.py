@@ -427,7 +427,7 @@ class BaseAgent:
             model = self._resolve_model()
             if self._llm_factory is None:
                 raise RuntimeError("runtime agent requires an explicit LLM factory")
-            llm = self._llm_factory(model=model, role=self.agent_id)
+            llm = self._llm_factory(model=model, role=f"{self.agent_id}_agent")
             messages = [sys_msg, usr_msg]
             from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model, should_cache
 
@@ -607,7 +607,7 @@ class ToolAgent(BaseAgent):
                 model=self.model,
                 temperature=0.2,
                 with_fallback=False,
-                role=self.agent_id,
+                role=f"{self.agent_id}_agent",
             )
             agent = create_agent(llm, tools=self.tools, system_prompt=sys_msg.content)
 

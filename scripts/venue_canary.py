@@ -26,6 +26,7 @@ from cryptotrader.venues.registry import VenueAdapterRegistry
 
 _SIMULATED_ENVIRONMENTS = frozenset({"paper", "demo", "testnet"})
 _REDACTED = "[redacted]"
+_CANARY_QUOTE_NOTIONAL = Decimal("10")
 
 
 class CanarySafetyError(RuntimeError):
@@ -131,9 +132,12 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
     """Run writes only against a session already proven simulated by the caller."""
     result: dict[str, Any] = {"status": "failed", "started_at": datetime.now(UTC), "steps": []}
     canary_write_attempted = False
-    client_order_id = f"canary-{uuid4().hex[:24]}"
+    client_order_prefix = f"canary-{uuid4().hex[:16]}"
+    open_client_order_id = f"{client_order_prefix}-open"
+    close_client_order_id = f"{client_order_prefix}-close"
     owned_order_ids: set[str] = set()
     owned_protection_ids: tuple[str, ...] = ()
+    owned_exposure = Decimal("0")
     try:
         await session.fetch_portfolio(pair)
         quote = await session.fetch_quote(pair)
@@ -141,14 +145,18 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
         if initial["requires_attention"]:
             raise CanarySafetyError("canary requires initial zero position, orders, and protections")
         result["steps"].append("read_health_balance_open_state")
-        amount = await session.minimum_amount(pair, quote.last)
+        minimum_amount = await session.minimum_amount(pair, quote.last)
+        amount = await session.normalize_amount(pair, max(minimum_amount, _CANARY_QUOTE_NOTIONAL / quote.last))
         if amount <= 0:
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")
         canary_write_attempted = True
-        opened = await session.place_order(OrderIntent(pair, "buy", amount, "market", None, False, client_order_id))
-        if opened.client_order_id != client_order_id or opened.filled_amount <= 0:
+        opened = await session.place_order(
+            OrderIntent(pair, "buy", amount, "market", None, False, open_client_order_id)
+        )
+        if opened.client_order_id != open_client_order_id or opened.filled_amount <= 0:
             raise CanarySafetyError("canary opening order ownership or fill is not confirmed")
         owned_order_ids.add(opened.id)
+        owned_exposure = opened.filled_amount
         result["open_order_id"] = opened.id
         result["steps"].append("open_minimum_position")
         protection = await session.replace_protection(
@@ -169,9 +177,9 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
         if state.position.signed_amount != opened.filled_amount:
             raise CanarySafetyError("owned exposure cannot be separated from current position")
         closing = await session.place_order(
-            OrderIntent(pair, "sell", opened.filled_amount, "market", None, True, client_order_id)
+            OrderIntent(pair, "sell", opened.filled_amount, "market", None, True, close_client_order_id)
         )
-        if closing.client_order_id != client_order_id or closing.filled_amount != opened.filled_amount:
+        if closing.client_order_id != close_client_order_id or closing.filled_amount != opened.filled_amount:
             raise CanarySafetyError("canary reduce-only close is not confirmed")
         owned_order_ids.add(closing.id)
         await session.cancel_protection(owned_protection_ids)
@@ -189,6 +197,19 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
             if owned_protection_ids:
                 try:
                     await session.cancel_protection(owned_protection_ids)
+                except Exception:
+                    result["requires_attention"] = True
+            if owned_exposure:
+                try:
+                    state = await session.list_open_state(pair)
+                    if state.position.signed_amount == owned_exposure:
+                        closing = await session.place_order(
+                            OrderIntent(pair, "sell", owned_exposure, "market", None, True, close_client_order_id)
+                        )
+                        if closing.client_order_id != close_client_order_id or closing.filled_amount != owned_exposure:
+                            result["requires_attention"] = True
+                    elif state.position.signed_amount != Decimal("0"):
+                        result["requires_attention"] = True
                 except Exception:
                     result["requires_attention"] = True
         result.update(await _cleanup(session, pair, canary_write_attempted=False))
