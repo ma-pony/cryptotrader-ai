@@ -452,3 +452,54 @@ async def test_timeout_after_fully_filled_remote_order_uses_client_id_lookup_for
     await venue_canary.run_simulated_canary(session, session.pair)
 
     assert session.order_amounts == [Decimal("0.1")]
+
+
+@dataclass
+class _PartialCloseSession(_Session):
+    pending: list[NormalizedOrder] = field(default_factory=list)
+    cancelled_ids: list[str] = field(default_factory=list)
+
+    async def place_order(self, intent):
+        if not intent.reduce_only or intent.client_order_id.endswith("X"):
+            return await super().place_order(intent)
+        partial = intent.amount / Decimal("2")
+        self.order_calls += 1
+        self.order_amounts.append(intent.amount)
+        self.signed_amount -= partial
+        order = NormalizedOrder(
+            "close-pending",
+            intent.pair,
+            "sell",
+            "market",
+            intent.amount,
+            partial,
+            Decimal("100"),
+            "partial",
+            True,
+            intent.client_order_id,
+        )
+        self.pending.append(order)
+        return order
+
+    async def find_order(self, _pair, *, order_id=None, client_order_id=None):
+        return next(
+            (item for item in self.pending if item.id == order_id or item.client_order_id == client_order_id), None
+        )
+
+    async def cancel_order(self, order_id, _pair):
+        self.cancelled_ids.append(order_id)
+        self.pending = [item for item in self.pending if item.id != order_id]
+
+
+@pytest.mark.asyncio
+async def test_partial_close_cancels_exact_remainder_then_closes_only_remaining_owned_exposure(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    monkeypatch.setattr(venue_canary, "_ORDER_POLL_SECONDS", 0)
+    session = _PartialCloseSession(Pair.parse("BTC/USDT:USDT"))
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_ids == ["close-pending"]
+    assert session.order_amounts == [Decimal("0.1"), Decimal("0.1"), Decimal("0.05")]
+    assert session.signed_amount == Decimal("0")
+    assert result["status"] == "completed"

@@ -29,6 +29,8 @@ from cryptotrader.venues.registry import VenueAdapterRegistry
 _SIMULATED_ENVIRONMENTS = frozenset({"paper", "demo", "testnet"})
 _REDACTED = "[redacted]"
 _CANARY_QUOTE_NOTIONAL = Decimal("10")
+_ORDER_POLL_SECONDS = 0.25
+_ORDER_POLL_ATTEMPTS = 3
 
 
 class CanarySafetyError(RuntimeError):
@@ -123,24 +125,39 @@ async def _find_owned_order(session, pair: Pair, client_order_id: str, order_id:
     return order if order is not None and order.client_order_id == client_order_id else None
 
 
-async def _confirmed_order(session, pair: Pair, order, client_order_id: str):
+async def _confirmed_order(session, pair: Pair, order, client_order_id: str):  # noqa: C901 - bounded order state machine
+    """Return an owned, settled order; pending acknowledgements are cancelled first."""
     if order.client_order_id != client_order_id:
         raise CanarySafetyError("canary order ownership is not confirmed")
-    if order.filled_amount > 0:
-        return order
-    for _ in range(3):
+    observed = order
+    for attempt in range(_ORDER_POLL_ATTEMPTS):
+        if observed.status not in {"open", "partial", "partially_filled"}:
+            if observed.filled_amount > 0:
+                return observed
+            raise CanarySafetyError("canary order has no confirmed fill")
+        if attempt:
+            await asyncio.sleep(_ORDER_POLL_SECONDS)
         observed = await _find_owned_order(session, pair, client_order_id, order.id)
-        if observed is not None and observed.filled_amount > 0:
+        if observed is None:
+            break
+        if observed.status not in {"open", "partial", "partially_filled"} and observed.filled_amount > 0:
             return observed
-        await asyncio.sleep(0)
+    if observed is not None and observed.status in {"open", "partial", "partially_filled"}:
+        await session.cancel_order(observed.id, pair)
+        await asyncio.sleep(_ORDER_POLL_SECONDS)
+        final = await _find_owned_order(session, pair, client_order_id, observed.id)
+        if final is not None and final.status in {"open", "partial", "partially_filled"}:
+            raise CanarySafetyError("owned pending order remains open after cancellation")
+    if observed is not None and observed.filled_amount > 0:
+        return observed
     raise CanarySafetyError("canary order fill is not confirmed")
 
 
-async def _cleanup_owned(
+async def _cleanup_owned(  # noqa: C901 - bounded cleanup state machine
     session,
     pair: Pair,
     *,
-    client_order_prefix: str,
+    allowed_client_order_ids: frozenset[str],
     owned_exposure: Decimal,
     cleanup_client_order_id: str,
     protection_ids: tuple[str, ...],
@@ -150,9 +167,7 @@ async def _cleanup_owned(
     attention = False
     try:
         state = await session.list_open_state(pair)
-        owned_open = tuple(
-            order for order in state.open_orders if (order.client_order_id or "").startswith(client_order_prefix)
-        )
+        owned_open = tuple(order for order in state.open_orders if order.client_order_id in allowed_client_order_ids)
         for order in owned_open:
             try:
                 await session.cancel_order(order.id, pair)
@@ -161,8 +176,10 @@ async def _cleanup_owned(
                 errors.append(type(error).__name__)
         if owned_open and attention:
             raise CanarySafetyError("owned pending orders could not be cancelled")
-        observed_fill = sum((order.filled_amount for order in owned_open), Decimal("0"))
-        owned_exposure = max(owned_exposure, observed_fill)
+        if owned_open:
+            confirmed = await session.list_open_state(pair)
+            if any(order.client_order_id in allowed_client_order_ids for order in confirmed.open_orders):
+                raise CanarySafetyError("owned pending order remains open after cancellation")
         if protection_ids:
             try:
                 await session.cancel_protection(protection_ids)
@@ -178,7 +195,11 @@ async def _cleanup_owned(
                 closing = await session.place_order(
                     OrderIntent(pair, "sell", owned_exposure, "market", None, True, cleanup_client_order_id)
                 )
-                await _confirmed_order(session, pair, closing, cleanup_client_order_id)
+                closed = await _confirmed_order(session, pair, closing, cleanup_client_order_id)
+                owned_exposure -= min(owned_exposure, closed.filled_amount)
+                if owned_exposure:
+                    attention = True
+                    errors.append("UnclosedOwnedExposure")
     except Exception as error:
         attention = True
         errors.append(type(error).__name__)
@@ -209,7 +230,7 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
             raise CanarySafetyError("canary requires initial zero position, orders, and protections")
         result["steps"].append("read_health_balance_open_state")
         minimum_amount = await session.minimum_amount(pair, quote.last, _CANARY_QUOTE_NOTIONAL)
-        amount = await session.normalize_amount(pair, max(minimum_amount, _CANARY_QUOTE_NOTIONAL / quote.last))
+        amount = minimum_amount
         if amount <= 0:
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")
         canary_write_attempted = True
@@ -247,26 +268,31 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
             OrderIntent(pair, "sell", opened.filled_amount, "market", None, True, close_client_order_id)
         )
         closing = await _confirmed_order(session, pair, closing, close_client_order_id)
-        if closing.filled_amount != opened.filled_amount:
-            raise CanarySafetyError("canary reduce-only close is not confirmed")
-        owned_exposure = Decimal("0")
-        await session.cancel_protection(owned_protection_ids)
+        owned_exposure -= min(owned_exposure, closing.filled_amount)
+        if not owned_exposure:
+            await session.cancel_protection(owned_protection_ids)
         result["steps"].append("reduce_only_close_and_cancel")
-        result["status"] = "completed"
+        if not owned_exposure:
+            result["status"] = "completed"
     except Exception as error:
         result["error_type"] = type(error).__name__
     finally:
         if canary_write_attempted:
-            result.update(
-                await _cleanup_owned(
-                    session,
-                    pair,
-                    client_order_prefix=client_order_prefix,
-                    owned_exposure=owned_exposure,
-                    cleanup_client_order_id=cleanup_client_order_id,
-                    protection_ids=owned_protection_ids,
+            cleanup = await wait_for_owned(
+                asyncio.create_task(
+                    _cleanup_owned(
+                        session,
+                        pair,
+                        allowed_client_order_ids=frozenset(
+                            {open_client_order_id, close_client_order_id, cleanup_client_order_id}
+                        ),
+                        owned_exposure=owned_exposure,
+                        cleanup_client_order_id=cleanup_client_order_id,
+                        protection_ids=owned_protection_ids,
+                    )
                 )
             )
+            result.update(cleanup)
         else:
             result.update(await inspect_residual(session, pair))
         if close_session:
@@ -277,6 +303,13 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
                 result["requires_attention"] = True
         if result["requires_attention"]:
             result["status"] = "failed"
+        elif (
+            canary_write_attempted
+            and result.get("status") == "failed"
+            and not result.get("cleanup_errors")
+            and "error_type" not in result
+        ):
+            result["status"] = "completed"
     return _safe_value(result)
 
 
