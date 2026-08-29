@@ -158,6 +158,7 @@ class BacktestEngine:
     def _backtest_snapshot(self, source_snapshot):
         from cryptotrader.runtime_config.models import (
             ExecutionConfig,
+            InfrastructureConfig,
             MarketDataConfig,
             RuntimeConfigSnapshot,
             SystemConfig,
@@ -192,6 +193,10 @@ class BacktestEngine:
                     parameters={"timeframe": default_timeframe, "limit": limit},
                 ),
                 "execution": ExecutionConfig(connections=(connection,), books=(book,)),
+                # Historical Paper execution never enters Runtime.execution_lease.
+                # Mark the isolated graph explicitly so strict production Redis
+                # admission remains mandatory for every deployed owner.
+                "infrastructure": InfrastructureConfig(redis_url="DISABLED"),
             }
         )
         return RuntimeConfigSnapshot(source_snapshot.revision, document, source_snapshot.updated_at)

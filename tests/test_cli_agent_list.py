@@ -47,13 +47,18 @@ async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
             return CycleOutcome("cli-cycle", 6, None, (), "no_change", "not_started", False)
 
     cycle = Cycle()
+    execution_leases: list[str] = []
+
+    def execution_lease(pair: str):
+        execution_leases.append(pair)
+        return static_cycle_lease(cycle)()
+
     snapshot = RuntimeConfigSnapshot(6, runtime_document(), datetime(2026, 8, 29, tzinfo=UTC))
     cycle.snapshot = snapshot
     runtime = SimpleNamespace(
         snapshot=snapshot,
         cycle=cycle,
-        cycle_lease=static_cycle_lease(cycle),
-        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
+        execution_lease=execution_lease,
         close=AsyncMock(),
     )
 
@@ -64,6 +69,7 @@ async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
         CycleRequest(Pair.parse("BTC/USDT")),
         CycleRequest(Pair.parse("ETH/USDT")),
     ]
+    assert execution_leases == ["BTC/USDT", "ETH/USDT"]
     runtime.close.assert_awaited_once_with()
 
 

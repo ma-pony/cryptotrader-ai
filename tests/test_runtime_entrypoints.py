@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import import_module
 from types import SimpleNamespace
@@ -106,12 +105,13 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
 
 
 @pytest.mark.asyncio
-async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lease() -> None:
+async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lease() -> None:  # noqa: C901
     """Changing either production source to a graph lease would run two cycles."""
     from api import main
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
     from cryptotrader.decision.models import CycleOutcome, CycleRequest
     from cryptotrader.pair import Pair
-    from cryptotrader.runtime import RuntimeLeaseUnavailableError
+    from cryptotrader.runtime import Runtime
     from cryptotrader.scheduler import Scheduler
 
     class Cycle:
@@ -134,52 +134,74 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
             self.start = AsyncMock()
             Engine.instance = self
 
+    class StrictRedisState:
+        def __init__(self) -> None:
+            self.values: dict[str, str] = {}
+            self.close_count = 0
+
+        async def try_acquire_strict_lock(self, key: str, owner: str, _ttl: int) -> bool:
+            if key in self.values:
+                return False
+            self.values[key] = owner
+            return True
+
+        async def release_strict_lock(self, key: str, owner: str) -> bool:
+            if self.values.get(key) != owner:
+                return False
+            del self.values[key]
+            return True
+
+        async def aclose(self) -> None:
+            self.close_count += 1
+
+    class Repository:
+        database_url = "sqlite+aiosqlite://"
+
+        async def get_or_create(self):
+            return snapshot
+
     cycle = Cycle()
     document = active_document(
         triggers=TriggerConfig(enabled=True),
         scheduler=SchedulerConfig(enabled=True, pairs=("BTC/USDT:USDT",), interval_minutes=15),
     )
     snapshot = RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC))
-    held: set[str] = set()
-
-    @asynccontextmanager
-    async def cycle_lease():
-        yield cycle
-
-    @asynccontextmanager
-    async def execution_lease(pair: str):
-        canonical = Pair.parse(pair).canonical()
-        if canonical in held:
-            raise RuntimeLeaseUnavailableError("execution lease held")
-        held.add(canonical)
-        try:
-            yield cycle
-        finally:
-            held.remove(canonical)
-
-    runtime = SimpleNamespace(
-        snapshot=snapshot,
-        repository=SimpleNamespace(database_url="sqlite+aiosqlite://"),
-        cycle=cycle,
-        cycle_lease=cycle_lease,
-        execution_lease=execution_lease,
+    document = document.model_copy(
+        update={"infrastructure": document.infrastructure.model_copy(update={"redis_url": "redis://strict-test"})}
     )
+    snapshot = RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC))
+    cycle.snapshot = snapshot
+    runtime = Runtime(
+        snapshot=snapshot,
+        repository=Repository(),
+        cycle=cycle,
+        sessions={},
+        signal_registry=object(),
+        market_registry=object(),
+        venue_registry=object(),
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+    )
+    runtime._reload_for_cycle_locked = AsyncMock(return_value=cycle)
+    strict_redis = StrictRedisState()
     application = SimpleNamespace(state=SimpleNamespace(runtime=runtime))
     with (
         patch("cryptotrader.triggers.engine.PriceTriggerEngine", Engine),
         patch("cryptotrader.triggers.store.TriggerRuleStore.ensure_tables", AsyncMock()),
+        patch("cryptotrader.risk.state.RedisStateManager", return_value=strict_redis),
     ):
         await main._init_trigger_engine(application)
 
-    trigger_task = asyncio.create_task(Engine.instance.callback("BTC/USDT:USDT", {}))
-    await cycle.entered.wait()
-    scheduler = Scheduler(document.scheduler, runtime)
-    await scheduler._run_pair("BTC/USDT:USDT")
-    cycle.release.set()
-    await trigger_task
+        trigger_task = asyncio.create_task(Engine.instance.callback("BTC/USDT:USDT", {}))
+        await cycle.entered.wait()
+        scheduler = Scheduler(document.scheduler, runtime)
+        await scheduler._run_pair("BTC/USDT:USDT")
+        cycle.release.set()
+        await trigger_task
 
     assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT:USDT"))]
     assert scheduler.status["BTC/USDT:USDT"]["last_error"] == "cycle_failed"
+    assert strict_redis.values == {}
+    assert strict_redis.close_count == 2
 
 
 @pytest.mark.asyncio

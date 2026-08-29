@@ -34,6 +34,7 @@ class _Cycle:
         self.approvals = BookApprovalStore()
         self.execute_approved = AsyncMock(side_effect=self._execute)
         self.reject_approval = AsyncMock(side_effect=self._reject)
+        self.execution_lease_pairs: list[str] = []
 
     async def _execute(self, approval_id):
         await self.approvals.claim_for_execution(approval_id, current_revision=9)
@@ -56,7 +57,12 @@ async def _seed(cycle: _Cycle, approval_id: str = "approval-1"):
 def _mount_cycle(api_harness, cycle: _Cycle) -> None:
     api_harness.runtime.cycle = cycle
     api_harness.runtime.cycle_lease = static_cycle_lease(cycle)
-    api_harness.runtime.execution_lease = lambda _pair: static_cycle_lease(cycle)()
+
+    def execution_lease(pair: str):
+        cycle.execution_lease_pairs.append(pair)
+        return static_cycle_lease(cycle)()
+
+    api_harness.runtime.execution_lease = execution_lease
 
 
 async def test_pending_api_exposes_frozen_book_proposal(api_harness):
@@ -89,6 +95,7 @@ async def test_approve_api_returns_final_approval_and_cycle_state(api_harness):
 
     assert response.status_code == 200
     cycle.execute_approved.assert_awaited_once_with("approval-1")
+    assert cycle.execution_lease_pairs == ["BTC/USDT:USDT"]
     assert response.json() == {
         "approval_id": "approval-1",
         "cycle_id": "cycle-1",

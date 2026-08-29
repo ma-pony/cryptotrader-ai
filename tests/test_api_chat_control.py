@@ -108,6 +108,7 @@ async def test_interrupt_response_waits_for_exact_old_task_cleanup_before_same_s
     )
 
     old_runtime.cycle_lease = static_cycle_lease(old_cycle)
+    old_runtime.execution_lease = lambda _pair: static_cycle_lease(old_cycle)()
 
     async def run_old(interrupt_event):
         await run_analysis_and_buffer(

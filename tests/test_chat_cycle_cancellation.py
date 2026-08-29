@@ -182,12 +182,17 @@ async def test_chat_reloads_once_reports_each_book_and_publishes_strict_terminal
             return CycleOutcome("chat-cycle", 12, None, books, "partial", "partial", True)
 
     cycle = Cycle()
+    execution_leases: list[str] = []
+
+    def execution_lease(pair: str):
+        execution_leases.append(pair)
+        return static_cycle_lease(cycle)()
+
     runtime = SimpleNamespace(
         cycle=cycle,
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
         snapshot=SimpleNamespace(revision=11),
-        cycle_lease=static_cycle_lease(cycle),
-        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
+        execution_lease=execution_lease,
     )
     bus = _Bus()
 
@@ -202,6 +207,7 @@ async def test_chat_reloads_once_reports_each_book_and_publishes_strict_terminal
 
     assert outcome.cycle_id == "chat-cycle"
     assert len(cycle.requests) == 1
+    assert execution_leases == ["BTC/USDT"]
     book_events = [data for name, data in bus.events if name == "book_result"]
     assert book_events == [
         {
