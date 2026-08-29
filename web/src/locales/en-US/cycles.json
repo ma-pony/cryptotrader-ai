@@ -6,6 +6,7 @@
   "empty": "No cycles recorded.",
   "previous": "Previous",
   "next": "Next",
+  "page": "Page {{page}}",
   "books": "{{count}} books",
   "attention": "Requires attention",
   "shared": "Shared committee evidence",

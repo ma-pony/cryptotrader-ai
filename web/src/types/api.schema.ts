@@ -117,7 +117,7 @@ export const CommitteeAgentAnalysisSchema = z
     timestamp: z.string().optional(),
     new_findings: z.string().optional(),
   })
-  .passthrough();
+  .strict();
 
 export const CommitteeDebateTurnSchema = z.object({
   round: z.number(),
@@ -126,16 +126,16 @@ export const CommitteeDebateTurnSchema = z.object({
   before: z.object({
     direction: z.string(),
     confidence: z.number(),
-  }),
+  }).strict(),
   after: z.object({
     direction: z.string(),
     confidence: z.number(),
-  }),
+  }).strict(),
   move: z.string(),
   reasoning: z.string(),
   new_findings: z.string().default(''),
   errored: z.boolean().default(false),
-});
+}).strict();
 
 export const ConsensusMetricsSchema = z
   .object({
@@ -143,9 +143,9 @@ export const ConsensusMetricsSchema = z
     mean_score: z.number().default(0),
     dispersion: z.number().default(0),
   })
-  .passthrough();
+  .strict();
 
-export const ComponentDetailsSchema = z
+export const CommitteeDetailsSchema = z
   .object({
     analyses: z.record(CommitteeAgentAnalysisSchema).optional(),
     debate_turns: z.array(CommitteeDebateTurnSchema).optional(),
@@ -153,7 +153,9 @@ export const ComponentDetailsSchema = z
     debate_skipped: z.boolean().optional(),
     debate_skip_reason: z.string().optional(),
   })
-  .passthrough();
+  .strict();
+
+export const ComponentDetailsSchema = CommitteeDetailsSchema;
 
 export const ComponentSignalSchema = z.object({
   component_id: z.string(),
@@ -694,7 +696,7 @@ export const HitlRespondSchema = z.object({
   cycle_status: z.string(),
   execution_status: z.string(),
   requires_attention: z.boolean(),
-});
+}).strict();
 
 const ConnectionPortfolioSchema = z.object({ connection_id: z.string(), equity: z.string(), balances: z.array(z.object({ asset: z.string(), amount: z.string() }).strict()), position: z.object({ pair: z.string(), signed_amount: z.string(), signed_notional: z.string(), entry_price: z.string().nullable() }).strict() }).strict();
 const PortfolioBookSchema = z.object({ book_id: z.string(), capital_scope: z.enum(['simulated', 'real']), pair: z.string(), total_equity: z.string(), total_signed_notional: z.string(), connections: z.array(ConnectionPortfolioSchema) }).strict();

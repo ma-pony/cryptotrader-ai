@@ -5,7 +5,7 @@ import { MemoryRouter } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/lib/i18n';
-import { ApprovalRequestSchema } from '@/types/api.schema';
+import { ApprovalRequestSchema, HitlRespondSchema } from '@/types/api.schema';
 
 import { ApprovalQueueCard } from './approval-queue-card';
 
@@ -75,6 +75,12 @@ describe('approval book plan', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('rejects response fields outside the strict HITL outcome contract', () => {
+    expect(HitlRespondSchema.safeParse({
+      approval_id: 'approval-1', cycle_id: 'cycle-partial', approval_status: 'approved', cycle_status: 'partial', execution_status: 'partial', requires_attention: true, leaked: true,
+    }).success).toBe(false);
   });
 
   it('keeps the frozen complete proposal visible through a partial attention outcome after approval', async () => {

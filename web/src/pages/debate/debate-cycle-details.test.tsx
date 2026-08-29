@@ -27,6 +27,7 @@ const agent = (agent_id: string, direction: string, confidence: string) => jsonO
   { key: 'agent_id', value: jsonString(agent_id) },
   { key: 'direction', value: jsonString(direction) },
   { key: 'confidence', value: jsonNumber(confidence) },
+  { key: 'reasoning', value: jsonString(`${agent_id} initial rationale`) },
 ]);
 const turn = (from: string, to: string, direction: string, confidence: string) => jsonObject([
   { key: 'round', value: jsonNumber('1') },
@@ -93,5 +94,23 @@ describe('debate canonical cycle details', () => {
       expect(screen.getAllByText(text, { exact: false }).length).toBeGreaterThan(0);
     }
     expect(screen.getByText(/触发辩论.*dispersion crossed gate/)).toBeInTheDocument();
+  });
+
+  it('renders controlled unavailable state for schema-valid but malformed committee details', async () => {
+    const malformed = CycleSchema.parse({
+      ...cycle,
+      shared_signals: { ...cycle.shared_signals, components: [{ ...cycle.shared_signals.components[0]!, details: [{ key: 'analyses', value: jsonString('not a committee object') }] }] },
+    });
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (String(url) === '/api/cycles/cycle-debate') return Promise.resolve(response(malformed));
+      if (String(url) === '/api/cycles?page=1&size=20') return Promise.resolve(response({ items: [malformed], total: 1, page: 1, size: 20, has_next: false }));
+      throw new Error(`unexpected request ${String(url)}`);
+    }));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/debate/cycle-debate']}><Routes><Route path="/debate/:cycleId" element={<DebatePage />} /></Routes></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('无法加载周期 cycle-debate 的辩论详情')).toBeInTheDocument();
   });
 });

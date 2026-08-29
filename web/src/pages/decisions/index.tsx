@@ -4,24 +4,29 @@ import { Link } from 'react-router';
 
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
-import { useDecisions } from '@/hooks/use-decisions';
+import { useMultiVenueCycles } from '@/hooks/use-multi-venue-cycles';
 import { cycleStatusTone, formatCycleStatus } from '@/lib/cycle-status';
 
 const PAGE_SIZE = 20;
 
 const DecisionsContent = () => {
   const { t } = useTranslation(['decisions', 'cycles']);
-  const [page] = useState(1);
+  const [page, setPage] = useState(1);
 
-  const { data, isLoading } = useDecisions({ page, size: PAGE_SIZE });
+  const cycles = useMultiVenueCycles(page, PAGE_SIZE);
+  const items = cycles.data?.items ?? [];
 
   return (
     <div className="space-y-6">
       <PageHeader title={t('title')} />
-      {isLoading ? (
+      {cycles.isLoading ? (
         <p>{t('loading', { ns: 'cycles' })}</p>
-      ) : (
-        data?.items.map((cycle) => (
+      ) : null}
+      {cycles.isError ? <p className="text-destructive">{t('loadError', { ns: 'cycles' })}</p> : null}
+      {!cycles.isLoading && !cycles.isError && items.length === 0 ? <p>{t('empty', { ns: 'cycles' })}</p> : null}
+      {items.length > 0 ? (
+        <>
+          {items.map((cycle) => (
           <Link
             key={cycle.cycle_id}
             to={`/cycles/${cycle.cycle_id}`}
@@ -40,8 +45,18 @@ const DecisionsContent = () => {
               <span className="ml-2 text-amber-600">{t('attention', { ns: 'cycles' })}</span>
             ) : null}
           </Link>
-        ))
-      )}
+          ))}
+          <nav className="flex items-center justify-between" aria-label={t('title')}>
+            <button type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1}>
+              {t('previous', { ns: 'cycles' })}
+            </button>
+            <span>{t('page', { ns: 'cycles', page })}</span>
+            <button type="button" onClick={() => setPage((current) => current + 1)} disabled={!cycles.data?.has_next}>
+              {t('next', { ns: 'cycles' })}
+            </button>
+          </nav>
+        </>
+      ) : null}
     </div>
   );
 };

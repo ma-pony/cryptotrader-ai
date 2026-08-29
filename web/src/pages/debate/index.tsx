@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/cn';
 import { useMultiVenueCycle, useMultiVenueCycles } from '@/hooks/use-multi-venue-cycles';
 import type { CommitteeDebateTurn, Cycle } from '@/types/api';
+import { CommitteeDetailsSchema } from '@/types/api.schema';
 import { decodeEntries } from '@/hooks/use-runtime-config';
 
 import { DirChip } from '@/components/ui/dir-chip';
@@ -54,7 +55,9 @@ const normalizeDir = (raw: string): NormalizedDir => {
 const toScenario = (d: Cycle): DebateScenario | null => {
   const committee = d.shared_signals.components.find((component) => component.component_id === 'llm_committee');
   if (!committee) return null;
-  const details = decodeEntries(committee.details as Parameters<typeof decodeEntries>[0]) as { debate_turns?: CommitteeDebateTurn[]; analyses?: Record<string, { agent_id: string; direction: string; confidence: number }>; consensus_metrics?: { dispersion?: number }; debate_skipped?: boolean; debate_skip_reason?: string };
+  const parsedDetails = CommitteeDetailsSchema.safeParse(decodeEntries(committee.details));
+  if (!parsedDetails.success) return null;
+  const details = parsedDetails.data;
   const turnsApi = details.debate_turns ?? [];
   const analyses = details.analyses ? Object.values(details.analyses) : [];
   const groupedInitial = new Map<AgentKind, { dir: NormalizedDir; conf: number }>();

@@ -24,6 +24,13 @@ const DashboardContent = () => {
             {!portfolio.isLoading && !portfolio.isError && portfolio.data?.[scope].books.length === 0 ? (
               <p className="mt-3 text-sm text-muted-foreground">{t('books.empty')}</p>
             ) : null}
+            {portfolio.data ? (
+              <div className="mt-3 rounded border border-primary/30 bg-primary/5 p-3 text-sm">
+                <p className="font-medium">{t('books.total')}</p>
+                <p>{t('books.equity')}: {portfolio.data[scope].totals.equity}</p>
+                <p>{t('books.notional')}: {portfolio.data[scope].totals.signed_notional}</p>
+              </div>
+            ) : null}
             {portfolio.data?.[scope].books.map((book) => (
               <article key={book.book_id} className="mt-3 rounded border border-border p-3">
                 <h3 className="font-mono text-xs">

@@ -6,7 +6,7 @@ import { useNavigate } from 'react-router';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Skeleton } from '@/components/ui/skeleton';
-import { useDecisions } from '@/hooks/use-decisions';
+import { useMultiVenueCycles } from '@/hooks/use-multi-venue-cycles';
 import { useRiskStatus } from '@/hooks/use-risk-status';
 import { cn } from '@/lib/cn';
 import { formatDateTime } from '@/lib/format';
@@ -66,14 +66,14 @@ const ActionBadge = ({
  * recent risk blocks into a single time-sorted stream so the user can answer
  * "what happened today?" without bouncing between Decisions / Risk pages.
  *
- * Reuses ``useDecisions`` and ``useRiskStatus`` (both already polled
+ * Reuses ``useMultiVenueCycles`` and ``useRiskStatus`` (both already polled
  * elsewhere in the dashboard via React Query, so this is a free subscription
  * via the cache).
  */
 export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
   const { t } = useTranslation('dashboard');
   const navigate = useNavigate();
-  const decisions = useDecisions({ page: 1, size: limit });
+  const decisions = useMultiVenueCycles(1, limit);
   const risk = useRiskStatus();
 
   const items = useMemo<FeedItem[]>(() => {

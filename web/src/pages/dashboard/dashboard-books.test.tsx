@@ -8,40 +8,40 @@ import { PortfolioBooksSchema } from '@/types/api.schema';
 const portfolio = PortfolioBooksSchema.parse({
   pair: 'BTC/USDT',
   simulated: {
-    totals: { equity: '100000', signed_notional: '1000' },
+    totals: { equity: '100000', signed_notional: '1500' },
     books: [
       {
         book_id: 'sim-book',
         capital_scope: 'simulated',
         pair: 'BTC/USDT',
-        total_equity: '100000',
-        total_signed_notional: '1000',
+        total_equity: '60000',
+        total_signed_notional: '900',
         connections: [
           {
             connection_id: 'sim-venue',
-            equity: '100000',
-            balances: [{ asset: 'USDT', amount: '90000' }],
-            position: { pair: 'BTC/USDT', signed_amount: '1', signed_notional: '1000', entry_price: '99000' },
+            equity: '60000',
+            balances: [{ asset: 'USDT', amount: '50000' }],
+            position: { pair: 'BTC/USDT', signed_amount: '1', signed_notional: '900', entry_price: '99000' },
           },
         ],
       },
     ],
   },
   real: {
-    totals: { equity: '12000', signed_notional: '200' },
+    totals: { equity: '12000', signed_notional: '300' },
     books: [
       {
         book_id: 'real-book',
         capital_scope: 'real',
         pair: 'BTC/USDT',
-        total_equity: '12000',
-        total_signed_notional: '200',
+        total_equity: '11000',
+        total_signed_notional: '250',
         connections: [
           {
             connection_id: 'real-venue',
-            equity: '12000',
-            balances: [{ asset: 'USDT', amount: '10000' }],
-            position: { pair: 'BTC/USDT', signed_amount: '0.2', signed_notional: '200', entry_price: '100000' },
+            equity: '11000',
+            balances: [{ asset: 'USDT', amount: '9000' }],
+            position: { pair: 'BTC/USDT', signed_amount: '0.2', signed_notional: '250', entry_price: '100000' },
           },
         ],
       },
@@ -64,13 +64,20 @@ describe('dashboard execution books', () => {
     for (const text of [
       'Simulated capital',
       'Real capital',
+      'Scope total',
       '100000',
       '12000',
+      '1500',
+      '300',
+      '60000',
+      '11000',
+      '900',
+      '250',
       'sim-book',
       'real-book',
       'sim-venue',
       'real-venue',
-      'USDT: 90000',
+      'USDT: 50000',
       'Entry',
     ])
       expect(screen.getAllByText(text, { exact: false }).length).toBeGreaterThan(0);
