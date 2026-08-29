@@ -11,7 +11,6 @@ WORKDIR /app
 COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
 COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ src/
-COPY config/ config/
 COPY artifacts/ artifacts/
 COPY vendor/ vendor/
 

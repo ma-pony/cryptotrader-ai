@@ -246,7 +246,7 @@ async def _compute_drawdown_pct(
     """Return current drawdown as positive percentage (e.g. ``33.34``).
 
     Always delegates to ``PortfolioManager.get_drawdown`` so the
-    operator-initiated baseline reset (``arena portfolio reset-baseline``,
+    operator-initiated baseline reset in the dashboard,
     spec drawdown decoupling 2026-05-07) is honored. The earlier inline
     fast-path that recomputed peak/trough from a pre-loaded ``snaps`` list
     bypassed the baseline cutoff and is no longer used; ``snaps`` is left

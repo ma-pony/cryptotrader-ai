@@ -160,21 +160,13 @@ class TestApplyCacheControl:
 
 class TestShouldCache:
     def test_enabled_with_claude_model(self):
-        with patch("cryptotrader.config.load_config") as mock_cfg:
-            mock_cfg.return_value.llm.prompt_caching = True
-            assert should_cache(model="claude-3.5-sonnet") is True
+        assert should_cache(model="claude-3.5-sonnet", enabled=True) is True
 
     def test_disabled_even_with_claude(self):
-        with patch("cryptotrader.config.load_config") as mock_cfg:
-            mock_cfg.return_value.llm.prompt_caching = False
-            assert should_cache(model="claude-3.5-sonnet") is False
+        assert should_cache(model="claude-3.5-sonnet", enabled=False) is False
 
     def test_non_anthropic_model_returns_false(self):
-        with patch("cryptotrader.config.load_config") as mock_cfg:
-            mock_cfg.return_value.llm.prompt_caching = True
-            assert should_cache(model="gpt-4o") is False
+        assert should_cache(model="gpt-4o", enabled=True) is False
 
     def test_empty_model_and_role(self):
-        with patch("cryptotrader.config.load_config") as mock_cfg:
-            mock_cfg.return_value.llm.prompt_caching = True
-            assert should_cache() is False
+        assert should_cache(enabled=True) is False

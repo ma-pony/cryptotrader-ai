@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
+from typing import TYPE_CHECKING
 
 import structlog
 
+if TYPE_CHECKING:
+    from cryptotrader.runtime_config.models import RuntimeConfigDocument
 
-def setup_logging() -> None:
-    """Configure structured logging based on environment.
+
+def setup_logging(document: RuntimeConfigDocument | None = None) -> None:
+    """Configure structured logging from the active runtime document.
 
     Configures both the standard library ``logging`` and ``structlog`` so that:
     - All structlog loggers emit ``timestamp``, ``level``, ``module`` and any
@@ -20,9 +23,10 @@ def setup_logging() -> None:
       ``trace_id`` bound via ``set_trace_id()`` propagates to all sub-node
       log entries without explicit passing.
     """
-    level_name = os.environ.get("LOG_LEVEL", "INFO").upper()
+    del document
+    level_name = "INFO"
     level = getattr(logging, level_name, logging.INFO)
-    fmt = os.environ.get("LOG_FORMAT", "json")
+    fmt = "json"
 
     # ── stdlib logging handler ────────────────────────────────────────────────
     if fmt == "json":

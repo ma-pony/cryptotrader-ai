@@ -65,35 +65,35 @@ async def get_funding_rate_history(pair: str, periods: int = 8) -> str:
 
 
 @tool
-async def get_liquidation_data(pair: str) -> str:
+async def get_liquidation_data(pair: str, provider_key: str = "") -> str:
     """Fetch 24h liquidation data (long vs short liquidation amounts).
 
     Use to assess leverage flush risk and cascade potential.
     Args:
         pair: Trading pair like "BTC/USDT"
     """
-    from cryptotrader.config import load_config
     from cryptotrader.data.providers.coinglass import fetch_derivatives
 
-    cfg = load_config().providers
     symbol = _base_symbol(pair)
-    data = await fetch_derivatives(cfg.coinglass_api_key, symbol)
+    if not provider_key:
+        return json.dumps({"open_interest": 0.0, "liquidations_24h": {}, "data_available": False})
+    data = await fetch_derivatives(provider_key, symbol)
     return json.dumps(data, default=str)
 
 
 @tool
-async def get_whale_transfers(pair: str) -> str:
+async def get_whale_transfers(pair: str, provider_key: str = "") -> str:
     """Fetch recent large whale transfers for a given asset.
 
     Use to detect smart money accumulation or distribution.
     Args:
         pair: Trading pair like "BTC/USDT"
     """
-    from cryptotrader.config import load_config
     from cryptotrader.data.providers.whale_alert import fetch_whale_transfers as _fetch
 
-    cfg = load_config().providers
-    transfers = await _fetch(cfg.whale_alert_api_key)
+    if not provider_key:
+        return json.dumps({"transfers": [], "data_available": False})
+    transfers = await _fetch(provider_key)
     # Filter by asset if possible
     symbol = _base_symbol(pair).upper()
     relevant = [t for t in transfers if t.get("symbol", "").upper() == symbol] or transfers
@@ -101,18 +101,18 @@ async def get_whale_transfers(pair: str) -> str:
 
 
 @tool
-async def get_exchange_netflow(pair: str) -> str:
+async def get_exchange_netflow(pair: str, provider_key: str = "") -> str:
     """Fetch exchange net inflow/outflow data.
 
     Positive = net inflow (sell pressure), Negative = net outflow (accumulation).
     Args:
         pair: Trading pair like "BTC/USDT"
     """
-    from cryptotrader.config import load_config
     from cryptotrader.data.providers.cryptoquant import fetch_exchange_netflow as _fetch
 
-    cfg = load_config().providers
-    netflow = await _fetch(cfg.cryptoquant_api_key)
+    if not provider_key:
+        return json.dumps({"netflow": 0.0, "data_available": False})
+    netflow = await _fetch(provider_key)
     label = "inflow (sell pressure)" if netflow > 0 else "outflow (accumulation)"
     return json.dumps({"netflow": netflow, "interpretation": label})
 

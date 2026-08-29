@@ -51,11 +51,13 @@ class DefaultMarketDataSource:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.config = config
-        self.exchange_id = str(config.parameters.get("exchange_id", "binance")).strip()
-        if not self.exchange_id:
-            raise ValueError("default market source requires exchange_id")
+        self.market_adapter_id = str(config.parameters.get("market_adapter_id", "binance")).strip()
+        if not self.market_adapter_id:
+            raise ValueError("default market source requires market_adapter_id")
         self.kronos_aux_symbol = str(config.parameters.get("kronos_aux_symbol", "BTCUSDT")).strip()
-        self.aggregator = aggregator or SnapshotAggregator()
+        self.aggregator = aggregator or SnapshotAggregator(
+            coindesk_api_key=str(config.parameters.get("coindesk_api_key", "")),
+        )
         self.market = self.aggregator.market
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -78,7 +80,7 @@ class DefaultMarketDataSource:
         primary = requirements.candles[0]
         base = await self.aggregator.collect(
             pair=pair.canonical(),
-            exchange_id=self.exchange_id,
+            market_adapter_id=self.market_adapter_id,
             timeframe=primary.timeframe,
             limit=primary.limit,
             backtest_mode=False,
@@ -91,7 +93,7 @@ class DefaultMarketDataSource:
         for requirement in requirements.candles[1:]:
             market = await self.market.collect(
                 pair.canonical(),
-                self.exchange_id,
+                self.market_adapter_id,
                 requirement.timeframe,
                 requirement.limit,
             )

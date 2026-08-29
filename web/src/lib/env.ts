@@ -2,7 +2,6 @@ import { z } from 'zod';
 
 const EnvSchema = z.object({
   VITE_API_BASE_URL: z.union([z.literal(''), z.string().url()]).default(''),
-  VITE_API_KEY: z.string().optional().default(''),
   VITE_OTLP_UI_ENDPOINT: z.string().optional().default(''),
   DEV: z.boolean(),
   PROD: z.boolean(),

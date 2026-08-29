@@ -24,9 +24,10 @@ from tests.factories.signal_fusion import cycle_record
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
 
     app.state.runtime = SimpleNamespace(
-        snapshot=SimpleNamespace(document=SimpleNamespace()),
+        snapshot=SimpleNamespace(document=minimal_runtime_document()),
         repository=SimpleNamespace(database_url=None),
         cycle=None,
     )
@@ -56,7 +57,6 @@ class TestPortfolioSnapshotShape:
         mock_pm.get_drawdown = AsyncMock(return_value=-0.012)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
                 "api.routes.portfolio_v2._read_live_portfolio",
@@ -78,7 +78,6 @@ class TestPortfolioSnapshotShape:
         mock_pm.get_drawdown = AsyncMock(return_value=-0.025)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
                 "api.routes.portfolio_v2._read_live_portfolio",
@@ -108,7 +107,6 @@ class TestPortfolioSnapshotShape:
 
         # Exchange overrides with current price for unrealized PnL math
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
                 "api.routes.portfolio_v2._read_live_portfolio",
@@ -149,7 +147,6 @@ class TestPortfolioSnapshotShape:
         mock_pm.get_drawdown = AsyncMock(return_value=0.0)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
                 "api.routes.portfolio_v2._read_live_portfolio",
@@ -169,7 +166,6 @@ class TestPortfolioSnapshotShape:
         mock_pm.get_drawdown = AsyncMock(return_value=0.0)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
                 "api.routes.portfolio_v2._read_live_portfolio",
@@ -190,7 +186,6 @@ class TestPortfolioSnapshotErrors:
         mock_pm.get_portfolio = AsyncMock(side_effect=RuntimeError("DB connection refused"))
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
             patch(
                 "api.routes.portfolio_v2._read_live_portfolio",

@@ -327,7 +327,7 @@ async def test_same_session_replacement_after_execution_started_returns_safe_409
 
 
 @pytest.mark.asyncio
-async def test_mounted_chat_handler_never_reaches_legacy_load_config():
+async def test_mounted_chat_handler_uses_its_explicit_runtime_cycle():
     from api.routes.chat import ChatStreamRequest, _handle_new_analysis
     from cryptotrader.chat.task_manager import BackgroundTaskManager
     from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
@@ -349,16 +349,15 @@ async def test_mounted_chat_handler_never_reaches_legacy_load_config():
     runtime.cycle_lease = static_cycle_lease(runtime.cycle)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
 
-    with patch("cryptotrader.config.load_config", side_effect=AssertionError("legacy load_config reached")):
-        await _handle_new_analysis(
-            "mounted-chat",
-            ChatStreamRequest(message="BTC/USDT:USDT"),
-            request,
-        )
-        task = BackgroundTaskManager.get_instance().get("mounted-chat")
-        assert task is not None
-        await task.task
-        assert task.outcome == CycleOutcome("cycle-chat", 4, None, (), "completed", "not_started", False)
+    await _handle_new_analysis(
+        "mounted-chat",
+        ChatStreamRequest(message="BTC/USDT:USDT"),
+        request,
+    )
+    task = BackgroundTaskManager.get_instance().get("mounted-chat")
+    assert task is not None
+    await task.task
+    assert task.outcome == CycleOutcome("cycle-chat", 4, None, (), "completed", "not_started", False)
 
 
 @pytest.mark.asyncio

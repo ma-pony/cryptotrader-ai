@@ -17,11 +17,12 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
 
     previous = getattr(app.state, "runtime", None)
     app.state.runtime = SimpleNamespace(
         repository=object(),
-        snapshot=object(),
+        snapshot=SimpleNamespace(document=minimal_runtime_document()),
         signal_registry=object(),
     )
     try:
@@ -49,9 +50,10 @@ def _valid_payload() -> dict:
 class TestBacktestRunHappyPath:
     def test_returns_202_with_run_id(self, client: TestClient, monkeypatch) -> None:
         from api.main import app
+        from cryptotrader.runtime_config.defaults import minimal_runtime_document
 
         shared_repository = object()
-        shared_snapshot = object()
+        shared_snapshot = SimpleNamespace(document=minimal_runtime_document())
         shared_signal_registry = object()
         monkeypatch.setattr(
             app.state,
@@ -63,7 +65,6 @@ class TestBacktestRunHappyPath:
             ),
         )
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._spawn_run", return_value="run_a1b2c3") as spawn_run,
         ):
             resp = client.post("/api/backtest/run", json=_valid_payload())
@@ -79,7 +80,6 @@ class TestBacktestRunHappyPath:
         payload = _valid_payload()
         del payload["session_name"]
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._spawn_run", return_value="run_xyz"),
         ):
             resp = client.post("/api/backtest/run", json=payload)
@@ -89,7 +89,6 @@ class TestBacktestRunHappyPath:
         payload = _valid_payload()
         payload["mode"] = "llm"
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._spawn_run", return_value="run_unused"),
         ):
             resp = client.post("/api/backtest/run", json=payload)
@@ -108,22 +107,19 @@ class TestBacktestRunValidation:
         payload = _valid_payload()
         payload["start"] = "2026-05-01"
         payload["end"] = "2026-04-01"
-        with patch("cryptotrader.config.load_config", return_value=_mock_config()):
-            resp = client.post("/api/backtest/run", json=payload)
+        resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code in (400, 422)
 
     def test_400_when_capital_below_minimum(self, client: TestClient) -> None:
         payload = _valid_payload()
         payload["initial_capital"] = 50  # < 100 floor
-        with patch("cryptotrader.config.load_config", return_value=_mock_config()):
-            resp = client.post("/api/backtest/run", json=payload)
+        resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code in (400, 422)
 
     def test_422_when_required_field_missing(self, client: TestClient) -> None:
         payload = _valid_payload()
         del payload["pair"]
-        with patch("cryptotrader.config.load_config", return_value=_mock_config()):
-            resp = client.post("/api/backtest/run", json=payload)
+        resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code == 422
 
     def test_400_when_end_in_future(self, client: TestClient) -> None:
@@ -131,16 +127,14 @@ class TestBacktestRunValidation:
         payload = _valid_payload()
         payload["start"] = "2026-01-01"
         payload["end"] = "2199-12-31"
-        with patch("cryptotrader.config.load_config", return_value=_mock_config()):
-            resp = client.post("/api/backtest/run", json=payload)
+        resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code in (400, 422)
 
     @pytest.mark.parametrize("bad_date", ["not-a-date", "2026/01/01", "01-01-2026"])
     def test_422_on_malformed_date(self, client: TestClient, bad_date: str) -> None:
         payload = _valid_payload()
         payload["start"] = bad_date
-        with patch("cryptotrader.config.load_config", return_value=_mock_config()):
-            resp = client.post("/api/backtest/run", json=payload)
+        resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code in (400, 422)
 
 

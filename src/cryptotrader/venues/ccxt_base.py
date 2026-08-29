@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from cryptotrader.venues.models import ProtectionSpec, VenueConnection
 
 
-def create_async_client(exchange_id: str, config: dict[str, Any], client_factory: Callable | None = None) -> Any:
+def create_async_client(adapter_id: str, config: dict[str, Any], client_factory: Callable | None = None) -> Any:
     """Build an async CCXT client without importing legacy execution code."""
     if client_factory is not None:
         return client_factory(config)
@@ -34,7 +34,7 @@ def create_async_client(exchange_id: str, config: dict[str, Any], client_factory
         import ccxt.async_support as ccxt_async
     except ImportError:
         raise ImportError("ccxt.async_support is required for CCXT venue adapters") from None
-    return getattr(ccxt_async, exchange_id)(config)
+    return getattr(ccxt_async, adapter_id)(config)
 
 
 class CcxtVenueBase:

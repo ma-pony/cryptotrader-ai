@@ -2,7 +2,7 @@
 <!--
   macOS launchd plist for the CryptoTrader scheduler.
 
-  Why: `arena scheduler start` is a foreground process. When run from a
+  Why: `trader scheduler start` is a foreground process. When run from a
   terminal it dies on Ctrl-C, ssh disconnect, terminal close, or sleep.
   This plist makes launchd own the process: KeepAlive=true restarts it
   immediately on any non-zero exit; ThrottleInterval=30 prevents tight
@@ -38,7 +38,7 @@
   <array>
     <string>/Users/rccpony/.local/bin/uv</string>
     <string>run</string>
-    <string>arena</string>
+    <string>trader</string>
     <string>scheduler</string>
     <string>start</string>
   </array>

@@ -36,13 +36,15 @@ class _Exchange:
         self,
         statuses=("closed",),
         *,
-        supports_protection_orders=True,
+        native_protection=True,
         old_algos=("old-oco",),
         oco_error=None,
         cancel_errors=(),
     ) -> None:
         self.statuses = iter(statuses)
-        self._supports_protection_orders = supports_protection_orders
+        self.capabilities = VenueCapabilities(
+            frozenset({"spot", "swap"}), native_protection, False, True, frozenset({"market"})
+        )
         self.orders = []
         self.cancelled_algos = []
         self.ocos = []
@@ -50,9 +52,6 @@ class _Exchange:
         self.oco_error = oco_error
         self.cancel_errors = set(cancel_errors)
         self.events = []
-
-    def supports_protection_orders(self):
-        return self._supports_protection_orders
 
     async def place_order(self, order):
         self.orders.append(order)
@@ -94,8 +93,8 @@ class _DirectOrderManager:
             raise outcome
         status, raw = outcome
         order.status = status
-        order.exchange_id = f"direct-{len(self.orders)}"
-        return order, {"id": order.exchange_id, "status": status.value, **raw}
+        order.venue_order_id = f"direct-{len(self.orders)}"
+        return order, {"id": order.venue_order_id, "status": status.value, **raw}
 
 
 @pytest.mark.asyncio
@@ -133,7 +132,7 @@ async def test_reversal_fills_in_order_then_replaces_protection():
 async def test_unsupported_live_protection_rejects_before_any_position_order():
     from cryptotrader.execution.service import ExecutionService
 
-    exchange = _Exchange(supports_protection_orders=False)
+    exchange = _Exchange(native_protection=False)
     service = ExecutionService(OrderManager(), exchange)
     plan = ExecutionPlan(
         intents=(OrderIntent("BTC/USDT:USDT", "buy", 1.0, False),),

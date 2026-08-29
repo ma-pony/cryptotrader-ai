@@ -22,16 +22,16 @@ logger = logging.getLogger(__name__)
 
 
 class SnapshotAggregator:
-    def __init__(self, providers_config=None) -> None:
+    def __init__(self, providers_config=None, *, coindesk_api_key: str = "") -> None:
         self.market = MarketCollector()
         self.onchain = OnchainCollector(providers_config)
-        self.news = NewsCollector()
+        self.news = NewsCollector(coindesk_api_key=coindesk_api_key)
         self.macro = MacroCollector(providers_config)
 
     async def collect(
         self,
         pair: str,
-        exchange_id: str = "",
+        market_adapter_id: str = "",
         timeframe: str = "1h",
         limit: int = 100,
         date: str | None = None,
@@ -41,9 +41,9 @@ class SnapshotAggregator:
         kronos_aux: bool = False,
         kronos_aux_symbol: str = "BTCUSDT",
     ) -> DataSnapshot:
-        logger.info("Collecting snapshot: pair=%s exchange=%s tf=%s limit=%d", pair, exchange_id, timeframe, limit)
+        logger.info("Collecting snapshot: pair=%s adapter=%s tf=%s limit=%d", pair, market_adapter_id, timeframe, limit)
         market_data, news_data, macro_data = await asyncio.gather(
-            self.market.collect(pair, exchange_id, timeframe, limit),
+            self.market.collect(pair, market_adapter_id, timeframe, limit),
             self.news.collect(pair, date=date),
             self.macro.collect(date=date),
         )

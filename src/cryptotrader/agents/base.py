@@ -155,6 +155,7 @@ def _try_manifest_llm(
 
 
 def create_llm(
+    config: RuntimeLlmConfig,
     model: str = "",
     temperature: float | None = None,
     timeout: int | None = None,
@@ -164,83 +165,16 @@ def create_llm(
     role: str = "",
     track_tokens: bool = True,
 ) -> ChatOpenAI:
-    """Create a LangChain ChatOpenAI instance with unified config.
-
-    All LLM calls in the project route through this factory to ensure
-    consistent configuration, caching, and fallback behavior.
-
-    When ``role`` is provided and ``config/models.toml`` exists, builds a
-    multi-provider fallback chain with per-provider retry middleware.
-
-    Args:
-        track_tokens: When True (default), attaches the shared TokenTrackerCallback
-            so token usage accumulates into the context-bound ledger. Set to False
-            for zero-overhead LLMs in test/backtest contexts that manage their own
-            accounting.
-    """
-    from cryptotrader.config import load_config
-    from cryptotrader.metrics import get_metrics_collector
-
-    _init_cache()
-
-    cfg = load_config()
-    llm_cfg = cfg.llm
-    retry_cfg = llm_cfg.retry
-
-    if temperature is None:
-        temperature = llm_cfg.default_temperature
-    if timeout is None:
-        timeout = llm_cfg.timeout
-
-    if role:
-        get_metrics_collector().inc_llm_calls(model=role, node="create_llm")
-        resilient = _try_manifest_llm(
-            role,
-            cfg,
-            temperature,
-            timeout,
-            json_mode,
-            retry_cfg,
-            track_tokens=track_tokens,
-        )
-        if resilient is not None:
-            return resilient
-
-    if not model:
-        model = cfg.models.analysis or cfg.models.fallback
-    if not model:
-        raise ValueError("No LLM model configured — set models.analysis or models.fallback in config/default.toml")
-
-    get_metrics_collector().inc_llm_calls(model=model, node="create_llm")
-
-    kwargs = _build_llm_kwargs(model, temperature, timeout, llm_cfg, json_mode=json_mode)
-    if track_tokens:
-        # Attach token tracker so each decision pipeline accumulates input/output
-        # tokens into the ContextVar-bound ledger (see llm.token_tracker).
-        from cryptotrader.llm.token_tracker import default_callback
-
-        existing = kwargs.get("callbacks") or []
-        kwargs["callbacks"] = [*existing, default_callback()]
-    llm = ChatOpenAI(**kwargs)
-
-    from cryptotrader.llm.factory import _wrap_with_retry
-
-    llm = _wrap_with_retry(llm, retry_cfg)
-
-    if with_fallback:
-        fallback_model = cfg.models.fallback
-        if fallback_model and fallback_model != model:
-            from langchain_core.runnables import RunnableWithFallbacks
-
-            fallback_kwargs = _build_llm_kwargs(fallback_model, temperature, timeout, llm_cfg, json_mode=json_mode)
-            fb_llm = _wrap_with_retry(ChatOpenAI(**fallback_kwargs), retry_cfg)
-            llm = RunnableWithFallbacks(
-                runnable=llm,
-                fallbacks=[fb_llm],
-                exceptions_to_handle=(Exception,),
-            )
-
-    return llm
+    """Build an LLM from an explicit database-owned runtime configuration."""
+    return create_runtime_llm_factory(config)(
+        model=model,
+        temperature=temperature,
+        timeout=timeout,
+        json_mode=json_mode,
+        with_fallback=with_fallback,
+        role=role,
+        track_tokens=track_tokens,
+    )
 
 
 def create_runtime_llm_factory(config: RuntimeLlmConfig) -> Callable[..., ChatOpenAI]:
@@ -407,7 +341,7 @@ def log_llm_usage(response: Any, *, caller: str) -> None:
     )
 
 
-async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
+async def acompletion_with_fallback(*, llm_factory: Callable[..., Any], model: str, **kwargs) -> AIMessage:
     """Unified LLM call via LangChain with automatic fallback.
 
     Accepts OpenAI-format kwargs and returns AIMessage.
@@ -418,7 +352,7 @@ async def acompletion_with_fallback(*, model: str, **kwargs) -> AIMessage:
     response_format = kwargs.pop("response_format", None)
     json_mode = response_format is not None and response_format.get("type") == "json_object"
 
-    llm = create_llm(model=model, temperature=temperature, timeout=timeout, json_mode=json_mode)
+    llm = llm_factory(model=model, temperature=temperature, timeout=timeout, json_mode=json_mode)
     lc_messages = _to_langchain_messages(messages)
     from cryptotrader.llm.prompt_cache import apply_cache_control, should_cache
 
@@ -448,13 +382,10 @@ class BaseAgent:
         self._prompt_caching = prompt_caching
 
     def _resolve_model(self) -> str:
-        """Return model name, falling back to config if not set."""
+        """Return the explicitly assembled runtime model."""
         if self.model:
             return self.model
-        from cryptotrader.config import load_config
-
-        cfg = load_config()
-        return cfg.models.analysis or cfg.models.fallback
+        raise ValueError(f"runtime agent {self.agent_id} requires an explicit model")
 
     def _snapshot_to_dict(self, snapshot: DataSnapshot) -> dict:
         """Convert DataSnapshot to dict consumable by render_crypto_snapshot.
@@ -516,7 +447,9 @@ class BaseAgent:
                 portfolio={},
             )
             model = self._resolve_model()
-            llm = (self._llm_factory or create_llm)(model=model)
+            if self._llm_factory is None:
+                raise RuntimeError("runtime agent requires an explicit LLM factory")
+            llm = self._llm_factory(model=model)
             messages = [sys_msg, usr_msg]
             from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model, should_cache
 
@@ -646,11 +579,6 @@ class BaseAgent:
         )
 
 
-def _create_chat_model(model: str, temperature: float = 0.2):
-    """Create a LangChain chat model without fallback (for ToolAgent / create_agent)."""
-    return create_llm(model=model, temperature=temperature, with_fallback=False)
-
-
 class ToolAgent(BaseAgent):
     """Agent with tool-calling capability via LangChain create_agent (spec 017b).
 
@@ -695,7 +623,9 @@ class ToolAgent(BaseAgent):
                 portfolio={},
             )
 
-            llm = (self._llm_factory or create_llm)(
+            if self._llm_factory is None:
+                raise RuntimeError("runtime agent requires an explicit LLM factory")
+            llm = self._llm_factory(
                 model=self.model,
                 temperature=0.2,
                 with_fallback=False,

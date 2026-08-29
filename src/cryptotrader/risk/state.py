@@ -268,8 +268,8 @@ class RedisStateManager:
     # ── Lock primitives ──
     #
     # SETNX-with-TTL + owner-check release. Used by ``cycle_lock`` to keep
-    # ``arena run`` and the launchd scheduler from racing each other on the
-    # same pair (production observation 2026-05-02: a manual ``arena run``
+    # ``trader run`` and the launchd scheduler from racing each other on the
+    # same pair (production observation 2026-05-02: a manual ``trader run``
     # while the scheduler restarted produced two concurrent ETH close orders
     # 426 ms apart — only one filled, but a second BUY would have doubled
     # exposure).

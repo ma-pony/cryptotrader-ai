@@ -56,13 +56,13 @@ class LiveSignalContextProvider:
         aggregator,
         market,
         *,
-        exchange_id: str,
+        market_adapter_id: str,
         default_timeframe: str,
         kronos_aux_symbol: str = "BTCUSDT",
     ) -> None:
         self.aggregator = aggregator
         self.market = market
-        self.exchange_id = exchange_id
+        self.market_adapter_id = market_adapter_id
         self.default_timeframe = default_timeframe
         self.kronos_aux_symbol = kronos_aux_symbol
 
@@ -72,7 +72,7 @@ class LiveSignalContextProvider:
         primary = requirements.candles[0]
         base = await self.aggregator.collect(
             pair=pair.canonical(),
-            exchange_id=self.exchange_id,
+            market_adapter_id=self.market_adapter_id,
             timeframe=primary.timeframe,
             limit=primary.limit,
             backtest_mode=False,
@@ -83,7 +83,7 @@ class LiveSignalContextProvider:
         for requirement in requirements.candles[1:]:
             market = await self.market.collect(
                 pair.canonical(),
-                self.exchange_id,
+                self.market_adapter_id,
                 requirement.timeframe,
                 requirement.limit,
             )

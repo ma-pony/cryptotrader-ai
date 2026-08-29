@@ -15,8 +15,14 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
 
-    return TestClient(app, raise_server_exceptions=False)
+    previous = getattr(app.state, "runtime", None)
+    app.state.runtime = MagicMock(snapshot=MagicMock(document=minimal_runtime_document()))
+    try:
+        yield TestClient(app, raise_server_exceptions=False)
+    finally:
+        app.state.runtime = previous
 
 
 def _mock_config() -> MagicMock:
@@ -70,7 +76,6 @@ def _completed_run(run_id: str = "run_done") -> dict:
 class TestBacktestStatus:
     def test_running_returns_progress(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._get_run", return_value=_running_run()),
         ):
             resp = client.get("/api/backtest/runs/run_a1b2c3")
@@ -84,7 +89,6 @@ class TestBacktestStatus:
 
     def test_completed_returns_result_block(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._get_run", return_value=_completed_run()),
         ):
             resp = client.get("/api/backtest/runs/run_done")
@@ -101,7 +105,6 @@ class TestBacktestStatus:
 
     def test_404_when_run_unknown(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._get_run", return_value=None),
         ):
             resp = client.get("/api/backtest/runs/run_does_not_exist")
@@ -111,7 +114,6 @@ class TestBacktestStatus:
 class TestBacktestCancel:
     def test_cancel_running_returns_200(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._cancel_run", return_value=True),
         ):
             resp = client.delete("/api/backtest/runs/run_a1b2c3")
@@ -124,7 +126,6 @@ class TestBacktestCancel:
         terminated["status"] = terminal_status
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._get_run", return_value=terminated),
             patch("api.routes.backtest._cancel_run", return_value=False),
         ):
@@ -133,7 +134,6 @@ class TestBacktestCancel:
 
     def test_404_when_cancel_unknown(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._get_run", return_value=None),
             patch("api.routes.backtest._cancel_run", return_value=False),
         ):

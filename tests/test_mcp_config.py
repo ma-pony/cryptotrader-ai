@@ -48,38 +48,3 @@ class TestMCPConfig:
         assert len(cfg.servers) == 2
         assert cfg.servers[0].name == "s1"
         assert cfg.servers[1].enabled is False
-
-
-class TestTOMLParsing:
-    def test_load_config_default_mcp(self):
-        from cryptotrader.config import load_config
-
-        cfg = load_config()
-        assert isinstance(cfg.mcp, MCPConfig)
-        assert cfg.mcp.enabled is False
-
-    def test_default_toml_has_four_servers(self):
-        from cryptotrader.config import load_config
-
-        cfg = load_config()
-        assert len(cfg.mcp.servers) == 4
-        names = {s.name for s in cfg.mcp.servers}
-        assert "cryptotrader-binance" in names
-        assert "cryptotrader-macro" in names
-        assert "cryptotrader-onchain" in names
-        assert "cryptotrader-news" in names
-
-    def test_binance_server_has_three_tools(self):
-        from cryptotrader.config import load_config
-
-        cfg = load_config()
-        binance_server = next(s for s in cfg.mcp.servers if s.name == "cryptotrader-binance")
-        assert len(binance_server.tools) == 3
-        assert "binance_derivatives" in binance_server.tools
-
-    def test_build_mcp_config_no_section(self):
-        from cryptotrader.config import _build_mcp_config
-
-        cfg = _build_mcp_config({})
-        assert cfg.enabled is False
-        assert cfg.servers == []

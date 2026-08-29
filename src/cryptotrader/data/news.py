@@ -105,6 +105,9 @@ def _truncate(text: str, max_len: int = _MAX_SUMMARY_LEN) -> str:
 
 
 class NewsCollector:
+    def __init__(self, *, coindesk_api_key: str = "") -> None:
+        self.coindesk_api_key = coindesk_api_key
+
     async def collect(self, pair: str, date: str | None = None) -> NewsSentiment:
         from cryptotrader.pair import Pair
 
@@ -220,10 +223,7 @@ class NewsCollector:
     async def _collect_cryptocompare(self, symbol: str) -> list[NewsArticle]:
         """Fetch latest news from CoinDesk/CryptoCompare with full article content."""
         try:
-            from cryptotrader.config import load_config
-
-            cfg = load_config()
-            api_key = cfg.providers.coindesk_api_key
+            api_key = self.coindesk_api_key
 
             async with httpx.AsyncClient(timeout=10) as client:
                 if api_key:

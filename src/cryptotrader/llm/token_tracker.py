@@ -47,19 +47,8 @@ _RESOLVED_COSTS: dict[str, tuple[float, float]] = {}
 
 
 def _config_model_costs() -> dict[str, tuple[float, float]]:
-    """Read ``[[llm.model_costs]]`` entries from config, if any.
-
-    Config values override/extend the hardcoded ``MODEL_COSTS`` table so ops can
-    adjust prices without a deploy. Returns empty dict when config unavailable.
-    """
-    try:
-        from cryptotrader.config import load_config
-
-        entries = load_config().llm.model_costs or []
-    except Exception:
-        logger.warning("model_costs: config read failed", exc_info=True)
-        return {}
-    return {e.name: (float(e.input_usd_per_mtok), float(e.output_usd_per_mtok)) for e in entries if e.name}
+    """Runtime callers pass document-owned costs directly to ``record``."""
+    return {}
 
 
 def _match_cost(

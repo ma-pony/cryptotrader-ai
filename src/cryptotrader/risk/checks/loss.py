@@ -68,9 +68,9 @@ class DrawdownLimit:
         # Drawdown is a slow-moving condition (peak-to-trough), not a fast-loss
         # event. We gate the trade but DO NOT auto-trip the circuit breaker —
         # that would conflate the user-facing "trading paused" signal with a
-        # drawdown trip-wire and make ``arena risk reset-circuit-breaker``
-        # meaningless (re-tripped on the next cycle). To reset the drawdown
-        # baseline, use ``arena portfolio reset-baseline``.
+        # drawdown trip-wire and make a dashboard circuit-breaker reset
+        # meaningless (re-tripped on the next cycle). Reset the drawdown
+        # baseline from the dashboard as well.
         drawdown = abs(portfolio.get("drawdown", 0))
         if drawdown > self._max_pct:
             logger.warning("Drawdown %.2f%% exceeds max %.2f%%", drawdown * 100, self._max_pct * 100)

@@ -28,17 +28,9 @@ def client() -> TestClient:
 
 
 def _mock_config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.infrastructure.database_url = None
-    cfg.infrastructure.redis_url = "redis://localhost:6379"
-    # RiskConfig thresholds — names match the real ``cryptotrader.config`` dataclasses
-    cfg.risk.position.max_single_pct = 0.30
-    cfg.risk.loss.max_daily_loss_pct = 0.05
-    cfg.risk.max_stop_loss_pct = 0.02
-    cfg.risk.rate_limit.max_trades_per_hour = 10
-    cfg.risk.rate_limit.max_trades_per_day = 50
-    cfg.risk.cooldown.post_loss_minutes = 30  # 30 * 60 = 1800s
-    return cfg
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
+
+    return minimal_runtime_document()
 
 
 class TestRiskStatusShape:
@@ -50,7 +42,6 @@ class TestRiskStatusShape:
         mock_rs.is_circuit_breaker_active = AsyncMock(return_value=True)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             resp = client.get("/api/risk/status")
@@ -79,7 +70,6 @@ class TestRiskStatusShape:
         mock_rs.is_circuit_breaker_active = AsyncMock(return_value=False)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             body = client.get("/api/risk/status").json()
@@ -94,7 +84,6 @@ class TestRiskStatusShape:
         mock_rs.is_circuit_breaker_active = AsyncMock(return_value=False)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             body = client.get("/api/risk/status").json()
@@ -119,7 +108,6 @@ class TestRiskStatusShape:
         mock_rs.is_circuit_breaker_active = AsyncMock(return_value=False)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             resp = client.get("/api/risk/status")
@@ -140,7 +128,6 @@ class TestCircuitBreakerReset:
         mock_rs.reset_circuit_breaker = AsyncMock(return_value=None)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             resp = client.post("/api/risk/circuit-breaker/reset")
@@ -158,7 +145,6 @@ class TestCircuitBreakerReset:
         mock_rs.reset_circuit_breaker = AsyncMock(return_value=None)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             resp = client.post("/api/risk/circuit-breaker/reset")
@@ -171,7 +157,6 @@ class TestCircuitBreakerReset:
         mock_rs.ping = AsyncMock(return_value=False)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rs),
         ):
             resp = client.post("/api/risk/circuit-breaker/reset")

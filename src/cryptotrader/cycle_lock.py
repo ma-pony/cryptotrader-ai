@@ -1,6 +1,6 @@
 """Per-pair cycle lock to prevent concurrent runs on the same trading pair.
 
-Production observation (2026-05-02): a manual ``arena run`` started while
+Production observation (2026-05-02): a manual ``trader run`` started while
 the launchd scheduler was processing a freshly-restarted cycle produced two
 ETH/USDT close decisions 426 ms apart, with the same pair entering the OKX
 order pipeline twice. Only one filled (the second saw flat balance), but a
@@ -10,7 +10,7 @@ restart-plus-manual-run window can't be assumed safe.
 The lock is keyed by pair (``cycle_lock:<pair>``) with a TTL slightly longer
 than the longest expected cycle. If Redis is unreachable, ``RedisStateManager``
 falls back to in-process memory — single-process safety only, but the
-launchd scheduler is single-process and ``arena run`` shares its memory
+launchd scheduler is single-process and ``trader run`` shares its memory
 neither, so the practical guarantee in that mode degrades gracefully:
 contending callers in the same process serialize, cross-process callers
 do not (matches existing risk/state.py degraded-mode behavior).

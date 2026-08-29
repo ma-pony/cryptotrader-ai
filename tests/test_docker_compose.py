@@ -4,7 +4,7 @@ Validates:
 - Service naming: api, scheduler, web, redis, postgres
 - Resource limits on api/scheduler/web
 - ctdata named volume mounted at /home/appuser/.cryptotrader
-- DOCS_ENABLED=false env var on api service
+- API and scheduler receive only the two database bootstrap variables
 """
 
 from __future__ import annotations
@@ -106,23 +106,12 @@ def test_ctdata_volume_mounted(compose, service_name):
     assert found, f"service '{service_name}' missing ctdata volume mount at /home/appuser/.cryptotrader"
 
 
-# ---- DOCS_ENABLED on api service ----
-
-
-def test_api_docs_enabled_false(compose):
-    """api service must set DOCS_ENABLED=false to disable Swagger/ReDoc in production."""
-    svc = compose["services"]["api"]
-    env = svc.get("environment", {})
-    if isinstance(env, list):
-        # List form: "DOCS_ENABLED=false"
-        assert any(e.startswith("DOCS_ENABLED=false") for e in env), (
-            "api service environment missing DOCS_ENABLED=false"
-        )
-    else:
-        # Dict form
-        assert str(env.get("DOCS_ENABLED", "")).lower() == "false", (
-            f"api service DOCS_ENABLED should be 'false', got: {env.get('DOCS_ENABLED')}"
-        )
+@pytest.mark.parametrize("service_name", ["api", "scheduler"])
+def test_application_services_receive_only_database_runtime_bootstrap(compose, service_name):
+    """Containers must not smuggle TOML, dotenv, or mode flags into runtime."""
+    environment = compose["services"][service_name]["environment"]
+    assert set(environment) == {"DATABASE_URL", "CONFIG_MASTER_KEY"}
+    assert "env_file" not in compose["services"][service_name]
 
 
 def test_clean_compose_config_needs_no_dotenv_and_exposes_no_browser_api_hostname(tmp_path):
@@ -134,15 +123,15 @@ def test_clean_compose_config_needs_no_dotenv_and_exposes_no_browser_api_hostnam
     empty_env.write_text("")
     clean_env = os.environ.copy()
     for name in (
-        "API_KEY",
-        "AUTH_MODE",
         "COMPOSE_ENV_FILES",
+        "CONFIG_MASTER_KEY",
         "POSTGRES_PASSWORD",
         "POSTGRES_USER",
         "VITE_API_BASE_URL",
     ):
         clean_env.pop(name, None)
 
+    clean_env["CONFIG_MASTER_KEY"] = "A" * 43 + "="
     result = subprocess.run(
         [
             "docker",
@@ -165,9 +154,9 @@ def test_clean_compose_config_needs_no_dotenv_and_exposes_no_browser_api_hostnam
     services = resolved["services"]
     postgres_password = services["postgres"]["environment"]["POSTGRES_PASSWORD"]
     assert postgres_password
-    assert postgres_password in services["api"]["environment"]["CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL"]
-    assert services["api"]["environment"]["AUTH_MODE"] == "disabled"
-    assert services["api"]["environment"]["API_KEY"] == ""
+    assert postgres_password in services["api"]["environment"]["DATABASE_URL"]
+    assert set(services["api"]["environment"]) == {"DATABASE_URL", "CONFIG_MASTER_KEY"}
+    assert set(services["scheduler"]["environment"]) == {"DATABASE_URL", "CONFIG_MASTER_KEY"}
     assert services["api"]["ports"][0]["host_ip"] == "127.0.0.1"
     assert services["web"]["ports"][0]["host_ip"] == "127.0.0.1"
     assert "VITE_API_BASE_URL" not in services["web"].get("environment", {})
@@ -180,3 +169,8 @@ def test_web_healthcheck_targets_nginx_ipv4_listener():
 
     assert "wget -q --spider http://127.0.0.1/" in dockerfile
     assert "wget -q --spider http://localhost/" not in dockerfile
+
+
+def test_runtime_image_does_not_copy_legacy_configuration_files():
+    dockerfile = (COMPOSE_PATH.parent / "Dockerfile").read_text()
+    assert "COPY config/ config/" not in dockerfile

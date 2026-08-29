@@ -1,223 +1,124 @@
-"""spec 020a — 部署前 staging smoke check 脚本。
-
-FR-Z1: staging_validate.py 支持 --dry-run flag（默认 True）
-FR-Z2: 顺序执行 5 个 step（migrate dry-run × 2 + cycle smoke + OTel 校验 + retrieval 校验）
-FR-Z3: stdout 格式 [step N] <name>: PASS|FAIL <duration>ms
-
-运行方式：
-  python scripts/staging_validate.py --dry-run
-  # 或省略 flag（默认 dry-run）
-  python scripts/staging_validate.py
-"""
+"""只读 staging 门禁：数据库配置、运行时和已启用平台连接。"""
 
 from __future__ import annotations
 
-import argparse
-import contextlib
-import subprocess
-import sys
+import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from pathlib import Path
 
 
-@dataclass
+@dataclass(frozen=True)
 class StepResult:
     idx: int
     name: str
-    status: str  # "PASS" | "FAIL"
+    status: str
     duration_ms: int
     error: str = ""
 
     def fmt(self) -> str:
-        line = f"[step {self.idx}] {self.name}: {self.status} {self.duration_ms}ms"
-        if self.error:
-            line += f"\n  ERROR: {self.error}"
-        return line
+        message = f"[step {self.idx}] {self.name}: {self.status} {self.duration_ms}ms"
+        return f"{message}\n  ERROR: {self.error}" if self.error else message
 
 
 def run_step(idx: int, name: str, fn: Callable[[], None]) -> StepResult:
-    """执行单个 step，捕获异常，返回 StepResult。"""
-    start = time.time()
+    started = time.monotonic()
     try:
         fn()
-        return StepResult(idx, name, "PASS", int((time.time() - start) * 1000))
-    except Exception as exc:
-        return StepResult(idx, name, "FAIL", int((time.time() - start) * 1000), str(exc))
+    except Exception as error:
+        return StepResult(idx, name, "FAIL", int((time.monotonic() - started) * 1000), str(error))
+    return StepResult(idx, name, "PASS", int((time.monotonic() - started) * 1000))
 
 
-# ── step 实现 ──────────────────────────────────────────────────────────────────
+async def _load_runtime_config():
+    """Create the DB schema if needed and require an active config revision."""
+    from cryptotrader.runtime import build_runtime
+
+    runtime = await build_runtime()
+    if runtime.snapshot.setup_required:
+        await runtime.close()
+        raise RuntimeError("runtime configuration is not active")
+    if runtime.snapshot.revision < 1:
+        await runtime.close()
+        raise RuntimeError("runtime configuration revision is invalid")
+    return runtime
 
 
-def _migrate(script_name: str, dry_run: bool = True) -> None:
-    """step 1/2: 运行 migrate 脚本 dry-run 模式。"""
-    script_path = Path(__file__).parent / f"{script_name}.py"
-    if not script_path.exists():
-        raise FileNotFoundError(f"migrate script not found: {script_path}")
-
-    cmd = [sys.executable, str(script_path)]
-    if dry_run:
-        cmd.append("--dry-run")
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    if result.returncode != 0:
-        stderr_snippet = (result.stderr or "")[:500]
-        raise RuntimeError(f"{script_name} exited {result.returncode}: {stderr_snippet}")
+async def _check_runtime_health(runtime) -> None:
+    """Require the database snapshot to assemble the only cycle runtime."""
+    if runtime.cycle is None:
+        raise RuntimeError("runtime cycle is unavailable")
 
 
-def _run_smoke_cycle() -> None:
-    """step 3: mocked LLM 单次 cycle smoke（基础导入校验）。
+async def _check_enabled_connections(runtime) -> None:
+    """Open and close each enabled venue session without creating orders."""
+    for connection in runtime.snapshot.document.execution.connections:
+        if not connection.enabled:
+            continue
+        credentials = None
+        if connection.credential_ref is not None:
+            state = await runtime.repository.credential_state(connection.credential_ref)
+            if not state.configured:
+                raise RuntimeError(f"connection {connection.id} credentials are not configured")
+            credentials = await runtime.repository.reveal_credentials(connection.credential_ref)
+        session = None
+        try:
+            adapter = runtime.venue_registry.require(connection.adapter_id)
+            session = await adapter.connect(connection, credentials)
+            if session.capabilities is None:
+                raise RuntimeError(f"connection {connection.id} has no capabilities")
+        except RuntimeError:
+            raise
+        except Exception as error:
+            raise RuntimeError(f"connection {connection.id} is unhealthy") from error
+        finally:
+            if session is not None:
+                try:
+                    await session.close()
+                except Exception as error:
+                    raise RuntimeError(f"connection {connection.id} did not close cleanly") from error
 
-    在 --dry-run 模式下只校验关键模块能正常导入，不实际触发 scheduler。
-    """
-    import asyncio
 
-    # 校验 agents.base 可以导入（LLM 创建路径）
-    from cryptotrader.agents.base import create_llm, log_llm_usage  # noqa: F401
-
-    # 校验 scheduler 模块可以导入（非核心路径，不存在时跳过）
-    with contextlib.suppress(ImportError):
-        from cryptotrader import scheduler as _sched  # noqa: F401
-
-    # 校验新的唯一顶层编排与组件注册可以导入（不连接外部服务）
-    from cryptotrader.bootstrap import build_signal_registry, build_trading_cycle  # noqa: F401
-    from cryptotrader.learning.evolution.ive import classify_case
-    from cryptotrader.trading_cycle import TradingCycle  # noqa: F401
-
-    # 确认 classify_case 是 coroutine function（async def）
-    if not asyncio.iscoroutinefunction(classify_case):
-        raise AssertionError(
-            "classify_case must be async def (FR-Z10); found sync function — IVE async migration incomplete"
-        )
-
-
-def _check_otel_fields() -> None:
-    """step 4: 校验 OTel telemetry 含 spec 017a FR-X18 8 字段 + 本 spec 3 cache 字段。
-
-    使用 InMemorySpanExporter 跑一次 log_llm_usage，检查写入的 attr。
-    """
-    try:
-        from opentelemetry.sdk.trace import TracerProvider
-        from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-        from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-    except ImportError as exc:
-        raise ImportError(
-            f"opentelemetry SDK not installed: {exc}; install opentelemetry-sdk to enable OTel field validation"
-        ) from exc
-
-    from langchain_core.messages import AIMessage
-
-    from cryptotrader.agents.base import log_llm_usage
-
-    exporter = InMemorySpanExporter()
-    provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(exporter))
-    tracer = provider.get_tracer("staging_validate")
-
-    msg = AIMessage(
-        content="test",
-        usage_metadata={
-            "input_tokens": 100,
-            "output_tokens": 50,
-            "total_tokens": 150,
-            "cache_read_input_tokens": 80,
-            "cache_creation_input_tokens": 20,
-        },
-        response_metadata={"model_name": "claude-3-5-sonnet-20241022"},
+async def _run_gate() -> list[StepResult]:
+    runtime = None
+    steps: tuple[tuple[str, Callable[..., Awaitable[None]]], ...] = (
+        ("database schema and config revision", _load_runtime_config),
+        ("runtime health", _check_runtime_health),
+        ("enabled connection health", _check_enabled_connections),
     )
-
-    with tracer.start_as_current_span("llm.call"):
-        log_llm_usage(msg, caller="staging_validate")
-
-    spans = exporter.get_finished_spans()
-    if not spans:
-        raise AssertionError("No OTel spans recorded — tracer not active during log_llm_usage")
-
-    attrs = dict(spans[0].attributes or {})
-
-    # spec 020a 3 cache 字段
-    missing_cache = [
-        field_name
-        for field_name in ("llm.cache.read_tokens", "llm.cache.creation_tokens", "llm.cache.hit_rate")
-        if field_name not in attrs
-    ]
-
-    if missing_cache:
-        raise AssertionError(f"Missing cache OTel attr: {missing_cache}; found attrs: {sorted(attrs.keys())}")
-
-    # 校验 cache hit rate 计算正确（80 / (80+20) = 0.8）
-    hit_rate = attrs.get("llm.cache.hit_rate", -1)
-    if abs(hit_rate - 0.8) > 0.001:
-        raise AssertionError(f"llm.cache.hit_rate expected 0.8, got {hit_rate}")
-
-
-def _check_retrieval() -> None:
-    """step 5: 校验 EvolvingSkillProvider retrieval 能导入并初始化（不要求 ≥1 hit，因无 test data）。"""
-    import tempfile
-    from pathlib import Path
-
-    from cryptotrader.learning.evolution.skill_provider import EvolvingSkillProvider
-
-    with tempfile.TemporaryDirectory() as tmp:
-        provider = EvolvingSkillProvider(skill_root=Path(tmp))
-        # 校验调用不会崩溃（无 skills 时返回 []）
-        result = provider.get_available_skills(
-            agent_id="tech",
-            snapshot={"regime_tags": ["high_funding"]},
-        )
-        # 结果是 list（可以为空，因为 tmp 目录没有 skills）
-        if not isinstance(result, list):
-            raise AssertionError(f"get_available_skills returned {type(result).__name__}, expected list")
-    # NOTE: 在实际 staging 环境（有 agent_skills/）中会返回 ≥1 hit，
-    #       dry-run 模式下临时目录无 skills，接口返回 [] 也视为 PASS（FR-Z2 step 5）。
-
-
-# ── main ──────────────────────────────────────────────────────────────────────
-
-
-def main(dry_run: bool = True) -> int:
-    """执行所有 step，输出结果，返回 exit code。"""
-    steps: list[tuple[int, str, Callable[[], None]]] = [
-        (1, "migrate_017_to_018 dry-run", lambda: _migrate("migrate_017_to_018", dry_run)),
-        (2, "migrate_018_to_019 dry-run", lambda: _migrate("migrate_018_to_019", dry_run)),
-        (3, "single cycle smoke (mocked LLM)", _run_smoke_cycle),
-        (4, "OTel telemetry 8+3 fields", _check_otel_fields),
-        (5, "EvolvingSkillProvider retrieval ≥1 hit", _check_retrieval),
-    ]
-
     results: list[StepResult] = []
-    for idx, name, fn in steps:
-        r = run_step(idx, name, fn)
-        print(r.fmt(), flush=True)
-        results.append(r)
+    try:
+        for index, (name, check) in enumerate(steps, start=1):
+            started = time.monotonic()
+            try:
+                if index == 1:
+                    runtime = await check()
+                else:
+                    await check(runtime)
+            except Exception as error:
+                result = StepResult(index, name, "FAIL", int((time.monotonic() - started) * 1000), str(error))
+            else:
+                result = StepResult(index, name, "PASS", int((time.monotonic() - started) * 1000))
+            results.append(result)
+            print(result.fmt(), flush=True)
+            if result.status == "FAIL":
+                break
+    finally:
+        if runtime is not None:
+            await runtime.close()
+    return results
 
-    failed = [r for r in results if r.status == "FAIL"]
+
+def main() -> int:
+    """Run the readonly gate. Runtime bootstrap accepts only DATABASE_URL and CONFIG_MASTER_KEY."""
+    results = asyncio.run(_run_gate())
+    failed = [result for result in results if result.status == "FAIL"]
     if failed:
-        print(
-            f"\n[summary] {len(failed)}/{len(results)} step(s) FAILED: " + ", ".join(r.name for r in failed),
-            flush=True,
-        )
+        print(f"\n[summary] {len(failed)}/{len(results)} step(s) FAILED: {failed[0].name}", flush=True)
         return 1
-
     print(f"\n[summary] All {len(results)} steps PASSED", flush=True)
     return 0
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="spec 020a staging smoke check")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        default=True,
-        dest="dry_run",
-        help="Run migrate scripts in dry-run mode (default: True)",
-    )
-    parser.add_argument(
-        "--no-dry-run",
-        action="store_false",
-        dest="dry_run",
-        help="Run migrate scripts in real mode (CAUTION: modifies data)",
-    )
-    args = parser.parse_args()
-    sys.exit(main(dry_run=args.dry_run))
+    raise SystemExit(main())

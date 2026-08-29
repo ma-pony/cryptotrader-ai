@@ -164,6 +164,7 @@ async def test_base_agent_analyze_logs_llm_usage():
         agent_id="test_agent",
         prompt_builder=fake_pb,
         model="gpt-4o-mini",
+        llm_factory=MagicMock(),
     )
     snapshot = _make_snapshot()
     response_msg = _make_ai_message(
@@ -178,13 +179,10 @@ async def test_base_agent_analyze_logs_llm_usage():
     def capture_log_llm_usage(msg, *, caller):
         usage_logged.append({"msg": msg, "caller": caller})
 
-    with (
-        patch("cryptotrader.agents.base.create_llm") as mock_create_llm,
-        patch("cryptotrader.agents.base.log_llm_usage", side_effect=capture_log_llm_usage),
-    ):
+    with patch("cryptotrader.agents.base.log_llm_usage", side_effect=capture_log_llm_usage):
         mock_llm = AsyncMock()
         mock_llm.ainvoke = AsyncMock(return_value=response_msg)
-        mock_create_llm.return_value = mock_llm
+        agent._llm_factory.return_value = mock_llm
 
         await agent.analyze(snapshot)
 
@@ -210,15 +208,13 @@ async def test_acompletion_with_fallback_logs_llm_usage():
     def capture_log_llm_usage(msg, *, caller):
         usage_logged.append({"msg": msg, "caller": caller})
 
-    with (
-        patch("cryptotrader.agents.base.create_llm") as mock_create_llm,
-        patch("cryptotrader.agents.base.log_llm_usage", side_effect=capture_log_llm_usage),
-    ):
+    with patch("cryptotrader.agents.base.log_llm_usage", side_effect=capture_log_llm_usage):
         mock_llm = AsyncMock()
         mock_llm.ainvoke = AsyncMock(return_value=response_msg)
-        mock_create_llm.return_value = mock_llm
+        llm_factory = MagicMock(return_value=mock_llm)
 
         result = await acompletion_with_fallback(
+            llm_factory=llm_factory,
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": "hi"}],
         )

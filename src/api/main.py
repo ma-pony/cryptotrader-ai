@@ -2,15 +2,7 @@
 
 from __future__ import annotations
 
-# Load .env into os.environ BEFORE any project import. api.dependencies
-# validates AUTH_MODE / API_KEY at module-import time and SystemExits if
-# misconfigured, so dotenv has to land first.
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import logging
-import os
 import time
 from collections import defaultdict
 from contextlib import asynccontextmanager
@@ -58,14 +50,13 @@ async def lifespan(_app: FastAPI):
     """Startup/shutdown lifecycle."""
     from cryptotrader.log_config import setup_logging
 
-    setup_logging()
+    await _init_runtime(_app)
+    runtime = _app.state.runtime
+    setup_logging(runtime.snapshot.document)
 
     from cryptotrader.otel import setup_otel
 
-    setup_otel()
-
-    await _init_runtime(_app)
-    runtime = _app.state.runtime
+    setup_otel(runtime.snapshot.document)
     active = not runtime.snapshot.setup_required
 
     try:
@@ -208,31 +199,21 @@ async def _shutdown_scheduler(app_instance: FastAPI) -> None:
     await task
 
 
-# ── Docs endpoint control ──
-# Read DOCS_ENABLED env var (default: "false").  When false/absent, Swagger UI
-# and ReDoc are disabled to prevent API schema information leakage in production
-# (Requirement 7.6).
-_docs_enabled = os.environ.get("DOCS_ENABLED", "false").lower() == "true"
-_docs_url = "/docs" if _docs_enabled else None
-_redoc_url = "/redoc" if _docs_enabled else None
-
 app = FastAPI(
     title="CryptoTrader AI",
     version="0.1.0",
     lifespan=lifespan,
-    docs_url=_docs_url,
-    redoc_url=_redoc_url,
+    docs_url=None,
+    redoc_url=None,
 )
 
 # ── CORS (dev only — frontend served at :5173) ──
 # SEC-M2: explicit method/header allowlist instead of "*". With allow_credentials
 # wildcard methods/headers grant cross-origin requests full access including
 # X-API-Key. Restrict to what the frontend actually uses.
-_cors_origins_env = os.environ.get("CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-_cors_origins = [o.strip() for o in _cors_origins_env.split(",") if o.strip()]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
     allow_headers=["Content-Type", "X-API-Key", "X-Trace-ID", "Last-Event-ID"],
@@ -310,7 +291,7 @@ def _mask_client_ip(ip: str) -> str:
 # Fixed-window approximation: per-IP counter with 60s TTL. Good enough for our
 # 60 req/min ceiling — sliding-window precision is not needed for abuse defence.
 
-RATE_LIMIT = int(os.environ.get("API_RATE_LIMIT", "60"))  # requests per minute
+RATE_LIMIT = 60
 _rate_buckets: dict[str, list[float]] = defaultdict(list)
 _redis_client: Any = None
 
@@ -381,13 +362,7 @@ async def trace_middleware(request: Request, call_next):
     raw_ip = request.client.host if request.client else "unknown"
     client_ip = _mask_client_ip(raw_ip)
 
-    # Rate limit (skip health/metrics for probes; also skip when AUTH_MODE
-    # is disabled — i.e. trusted local dev: the dashboard fires 10+ memory
-    # endpoints on page load + 30s polling that quickly drains the 60 rpm
-    # bucket and shows persistent "加载中…" spinners).
-    auth_mode = os.environ.get("AUTH_MODE", "enabled").lower()
-    skip_rl = auth_mode == "disabled" or request.url.path in ("/health", "/metrics")
-    if not skip_rl and not await _check_rate_limit(raw_ip):
+    if request.url.path not in ("/health", "/metrics") and not await _check_rate_limit(raw_ip):
         return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"})
 
     trace_id = set_trace_id(request.headers.get("X-Trace-ID"))

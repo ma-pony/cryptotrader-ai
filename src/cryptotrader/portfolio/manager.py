@@ -330,8 +330,7 @@ class PortfolioManager:
         with ``timestamp < latest_reset.reset_at`` are excluded so the
         peak/trough computation starts fresh from the reset point. This
         prevents historical losses from permanently gating new trades after
-        the operator has explicitly accepted a new baseline via
-        ``arena portfolio reset-baseline``.
+        the operator has explicitly accepted a new baseline in the dashboard.
         """
         snaps = await self.load_snapshots(account_id)
         last_reset = await self.get_last_baseline_reset(account_id)

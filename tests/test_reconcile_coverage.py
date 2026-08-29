@@ -10,9 +10,11 @@ from cryptotrader.execution.reconcile import Reconciler
 from cryptotrader.models import Order, OrderStatus
 
 
-def _make_order(exchange_id: str = "ex1", pair: str = "BTC/USDT", status: OrderStatus = OrderStatus.SUBMITTED) -> Order:
+def _make_order(
+    venue_order_id: str = "ex1", pair: str = "BTC/USDT", status: OrderStatus = OrderStatus.SUBMITTED
+) -> Order:
     o = MagicMock(spec=Order)
-    o.exchange_id = exchange_id
+    o.venue_order_id = venue_order_id
     o.pair = pair
     o.status = status
     return o
@@ -39,10 +41,10 @@ class TestReconcile:
         assert result[0][1] == "filled"
 
     @pytest.mark.asyncio
-    async def test_skip_no_exchange_id(self):
+    async def test_skip_without_venue_order_id(self):
         exchange = MagicMock()
         r = Reconciler(exchange)
-        order = _make_order(exchange_id="")
+        order = _make_order(venue_order_id="")
         result = await r.reconcile([order])
         assert result == []
         exchange.get_order.assert_not_called()

@@ -95,7 +95,7 @@ class TestTokenSecurityCheck:
     async def test_no_contract_address(self):
         from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 
-        check = TokenSecurityCheck()
+        check = TokenSecurityCheck(tax_threshold=10.0)
         result = await check.evaluate(risk_request(), {})
         assert result.passed is True
         assert "No contract" in result.reason
@@ -104,7 +104,7 @@ class TestTokenSecurityCheck:
     async def test_audit_api_error(self):
         from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 
-        check = TokenSecurityCheck()
+        check = TokenSecurityCheck(tax_threshold=10.0)
         check.audit = MagicMock()
         check.audit.audit_token = AsyncMock(side_effect=Exception("network"))
         portfolio = {"contract_address": "0xabc", "symbol": "TOKEN", "chain": "BSC"}
@@ -116,7 +116,7 @@ class TestTokenSecurityCheck:
     async def test_high_risk(self):
         from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 
-        check = TokenSecurityCheck()
+        check = TokenSecurityCheck(tax_threshold=10.0)
         check.audit = MagicMock()
         check.audit.audit_token = AsyncMock(return_value={"risk_level": "HIGH", "issues": ["honeypot"]})
         portfolio = {"contract_address": "0xabc", "symbol": "TOKEN", "chain": "BSC"}
@@ -128,7 +128,7 @@ class TestTokenSecurityCheck:
     async def test_low_risk(self):
         from cryptotrader.risk.checks.token_security import TokenSecurityCheck
 
-        check = TokenSecurityCheck()
+        check = TokenSecurityCheck(tax_threshold=10.0)
         check.audit = MagicMock()
         check.audit.audit_token = AsyncMock(return_value={"risk_level": "LOW", "issues": []})
         portfolio = {"contract_address": "0xabc", "symbol": "TOKEN", "chain": "BSC"}

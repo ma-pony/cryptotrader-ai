@@ -6,6 +6,7 @@ import asyncio
 import math
 import pickle
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +20,6 @@ from cryptotrader.signals.models import CandleRequirement, ComponentSignal, Data
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from cryptotrader.config import KronosConfig
     from cryptotrader.models import DataSnapshot
     from cryptotrader.runtime_config.models import RuntimeConfigDocument
     from cryptotrader.signals.models import SignalContext
@@ -28,7 +28,22 @@ _gate_cache: dict[Path, dict[str, Any]] = {}
 _predictor_cache: dict[str, Any] = {}
 
 
-def _device(config: KronosConfig) -> str:
+@dataclass(frozen=True)
+class KronosSettings:
+    gate_path: str = "artifacts/kronos/gate_v21.pkl"
+    model_name: str = "NeoQuasar/Kronos-base"
+    tokenizer_name: str = "NeoQuasar/Kronos-Tokenizer-base"
+    device: str = ""
+    lookback: int = 460
+    pred_len: int = 50
+    sample_count: int = 5
+    step2_short_threshold: float = 0.04
+    aux_symbol: str = "BTCUSDT"
+    timeframe: str = "4h"
+    ohlcv_limit: int = 512
+
+
+def _device(config: KronosSettings) -> str:
     if config.device:
         return config.device
     try:
@@ -41,14 +56,14 @@ def _device(config: KronosConfig) -> str:
     return "cpu"
 
 
-def _gate_path(config: KronosConfig) -> Path:
+def _gate_path(config: KronosSettings) -> Path:
     path = Path(config.gate_path)
     if path.is_absolute():
         return path
     return Path(__file__).resolve().parents[4] / path
 
 
-def _load_gate(config: KronosConfig) -> dict[str, Any]:
+def _load_gate(config: KronosSettings) -> dict[str, Any]:
     path = _gate_path(config)
     if path not in _gate_cache:
         with path.open("rb") as stream:
@@ -56,7 +71,7 @@ def _load_gate(config: KronosConfig) -> dict[str, Any]:
     return _gate_cache[path]
 
 
-def _load_predictor(config: KronosConfig):
+def _load_predictor(config: KronosSettings):
     device = _device(config)
     cache_key = f"{config.model_name}::{config.tokenizer_name}::{device}"
     if cache_key in _predictor_cache:
@@ -129,10 +144,10 @@ class KronosComponent:
 
     def __init__(
         self,
-        config: KronosConfig,
+        config: KronosSettings,
         *,
-        gate_loader: Callable[[KronosConfig], dict[str, Any]] = _load_gate,
-        predictor_loader: Callable[[KronosConfig], Any] = _load_predictor,
+        gate_loader: Callable[[KronosSettings], dict[str, Any]] = _load_gate,
+        predictor_loader: Callable[[KronosSettings], Any] = _load_predictor,
         feature_computer: Callable[[DataSnapshot, list[str], dict[str, float]], dict[str, float]] = (
             compute_kronos_features
         ),
@@ -257,7 +272,5 @@ class KronosComponent:
 def create_component(document: RuntimeConfigDocument, sink) -> KronosComponent:
     """Build Kronos from its database-owned component parameters."""
     del sink
-    from cryptotrader.config import KronosConfig
-
     configured = next(item for item in document.signals.components if item.component_id == KronosComponent.id)
-    return KronosComponent(KronosConfig(**dict(configured.parameters)))
+    return KronosComponent(KronosSettings(**dict(configured.parameters)))

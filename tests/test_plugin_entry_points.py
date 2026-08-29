@@ -180,10 +180,6 @@ def test_runtime_llm_factory_builds_from_database_settings_without_legacy_config
     assert built[0]["callbacks"][0].model_costs == {"analysis-db": (1.2, 3.4)}
     assert retries == [settings.retry]
 
-    def reject_legacy_config():
-        raise AssertionError("runtime token costs read legacy config")
-
-    monkeypatch.setattr("cryptotrader.config.load_config", reject_legacy_config)
     ledger = start_ledger()
     try:
         message = AIMessage(
@@ -200,7 +196,8 @@ def test_runtime_llm_factory_builds_from_database_settings_without_legacy_config
 @pytest.mark.asyncio
 async def test_llm_committee_factory_resolves_empty_role_from_database_without_legacy_config(monkeypatch):
     from cryptotrader.signals.components.llm_committee import create_component
-    from tests.test_llm_committee_component import RecordingSink, _context
+    from tests.test_runtime_signal_components import _committee_context as _context
+    from tests.test_runtime_signal_components import _Sink as RecordingSink
 
     models = LlmModelsConfig(
         analysis="analysis-db",
@@ -266,10 +263,6 @@ async def test_llm_committee_factory_resolves_empty_role_from_database_without_l
         captured_settings.append(config)
         return fake_llm_factory
 
-    def reject_legacy_config():
-        raise AssertionError("new discovery path read legacy load_config")
-
-    monkeypatch.setattr("cryptotrader.config.load_config", reject_legacy_config)
     component = create_component(
         document,
         RecordingSink(),
@@ -312,10 +305,6 @@ def test_llm_committee_factory_rejects_unresolved_empty_database_role(monkeypatc
         ),
     )
 
-    def reject_legacy_config():
-        raise AssertionError("new discovery path read legacy load_config")
-
-    monkeypatch.setattr("cryptotrader.config.load_config", reject_legacy_config)
     with pytest.raises(ValueError, match="tech_agent"):
         create_component(document, NullCycleEventSink())
 
@@ -324,7 +313,7 @@ def test_market_source_entry_point_returns_configured_source():
     from cryptotrader.market_sources.registry import MarketSourceRegistry
 
     registry = MarketSourceRegistry.discover(
-        market_config(source_id="fixture-market", parameters={"exchange_id": "binance"}),
+        market_config(source_id="fixture-market", parameters={"market_adapter_id": "binance"}),
         entry_points=(
             _entry_point(
                 "fixture-market",
@@ -335,7 +324,7 @@ def test_market_source_entry_point_returns_configured_source():
     )
 
     assert registry.ids() == ("fixture-market",)
-    assert registry.require("fixture-market").config.parameters["exchange_id"] == "binance"
+    assert registry.require("fixture-market").config.parameters["market_adapter_id"] == "binance"
 
 
 def test_market_source_registry_rejects_configured_uninstalled_source():

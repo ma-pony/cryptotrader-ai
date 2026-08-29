@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from cryptotrader.models import Order, OrderStatus
 
 if TYPE_CHECKING:
-    from cryptotrader.execution.exchange import ExchangeAdapter
+    from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -22,30 +22,30 @@ _STATUS_MAP = {
 
 
 class Reconciler:
-    def __init__(self, exchange: ExchangeAdapter) -> None:
-        self._exchange = exchange
+    def __init__(self, venue: Any) -> None:
+        self._venue = venue
 
     async def reconcile(self, local_orders: list[Order]) -> list[tuple[Order, str]]:
         mismatches: list[tuple[Order, str]] = []
         for order in local_orders:
-            if not order.exchange_id:
+            if not order.venue_order_id:
                 continue
             try:
-                remote = await self._exchange.get_order(order.exchange_id, order.pair)
+                remote = await self._venue.get_order(order.venue_order_id, order.pair)
             except Exception as e:
-                logger.warning("Failed to fetch order %s: %s", order.exchange_id, e)
+                logger.warning("Failed to fetch order %s: %s", order.venue_order_id, e)
                 continue
             remote_status = _STATUS_MAP.get(remote.get("status", ""))
             if remote_status and remote_status != order.status:
                 mismatches.append((order, remote_status.value))
-                logger.warning("Mismatch: %s local=%s remote=%s", order.exchange_id, order.status, remote_status)
+                logger.warning("Mismatch: %s local=%s remote=%s", order.venue_order_id, order.status, remote_status)
         return mismatches
 
     async def detect_orphans(self, local_ids: set[str]) -> list[dict]:
         """Detect exchange orders not tracked locally."""
         orphans = []
         try:
-            open_orders = await self._exchange.fetch_open_orders()
+            open_orders = await self._venue.fetch_open_orders()
             for o in open_orders:
                 if o.get("id") not in local_ids:
                     orphans.append(o)

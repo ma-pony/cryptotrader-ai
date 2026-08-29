@@ -1,117 +1,73 @@
 # CryptoTrader AI
 
-CryptoTrader AI 是一个可插拔的加密资产信号融合与交易系统。Kronos、LLM 四智能体委员会以及自定义策略都只是信号组件；系统把所有启用组件的输出按信任权重确定性融合，再统一生成目标仓位、退出价格、风控结论和执行计划。
+CryptoTrader AI 是一个可插拔的加密资产信号融合与多平台执行系统。Kronos、LLM 四智能体委员会和自定义组件都是独立信号来源；它们以网页可调整的信任权重融合为一个目标仓位，再由各执行资金池独立风控、审批和执行。
 
-## 核心模型
+## 运行时模型
 
-每个组件只回答三个问题：方向、置信度和理由。
+运行配置唯一保存在数据库 `runtime_config` 中。进程只接受两个启动参数：`DATABASE_URL` 和 `CONFIG_MASTER_KEY`；后者用于加密平台凭据。没有 TOML、`.env` 合并或单平台模式开关。
 
-```text
-ComponentSignal
-  component_id
-  direction: long | short | neutral
-  confidence: 0..1
-  reasoning
-  details
-```
-
-融合器先把方向映射为 `long=+1`、`short=-1`、`neutral=0`，计算启用组件的加权分数。这个正负分数只用于内部融合；最终业务对象是更直观的：
+每次网页保存都是整份严格校验的配置替换，并递增全局 revision。周期与 HITL 提案会冻结其 revision；保存失败时页面保留当前运行状态并显示错误，revision 变化会使待审批计划失效。
 
 ```text
-TargetPosition
-  side: long | short | flat
-  size_ratio: 0..1
+市场数据 → Kronos / 四智能体内部辩论 / 自定义组件 → 信号融合 → 目标仓位
+       → 每个执行资金池的风控、可选 HITL、连接分配 → 周期审计
 ```
 
-`size_ratio` 表示在风控允许的单标的上限内希望达到的比例，不是杠杆倍数，也不是直接下单量。执行层比较当前仓位和目标仓位，只交易差值。
+`target_position` 使用 `side: long | short | flat` 与 `size_ratio: 0..1`。它是每个资金池在风控上限内的目标比例，不是杠杆或直接下单量；连接只执行当前仓位到目标仓位的差额。
 
-## 内置组件
+## 首次启动
 
-- `kronos`：Kronos 时序模型与门控逻辑，输出纯市场方向信号。
-- `llm_committee`：技术、链上、新闻、宏观四个智能体。委员会内部保留多轮交叉质询、收敛判断和最终摘要，外部仍只输出一个标准信号。
-
-自定义组件实现统一协议后，通过 `[signal_plugins].factories` 注册。Factory 使用 `package.module:function` 格式并返回组件实例。启动时会校验组件 ID 唯一、Profile 引用的组件均已安装。
-
-## 全局 Signal Profile
-
-默认配置位于 `config/default.toml`：
-
-```toml
-[signal_plugins]
-factories = []
-
-[signal_profile]
-neutral_threshold = 0.20
-max_target_ratio = 1.0
-atr_stop_multiplier = 2.0
-reward_ratio = 2.0
-hitl_required = false
-
-[[signal_profile.components]]
-component_id = "kronos"
-enabled = true
-weight = 0.60
-
-[[signal_profile.components]]
-component_id = "llm_committee"
-enabled = true
-weight = 0.40
-```
-
-所有启用组件的权重必须精确合计为 `1.0`。网页 `/strategy` 可以动态启停组件、调整信任占比、融合阈值、目标仓位上限、ATR 止损倍数、盈亏比和 HITL。保存会生成新的 Profile revision；已经开始的周期继续使用冻结快照，新配置从下一周期生效。
-
-## 唯一交易主链
-
-实时、模拟和回测共用同一个 `TradingCycle`：
-
-```text
-冻结 Profile
-  → 汇总所有组件的数据需求
-  → 生成同一时点的 SignalContext
-  → 并行运行全部启用组件
-  → 严格成功检查
-  → 加权融合
-  → TargetPosition
-  → 统一 ATR ExitPolicy
-  → 可选 HITL
-  → RiskGate
-  → 目标仓位差值下单
-  → trading_cycles Journal
-```
-
-任何启用组件失败，整个周期以 `component_failed` 结束，不拿残缺结果交易。HITL 开启后保存完整的 Profile revision、上下文和交易计划；网页审批通过时会重新读取当前仓位并重新规划订单，但不会重新生成信号。
-
-## 启动
-
-要求 Python 3.12+、Node.js 20+、uv 和 pnpm。
+要求 Python 3.12+、Node.js 20+、uv 和 pnpm。准备 PostgreSQL，并生成一个 32 字节 AES-GCM 主密钥后启动 API：
 
 ```bash
 uv sync --all-extras
-cp config/default.toml config/local.toml
-
-uv run arena serve --port 8003
-cd web && pnpm install && pnpm dev
+export DATABASE_URL='postgresql+asyncpg://<db-user>:<db-password>@localhost:5432/cryptotrader'
+export CONFIG_MASTER_KEY='base64 编码的 32 字节密钥'
+uv run trader serve --port 8003
 ```
 
-常用命令：
+另一个终端启动网页：
 
 ```bash
-uv run arena run --pair BTC/USDT --mode paper
-uv run arena backtest --pair BTC/USDT --start 2025-01-01 --end 2025-03-01
-uv run arena journal log
-uv run arena journal show <cycle-id>
-uv run arena scheduler start
-uv run arena migrate
+cd web
+pnpm install
+pnpm dev
 ```
 
-API 的主要资源包括 `/api/signal-profile`、`/api/decisions`、`/api/hitl`、`/api/portfolio`、`/api/risk` 和 `/api/backtest`。
+打开 `http://localhost:5173`。未配置时网页会自动进入初始化向导，按顺序配置：LLM、信号组件、市场数据、平台连接、执行资金池、风控、调度和通知；全部通过校验后才能激活运行时。
+
+平台连接可同时使用 Paper、OKX、Bybit 或以后安装的适配器。Paper、Demo、Testnet 只能分配给 `simulated` 资金池；Live 连接只能分配给 `real` 资金池。一个连接最多属于一个启用资金池。每个资金池可分别打开 HITL，审批的是含保护价格和配置 revision 的完整计划。
+
+## 容器启动
+
+Compose 同样只向 API 和调度器传入两个运行时变量：
+
+```bash
+export CONFIG_MASTER_KEY='base64 编码的 32 字节密钥'
+docker compose up --build
+```
+
+PostgreSQL 地址由 Compose 组装后作为 `DATABASE_URL` 传入应用。首次访问网页完成配置；容器不会读取本地配置文件。
+
+## 常用命令
+
+```bash
+uv run trader run --pair BTC/USDT
+uv run trader backtest --pair BTC/USDT --start 2025-01-01 --end 2025-03-01
+uv run trader journal log
+uv run trader journal show <cycle-id>
+uv run trader scheduler start
+```
+
+回测只使用临时 Paper 资金池，不连接 Demo、Testnet 或 Live。真实模型与模拟盘验证应在网页完成配置后，使用已启用的测试环境连接；实盘连接只允许只读检查，禁止自动化真实资金订单。
 
 ## 验证
 
 ```bash
 uv run pytest --no-cov -q
 uv run ruff check src tests scripts
+uv run python scripts/import_smoke.py
 cd web && pnpm test && pnpm typecheck && pnpm lint
 ```
 
-更完整的模块边界和数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+架构约束与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。

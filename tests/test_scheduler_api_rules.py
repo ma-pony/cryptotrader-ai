@@ -1,7 +1,7 @@
 """Integration tests for trigger rule CRUD API endpoints (T018).
 
 Tests /api/scheduler/rules and /api/scheduler/triggers endpoints.
-Mocks TriggerRuleStore, RedisStateManager, and load_config.
+Mocks TriggerRuleStore and RedisStateManager.
 """
 
 from __future__ import annotations

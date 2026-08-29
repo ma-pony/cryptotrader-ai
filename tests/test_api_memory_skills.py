@@ -5,16 +5,12 @@ SC-W11: >= 8 use cases PASS（contracts/skill-api-routes.md 单测要求）。
 
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-
-os.environ.setdefault("AUTH_MODE", "disabled")
-os.environ.setdefault("API_KEY", "test-key-019")
 
 
 @pytest.fixture
@@ -251,10 +247,8 @@ class TestGetSkillProposals:
 
 
 class TestAuthEnforcement:
-    def test_missing_api_key_returns_401_or_bypassed(self, client: TestClient, tmp_path: Path) -> None:
-        """SC-W11.6: 缺鉴权时返回 401（AUTH_MODE=enabled）或 bypass（disabled）。"""
-        # In test env AUTH_MODE=disabled → 200 bypass is valid
+    def test_runtime_security_disabled_permits_memory_skills(self, client: TestClient, tmp_path: Path) -> None:
+        """The explicit runtime security fixture permits this route."""
         with patch("api.routes.memory._SKILLS_ROOT", tmp_path):
             resp = client.get("/api/memory/skills")
-        # Either 200 (bypassed) or 401 (enforced) — both valid per config
-        assert resp.status_code in (200, 401)
+        assert resp.status_code == 200

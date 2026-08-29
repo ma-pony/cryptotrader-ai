@@ -127,16 +127,10 @@ class TestNewsCollectorSchemaValidation:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        mock_config = MagicMock()
-        mock_config.providers.coindesk_api_key = ""
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=mock_config),
-            patch("httpx.AsyncClient", return_value=mock_client),
-        ):
+        with patch("httpx.AsyncClient", return_value=mock_client):
             from cryptotrader.data.news import NewsCollector
 
-            collector = NewsCollector()
+            collector = NewsCollector(coindesk_api_key="")
             with caplog.at_level(logging.WARNING, logger="cryptotrader.data.news"):
                 articles = await collector._collect_cryptocompare("BTC")
 
@@ -159,16 +153,10 @@ class TestNewsCollectorSchemaValidation:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        mock_config = MagicMock()
-        mock_config.providers.coindesk_api_key = ""
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=mock_config),
-            patch("httpx.AsyncClient", return_value=mock_client),
-        ):
+        with patch("httpx.AsyncClient", return_value=mock_client):
             from cryptotrader.data.news import NewsCollector
 
-            collector = NewsCollector()
+            collector = NewsCollector(coindesk_api_key="")
             with caplog.at_level(logging.WARNING, logger="cryptotrader.data.news"):
                 await collector._collect_cryptocompare("BTC")
 
@@ -190,16 +178,10 @@ class TestNewsCollectorSchemaValidation:
         mock_client.__aexit__ = AsyncMock(return_value=False)
         mock_client.get = AsyncMock(return_value=mock_resp)
 
-        mock_config = MagicMock()
-        mock_config.providers.coindesk_api_key = ""
-
-        with (
-            patch("cryptotrader.config.load_config", return_value=mock_config),
-            patch("httpx.AsyncClient", return_value=mock_client),
-        ):
+        with patch("httpx.AsyncClient", return_value=mock_client):
             from cryptotrader.data.news import NewsCollector
 
-            collector = NewsCollector()
+            collector = NewsCollector(coindesk_api_key="")
             with caplog.at_level(logging.WARNING, logger="cryptotrader.data.news"):
                 articles = await collector._collect_cryptocompare("BTC")
 

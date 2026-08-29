@@ -36,12 +36,9 @@ def _is_role_anthropic(role: str) -> bool:
         return False
 
 
-def should_cache(model: str = "", role: str = "") -> bool:
-    """Return True when prompt caching should be applied."""
-    from cryptotrader.config import load_config
-
-    cfg = load_config()
-    if not cfg.llm.prompt_caching:
+def should_cache(model: str = "", role: str = "", *, enabled: bool = True) -> bool:
+    """Return True when the explicit caller enables Anthropic prompt caching."""
+    if not enabled:
         return False
     if model and is_anthropic_model(model):
         return True

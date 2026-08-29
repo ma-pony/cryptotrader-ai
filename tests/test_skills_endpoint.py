@@ -10,16 +10,11 @@ Five test cases (FR-022-3, FR-022-4, FR-022-5, FR-022-6):
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
-
-# Set auth env before importing app so dependencies module initialises correctly.
-os.environ.setdefault("AUTH_MODE", "disabled")
-os.environ.setdefault("API_KEY", "test-key-025")
 
 _EXTERNAL_ROOT_ATTR = "api.routes.skills._EXTERNAL_SKILLS_ROOT"
 
@@ -160,8 +155,8 @@ class TestSkillEndpoint401:
         skill_routes = [r for r in app.routes if hasattr(r, "path") and "/skill/" in getattr(r, "path", "")]
         assert len(skill_routes) >= 1, "/skill/{name} route must be registered"
 
-    def test_skills_endpoint_accessible_with_disabled_auth(self, client: TestClient, skills_root: Path):
-        """When AUTH_MODE=disabled (test env), /skill/<name> is accessible."""
+    def test_skills_endpoint_accessible_with_runtime_security_disabled(self, client: TestClient, skills_root: Path):
+        """The explicit test runtime permits the route when security is disabled."""
         _write_external_skill(skills_root, "cryptotrader")
         resp = client.get("/skill/cryptotrader")
         assert resp.status_code == 200

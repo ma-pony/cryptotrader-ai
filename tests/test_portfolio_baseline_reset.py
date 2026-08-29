@@ -146,8 +146,8 @@ def test_drawdown_limit_does_not_trip_circuit_breaker():
     """Mirror of test_live_readiness assertion — kept here for proximity to design."""
     from unittest.mock import AsyncMock, MagicMock
 
-    from cryptotrader.config import LossConfig
     from cryptotrader.risk.checks.loss import DrawdownLimit
+    from cryptotrader.runtime_config.models import LossConfig
     from tests.factories.signal_fusion import risk_request
 
     async def go():

@@ -160,7 +160,7 @@ def cycle_record(**overrides):
             "pair": "BTC/USDT:USDT",
             "as_of": "2026-01-01T00:00:00+00:00",
             "mode": "paper",
-            "exchange_id": "okx",
+            "market_data_source_id": "default",
             "market_type": "swap",
             "equity": 10_000.0,
             "current_price": 100.0,

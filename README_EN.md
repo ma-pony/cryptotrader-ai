@@ -1,61 +1,73 @@
 # CryptoTrader AI
 
-CryptoTrader AI is a pluggable signal-fusion and trading system for crypto markets. Kronos, the four-agent LLM committee, and user-defined strategies are peer signal components. Their outputs are fused deterministically by configurable trust weights before the system creates a target position, exit prices, a risk decision, and an execution plan.
+CryptoTrader AI is a pluggable signal-fusion and multi-venue execution system. Kronos, the four-agent LLM committee, and custom components are independent signal sources. Configurable trust weights fuse them into one target position; each execution book then applies its own risk controls, approval, and execution.
 
-## Domain model
+## Runtime model
 
-Every component returns `ComponentSignal(component_id, direction, confidence, reasoning, details)`, where direction is `long`, `short`, or `neutral` and confidence is between zero and one.
+The database `runtime_config` is the only runtime configuration source. A process receives only `DATABASE_URL` and `CONFIG_MASTER_KEY`; the latter encrypts venue credentials. There is no TOML loading, dotenv merge, or single-venue mode switch.
 
-The fusion score may be positive or negative internally. The business-facing result is deliberately explicit:
-
-```text
-TargetPosition(side: long | short | flat, size_ratio: 0..1)
-```
-
-`size_ratio` is the desired fraction of the configured per-symbol risk capacity. It is neither leverage nor a raw order quantity. Execution trades only the delta between the current and target positions.
-
-## Components and profile
-
-Built-ins:
-
-- `kronos`: Kronos time-series inference and gate, exposed as a pure signal component.
-- `llm_committee`: technical, on-chain, news, and macro agents with internal cross-examination, convergence checks, and a final committee summary.
-
-Custom component factories are configured under `[signal_plugins].factories` using `package.module:function` references.
-
-The global Signal Profile controls component enablement and trust weights, the neutral threshold, maximum target ratio, ATR exit settings, and HITL. Enabled weights must total exactly `1.0`. The `/strategy` page edits the profile dynamically. A save creates a new revision; in-flight cycles keep their frozen revision and changes apply on the next cycle.
-
-## One trading pipeline
-
-Live, paper, and backtest modes share `TradingCycle`:
+Every web save atomically replaces a fully validated document and increments a global revision. Cycles and HITL proposals freeze that revision. The UI shows save errors without discarding the active state, and a revision change invalidates a pending approval.
 
 ```text
-freeze profile → collect point-in-time context → run all enabled components
-→ strict success check → weighted fusion → target position → ATR exit policy
-→ optional HITL → risk gate → delta execution → trading cycle journal
+market data → Kronos / four-agent internal debate / custom components → fusion → target position
+            → per-book risk, optional HITL, connection allocation → cycle audit
 ```
 
-If any enabled component fails, the cycle ends as `component_failed` and cannot trade. Approved HITL plans are recalculated against the latest position without regenerating signals.
+`target_position` is `side: long | short | flat` plus `size_ratio: 0..1`. It is a desired fraction of a book's risk capacity, never leverage or a raw order quantity. Connections trade only the delta to that target.
 
-## Run locally
+## First start
 
-Requires Python 3.12+, Node.js 20+, uv, and pnpm.
+Requires Python 3.12+, Node.js 20+, uv, pnpm, and PostgreSQL. Create a 32-byte AES-GCM master key and start the API:
 
 ```bash
 uv sync --all-extras
-cp config/default.toml config/local.toml
-uv run arena serve --port 8003
-cd web && pnpm install && pnpm dev
+export DATABASE_URL='postgresql+asyncpg://<db-user>:<db-password>@localhost:5432/cryptotrader'
+export CONFIG_MASTER_KEY='base64-encoded 32-byte key'
+uv run trader serve --port 8003
 ```
 
-Useful commands:
+Start the web application in another terminal:
 
 ```bash
-uv run arena run --pair BTC/USDT --mode paper
-uv run arena journal log
-uv run arena journal show <cycle-id>
-uv run arena scheduler start
-uv run arena migrate
+cd web
+pnpm install
+pnpm dev
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for module boundaries and invariants.
+Open `http://localhost:5173`. An unconfigured installation opens the setup wizard. Configure LLMs, signal components, market data, venue connections, execution books, risk, scheduling, and notifications in order, then activate the runtime.
+
+Paper, OKX, Bybit, and future adapters may run at the same time. Paper, demo, and testnet connections belong only to `simulated` books; live connections belong only to `real` books. One connection can belong to at most one enabled book. HITL is configurable per book and approves a full plan including protection prices and configuration revision.
+
+## Containers
+
+Compose passes only the same two runtime variables to API and scheduler:
+
+```bash
+export CONFIG_MASTER_KEY='base64-encoded 32-byte key'
+docker compose up --build
+```
+
+Compose derives the PostgreSQL address and supplies it as `DATABASE_URL`. Complete initial setup in the web UI; containers do not read local configuration files.
+
+## Useful commands
+
+```bash
+uv run trader run --pair BTC/USDT
+uv run trader backtest --pair BTC/USDT --start 2025-01-01 --end 2025-03-01
+uv run trader journal log
+uv run trader journal show <cycle-id>
+uv run trader scheduler start
+```
+
+Backtests use an isolated temporary Paper book and never connect demo, testnet, or live venues. Validate live models with simulated connections after web setup; live-money connections are read-only checks and must not receive automated real-money orders.
+
+## Verification
+
+```bash
+uv run pytest --no-cov -q
+uv run ruff check src tests scripts
+uv run python scripts/import_smoke.py
+cd web && pnpm test && pnpm typecheck && pnpm lint
+```
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for system boundaries and data flow.

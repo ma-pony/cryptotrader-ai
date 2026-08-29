@@ -31,9 +31,8 @@ class TestWebhookBackend:
 class TestTelegramBackend:
     def _make_backend(self):
         cfg = MagicMock()
-        cfg.bot_token = "test-token"
         cfg.chat_id = "12345"
-        return TelegramBackend(cfg)
+        return TelegramBackend(cfg, "test-token")
 
     def test_format_price_trigger(self):
         msg = TelegramBackend._format_message("price_trigger", {"pair": "BTC/USDT", "trigger_reason": "crossed 50k"})
@@ -103,8 +102,7 @@ class TestNotifier:
     async def test_with_telegram_config(self):
         cfg = MagicMock()
         cfg.enabled = True
-        cfg.bot_token = "test-token"
         cfg.chat_id = "123"
-        n = Notifier(telegram_config=cfg)
+        n = Notifier(telegram_config=cfg, telegram_bot_token="test-token")
         assert n.telegram is not None
         assert len(n._backends) == 1

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -40,12 +40,7 @@ class TestOtel:
     def test_setup_otel_no_endpoint(self):
         from cryptotrader.otel import setup_otel
 
-        with patch.dict("os.environ", {}, clear=False):
-            if "OTLP_ENDPOINT" in __import__("os").environ:
-                with patch.dict("os.environ", {"OTLP_ENDPOINT": ""}):
-                    setup_otel()
-            else:
-                setup_otel()
+        setup_otel()
 
 
 # ── mcp/registry.py ──

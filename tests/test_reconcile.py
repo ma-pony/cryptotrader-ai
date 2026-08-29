@@ -19,7 +19,7 @@ async def test_reconcile_mismatch():
     ex = MockExchange({"ord1": {"status": "closed"}})
     r = Reconciler(ex)
     order = Order(
-        pair="BTC/USDT", side="buy", amount=0.1, price=50000, status=OrderStatus.SUBMITTED, exchange_id="ord1"
+        pair="BTC/USDT", side="buy", amount=0.1, price=50000, status=OrderStatus.SUBMITTED, venue_order_id="ord1"
     )
     mismatches = await r.reconcile([order])
     assert len(mismatches) == 1
@@ -30,13 +30,15 @@ async def test_reconcile_mismatch():
 async def test_reconcile_no_mismatch():
     ex = MockExchange({"ord1": {"status": "closed"}})
     r = Reconciler(ex)
-    order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000, status=OrderStatus.FILLED, exchange_id="ord1")
+    order = Order(
+        pair="BTC/USDT", side="buy", amount=0.1, price=50000, status=OrderStatus.FILLED, venue_order_id="ord1"
+    )
     mismatches = await r.reconcile([order])
     assert len(mismatches) == 0
 
 
 @pytest.mark.asyncio
-async def test_reconcile_skips_no_exchange_id():
+async def test_reconcile_skips_without_a_venue_order_id():
     ex = MockExchange({})
     r = Reconciler(ex)
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)

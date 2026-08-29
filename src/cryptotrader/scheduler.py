@@ -369,7 +369,7 @@ class Scheduler:
         from cryptotrader.tracing import set_trace_id
 
         # Per-pair mutex prevents concurrent cycles on the same pair (e.g. a
-        # manual ``arena run`` overlapping with a scheduler tick). The lock
+        # manual ``trader run`` overlapping with a scheduler tick). The lock
         # holder writes its uuid; release is owner-checked so a TTL-expired
         # holder cannot wipe a fresh holder's key.
         trace_id = set_trace_id()

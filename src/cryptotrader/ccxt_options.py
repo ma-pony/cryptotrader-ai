@@ -10,6 +10,6 @@ _FETCH_MARKETS_BY_EXCHANGE = {
 }
 
 
-def fetch_market_types(exchange_id: str) -> list[str]:
-    """Return market type names accepted by the selected ccxt exchange."""
-    return _FETCH_MARKETS_BY_EXCHANGE.get(exchange_id, ["spot"]).copy()
+def fetch_market_types(adapter_id: str) -> list[str]:
+    """Return market type names accepted by the selected CCXT adapter."""
+    return _FETCH_MARKETS_BY_EXCHANGE.get(adapter_id, ["spot"]).copy()

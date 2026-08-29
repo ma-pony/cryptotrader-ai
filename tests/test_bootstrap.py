@@ -17,7 +17,7 @@ def _settings_type():
 def test_bootstrap_settings_read_exactly_two_environment_variables(monkeypatch):
     monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///test.db")
     monkeypatch.setenv("CONFIG_MASTER_KEY", MASTER_KEY)
-    monkeypatch.setenv("CRYPTOTRADER_EXCHANGE_ID", "must-be-ignored")
+    monkeypatch.setenv("UNRELATED_RUNTIME_SETTING", "must-be-ignored")
 
     settings = _settings_type().from_environment()
 

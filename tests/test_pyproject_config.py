@@ -7,10 +7,7 @@ Validates:
 - test group is separate from dev group
 """
 
-try:
-    import tomllib
-except ModuleNotFoundError:
-    import tomli as tomllib  # type: ignore[no-redef]
+import tomllib
 from pathlib import Path
 
 PYPROJECT_PATH = Path(__file__).parent.parent / "pyproject.toml"
@@ -119,3 +116,13 @@ class TestOptionalDependencies:
         # Must be >=5.0
         dep = cov_deps[0]
         assert ">=5.0" in dep, f"pytest-cov must specify >=5.0, got: {dep}"
+
+
+def test_runtime_has_one_trader_entry_point_and_no_legacy_config_dependencies():
+    data = _load_pyproject()
+    dependencies = data["project"]["dependencies"]
+
+    assert "trader" in data["project"]["scripts"]
+    assert "arena" not in data["project"]["scripts"]
+    assert not any(dependency.startswith("tomli") for dependency in dependencies)
+    assert not any(dependency.startswith("python-dotenv") for dependency in dependencies)

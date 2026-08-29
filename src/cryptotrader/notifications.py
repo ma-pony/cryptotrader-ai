@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 import httpx
 
 if TYPE_CHECKING:
-    from cryptotrader.config import TelegramConfig
+    from cryptotrader.runtime_config.models import TelegramConfig
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +41,8 @@ class WebhookBackend:
 
 
 class TelegramBackend:
-    def __init__(self, config: TelegramConfig) -> None:
-        self._token = config.bot_token
+    def __init__(self, config: TelegramConfig, bot_token: str) -> None:
+        self._token = bot_token
         self._chat_id = config.chat_id
         self._base_url = f"https://api.telegram.org/bot{self._token}"
         self._polling_task: asyncio.Task[None] | None = None
@@ -135,13 +135,14 @@ class Notifier:
         events: list[str] | None = None,
         webhook_timeout: int = 5,
         telegram_config: TelegramConfig | None = None,
+        telegram_bot_token: str = "",
     ):
         self._events = set(events or _DEFAULT_EVENTS)
         self._backends: list[NotifierBackend] = []
         if webhook_url:
             self._backends.append(WebhookBackend(webhook_url, webhook_timeout))
-        if telegram_config and telegram_config.enabled and telegram_config.bot_token:
-            self._telegram = TelegramBackend(telegram_config)
+        if telegram_config and telegram_config.enabled and telegram_bot_token:
+            self._telegram = TelegramBackend(telegram_config, telegram_bot_token)
             self._backends.append(self._telegram)
         else:
             self._telegram = None

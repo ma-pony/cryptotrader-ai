@@ -124,13 +124,12 @@ CSS HSL variables with `data-theme="dark|light"` on `<html>`. Semantic tokens (`
 
 ## Auth & API Key Handling
 
-**Strict in-memory model** (NFR-S-001 / NFR-S-005):
+**运行时配置模型**：
 
-- API key stored **only** in `useSettingsStore` (Zustand, in-memory); never persisted.
-- All API/SSE calls (`api-client.ts`, `stream-fetch.ts`, `use-analysis-progress.ts`) read from the store; **no fallback** to `env.VITE_API_KEY`.
-- **Dev mode**: `useSettingsStore` hydrates once from `VITE_API_KEY` (set in `.env.local`) for convenience.
-- **Production builds reject `VITE_API_KEY`** — Vite plugin `forbid-baked-api-key` throws at build time. Production users **must** enter the key via Settings UI.
-- Backend default `AUTH_MODE=enabled` (fail-closed); 401 means missing or wrong key.
+- 鉴权策略和 API 密钥属于数据库 `runtime_config`，由后端在请求时读取；前端不从环境文件取得密钥。
+- API/SSE 客户端使用同源相对路径；本地 Vite 开发服务器代理到 API，不需要 `VITE_*` 配置。
+- 平台凭据只在平台连接表单提交时发送到后端加密存储，前端后续只取得“是否已配置”的脱敏状态。
+- 运行时未初始化时，路由直接显示初始化向导；配置 revision、冲突和校验错误由配置页面展示。
 
 **Sourcemaps** (NFR-S-002): Production build uses `sourcemap: 'hidden'` — `.map` files emitted but bundles don't reference them.
 

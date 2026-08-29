@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 async def _write_journal_event(
-    database_url: str | None,
+    database_url: str,
     *,
     trace_id: str,
     event_type: str,
@@ -51,10 +51,6 @@ async def _write_journal_event(
     from sqlalchemy import text
 
     from cryptotrader.db import get_engine
-
-    if not database_url:
-        logger.debug("_write_journal_event: no database_url, skipping write (event_type=%s)", event_type)
-        return
 
     try:
         engine = await get_engine(database_url)
@@ -100,7 +96,7 @@ async def record_phase1_rejection(
     reason: str,
     payload: dict[str, Any] | None = None,
     *,
-    database_url: str | None = None,
+    database_url: str,
 ) -> None:
     """Write a phase1_rejected event to the journal table.
 
@@ -110,16 +106,8 @@ async def record_phase1_rejection(
         reason: rejection reason code: low_rr / stop_too_tight / missing_sl_tp /
                 direction_inverted_long / direction_inverted_short.
         payload: optional additional context dict.
-        database_url: PostgreSQL connection URL; resolved from config if None.
+        database_url: PostgreSQL connection URL supplied by the runtime assembly.
     """
-    if database_url is None:
-        try:
-            from cryptotrader.config import load_config
-
-            database_url = load_config().infrastructure.database_url
-        except Exception:
-            database_url = None
-
     full_payload: dict[str, Any] = {"reason": reason}
     if payload:
         full_payload.update(payload)
@@ -138,7 +126,7 @@ async def record_evolution_event(
     artifact_name: str,
     payload: dict[str, Any] | None = None,
     *,
-    database_url: str | None = None,
+    database_url: str,
 ) -> None:
     """Write an evolution_event to the journal table.
 
@@ -146,16 +134,8 @@ async def record_evolution_event(
         event_subtype: "new_pattern" / "new_skill_draft" / "pareto_rerank".
         artifact_name: slug or name of the artifact (pattern slug, skill name, etc.).
         payload: optional additional context dict.
-        database_url: PostgreSQL connection URL; resolved from config if None.
+        database_url: PostgreSQL connection URL supplied by the runtime assembly.
     """
-    if database_url is None:
-        try:
-            from cryptotrader.config import load_config
-
-            database_url = load_config().infrastructure.database_url
-        except Exception:
-            database_url = None
-
     full_payload: dict[str, Any] = {
         "event_subtype": event_subtype,
         "artifact_name": artifact_name,

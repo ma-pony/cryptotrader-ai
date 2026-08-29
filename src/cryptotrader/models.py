@@ -200,7 +200,7 @@ class Order:
     order_type: Literal["market", "limit"] = "market"
     reduce_only: bool = False
     status: OrderStatus = OrderStatus.PENDING
-    exchange_id: str | None = None
+    venue_order_id: str | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
     def __post_init__(self) -> None:

@@ -21,9 +21,10 @@ from cryptotrader._compat import UTC
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
 
     app.state.runtime = SimpleNamespace(
-        snapshot=SimpleNamespace(document=SimpleNamespace()),
+        snapshot=SimpleNamespace(document=minimal_runtime_document()),
         repository=SimpleNamespace(database_url=None),
         cycle=None,
     )
@@ -57,7 +58,6 @@ class TestEquityCurveShape:
         mock_pm.load_snapshots = AsyncMock(return_value=_make_snapshots(5))
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
         ):
             resp = client.get(f"/api/portfolio/equity-curve?range={rng}")
@@ -72,7 +72,6 @@ class TestEquityCurveShape:
         mock_pm.load_snapshots = AsyncMock(return_value=_make_snapshots(3))
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
         ):
             resp = client.get("/api/portfolio/equity-curve?range=24h")
@@ -91,7 +90,6 @@ class TestEquityCurveShape:
         mock_pm.load_snapshots = AsyncMock(return_value=snaps)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
         ):
             resp = client.get("/api/portfolio/equity-curve?range=24h")
@@ -107,7 +105,6 @@ class TestEquityCurveShape:
         mock_pm.load_snapshots = AsyncMock(return_value=snaps)
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
         ):
             resp = client.get("/api/portfolio/equity-curve?range=all")
@@ -120,7 +117,6 @@ class TestEquityCurveShape:
         mock_pm.load_snapshots = AsyncMock(return_value=[])
 
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=mock_pm),
         ):
             resp = client.get("/api/portfolio/equity-curve?range=7d")

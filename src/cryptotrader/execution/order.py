@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from cryptotrader.models import VALID_TRANSITIONS, Order, OrderStatus
 
 if TYPE_CHECKING:
-    from cryptotrader.execution.exchange import ExchangeAdapter
+    from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +21,13 @@ class OrderManager:
         order.status = new_status
         return order
 
-    async def place(self, order: Order, exchange: ExchangeAdapter) -> tuple[Order, dict]:
-        """Place order and return (order, exchange_result) tuple."""
+    async def place(self, order: Order, venue: Any) -> tuple[Order, dict]:
+        """Place order and return (order, venue result) tuple."""
         self.transition(order, OrderStatus.SUBMITTED)
         result: dict = {}
         try:
-            result = await exchange.place_order(order)
-            order.exchange_id = result.get("id")
+            result = await venue.place_order(order)
+            order.venue_order_id = result.get("id")
             status = result.get("status", "")
             if status in ("closed", "filled"):
                 self.transition(order, OrderStatus.FILLED)

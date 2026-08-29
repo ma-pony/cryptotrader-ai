@@ -16,34 +16,34 @@ from tests.fakes.ccxt_client import FakeCcxtFactory
 
 
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environments"),
+    ("adapter_module", "adapter_name", "adapter_id", "environments"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", ("demo", "live")),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", ("testnet", "demo", "live")),
     ],
 )
-def test_ccxt_adapters_implement_the_task_4_adapter_contract(adapter_module, adapter_name, exchange_id, environments):
+def test_ccxt_adapters_implement_the_task_4_adapter_contract(adapter_module, adapter_name, adapter_id, environments):
     import importlib
 
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
-    assert_venue_contract(lambda: adapter_class(client_factory=FakeCcxtFactory(exchange_id)), environments)
+    assert_venue_contract(lambda: adapter_class(client_factory=FakeCcxtFactory(adapter_id)), environments)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo"),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet"),
     ],
 )
 async def test_ccxt_adapters_share_portfolio_order_protection_and_close_contract(
-    adapter_module, adapter_name, exchange_id, environment
+    adapter_module, adapter_name, adapter_id, environment
 ):
     import importlib
 
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
-    fake_factory = FakeCcxtFactory(exchange_id)
+    fake_factory = FakeCcxtFactory(adapter_id)
     await assert_ccxt_session_contract(lambda: adapter_class(client_factory=fake_factory), environment, fake_factory)
 
 
@@ -71,24 +71,24 @@ async def test_ccxt_error_boundary_does_not_expose_raw_exchange_message_or_cause
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment", "amounts"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment", "amounts"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo", ("2", "1")),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet", ("0.02", "0.01")),
     ],
 )
 async def test_ccxt_rejects_simultaneous_nonzero_hedge_legs_before_flat_execution(
-    adapter_module, adapter_name, exchange_id, environment, amounts
+    adapter_module, adapter_name, adapter_id, environment, amounts
 ):
     from dataclasses import replace
 
     from cryptotrader.execution.service import VenueExecutionService
     from tests.test_execution_service import _venue_plan
 
-    fake_factory = FakeCcxtFactory(exchange_id)
+    fake_factory = FakeCcxtFactory(adapter_id)
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
-        connection("dual", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        connection("dual", environment, adapter_id=adapter_id, credential_ref="credentials"),
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
     client = fake_factory.clients[-1]
@@ -135,17 +135,17 @@ async def test_ccxt_rejects_simultaneous_nonzero_hedge_legs_before_flat_executio
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo"),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet"),
     ],
 )
-async def test_ccxt_keeps_one_nonzero_hedge_leg_supported(adapter_module, adapter_name, exchange_id, environment):
-    fake_factory = FakeCcxtFactory(exchange_id)
+async def test_ccxt_keeps_one_nonzero_hedge_leg_supported(adapter_module, adapter_name, adapter_id, environment):
+    fake_factory = FakeCcxtFactory(adapter_id)
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
-        connection("one-leg", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        connection("one-leg", environment, adapter_id=adapter_id, credential_ref="credentials"),
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
 
@@ -252,19 +252,19 @@ async def test_malformed_open_orders_top_level_shape_is_a_safe_operation_error()
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo"),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet"),
     ],
 )
 async def test_inverse_contract_is_rejected_before_precision_or_configuration(
-    adapter_module, adapter_name, exchange_id, environment
+    adapter_module, adapter_name, adapter_id, environment
 ):
-    fake_factory = FakeCcxtFactory(exchange_id)
+    fake_factory = FakeCcxtFactory(adapter_id)
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
-        connection("inverse", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        connection("inverse", environment, adapter_id=adapter_id, credential_ref="credentials"),
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
 
@@ -279,19 +279,19 @@ async def test_inverse_contract_is_rejected_before_precision_or_configuration(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment", "expected"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment", "expected"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo", Decimal("0.12")),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet", Decimal("0.123")),
     ],
 )
 async def test_normalize_amount_round_trips_platform_units_back_to_safe_base_amount(
-    adapter_module, adapter_name, exchange_id, environment, expected
+    adapter_module, adapter_name, adapter_id, environment, expected
 ):
-    fake_factory = FakeCcxtFactory(exchange_id)
+    fake_factory = FakeCcxtFactory(adapter_id)
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
-        connection("normalize", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        connection("normalize", environment, adapter_id=adapter_id, credential_ref="credentials"),
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
 
@@ -325,22 +325,22 @@ async def test_normalize_amount_rejects_zero_unsafe_rounding_and_inverse_contrac
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo"),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet"),
     ],
 )
 async def test_margin_mode_and_leverage_are_configured_once_before_first_market_order(
-    adapter_module, adapter_name, exchange_id, environment
+    adapter_module, adapter_name, adapter_id, environment
 ):
-    fake_factory = FakeCcxtFactory(exchange_id)
+    fake_factory = FakeCcxtFactory(adapter_id)
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
         connection(
             "configured",
             environment,
-            adapter_id=exchange_id,
+            adapter_id=adapter_id,
             credential_ref="credentials",
             margin_mode="cross",
             leverage=7,
@@ -355,7 +355,7 @@ async def test_margin_mode_and_leverage_are_configured_once_before_first_market_
     calls = fake_factory.clients[-1].calls
     configuration = [(name, payload) for name, payload in calls if name in {"set_margin_mode", "set_leverage"}]
     assert len([item for item in configuration if item[0] == "set_margin_mode"]) == 1
-    if exchange_id == "bybit":
+    if adapter_id == "bybit":
         assert len([item for item in configuration if item[0] == "set_leverage"]) == 1
         assert configuration == [
             ("set_margin_mode", ("cross", None, {})),
@@ -373,19 +373,19 @@ async def test_margin_mode_and_leverage_are_configured_once_before_first_market_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("adapter_module", "adapter_name", "exchange_id", "environment", "expected_equity"),
+    ("adapter_module", "adapter_name", "adapter_id", "environment", "expected_equity"),
     [
         ("cryptotrader.venues.okx", "OkxVenueAdapter", "okx", "demo", "12345.67"),
         ("cryptotrader.venues.bybit", "BybitVenueAdapter", "bybit", "testnet", "23456.78"),
     ],
 )
 async def test_portfolio_uses_account_equity_and_marks_spot_at_current_quote(
-    adapter_module, adapter_name, exchange_id, environment, expected_equity
+    adapter_module, adapter_name, adapter_id, environment, expected_equity
 ):
-    fake_factory = FakeCcxtFactory(exchange_id)
+    fake_factory = FakeCcxtFactory(adapter_id)
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
-        connection("portfolio", environment, adapter_id=exchange_id, credential_ref="credentials"),
+        connection("portfolio", environment, adapter_id=adapter_id, credential_ref="credentials"),
         CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
     )
 

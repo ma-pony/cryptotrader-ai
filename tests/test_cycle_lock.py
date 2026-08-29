@@ -1,6 +1,6 @@
 """Tests for the per-pair cycle lock used to prevent concurrent runs.
 
-Production observation 2026-05-02: a manual ``arena run`` started while the
+Production observation 2026-05-02: a manual ``trader run`` started while the
 launchd scheduler was processing a freshly-restarted cycle produced two
 concurrent ETH/USDT close decisions 426ms apart. The lock guarantees that
 only one cycle for a given pair can be in flight at a time.

@@ -11,24 +11,34 @@ import pytest
 
 class TestVerifyApiKey:
     @pytest.mark.asyncio
-    async def test_disabled_mode_short_circuits(self):
-        """AUTH_MODE=disabled returns early regardless of header — that's the test-env default."""
+    async def test_missing_runtime_fails_closed_as_service_unavailable(self):
+        from fastapi import HTTPException
+
         from api.dependencies import verify_api_key
 
-        with patch("api.dependencies.AUTH_MODE", "disabled"):
-            req = MagicMock()
-            req.method = "GET"
-            req.url.path = "/test"
-            await verify_api_key(req)  # no exception
+        req = MagicMock()
+        del req.app.state.runtime
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key(req)
+        assert exc_info.value.status_code == 503
+
+    @pytest.mark.asyncio
+    async def test_disabled_runtime_security_short_circuits(self):
+        from api.dependencies import verify_api_key
+
+        req = MagicMock()
+        req.app.state.runtime.snapshot.document.security.enabled = False
+        await verify_api_key(req)
 
     @pytest.mark.asyncio
     async def test_valid_key(self):
         from api.dependencies import verify_api_key
 
         req = MagicMock()
-        req.headers.get.return_value = "secret123"
-        with patch("api.dependencies.AUTH_MODE", "enabled"), patch("api.dependencies.API_KEY", "secret123"):
-            await verify_api_key(req)
+        req.headers.get.return_value = "runtime-test-key"
+        req.app.state.runtime.snapshot.document.security.enabled = True
+        req.app.state.runtime.snapshot.document.security.api_key = "runtime-test-key"  # pragma: allowlist secret
+        await verify_api_key(req)
 
     @pytest.mark.asyncio
     async def test_invalid_key(self):
@@ -38,10 +48,13 @@ class TestVerifyApiKey:
 
         req = MagicMock()
         req.headers.get.return_value = "wrong"
-        with patch("api.dependencies.AUTH_MODE", "enabled"), patch("api.dependencies.API_KEY", "secret123"):
-            with pytest.raises(HTTPException) as exc_info:
-                await verify_api_key(req)
-            assert exc_info.value.status_code == 401
+        req.app.state.runtime.snapshot.document.security.enabled = True
+        req.app.state.runtime.snapshot.document.security.api_key = (
+            "invalid-runtime-test-key"  # pragma: allowlist secret
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key(req)
+        assert exc_info.value.status_code == 401
 
 
 # ── cryptotrader/mcp/__init__.py ──
@@ -87,7 +100,7 @@ class TestBinanceAudit:
 
         from cryptotrader.data.binance_audit import BinanceAudit
 
-        audit = BinanceAudit()
+        audit = BinanceAudit(tax_threshold=10.0)
         mock_resp = MagicMock()
         mock_resp.json.return_value = {
             "code": "000000",
@@ -100,13 +113,7 @@ class TestBinanceAudit:
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
         mock_client.__aexit__ = AsyncMock(return_value=None)
 
-        cfg = MagicMock()
-        cfg.providers.token_tax_threshold = 10.0
-
-        with (
-            patch("httpx.AsyncClient", return_value=mock_client),
-            patch("cryptotrader.config.load_config", return_value=cfg),
-        ):
+        with patch("httpx.AsyncClient", return_value=mock_client):
             result = await audit.audit_token("TOKEN", "0xabc", "BSC")
         assert result["risk_level"] == "HIGH"
         assert result["is_honeypot"] is True
@@ -117,7 +124,7 @@ class TestBinanceAudit:
 
         from cryptotrader.data.binance_audit import BinanceAudit
 
-        audit = BinanceAudit()
+        audit = BinanceAudit(tax_threshold=10.0)
         mock_client = AsyncMock()
         mock_client.post = AsyncMock(side_effect=Exception("timeout"))
         mock_client.__aenter__ = AsyncMock(return_value=mock_client)
@@ -133,7 +140,7 @@ class TestBinanceAudit:
 
         from cryptotrader.data.binance_audit import BinanceAudit
 
-        audit = BinanceAudit()
+        audit = BinanceAudit(tax_threshold=10.0)
         mock_resp = MagicMock()
         mock_resp.json.return_value = {"code": "999999"}
         mock_resp.raise_for_status = MagicMock()

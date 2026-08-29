@@ -12,6 +12,9 @@ class BinanceAudit:
 
     CHAIN_MAP = {"BTC": "1", "ETH": "1", "BSC": "56", "BASE": "8453", "SOL": "CT_501"}
 
+    def __init__(self, *, tax_threshold: float) -> None:
+        self.tax_threshold = tax_threshold
+
     async def audit_token(self, symbol: str, contract_address: str, chain: str = "BSC") -> dict:
         """Audit token security.
 
@@ -67,10 +70,7 @@ class BinanceAudit:
         buy_tax = float(result.get("buyTax") or 0)
         sell_tax = float(result.get("sellTax") or 0)
 
-        from cryptotrader.config import load_config
-
-        tax_threshold = load_config().providers.token_tax_threshold
-        if buy_tax > tax_threshold or sell_tax > tax_threshold:
+        if buy_tax > self.tax_threshold or sell_tax > self.tax_threshold:
             issues.append(f"High tax: buy={buy_tax}%, sell={sell_tax}%")
             risk_level = "HIGH"
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from dataclasses import asdict, is_dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
@@ -20,7 +20,6 @@ from cryptotrader.signals.models import CandleRequirement, ComponentSignal, Data
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
 
-    from cryptotrader.config import AppConfig
     from cryptotrader.cycle_events import CycleEventSink
     from cryptotrader.runtime_config.models import RuntimeConfigDocument
 
@@ -35,6 +34,17 @@ class CommitteeState(TypedDict):
     debate_skip_reason: str
     consensus_metrics: dict[str, float]
     final_signal: ComponentSignal | None
+
+
+@dataclass(frozen=True)
+class DebateSettings:
+    max_rounds: int = 3
+    convergence_threshold: float = 0.1
+    divergence_hold_threshold: float = 0.7
+    skip_debate: bool = True
+    consensus_skip_threshold: float = 0.5
+    confusion_skip_threshold: float = 0.05
+    confusion_max_dispersion: float = 0.2
 
 
 def normalize_summary_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -57,7 +67,7 @@ class LLMCommitteeComponent:
 
     def __init__(
         self,
-        config: AppConfig | None,
+        config: Any | None,
         *,
         agents: Mapping[str, Any] | None = None,
         summary: Callable[[CommitteeState], Awaitable[Mapping[str, Any]]] | None = None,
@@ -413,13 +423,12 @@ def create_component(
 ) -> LLMCommitteeComponent:
     """Build the committee from database LLM settings without execution state."""
     from cryptotrader.agents.base import create_runtime_llm_factory
-    from cryptotrader.config import DebateConfig
 
     configured = next(item for item in document.signals.components if item.component_id == LLMCommitteeComponent.id)
     parameters = dict(configured.parameters)
     default_timeframe = str(parameters.pop("default_timeframe", "1h"))
     ohlcv_limit = int(parameters.pop("ohlcv_limit", 100))
-    debate = DebateConfig(**dict(parameters.pop("debate", {})))
+    debate = DebateSettings(**dict(parameters.pop("debate", {})))
     if parameters:
         unknown = ", ".join(sorted(parameters))
         raise ValueError(f"unsupported llm_committee parameters: {unknown}")

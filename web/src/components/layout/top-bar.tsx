@@ -43,8 +43,6 @@ const PATH_LABELS: Record<string, 'nav.dashboard' | 'nav.strategy' | 'nav.decisi
 
 const ApiKeyBadge = () => {
   const apiKey = useSettingsStore((s) => s.apiKey);
-  // SEC-I3: presence reflects only the in-memory store; VITE_API_KEY no longer
-  // contributes to runtime auth (forbidden in production builds).
   const present = apiKey.length > 0;
   return (
     <span

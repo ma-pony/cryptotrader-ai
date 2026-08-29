@@ -1,13 +1,13 @@
 """OpenTelemetry optional tracing infrastructure module.
 
-Only activates when env var OTLP_ENDPOINT is non-empty AND opentelemetry packages
-are installed. Otherwise all APIs degrade to no-op silently.
+Only activates when the active runtime document has an OTLP endpoint and the
+OpenTelemetry packages are installed. Otherwise all APIs degrade to no-op silently.
 
 Usage::
 
     from cryptotrader.otel import setup_otel, get_tracer
 
-    setup_otel("cryptotrader-ai")   # call once at lifespan / CLI entry
+    setup_otel(runtime.snapshot.document)   # call once at lifespan / CLI entry
 
     tracer = get_tracer()
     with tracer.start_as_current_span("my-span") as span:
@@ -62,11 +62,11 @@ _NOOP_TRACER = _NoOpTracer()
 # -- public API --
 
 
-def setup_otel(service_name: str = "cryptotrader-ai") -> None:
+def setup_otel(document=None, service_name: str = "cryptotrader-ai") -> None:
     """Initialize OpenTelemetry SDK.
 
     Activates only when both conditions are met:
-    1. Env var ``OTLP_ENDPOINT`` is non-empty
+    1. Runtime configuration includes an OTLP endpoint
     2. ``opentelemetry-sdk`` and ``opentelemetry-exporter-otlp-proto-grpc`` are installed
 
     When either condition is unmet, returns silently without raising.
@@ -76,11 +76,10 @@ def setup_otel(service_name: str = "cryptotrader-ai") -> None:
     """
     global _otel_active, _tracer
 
-    import os
-
-    endpoint = os.environ.get("OTLP_ENDPOINT", "").strip()
+    observability = getattr(document, "observability", None)
+    endpoint = str(observability.otlp_endpoint if observability else "").strip()
     if not endpoint:
-        logger.debug("OTLP_ENDPOINT not set, OTel running in no-op mode")
+        logger.debug("OTLP endpoint is not configured; OTel running in no-op mode")
         return
 
     try:

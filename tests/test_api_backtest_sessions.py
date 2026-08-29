@@ -14,8 +14,14 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
 
-    return TestClient(app, raise_server_exceptions=False)
+    previous = getattr(app.state, "runtime", None)
+    app.state.runtime = MagicMock(snapshot=MagicMock(document=minimal_runtime_document()))
+    try:
+        yield TestClient(app, raise_server_exceptions=False)
+    finally:
+        app.state.runtime = previous
 
 
 def _mock_config() -> MagicMock:
@@ -27,7 +33,6 @@ def _mock_config() -> MagicMock:
 class TestSessionsList:
     def test_returns_session_names(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch(
                 "cryptotrader.backtest.session.list_sessions",
                 return_value=["q1-rules-baseline", "q2-llm-aggressive"],
@@ -42,7 +47,6 @@ class TestSessionsList:
 
     def test_empty_when_no_sessions(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.backtest.session.list_sessions", return_value=[]),
         ):
             resp = client.get("/api/backtest/sessions")
@@ -76,7 +80,6 @@ class TestSessionDetail:
             "saved_at": "2026-04-16T13:08:42Z",
         }
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.backtest.session.load_session", return_value=loaded),
         ):
             resp = client.get("/api/backtest/sessions/q1-rules-baseline")
@@ -89,7 +92,6 @@ class TestSessionDetail:
 
     def test_404_when_session_unknown(self, client: TestClient) -> None:
         with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("cryptotrader.backtest.session.load_session", return_value=None),
         ):
             resp = client.get("/api/backtest/sessions/never-existed")

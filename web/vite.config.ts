@@ -8,25 +8,8 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
 
-// SEC-I3: Reject `VITE_API_KEY` at production build time.
-// Vite inlines `VITE_*` env vars into the JS bundle, so any value set during
-// `pnpm build` would be world-readable in the deployed bundle. The runtime
-// `useSettingsStore` (in-memory only) is the sole intended source of API keys.
-const forbidBakedApiKey = {
-  name: 'forbid-baked-api-key',
-  config(_config: unknown, { command, mode }: { command: string; mode: string }) {
-    if (command === 'build' && mode === 'production' && process.env.VITE_API_KEY) {
-      throw new Error(
-        'VITE_API_KEY is set during a production build. ' +
-          'API keys must be entered at runtime via the Settings UI to avoid bundle exposure. ' +
-          'Unset VITE_API_KEY before running `pnpm build`.',
-      );
-    }
-  },
-};
-
 export default defineConfig({
-  plugins: [react(), forbidBakedApiKey],
+  plugins: [react()],
   resolve: {
     alias: {
       '@': path.resolve(__dirname, './src'),

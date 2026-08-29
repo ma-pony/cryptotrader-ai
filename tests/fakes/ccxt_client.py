@@ -8,8 +8,8 @@ from typing import Any
 
 
 class FakeCcxtClient:
-    def __init__(self, exchange_id: str, config: dict[str, Any]) -> None:
-        self.id = exchange_id
+    def __init__(self, adapter_id: str, config: dict[str, Any]) -> None:
+        self.id = adapter_id
         self.config = deepcopy(config)
         self.headers: dict[str, str] = {}
         self.urls = {
@@ -19,7 +19,7 @@ class FakeCcxtClient:
         }
         self.markets = {
             "BTC/USDT": {
-                "id": "BTCUSDT" if exchange_id == "bybit" else "BTC-USDT",
+                "id": "BTCUSDT" if adapter_id == "bybit" else "BTC-USDT",
                 "symbol": "BTC/USDT",
                 "spot": True,
                 "swap": False,
@@ -27,17 +27,17 @@ class FakeCcxtClient:
                 "precision": {"amount": "0.001", "price": "0.1"},
             },
             "BTC/USDT:USDT": {
-                "id": "BTCUSDT" if exchange_id == "bybit" else "BTC-USDT-SWAP",
+                "id": "BTCUSDT" if adapter_id == "bybit" else "BTC-USDT-SWAP",
                 "symbol": "BTC/USDT:USDT",
                 "spot": False,
                 "swap": True,
                 "linear": True,
                 "inverse": False,
-                "contractSize": "1" if exchange_id == "bybit" else "0.01",
-                "precision": {"amount": "0.001" if exchange_id == "bybit" else "1", "price": "0.1"},
+                "contractSize": "1" if adapter_id == "bybit" else "0.01",
+                "precision": {"amount": "0.001" if adapter_id == "bybit" else "1", "price": "0.1"},
             },
             "BTC/USD:BTC": {
-                "id": "BTCUSD" if exchange_id == "bybit" else "BTC-USD-SWAP",
+                "id": "BTCUSD" if adapter_id == "bybit" else "BTC-USD-SWAP",
                 "symbol": "BTC/USD:BTC",
                 "spot": False,
                 "swap": True,
@@ -59,9 +59,9 @@ class FakeCcxtClient:
                 "symbol": "BTC/USDT:USDT",
                 "type": "limit",
                 "side": "buy",
-                "amount": "0.03" if exchange_id == "bybit" else "3",
-                "filled": "0.01" if exchange_id == "bybit" else "1",
-                "remaining": "0.02" if exchange_id == "bybit" else "2",
+                "amount": "0.03" if adapter_id == "bybit" else "3",
+                "filled": "0.01" if adapter_id == "bybit" else "1",
+                "remaining": "0.02" if adapter_id == "bybit" else "2",
                 "average": "49900",
                 "price": "49900",
                 "status": "open",
@@ -72,7 +72,7 @@ class FakeCcxtClient:
         self._okx_algos: list[dict[str, Any]] = []
         self._bybit_stop_loss = "0"
         self._bybit_take_profit = "0"
-        self.position_contracts = "0.02" if exchange_id == "bybit" else "2"
+        self.position_contracts = "0.02" if adapter_id == "bybit" else "2"
         self.position_index = 1
         self.position_side = "long"
         self.hedged = True
@@ -299,13 +299,13 @@ class FakeCcxtClient:
 
 
 class FakeCcxtFactory:
-    def __init__(self, exchange_id: str) -> None:
-        self.exchange_id = exchange_id
+    def __init__(self, adapter_id: str) -> None:
+        self.adapter_id = adapter_id
         self.configs: list[dict[str, Any]] = []
         self.clients: list[FakeCcxtClient] = []
 
     def __call__(self, config: dict[str, Any]) -> FakeCcxtClient:
         self.configs.append(deepcopy(config))
-        client = FakeCcxtClient(self.exchange_id, config)
+        client = FakeCcxtClient(self.adapter_id, config)
         self.clients.append(client)
         return client

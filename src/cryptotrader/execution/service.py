@@ -33,7 +33,6 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from cryptotrader.decision.models import ExecutionPlan
-    from cryptotrader.execution.exchange import ExchangeAdapter
     from cryptotrader.execution.order import OrderManager
     from cryptotrader.signals.models import SignalContext
     from cryptotrader.venues.protocol import VenueSession
@@ -43,7 +42,7 @@ if TYPE_CHECKING:
 class ExecutionOrderResult:
     intent: OrderIntent
     status: str
-    exchange_id: str | None
+    venue_order_id: str | None
     raw: Mapping[str, Any] = field(default_factory=dict)
     filled_amount: float = 0.0
 
@@ -70,12 +69,12 @@ class ExecutionService:
     def __init__(
         self,
         orders: OrderManager,
-        exchange: ExchangeAdapter,
+        venue: Any,
         *,
         manage_protection: bool = True,
     ) -> None:
         self.orders = orders
-        self.exchange = exchange
+        self.venue = venue
         self.manage_protection = manage_protection
 
     async def execute(self, plan: ExecutionPlan, context: SignalContext) -> ExecutionResult:
@@ -118,7 +117,7 @@ class ExecutionService:
         )
 
     async def process_pending_protection(self, context: SignalContext) -> ProtectionTriggerResult | None:
-        processor = getattr(self.exchange, "process_pending_protection", None)
+        processor = getattr(self.venue, "process_pending_protection", None)
         if processor is None:
             return None
         return await processor(context)
@@ -137,7 +136,7 @@ class ExecutionService:
         final_signed_amount: float,
         pair: str,
     ) -> tuple[str, ...] | ExecutionResult:
-        supports_protection = self.exchange.supports_protection_orders()
+        supports_protection = self.venue.capabilities.native_protection
         if abs(final_signed_amount) >= 1e-12:
             if not supports_protection:
                 return ExecutionResult(False, (), None, "protection orders are unsupported by this exchange")
@@ -235,7 +234,7 @@ class ExecutionService:
     ) -> ExecutionResult:
         pos_side = "long" if final_signed_amount > 0.0 else "short"
         try:
-            algo_id = await self.exchange.place_algo_oco(
+            algo_id = await self.venue.place_algo_oco(
                 pair,
                 side="sell" if pos_side == "long" else "buy",
                 amount=abs(final_signed_amount),
@@ -322,13 +321,13 @@ class ExecutionService:
             price=price,
             reduce_only=intent.reduce_only,
         )
-        placed, raw = await self.orders.place(order, self.exchange)
+        placed, raw = await self.orders.place(order, self.venue)
         filled_amount = self._filled_amount(intent, placed, raw)
         results.append(
             ExecutionOrderResult(
                 intent=intent,
                 status=placed.status.value,
-                exchange_id=placed.exchange_id,
+                venue_order_id=placed.venue_order_id,
                 raw=raw,
                 filled_amount=filled_amount,
             )
@@ -396,7 +395,7 @@ class ExecutionService:
         return None
 
     async def _pending_algo_ids(self, pair: str) -> tuple[str, ...]:
-        pending = await self.exchange.list_pending_algos(pair=pair)
+        pending = await self.venue.list_pending_algos(pair=pair)
         return tuple(str(algo_id) for item in pending for algo_id in (item.get("algoId") or item.get("id"),) if algo_id)
 
     async def _cancel_algos(
@@ -406,7 +405,7 @@ class ExecutionService:
     ) -> tuple[tuple[str, ...], Exception | None]:
         for index, algo_id in enumerate(algo_ids):
             try:
-                await self.exchange.cancel_algo(algo_id, pair)
+                await self.venue.cancel_algo(algo_id, pair)
             except Exception as error:
                 return algo_ids[index:], error
         return (), None

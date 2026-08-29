@@ -63,7 +63,7 @@ async def test_place_success(mgr):
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
     result, _raw = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.FILLED
-    assert result.exchange_id == "abc123"
+    assert result.venue_order_id == "abc123"
 
 
 @pytest.mark.asyncio
@@ -99,4 +99,4 @@ async def test_place_open_stays_submitted(mgr):
     order = Order(pair="BTC/USDT", side="buy", amount=0.1, price=50000)
     result, _ = await mgr.place(order, MockExchange())
     assert result.status == OrderStatus.SUBMITTED
-    assert result.exchange_id == "abc789"
+    assert result.venue_order_id == "abc789"

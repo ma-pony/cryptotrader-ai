@@ -55,7 +55,7 @@ class FakeMarketCollector:
     def __init__(self) -> None:
         self.calls = []
 
-    async def collect(self, pair, exchange_id, timeframe, limit):
+    async def collect(self, pair, market_adapter_id, timeframe, limit):
         self.calls.append((pair, timeframe, limit))
         return _market(rows=limit, start="2025-12-01", price=101.0)
 
@@ -76,7 +76,7 @@ async def test_live_provider_materializes_each_required_timeframe_once():
 
     aggregator = FakeSnapshotAggregator()
     market = FakeMarketCollector()
-    provider = LiveSignalContextProvider(aggregator, market, exchange_id="okx", default_timeframe="1h")
+    provider = LiveSignalContextProvider(aggregator, market, market_adapter_id="okx", default_timeframe="1h")
 
     context = await provider.collect(PAIR, AS_OF, _requirements())
 

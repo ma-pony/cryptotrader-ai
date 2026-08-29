@@ -21,7 +21,6 @@ import type {
   ConsensusMetricsSchema,
   CooldownSchema,
   CorrelationGroupSchema,
-  CycleExecutionResultSchema,
   CycleRiskResultSchema,
   CycleStatusSchema,
   DailyCostPointSchema,
@@ -49,7 +48,6 @@ import type {
   CredentialMutationSchema,
   ConnectionHealthSchema,
   TargetPositionSchema,
-  TradePlanSchema,
   TriggerEventSchema,
   TriggerTypeSchema,
 } from './api.schema';
@@ -73,9 +71,7 @@ export type ComponentSignal = z.output<typeof ComponentSignalSchema>;
 export type ComponentContribution = z.output<typeof ComponentContributionSchema>;
 export type FusedSignal = z.output<typeof FusedSignalSchema>;
 export type TargetPosition = z.output<typeof TargetPositionSchema>;
-export type TradePlan = z.output<typeof TradePlanSchema>;
 export type CycleRiskResult = z.output<typeof CycleRiskResultSchema>;
-export type CycleExecutionResult = z.output<typeof CycleExecutionResultSchema>;
 
 // §4 Backtest
 export type BacktestParams = z.output<typeof BacktestParamsSchema>;

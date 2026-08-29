@@ -10,14 +10,10 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-
-os.environ.setdefault("AUTH_MODE", "disabled")
-os.environ.setdefault("API_KEY", "test-key-024")
 
 # ── Pattern MD 模板 ────────────────────────────────────────────────────────────
 

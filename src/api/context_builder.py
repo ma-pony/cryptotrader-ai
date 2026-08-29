@@ -6,7 +6,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from cryptotrader.config import AppConfig
+    from cryptotrader.runtime_config.models import LlmConfig
 
 logger = logging.getLogger(__name__)
 
@@ -14,15 +14,15 @@ logger = logging.getLogger(__name__)
 def build_multimodal_messages(
     payloads: list[dict[str, Any]],
     model: str,
-    config: AppConfig,
+    config: LlmConfig,
 ) -> tuple[list, bool]:
     """Build LangChain-compatible messages from chart capture payloads.
 
     Returns (messages, degraded) where degraded=True when an image was
     too large and was dropped.
     """
-    vision_models = config.chart_analysis.vision_models
-    max_bytes = config.chart_analysis.max_image_bytes
+    vision_models = config.vision_models
+    max_bytes = config.max_image_bytes
     supports_vision = model in vision_models
 
     content_blocks: list[str | dict[str, Any]] = []

@@ -1,12 +1,6 @@
-"""CLI entry point — arena command."""
+"""CLI entry point."""
 
 from __future__ import annotations
-
-# Load the two bootstrap settings before project imports so Runtime-backed
-# commands can resolve DATABASE_URL and CONFIG_MASTER_KEY from a local .env.
-from dotenv import load_dotenv
-
-load_dotenv()
 
 import asyncio
 import logging
@@ -16,7 +10,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-app = typer.Typer(name="arena", help="CryptoTrader AI — pluggable signal fusion trading")
+app = typer.Typer(name="trader", help="CryptoTrader AI — pluggable signal fusion trading")
 console = Console()
 logger = logging.getLogger(__name__)
 
@@ -77,7 +71,7 @@ async def _run_one_pair(pair: str, cycle) -> None:
     from cryptotrader.tracing import set_trace_id
 
     trace_id = set_trace_id()
-    console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] trace=[dim]{trace_id}[/dim]")
+    console.print(f"\n[bold]Trader[/bold] analyzing [cyan]{pair}[/cyan] trace=[dim]{trace_id}[/dim]")
 
     try:
         outcome = await cycle.run(CycleRequest(Pair.parse(pair)))

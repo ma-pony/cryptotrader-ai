@@ -90,6 +90,10 @@ def active_document() -> RuntimeConfigDocument:
 
 def active_payload() -> dict:
     payload = active_document().model_dump(mode="json")
+    # The public config write contract excludes server-owned security and
+    # observability settings.  Credentials use their dedicated endpoint.
+    payload.pop("security")
+    payload.pop("observability")
     for connection in payload["execution"]["connections"]:
         connection.pop("credential_ref")
     return payload

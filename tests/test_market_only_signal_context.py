@@ -12,7 +12,7 @@ from tests.factories.runtime_config import market_config
 
 
 class _MarketOnlyGuard:
-    _forbidden = {"exchange_id", "equity", "current_position", "portfolio"}
+    _forbidden = {"equity", "current_position", "portfolio"}
 
     def __init__(self, context) -> None:
         for name in (
@@ -35,7 +35,7 @@ class _MarketOnlyGuard:
 @pytest.mark.asyncio
 async def test_default_market_source_builds_context_from_explicit_public_source_without_network():
     from cryptotrader.market_sources.default import DefaultMarketDataSource
-    from tests.test_kronos_component import _snapshot
+    from tests.test_runtime_signal_components import _snapshot
 
     class FakeMarketCollector:
         def __init__(self) -> None:
@@ -56,7 +56,7 @@ async def test_default_market_source_builds_context_from_explicit_public_source_
 
     aggregator = FakeAggregator()
     source = DefaultMarketDataSource(
-        market_config(parameters={"exchange_id": "binance"}),
+        market_config(parameters={"market_adapter_id": "binance"}),
         aggregator=aggregator,
         clock=lambda: as_of,
     )
@@ -77,7 +77,7 @@ async def test_default_market_source_builds_context_from_explicit_public_source_
     assert aggregator.calls == [
         {
             "pair": "BTC/USDT:USDT",
-            "exchange_id": "binance",
+            "market_adapter_id": "binance",
             "timeframe": "4h",
             "limit": 20,
             "backtest_mode": False,
@@ -104,7 +104,7 @@ async def test_default_market_source_rejects_historical_as_of_before_collection(
     aggregator = FakeAggregator()
     now = datetime(2026, 1, 1, 12, tzinfo=UTC)
     source = DefaultMarketDataSource(
-        market_config(parameters={"exchange_id": "binance"}),
+        market_config(parameters={"market_adapter_id": "binance"}),
         aggregator=aggregator,
         clock=lambda: now,
     )
@@ -121,9 +121,9 @@ async def test_default_market_source_rejects_historical_as_of_before_collection(
 
 @pytest.mark.asyncio
 async def test_kronos_does_not_read_execution_account_fields():
-    from tests.test_kronos_component import _component, _context
+    from tests.test_runtime_signal_components import _kronos, _kronos_context
 
-    result = await _component(probability=0.49).evaluate(_MarketOnlyGuard(_context()))
+    result = await _kronos(probability=0.49).evaluate(_MarketOnlyGuard(_kronos_context()))
 
     assert result.component_id == "kronos"
     assert result.direction == "neutral"
@@ -131,8 +131,10 @@ async def test_kronos_does_not_read_execution_account_fields():
 
 @pytest.mark.asyncio
 async def test_llm_committee_debate_does_not_read_execution_account_fields():
-    from cryptotrader.signals.components.llm_committee import LLMCommitteeComponent
-    from tests.test_llm_committee_component import RecordingSink, _agents, _config, _context, _summary
+    from cryptotrader.signals.components.llm_committee import DebateSettings, LLMCommitteeComponent
+    from tests.test_runtime_signal_components import _committee_agents as _agents
+    from tests.test_runtime_signal_components import _committee_context as _context
+    from tests.test_runtime_signal_components import _Sink as RecordingSink
 
     debate_calls = []
 
@@ -150,12 +152,19 @@ async def test_llm_committee_debate_does_not_read_execution_account_fields():
             "errored": False,
         }
 
+    async def summary(_):
+        return {"direction": "neutral", "confidence": 0.0, "reasoning": "market-only"}
+
     component = LLMCommitteeComponent(
-        _config(rounds=1),
+        None,
         agents=_agents(),
-        summary=_summary,
+        summary=summary,
         challenger=challenger,
         sink=RecordingSink(),
+        default_timeframe="1h",
+        ohlcv_limit=100,
+        debate=DebateSettings(max_rounds=1, skip_debate=False, consensus_skip_threshold=0.5),
+        models=object(),
     )
 
     result = await component.evaluate(_MarketOnlyGuard(_context()))

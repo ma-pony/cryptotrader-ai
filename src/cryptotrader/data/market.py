@@ -63,14 +63,10 @@ def clip_ohlcv_at(frame: pd.DataFrame, as_of: datetime, limit: int | None = None
 
 
 class MarketCollector:
-    async def latest_price(self, pair: str, exchange_id: str = "") -> float:
+    async def latest_price(self, pair: str, market_adapter_id: str) -> float:
         """Read one current public ticker without collecting a new snapshot."""
-        if not exchange_id:
-            from cryptotrader.config import load_config
-
-            exchange_id = load_config().exchange_id
-        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)(
-            {"options": {"fetchMarkets": fetch_market_types(exchange_id)}}
+        exchange: ccxt.Exchange = getattr(ccxt, market_adapter_id)(
+            {"options": {"fetchMarkets": fetch_market_types(market_adapter_id)}}
         )
         try:
             await exchange.load_markets()
@@ -93,7 +89,7 @@ class MarketCollector:
     async def collect(
         self,
         pair: str,
-        exchange_id: str = "",
+        market_adapter_id: str,
         timeframe: str = "1h",
         limit: int = 100,
         date: str | None = None,
@@ -103,19 +99,14 @@ class MarketCollector:
         Args:
             date: If provided, use date-specific store lookup (backtest mode).
         """
-        if not exchange_id:
-            from cryptotrader.config import load_config
-
-            exchange_id = load_config().exchange_id
-
         # Check OHLCV cache first
         ohlcv_key = f"ohlcv_{pair.replace('/', '_')}_{timeframe}"
         cached_ohlcv = get_cached_or_none(ohlcv_key, date=date)
 
         # fetchMarkets restricts load_markets to types we actually use — see
         # comment in execution/exchange.py for why future/option are excluded.
-        exchange: ccxt.Exchange = getattr(ccxt, exchange_id)(
-            {"options": {"fetchMarkets": fetch_market_types(exchange_id)}}
+        exchange: ccxt.Exchange = getattr(ccxt, market_adapter_id)(
+            {"options": {"fetchMarkets": fetch_market_types(market_adapter_id)}}
         )
         try:
             await exchange.load_markets()
@@ -196,30 +187,30 @@ class MarketDataService:
     route falls back gracefully on missing data.
     """
 
-    async def get_market_snapshot(self, pair: str, exchange_id: str) -> dict:
+    async def get_market_snapshot(self, pair: str, market_adapter_id: str) -> dict:
         snapshot: dict = {
             "funding_rate": None,
             "open_interest": None,
             "liquidations_long_24h": 0.0,
             "liquidations_short_24h": 0.0,
         }
-        exchange_cls = getattr(ccxt, exchange_id, None)
+        exchange_cls = getattr(ccxt, market_adapter_id, None)
         if exchange_cls is None:
             return snapshot
-        ex = exchange_cls({"enableRateLimit": True, "options": {"fetchMarkets": fetch_market_types(exchange_id)}})
+        ex = exchange_cls({"enableRateLimit": True, "options": {"fetchMarkets": fetch_market_types(market_adapter_id)}})
         try:
             try:
                 fr = await ex.fetch_funding_rate(pair)
                 snapshot["funding_rate"] = fr.get("fundingRate") if isinstance(fr, dict) else None
             except Exception:
-                logger.warning("funding_rate fetch failed for %s on %s", pair, exchange_id, exc_info=True)
+                logger.warning("funding_rate fetch failed for %s on %s", pair, market_adapter_id, exc_info=True)
             try:
                 oi = await ex.fetch_open_interest(pair)
                 snapshot["open_interest"] = (
                     oi.get("openInterestAmount") or oi.get("openInterest") if isinstance(oi, dict) else None
                 )
             except Exception:
-                logger.warning("open_interest fetch failed for %s on %s", pair, exchange_id, exc_info=True)
+                logger.warning("open_interest fetch failed for %s on %s", pair, market_adapter_id, exc_info=True)
         finally:
             await ex.close()
         return snapshot

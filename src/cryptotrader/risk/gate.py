@@ -188,7 +188,7 @@ class RiskGate:
             FundingRateGate(config.volatility),
             RateLimitCheck(config.rate_limit, redis_state),
             ExchangeHealthCheck(config.exchange),
-            TokenSecurityCheck(),
+            TokenSecurityCheck(tax_threshold=config.token_tax_threshold),
         ]
         self._checks = list(checks) if checks is not None else default_checks
 

@@ -57,7 +57,7 @@ class TradingCycleRecord:
                 "pair",
                 "as_of",
                 "mode",
-                "exchange_id",
+                "market_data_source_id",
                 "market_type",
                 "equity",
                 "current_price",
@@ -66,7 +66,7 @@ class TradingCycleRecord:
                 "portfolio",
             }
         elif available is False:
-            required = {"pair", "as_of", "mode", "exchange_id"}
+            required = {"pair", "as_of", "mode", "market_data_source_id"}
         else:
             raise ValueError("context_summary must declare availability")
         missing = required - self.context_summary.keys()

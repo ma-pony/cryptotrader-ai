@@ -36,17 +36,8 @@ services:
     ports:
       - "${API_BIND_ADDRESS:-127.0.0.1}:8003:8003"
     environment:
-      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
-      CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
-      # Local Compose is loopback-only and runnable without a secret file.
-      # Production MUST override AUTH_MODE=enabled and set a strong API_KEY.
-      AUTH_MODE: ${AUTH_MODE:-disabled}
-      API_KEY: ${API_KEY:-}
-      # Disable Swagger UI and ReDoc in production to prevent schema leakage (Req 7.6)
-      DOCS_ENABLED: "false"
-    env_file:
-      - path: .env
-        required: false
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
+      CONFIG_MASTER_KEY: ${CONFIG_MASTER_KEY:?CONFIG_MASTER_KEY is required}
     volumes:
       - ctdata:/home/appuser/.cryptotrader
     depends_on:
@@ -89,14 +80,10 @@ services:
 
   scheduler:
     build: .
-    command: arena scheduler start
+    command: trader scheduler start
     environment:
-      CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
-      CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL: redis://redis:6379
-      HF_HOME: /home/appuser/.cache/huggingface
-    env_file:
-      - path: .env
-        required: false
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
+      CONFIG_MASTER_KEY: ${CONFIG_MASTER_KEY:?CONFIG_MASTER_KEY is required}
     volumes:
       - ctdata:/home/appuser/.cryptotrader
       - hf_cache:/home/appuser/.cache/huggingface
@@ -108,7 +95,7 @@ services:
     # Heartbeat-based liveness: scheduler writes scheduler.heartbeat after each
     # cycle; check fails if file age > 2× interval (default ≥120s).
     healthcheck:
-      test: ["CMD", "arena", "scheduler", "healthcheck"]
+      test: ["CMD", "trader", "scheduler", "healthcheck"]
       interval: 60s
       timeout: 10s
       retries: 3

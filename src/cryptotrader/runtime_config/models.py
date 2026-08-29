@@ -55,6 +55,11 @@ class SystemConfig(_FrozenConfigModel):
     active: bool = False
 
 
+class SecurityConfig(_FrozenConfigModel):
+    enabled: bool = False
+    api_key: str = ""
+
+
 class MarketDataConfig(_ParameterConfigModel):
     source_id: str = "default"
 
@@ -90,6 +95,8 @@ class LlmConfig(_FrozenConfigModel):
     default_temperature: float = 0.2
     timeout: int = 120
     prompt_caching: bool = True
+    vision_models: tuple[str, ...] = ()
+    max_image_bytes: int = 4_000_000
     retry: LlmRetryConfig = Field(default_factory=LlmRetryConfig)
     model_costs: tuple[LlmModelCostConfig, ...] = ()
     models: LlmModelsConfig = Field(default_factory=LlmModelsConfig)
@@ -162,6 +169,7 @@ class RateLimitConfig(_FrozenConfigModel):
 
 class RiskConfig(_FrozenConfigModel):
     max_stop_loss_pct: float = 0.05
+    token_tax_threshold: float = 10.0
     position: PositionConfig = Field(default_factory=PositionConfig)
     loss: LossConfig = Field(default_factory=LossConfig)
     cooldown: CooldownConfig = Field(default_factory=CooldownConfig)
@@ -255,8 +263,13 @@ class InfrastructureConfig(_FrozenConfigModel):
     redis_url: str = ""
 
 
+class ObservabilityConfig(_FrozenConfigModel):
+    otlp_endpoint: str = ""
+
+
 class RuntimeConfigDocument(_FrozenConfigModel):
     system: SystemConfig
+    security: SecurityConfig = Field(default_factory=SecurityConfig)
     market_data: MarketDataConfig
     llm: LlmConfig = Field(default_factory=LlmConfig)
     signals: SignalConfig
@@ -267,6 +280,7 @@ class RuntimeConfigDocument(_FrozenConfigModel):
     triggers: TriggerConfig = Field(default_factory=TriggerConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
     infrastructure: InfrastructureConfig = Field(default_factory=InfrastructureConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
 
 
 @dataclass(frozen=True)

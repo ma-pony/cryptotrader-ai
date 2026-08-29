@@ -19,8 +19,8 @@ class TokenSecurityCheck:
 
     name = "token_security"
 
-    def __init__(self):
-        self.audit = BinanceAudit()
+    def __init__(self, *, tax_threshold: float):
+        self.audit = BinanceAudit(tax_threshold=tax_threshold)
 
     async def evaluate(self, request: RiskRequest, portfolio: dict) -> RiskCheckResult:
         """Check if token passes security audit."""

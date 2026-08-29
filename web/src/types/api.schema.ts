@@ -178,14 +178,6 @@ export const FusedSignalSchema = z.object({
   contributions: z.array(ComponentContributionSchema),
 });
 
-export const TradePlanSchema = z.object({
-  target: TargetPositionSchema,
-  stop_loss: z.number().nullable(),
-  take_profit: z.number().nullable(),
-  component_signals: z.array(ComponentSignalSchema),
-  fused_signal: FusedSignalSchema,
-});
-
 export const CycleRiskResultSchema = z.object({
   passed: z.boolean(),
   rejected_by: z.string(),
@@ -193,77 +185,6 @@ export const CycleRiskResultSchema = z.object({
   cap_source: z.string(),
   target: TargetPositionSchema,
 });
-
-export const ExecutionOrderResultSchema = z.object({
-  intent: z.object({
-    pair: z.string(),
-    side: z.enum(['buy', 'sell']),
-    amount: z.number(),
-    reduce_only: z.boolean(),
-  }),
-  status: z.string(),
-  exchange_id: z.string().nullable(),
-  raw: z.record(z.unknown()),
-  filled_amount: z.number().nonnegative().default(0),
-});
-
-export const CycleExecutionResultSchema = z.object({
-  succeeded: z.boolean(),
-  algo_id: z.string().nullable(),
-  error: z.string().nullable(),
-  retained_algo_ids: z.array(z.string()).default([]),
-  protection_trigger: z
-    .object({
-      algo_id: z.string(),
-      trigger_reason: z.string(),
-      trigger_price: z.number(),
-      order_id: z.string(),
-    })
-    .nullable()
-    .optional(),
-  orders: z.array(ExecutionOrderResultSchema),
-});
-
-const SignalContextPositionSchema = z
-  .object({
-    side: z.enum(['long', 'short', 'flat']),
-    amount: z.number(),
-    size_ratio: z.number(),
-    avg_price: z.number().nullable(),
-    unrealized_pnl: z.number(),
-  })
-  .strict();
-
-const AvailableSignalContextSchema = z
-  .object({
-    available: z.literal(true),
-    pair: z.string(),
-    as_of: z.string(),
-    mode: z.enum(['live', 'paper', 'backtest']),
-    exchange_id: z.string(),
-    market_type: MarketTypeSchema,
-    equity: z.number(),
-    current_price: z.number(),
-    atr: z.number(),
-    current_position: SignalContextPositionSchema,
-    portfolio: z.record(z.unknown()),
-  })
-  .strict();
-
-const UnavailableSignalContextSchema = z
-  .object({
-    available: z.literal(false),
-    pair: z.string(),
-    as_of: z.string().nullable(),
-    mode: z.enum(['live', 'paper', 'backtest']),
-    exchange_id: z.string(),
-  })
-  .strict();
-
-export const DecisionContextSchema = z.discriminatedUnion('available', [
-  AvailableSignalContextSchema,
-  UnavailableSignalContextSchema,
-]);
 
 // ── §4 Backtest (matches BacktestParams / BacktestRunStatus / sessions) ──
 

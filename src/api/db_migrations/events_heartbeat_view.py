@@ -77,10 +77,7 @@ async def apply(database_url: str) -> None:
 if __name__ == "__main__":
     import os
 
-    import dotenv
-
-    dotenv.load_dotenv()
-    db_url = os.environ.get("DATABASE_URL") or os.environ.get("CRYPTOTRADER_INFRASTRUCTURE__DATABASE_URL")
+    db_url = os.environ.get("DATABASE_URL")
     if not db_url:
         raise SystemExit("DATABASE_URL not set")
     asyncio.run(apply(db_url))

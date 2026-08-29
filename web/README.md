@@ -1,40 +1,47 @@
 # cryptotrader-web
 
-CryptoTrader-AI 前端 — React 19 + Vite 8 + TypeScript 5.9 + Tailwind 3 SPA。
+CryptoTrader AI 的 React 19、Vite 8、TypeScript 5.9 单页控制台。网页读取数据库运行时配置的脱敏视图；不读取本地前端环境文件，也不保存平台凭据或 API 密钥。
 
-提供监控/复盘/操作三类视图。
+## 本地开发
 
-## 快速开始
+先启动后端并提供唯一的两个引导变量：
+
+```bash
+export DATABASE_URL='postgresql+asyncpg://<db-user>:<db-password>@localhost:5432/cryptotrader'
+export CONFIG_MASTER_KEY='base64 编码的 32 字节密钥'
+uv run trader serve --port 8003
+```
+
+然后启动网页：
 
 ```bash
 pnpm install
-pnpm dev   # http://localhost:5173
+pnpm dev
 ```
 
-后端默认地址 `http://localhost:8003`（通过 `arena serve` 启动）。可在 `.env.local` 中覆盖：
+浏览器访问 `http://localhost:5173`。API 使用同源相对路径；开发服务器将请求转给本地 API，无需 `.env.local` 或 `VITE_*` 配置。
 
-```bash
-# .env.local — dev only, NEVER commit, NEVER use in production builds
-VITE_API_BASE_URL=http://localhost:8003
-VITE_API_KEY=dev-test-key   # 仅 dev 模式启动 hydrate 进 useSettingsStore
-```
+## 初始化与配置
+
+未激活的运行时会直接显示初始化向导。向导和配置页写入数据库 `runtime_config`，每次成功保存都会显示新的配置版本；冲突、校验和服务错误会留在页面上，当前运行配置不被覆盖。
+
+可在网页配置并查看：
+
+- 市场数据来源，以及 Kronos、四智能体内部辩论和自定义信号组件的权重与参数；
+- 同时存在的 Paper、Demo、Testnet、Live 平台连接及其只读连通性检查；
+- `simulated` 与 `real` 执行资金池、固定连接分配权重和每资金池 HITL；
+- 周期、融合结论、委员会辩论、资金池/连接执行结果及需要人工处理的状态。
+
+平台凭据只在提交时发送到后端加密存储，随后只显示是否已配置，永不回显。
 
 ## 脚本
 
-- `pnpm dev` — Vite 开发服务器
-- `pnpm build` — 生产构建（**会拒绝 `VITE_API_KEY` 非空**，参见 NFR-S-002）
-- `pnpm preview` — 本地预览生产构建
-- `pnpm lint` — ESLint 0 警告策略
-- `pnpm typecheck` — `tsc --noEmit`
-- `pnpm test` — Vitest 单元/组件测试
-- `pnpm test:e2e` — Playwright 端到端测试（需先 `docker compose up -d`）
+- `pnpm dev`：Vite 开发服务器。
+- `pnpm build`：生产构建。
+- `pnpm preview`：本地预览生产构建。
+- `pnpm lint`：ESLint。
+- `pnpm typecheck`：`tsc --noEmit`。
+- `pnpm test`：Vitest 单元与组件测试。
+- `pnpm test:e2e`：Playwright 端到端测试，需要已启动的本地服务。
 
-## 关键约束
-
-- **API key 仅运行时输入**：生产 bundle 永不打入 key（`vite.config.ts` 里 `forbid-baked-api-key` 插件强制）。用户在 Settings UI 输 key，存 `useSettingsStore`（in-memory only）。
-- **生产 sourcemap = `hidden`**：`.map` 文件可上传到私有 error tracker，但 JS bundle 不引用它，防止源码泄漏。
-- **TypeScript strict 模式**：`exactOptionalPropertyTypes` + `noUncheckedIndexedAccess` + `verbatimModuleSyntax` 全开。
-- **`useChatMessages` ≤ 500 行硬限**（NFR-M-007，目前 ~280 行）。
-- **主 bundle ≤ 300 KB gzipped**（NFR-P-002，目前 ~220 KB）。
-
-详细架构见仓库根 [`docs/frontend-architecture.md`](../docs/frontend-architecture.md)。
+详细前端架构见仓库根 [docs/frontend-architecture.md](../docs/frontend-architecture.md)。

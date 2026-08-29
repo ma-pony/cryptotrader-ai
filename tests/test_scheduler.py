@@ -70,7 +70,6 @@ def test_scheduler_uses_fixed_config_without_execution_identity_fields() -> None
     assert scheduler.interval_minutes == 60
     assert scheduler.daily_summary_hour == 2
     assert not hasattr(scheduler, "mode")
-    assert not hasattr(scheduler, "exchange_id")
 
 
 @pytest.mark.asyncio
