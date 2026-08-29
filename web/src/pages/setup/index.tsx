@@ -101,6 +101,7 @@ const SetupEditor = ({
   const [riskDirty, setRiskDirty] = useState(false);
   const [llmAdvanced, setLlmAdvanced] = useState(JSON.stringify({ streaming_models: initialDocument.llm.streaming_models, retry: initialDocument.llm.retry, model_costs: initialDocument.llm.model_costs, timeout_seconds: initialDocument.llm.models.timeout_seconds }, null, 2));
   const [llmError, setLlmError] = useState('');
+  const [llmAdvancedDirty, setLlmAdvancedDirty] = useState(false);
   const [activationError, setActivationError] = useState('');
 
   const enabledConnections = draft.execution.connections.filter((connection) => connection.enabled);
@@ -130,6 +131,8 @@ const SetupEditor = ({
     !marketError &&
     !riskDirty &&
     !riskError &&
+    !llmAdvancedDirty &&
+    !llmError &&
     !Object.values(componentParameterErrors).some(Boolean) &&
     !runtime.conflict;
 
@@ -201,8 +204,8 @@ const SetupEditor = ({
           <label>{t('wizard.defaultTemperature')}<input aria-label={t('wizard.defaultTemperature')} type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label>{t('wizard.timeout')}<input aria-label={t('wizard.timeout')} type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
-          <label className="md:col-span-2">{t('wizard.advanced')}<textarea aria-label={t('wizard.advanced')} value={llmAdvanced} onChange={(event) => setLlmAdvanced(event.target.value)} className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
-          <Button type="button" variant="outline" onClick={() => { try { const value = validateLlmAdvanced(JSON.parse(llmAdvanced)); if (!value) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); } catch { setLlmError(t('wizard.advancedInvalid')); } }}>{t('wizard.applyAdvanced')}</Button>
+          <label className="md:col-span-2">{t('wizard.advanced')}<textarea aria-label={t('wizard.advanced')} value={llmAdvanced} onChange={(event) => { setLlmAdvanced(event.target.value); setLlmAdvancedDirty(true); }} className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
+          <Button type="button" variant="outline" onClick={() => { try { const value = validateLlmAdvanced(JSON.parse(llmAdvanced)); if (!value) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); setLlmAdvancedDirty(false); } catch { setLlmError(t('wizard.advancedInvalid')); setLlmAdvancedDirty(true); } }}>{t('wizard.applyAdvanced')}</Button>
           {llmError ? <p role="alert" className="text-sm text-trade-short">{llmError}</p> : null}
         </div>
       );

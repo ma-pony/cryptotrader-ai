@@ -81,11 +81,12 @@ export const VenueForm = ({
     try {
       setError('');
       setCredentialSaving(true);
-      await venues.putCredentials({
+      const saved = await venues.putCredentials({
         id: connection.id,
         expectedRevision: revision,
         credentials: { api_key: apiKey, secret, ...(passphrase ? { passphrase } : {}) },
       });
+      setSavedNeedsReload(saved.savedNeedsReload);
       setApiKey('');
       setSecret('');
       setPassphrase('');

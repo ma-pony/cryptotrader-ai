@@ -6,6 +6,8 @@ import { useVenueConnections } from './use-venue-connections';
 import { VenueForm } from '@/pages/settings/venues/venue-form';
 import '@/lib/i18n';
 import i18n from '@/lib/i18n';
+import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
+import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 
 describe('venue connection write recovery', () => {
   it('keeps a successful create as saved when the follow-up config refresh fails', async () => {
@@ -26,6 +28,8 @@ describe('venue connection write recovery', () => {
       .mockResolvedValueOnce(new Response('down', { status: 503 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const base = runtimeConfigFixture();
+    client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, runtimeConfigFixture({ document: { ...base.document, execution: { ...base.document.execution, connections: [{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }] } } }));
     render(
       <QueryClientProvider client={client}>
         <VenueForm revision={1} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} }} />
@@ -38,6 +42,9 @@ describe('venue connection write recovery', () => {
     await waitFor(() => expect(screen.getByLabelText('访问 ID')).toHaveValue(''));
     expect(screen.getByLabelText('签名短语')).toHaveValue('');
     expect(screen.getByLabelText('Passphrase')).toHaveValue('');
+    expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toMatchObject({ revision: 2, document: { execution: { connections: [{ id: 'okx-demo', credential_configured: true, credential_updated_at: '2026-08-29T00:00:00Z' }] } } });
+    expect(screen.getByRole('status')).toHaveTextContent('连接已保存，但配置刷新失败；请重新加载后继续。');
+    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeDisabled();
     expect(JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables))).not.toContain('secret-marker');
   });
 
