@@ -11,6 +11,7 @@ import asyncio
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -50,7 +51,7 @@ def _safe_value(value: Any, key: str = "") -> Any:
     normalized = key.lower().replace("-", "_")
     if any(token in normalized for token in ("secret", "token", "key", "passphrase", "authorization", "credential")):
         return _REDACTED
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(item_key): _safe_value(item, str(item_key)) for item_key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_safe_value(item) for item in value]
@@ -94,11 +95,11 @@ async def inspect_residual(session, pair: Pair) -> dict[str, Any]:
     return {"residual": residual, "requires_attention": any(residual.values())}
 
 
-async def _cleanup(session, pair: Pair) -> dict[str, Any]:
+async def _cleanup(session, pair: Pair, *, canary_write_attempted: bool) -> dict[str, Any]:
     errors: list[str] = []
     try:
         state = await session.list_open_state(pair)
-        if state.position.signed_amount != Decimal("0"):
+        if canary_write_attempted and state.position.signed_amount != Decimal("0"):
             intent = OrderIntent(
                 pair,
                 "sell" if state.position.signed_amount > 0 else "buy",
@@ -108,7 +109,7 @@ async def _cleanup(session, pair: Pair) -> dict[str, Any]:
                 True,
             )
             await session.place_order(intent)
-        if state.protections:
+        if canary_write_attempted and state.protections:
             protection_ids = tuple(item for protection in state.protections for item in protection.protection_ids)
             await session.cancel_protection(protection_ids)
     except Exception as error:
@@ -124,6 +125,7 @@ async def _cleanup(session, pair: Pair) -> dict[str, Any]:
 async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:
     """Run writes only against a session already proven simulated by the caller."""
     result: dict[str, Any] = {"status": "failed", "started_at": datetime.now(UTC), "steps": []}
+    canary_write_attempted = False
     try:
         await session.fetch_portfolio(pair)
         quote = await session.fetch_quote(pair)
@@ -134,6 +136,7 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:
         amount = await session.normalize_amount(pair, Decimal("0.0001"))
         if amount <= 0:
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")
+        canary_write_attempted = True
         opened = await session.place_order(OrderIntent(pair, "buy", amount, "market", None, False))
         result["open_order_id"] = getattr(opened, "id", "")
         result["steps"].append("open_minimum_position")
@@ -152,7 +155,7 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:
     except Exception as error:
         result["error_type"] = type(error).__name__
     finally:
-        result.update(await _cleanup(session, pair))
+        result.update(await _cleanup(session, pair, canary_write_attempted=canary_write_attempted))
         try:
             await session.close()
         except Exception as error:

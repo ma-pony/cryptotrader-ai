@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
@@ -27,7 +28,7 @@ def _safe_value(value: Any, key: str = "") -> Any:
     normalized = key.lower().replace("-", "_")
     if any(token in normalized for token in ("secret", "token", "key", "passphrase", "authorization", "credential")):
         return "[redacted]"
-    if isinstance(value, dict):
+    if isinstance(value, Mapping):
         return {str(item_key): _safe_value(item, str(item_key)) for item_key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_safe_value(item) for item in value]
@@ -41,6 +42,22 @@ def parse_signal_canary_args(argv: list[str] | None = None) -> argparse.Namespac
     parser.add_argument("--pair", required=True)
     parser.set_defaults(execute=False)
     return parser.parse_args(argv)
+
+
+def _component_summary(signal, model_ids: dict[str, str]) -> dict[str, Any]:
+    summary: dict[str, Any] = {
+        "component_id": signal.component_id,
+        "direction": signal.direction,
+        "confidence": signal.confidence,
+    }
+    if signal.component_id == "llm_committee":
+        details = signal.details
+        analyses = details.get("analyses", {})
+        turns = details.get("debate_turns", ())
+        if details.get("debate_skipped") or not turns:
+            raise RuntimeError("signal canary requires an observed internal committee debate")
+        summary.update({"agent_ids": sorted(analyses), "debate_turn_count": len(turns), "model_ids": model_ids})
+    return summary
 
 
 async def run_signal_canary(pair_text: str) -> dict[str, Any]:
@@ -66,21 +83,22 @@ async def run_signal_canary(pair_text: str) -> dict[str, Any]:
     signals = await ComponentRunner(events).run(components, context)
     fused = WeightedSignalFusion().fuse(signals, profile.components)
     target = DecisionEngine().target_for(fused, profile)
+    models = snapshot.document.llm.models
+    model_ids = {
+        "tech_agent": models.tech_agent or models.analysis,
+        "chain_agent": models.chain_agent or models.analysis,
+        "news_agent": models.news_agent or models.analysis,
+        "macro_agent": models.macro_agent or models.analysis,
+        "debate": models.debate or models.fallback,
+        "committee_summary": models.committee_summary or models.debate or models.fallback,
+    }
     return _safe_value(
         {
             "status": "completed",
             "mode": "signal_only_no_execution",
             "config_revision": snapshot.revision,
             "market_data_source_id": context.market_data_source_id,
-            "components": [
-                {
-                    "component_id": signal.component_id,
-                    "direction": signal.direction,
-                    "confidence": signal.confidence,
-                    "details": signal.details,
-                }
-                for signal in signals
-            ],
+            "components": [_component_summary(signal, model_ids) for signal in signals],
             "fused_score": fused.score,
             "target_position": {"side": target.side, "size_ratio": target.size_ratio},
         }

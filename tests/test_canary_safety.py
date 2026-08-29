@@ -51,6 +51,7 @@ class _Session:
     fail_open: bool = False
     signed_amount: Decimal = Decimal("0")
     cleaned: bool = False
+    order_calls: int = 0
 
     connection_id: str = "paper"
     capabilities: VenueCapabilities = field(
@@ -67,6 +68,7 @@ class _Session:
         return amount
 
     async def place_order(self, intent):
+        self.order_calls += 1
         if self.fail_open and not intent.reduce_only:
             raise RuntimeError("open failed")
         self.signed_amount += intent.amount if intent.side == "buy" else -intent.amount
@@ -107,6 +109,17 @@ async def test_residual_state_requires_attention_and_audit_protocol_is_separate(
     assert result["requires_attention"] is True
     assert result["residual"]["position_nonzero"] is True
     assert venue_canary.audit_in_subprocess.__name__ == "audit_in_subprocess"
+
+
+@pytest.mark.asyncio
+async def test_nonzero_initial_state_is_reported_without_touching_user_position():
+    venue_canary = _script("venue_canary.py")
+    session = _Session(Pair.parse("BTC/USDT:USDT"), signed_amount=Decimal("1"))
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert result["requires_attention"] is True
+    assert session.order_calls == 0
 
 
 def test_canary_output_redacts_sensitive_values_and_signal_wiring_is_real():
