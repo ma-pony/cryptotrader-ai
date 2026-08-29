@@ -144,3 +144,24 @@ def test_canary_output_redacts_sensitive_values_and_signal_wiring_is_real():
     assert "visible-secret" not in venue_canary.safe_json(payload)  # pragma: allowlist secret
     assert frozenset({"kronos", "llm_committee"}) == signal_canary.REQUIRED_COMPONENT_IDS
     assert "mock" not in Path(signal_canary.__file__).read_text().lower()
+
+
+def test_signal_canary_forces_each_real_model_call_to_fail_without_fallback(monkeypatch):
+    signal_canary = _script("signal_canary.py")
+    calls = []
+
+    def build_factory(_config, *, api_key):
+        assert api_key == "gateway-token"  # pragma: allowlist secret
+
+        def invoke(**kwargs):
+            calls.append(kwargs)
+            return object()
+
+        return invoke
+
+    monkeypatch.setattr("cryptotrader.agents.base.create_runtime_llm_factory", build_factory)
+
+    factory = signal_canary.strict_llm_factory(object(), "gateway-token")  # pragma: allowlist secret
+    factory(model="model-a")
+
+    assert calls == [{"model": "model-a", "with_fallback": False}]

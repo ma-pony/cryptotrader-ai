@@ -44,6 +44,19 @@ def parse_signal_canary_args(argv: list[str] | None = None) -> argparse.Namespac
     return parser.parse_args(argv)
 
 
+def strict_llm_factory(config, gateway_key: str):
+    """Bind the database gateway while prohibiting transparent model fallback."""
+    from cryptotrader.agents.base import create_runtime_llm_factory
+
+    runtime_factory = create_runtime_llm_factory(config, api_key=gateway_key)
+
+    def invoke(**kwargs):
+        kwargs["with_fallback"] = False
+        return runtime_factory(**kwargs)
+
+    return invoke
+
+
 def _component_summary(signal, model_ids: dict[str, str]) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "component_id": signal.component_id,
@@ -70,7 +83,12 @@ async def run_signal_canary(pair_text: str) -> dict[str, Any]:
         raise RuntimeError("active runtime configuration is required")
     gateway_key = (await repository.reveal_token(LLM_GATEWAY_CREDENTIAL_REF)).token
     events = NullCycleEventSink()
-    registry = SignalComponentRegistry.discover(snapshot.document, events, llm_gateway_key=gateway_key)
+    registry = SignalComponentRegistry.discover(
+        snapshot.document,
+        events,
+        llm_gateway_key=gateway_key,
+        llm_factory_builder=lambda config: strict_llm_factory(config, gateway_key),
+    )
     profile = snapshot.document.signals.to_profile(snapshot.revision)
     components = registry.enabled(profile)
     ids = frozenset(component.id for component in components)

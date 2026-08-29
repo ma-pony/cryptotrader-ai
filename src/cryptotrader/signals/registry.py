@@ -42,6 +42,7 @@ class SignalComponentRegistry:
         sink: CycleEventSink,
         *,
         llm_gateway_key: str = "",
+        llm_factory_builder=None,
     ) -> SignalComponentRegistry:
         """Instantiate configured components from code-owned and installed factories."""
         from cryptotrader.signals.components.kronos import create_component as create_kronos
@@ -69,7 +70,12 @@ class SignalComponentRegistry:
         registry._installed_ids = frozenset(factories)
         for component_id in configured_ids:
             if component_id == "llm_committee":
-                component = factories[component_id](document, sink, llm_gateway_key=llm_gateway_key)
+                component = factories[component_id](
+                    document,
+                    sink,
+                    llm_gateway_key=llm_gateway_key,
+                    llm_factory_builder=llm_factory_builder,
+                )
             else:
                 component = factories[component_id](document, sink)
             if not isinstance(component, SignalComponent):
