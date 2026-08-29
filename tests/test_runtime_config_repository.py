@@ -50,6 +50,60 @@ async def test_get_or_create_is_stable_and_round_trips_the_exact_document(reposi
     assert (loaded.apply_status, loaded.applied_revision, loaded.apply_error) == ("pending", 1, None)
 
 
+async def test_ensure_tables_rechecks_a_recreated_database_at_the_same_url(tmp_path):
+    """A URL is not a database lifetime: test/worker DB files are recreated in place."""
+    import cryptotrader.db as database
+    from cryptotrader.db import get_async_session, get_engine
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.runtime_config.secrets import CredentialVault
+
+    database_path = tmp_path / "recreated-runtime.db"
+    url = f"sqlite+aiosqlite:///{database_path}"
+    repository = RuntimeConfigRepository(url, CredentialVault(base64.urlsafe_b64encode(b"l" * 32).decode()))
+    await repository.ensure_tables()
+
+    engine = await get_engine(url)
+    await engine.dispose()
+    for key in [key for key in database._engines if key[0] == url]:
+        database._engines.pop(key)
+    database_path.unlink()
+
+    await repository.ensure_tables()
+    session = await get_async_session(url)
+    try:
+        columns = (await session.execute(text("PRAGMA table_info(runtime_config)"))).all()
+        names = {column[1] for column in columns}
+    finally:
+        await session.close()
+
+    assert {"apply_status", "applied_revision", "apply_error"} <= names
+
+
+async def test_ensure_tables_rejects_a_removed_runtime_schema(tmp_path):
+    """Hard cutover must fail clearly instead of lazily altering an old table."""
+    from cryptotrader.db import get_async_session
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.runtime_config.secrets import CredentialVault
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'old-runtime.db'}"
+    session = await get_async_session(url)
+    try:
+        await session.execute(
+            text(
+                "CREATE TABLE runtime_config ("
+                "id VARCHAR(20) PRIMARY KEY, revision BIGINT NOT NULL, "
+                "document JSON NOT NULL, updated_at DATETIME NOT NULL)"
+            )
+        )
+        await session.commit()
+    finally:
+        await session.close()
+
+    repository = RuntimeConfigRepository(url, CredentialVault(base64.urlsafe_b64encode(b"o" * 32).decode()))
+    with pytest.raises(RuntimeError, match="schema is not current; missing columns"):
+        await repository.ensure_tables()
+
+
 async def test_document_revision_is_pending_until_the_runtime_application_is_marked(repository):
     first = await repository.get_or_create()
 

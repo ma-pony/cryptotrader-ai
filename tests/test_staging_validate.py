@@ -308,7 +308,8 @@ async def test_loaded_staging_runtime_has_total_cleanup_after_all_steps(monkeypa
     key = "c3Rha2luZy1nYXRlLW1hc3Rlci1rZXktMzItYnl0ZXM="
     repository = RuntimeConfigRepository(url, CredentialVault(key))
     initial = await repository.get_or_create()
-    await repository.replace(initial.revision, active_document())
+    pending = await repository.replace(initial.revision, active_document())
+    await repository.mark_applied(pending.revision)
     monkeypatch.setattr(
         BootstrapSettings,
         "from_environment",

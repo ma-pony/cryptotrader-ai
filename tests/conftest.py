@@ -10,13 +10,24 @@ fills.
 from __future__ import annotations
 
 import os
+import tempfile
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:////tmp/cryptotrader-test-runtime.db")
+_test_runtime_database: Path | None = None
+if "DATABASE_URL" not in os.environ:
+    _test_runtime_database = Path(tempfile.gettempdir()) / f"cryptotrader-test-runtime-{os.getpid()}.db"
+    _test_runtime_database.unlink(missing_ok=True)
+    os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_test_runtime_database}"
 os.environ.setdefault("CONFIG_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+
+def pytest_sessionfinish() -> None:
+    if _test_runtime_database is not None:
+        _test_runtime_database.unlink(missing_ok=True)
 
 
 @pytest.fixture(autouse=True)

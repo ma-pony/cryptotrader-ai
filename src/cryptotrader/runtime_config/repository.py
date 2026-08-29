@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, LargeBinary, String, select, update
+from sqlalchemy import JSON, BigInteger, DateTime, LargeBinary, String, inspect, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -23,7 +23,6 @@ if TYPE_CHECKING:
 _GLOBAL_ID = "global"
 LLM_GATEWAY_CREDENTIAL_REF = "llm-gateway"
 API_ACCESS_CREDENTIAL_REF = "api-access"
-_ready: set[str] = set()
 
 
 class RevisionConflict(RuntimeError):  # noqa: N818 - public contract uses this exact name.
@@ -73,6 +72,23 @@ class _RuntimeCredentialRow(_Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+def _assert_current_schema(connection) -> None:
+    """Reject a database created by the removed configuration runtime.
+
+    ``create_all`` only creates missing tables; it deliberately does not alter an
+    existing table.  The runtime is a hard cutover, so serving a table missing
+    its apply-state columns would split persisted and in-memory configuration.
+    Operators must provision the current schema instead of receiving a lazy
+    compatibility migration while handling a request.
+    """
+    columns = {column["name"] for column in inspect(connection).get_columns(_RuntimeConfigRow.__tablename__)}
+    required = {"id", "revision", "document", "updated_at", "apply_status", "applied_revision", "apply_error"}
+    missing = required - columns
+    if missing:
+        names = ", ".join(sorted(missing))
+        raise RuntimeError(f"runtime_config schema is not current; missing columns: {names}")
+
+
 def _normalize_datetime(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
@@ -100,12 +116,10 @@ class RuntimeConfigRepository:
         self._default_factory = default_factory
 
     async def ensure_tables(self) -> None:
-        if self.database_url in _ready:
-            return
         engine = await get_engine(self.database_url)
         async with engine.begin() as connection:
             await connection.run_sync(_Base.metadata.create_all)
-        _ready.add(self.database_url)
+            await connection.run_sync(_assert_current_schema)
 
     async def get_or_create(self) -> RuntimeConfigSnapshot:
         await self.ensure_tables()
