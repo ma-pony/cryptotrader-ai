@@ -101,41 +101,92 @@ async def inspect_residual(session, pair: Pair) -> dict[str, Any]:
     return {"residual": residual, "requires_attention": any(residual.values())}
 
 
-async def _cleanup(session, pair: Pair, *, canary_write_attempted: bool) -> dict[str, Any]:
+async def _find_owned_order(session, pair: Pair, client_order_id: str, order_id: str | None = None):
+    """Read back one exchange-visible client id; never infer ownership from a position."""
+    if order_id:
+        order = await session.find_order(pair, order_id=order_id)
+        if order is not None and order.client_order_id == client_order_id:
+            return order
+    order = await session.find_order(pair, client_order_id=client_order_id)
+    return order if order is not None and order.client_order_id == client_order_id else None
+
+
+async def _confirmed_order(session, pair: Pair, order, client_order_id: str):
+    if order.client_order_id != client_order_id:
+        raise CanarySafetyError("canary order ownership is not confirmed")
+    if order.filled_amount > 0:
+        return order
+    for _ in range(3):
+        observed = await _find_owned_order(session, pair, client_order_id, order.id)
+        if observed is not None and observed.filled_amount > 0:
+            return observed
+        await asyncio.sleep(0)
+    raise CanarySafetyError("canary order fill is not confirmed")
+
+
+async def _cleanup_owned(
+    session,
+    pair: Pair,
+    *,
+    client_order_prefix: str,
+    owned_exposure: Decimal,
+    cleanup_client_order_id: str,
+    protection_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    """Cancel and close only objects positively tagged as belonging to this run."""
     errors: list[str] = []
+    attention = False
     try:
         state = await session.list_open_state(pair)
-        if canary_write_attempted and state.position.signed_amount != Decimal("0"):
-            intent = OrderIntent(
-                pair,
-                "sell" if state.position.signed_amount > 0 else "buy",
-                abs(state.position.signed_amount),
-                "market",
-                None,
-                True,
-            )
-            await session.place_order(intent)
-        if canary_write_attempted and state.protections:
-            protection_ids = tuple(item for protection in state.protections for item in protection.protection_ids)
-            await session.cancel_protection(protection_ids)
+        owned_open = tuple(
+            order for order in state.open_orders if (order.client_order_id or "").startswith(client_order_prefix)
+        )
+        for order in owned_open:
+            try:
+                await session.cancel_order(order.id, pair)
+            except Exception as error:
+                attention = True
+                errors.append(type(error).__name__)
+        if owned_open and attention:
+            raise CanarySafetyError("owned pending orders could not be cancelled")
+        observed_fill = sum((order.filled_amount for order in owned_open), Decimal("0"))
+        owned_exposure = max(owned_exposure, observed_fill)
+        if protection_ids:
+            try:
+                await session.cancel_protection(protection_ids)
+            except Exception as error:
+                attention = True
+                errors.append(type(error).__name__)
+        if owned_exposure:
+            state = await session.list_open_state(pair)
+            if state.position.signed_amount != owned_exposure:
+                attention = True
+                errors.append("UnverifiableOwnedExposure")
+            else:
+                closing = await session.place_order(
+                    OrderIntent(pair, "sell", owned_exposure, "market", None, True, cleanup_client_order_id)
+                )
+                await _confirmed_order(session, pair, closing, cleanup_client_order_id)
     except Exception as error:
+        attention = True
         errors.append(type(error).__name__)
     try:
         residual = await inspect_residual(session, pair)
     except Exception as error:
         residual = {"residual": {"state_unavailable": True}, "requires_attention": True}
+        attention = True
         errors.append(type(error).__name__)
-    return {**residual, "cleanup_errors": errors}
+    return {**residual, "cleanup_errors": errors, "requires_attention": attention or residual["requires_attention"]}
 
 
-async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: C901 - bounded safety procedure
+async def run_simulated_canary(session, pair: Pair, *, close_session: bool = True) -> dict[str, Any]:  # noqa: C901 - bounded safety procedure
     """Run writes only against a session already proven simulated by the caller."""
     result: dict[str, Any] = {"status": "failed", "started_at": datetime.now(UTC), "steps": []}
     canary_write_attempted = False
-    client_order_prefix = f"canary-{uuid4().hex[:16]}"
-    open_client_order_id = f"{client_order_prefix}-open"
-    close_client_order_id = f"{client_order_prefix}-close"
-    owned_order_ids: set[str] = set()
+    client_order_prefix = f"CT{uuid4().hex[:16].upper()}"
+    open_client_order_id = f"{client_order_prefix}O"
+    close_client_order_id = f"{client_order_prefix}C"
+    cleanup_client_order_id = f"{client_order_prefix}X"
     owned_protection_ids: tuple[str, ...] = ()
     owned_exposure = Decimal("0")
     try:
@@ -150,12 +201,15 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
         if amount <= 0:
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")
         canary_write_attempted = True
-        opened = await session.place_order(
-            OrderIntent(pair, "buy", amount, "market", None, False, open_client_order_id)
-        )
-        if opened.client_order_id != open_client_order_id or opened.filled_amount <= 0:
-            raise CanarySafetyError("canary opening order ownership or fill is not confirmed")
-        owned_order_ids.add(opened.id)
+        try:
+            opened = await session.place_order(
+                OrderIntent(pair, "buy", amount, "market", None, False, open_client_order_id)
+            )
+            opened = await _confirmed_order(session, pair, opened, open_client_order_id)
+        except Exception:
+            opened = await _find_owned_order(session, pair, open_client_order_id)
+            if opened is None:
+                raise
         owned_exposure = opened.filled_amount
         result["open_order_id"] = opened.id
         result["steps"].append("open_minimum_position")
@@ -179,9 +233,10 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
         closing = await session.place_order(
             OrderIntent(pair, "sell", opened.filled_amount, "market", None, True, close_client_order_id)
         )
-        if closing.client_order_id != close_client_order_id or closing.filled_amount != opened.filled_amount:
+        closing = await _confirmed_order(session, pair, closing, close_client_order_id)
+        if closing.filled_amount != opened.filled_amount:
             raise CanarySafetyError("canary reduce-only close is not confirmed")
-        owned_order_ids.add(closing.id)
+        owned_exposure = Decimal("0")
         await session.cancel_protection(owned_protection_ids)
         result["steps"].append("reduce_only_close_and_cancel")
         result["status"] = "completed"
@@ -189,38 +244,33 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:  # noqa: 
         result["error_type"] = type(error).__name__
     finally:
         if canary_write_attempted:
-            for order_id in owned_order_ids:
-                try:
-                    await session.cancel_order(order_id, pair)
-                except Exception:
-                    result["requires_attention"] = True
-            if owned_protection_ids:
-                try:
-                    await session.cancel_protection(owned_protection_ids)
-                except Exception:
-                    result["requires_attention"] = True
-            if owned_exposure:
-                try:
-                    state = await session.list_open_state(pair)
-                    if state.position.signed_amount == owned_exposure:
-                        closing = await session.place_order(
-                            OrderIntent(pair, "sell", owned_exposure, "market", None, True, close_client_order_id)
-                        )
-                        if closing.client_order_id != close_client_order_id or closing.filled_amount != owned_exposure:
-                            result["requires_attention"] = True
-                    elif state.position.signed_amount != Decimal("0"):
-                        result["requires_attention"] = True
-                except Exception:
-                    result["requires_attention"] = True
-        result.update(await _cleanup(session, pair, canary_write_attempted=False))
-        try:
-            await session.close()
-        except Exception as error:
-            result["close_error"] = type(error).__name__
-            result["requires_attention"] = True
+            result.update(
+                await _cleanup_owned(
+                    session,
+                    pair,
+                    client_order_prefix=client_order_prefix,
+                    owned_exposure=owned_exposure,
+                    cleanup_client_order_id=cleanup_client_order_id,
+                    protection_ids=owned_protection_ids,
+                )
+            )
+        else:
+            result.update(await inspect_residual(session, pair))
+        if close_session:
+            try:
+                await session.close()
+            except Exception as error:
+                result["close_error"] = type(error).__name__
+                result["requires_attention"] = True
         if result["requires_attention"]:
             result["status"] = "failed"
     return _safe_value(result)
+
+
+async def _run_with_execution_lease(runtime, session, pair: Pair) -> dict[str, Any]:
+    """Use the Runtime's sole strict Redis admission path before any canary write."""
+    async with runtime.execution_lease(pair.canonical()):
+        return await run_simulated_canary(session, pair, close_session=False)
 
 
 async def audit_in_subprocess(connection_id: str, pair: str) -> dict[str, Any]:
@@ -273,14 +323,23 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
         finally:
             await session.close()
     require_simulated_environment(connection.environment)
-    session = await _open_connection(connection, repository)
     if options.audit:
+        session = await _open_connection(connection, repository)
         try:
             result = await inspect_residual(session, pair)
             return {"status": "completed" if not result["requires_attention"] else "failed", **result}
         finally:
             await session.close()
-    result = await run_simulated_canary(session, pair)
+    from cryptotrader.runtime import build_runtime
+
+    runtime = await build_runtime(repository=repository, snapshot=snapshot)
+    try:
+        session = runtime.sessions.get(connection.id)
+        if session is None:
+            raise CanarySafetyError("configured connection is unavailable in the active runtime")
+        result = await _run_with_execution_lease(runtime, session, pair)
+    finally:
+        await runtime.close()
     result.update(
         {"connection_id": connection.id, "environment": connection.environment, "config_revision": snapshot.revision}
     )

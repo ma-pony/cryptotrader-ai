@@ -211,12 +211,14 @@ class _ResponseModelObserver(BaseCallbackHandler):
         self._observer = observer
 
     def on_llm_end(self, response: Any, **_: Any) -> None:
-        generations = response.generations or []
-        message = generations[0][0].message if generations and generations[0] else None
-        metadata = getattr(message, "response_metadata", {}) if message is not None else {}
-        model = metadata.get("model_name") if isinstance(metadata, dict) else None
-        if isinstance(model, str) and model:
+        from cryptotrader.llm.token_tracker import _extract_usage
+
+        model, _input_tokens, _output_tokens, _cache_hit = _extract_usage(response)
+        if model:
             self._observer(self._role, model)
+
+    def on_chat_model_end(self, response: Any, **kwargs: Any) -> None:
+        self.on_llm_end(response, **kwargs)
 
 
 def _to_langchain_messages(messages: list[dict]) -> list:

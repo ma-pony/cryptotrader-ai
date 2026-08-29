@@ -194,6 +194,41 @@ def test_runtime_llm_factory_uses_only_the_explicit_vault_key(monkeypatch):
         set_ledger(None)
 
 
+def test_runtime_llm_response_observer_records_actual_chat_metadata_not_configured_model(monkeypatch):
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    from cryptotrader.agents.base import create_runtime_llm_factory
+
+    built = []
+    observed = []
+
+    class FakeChatModel:
+        def __init__(self, **kwargs) -> None:
+            built.append(kwargs)
+
+    monkeypatch.setattr("cryptotrader.agents.base.ChatOpenAI", FakeChatModel)
+    monkeypatch.setattr("cryptotrader.llm.retry.wrap_with_retry", lambda llm, _retry: llm)
+    settings = LlmConfig(models=LlmModelsConfig(analysis="configured-model", fallback="configured-model"))
+    create_runtime_llm_factory(
+        settings, api_key="gateway-key", response_observer=lambda role, model: observed.append((role, model))
+    )(role="tech_agent")
+    observer = built[0]["callbacks"][1]
+    observer.on_chat_model_end(
+        LLMResult(
+            generations=[
+                [
+                    ChatGeneration(
+                        message=AIMessage(content="ok", response_metadata={"model_name": "actual-response-model"})
+                    )
+                ]
+            ]
+        )
+    )
+    observer.on_chat_model_end(LLMResult(generations=[[ChatGeneration(message=AIMessage(content="missing"))]]))
+
+    assert observed == [("tech_agent", "actual-response-model")]
+
+
 @pytest.mark.asyncio
 async def test_llm_committee_factory_resolves_empty_role_from_database_without_legacy_config(monkeypatch):
     from cryptotrader.signals.components.llm_committee import create_component
@@ -286,6 +321,17 @@ async def test_llm_committee_factory_resolves_empty_role_from_database_without_l
         "debate-db",
         "debate-db",
         "summary-db",
+    ]
+    assert [call["role"] for call in calls] == [
+        "tech_agent",
+        "chain_agent",
+        "news_agent",
+        "macro_agent",
+        "debate",
+        "debate",
+        "debate",
+        "debate",
+        "committee_summary",
     ]
 
 

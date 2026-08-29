@@ -133,6 +133,21 @@ class PaperVenueSession:
             if order.status == "open":
                 self._account.orders[order_id] = replace(order, status="canceled")
 
+    async def find_order(
+        self, pair: Pair, *, order_id: str | None = None, client_order_id: str | None = None
+    ) -> NormalizedOrder | None:
+        self._require_open()
+        self._require_supported_pair(pair)
+        if bool(order_id) == bool(client_order_id):
+            raise VenueOperationError(f"{self.connection_id}: provide exactly one order identifier")
+        async with self._account.lock_for(pair):
+            for order in self._account.orders.values():
+                if order.pair != pair:
+                    continue
+                if order_id == order.id or client_order_id == order.client_order_id:
+                    return order
+        return None
+
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
         self._require_open()
         self._require_supported_pair(pair)

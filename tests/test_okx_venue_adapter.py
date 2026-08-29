@@ -150,6 +150,37 @@ async def test_okx_order_params_follow_account_mode_and_open_reduce_close_intent
 
 
 @pytest.mark.asyncio
+async def test_okx_canary_client_order_id_uses_the_strict_common_platform_format():
+    _, session, factory = await _connect()
+    client_order_id = "CT0123456789ABCDEFO"
+
+    await session.place_order(
+        OrderIntent(Pair.parse("BTC/USDT:USDT"), "buy", Decimal("0.1"), "market", None, False, client_order_id)
+    )
+
+    request = next(payload for name, payload in factory.clients[-1].calls if name == "create_order")
+    assert request[5]["clOrdId"] == client_order_id
+    assert len(request[5]["clOrdId"]) <= 32
+    assert request[5]["clOrdId"].isalnum()
+
+
+@pytest.mark.asyncio
+async def test_minimum_amount_never_rounds_below_platform_amount_or_cost_limit():
+    _, session, factory = await _connect()
+    client = factory.clients[-1]
+    client.markets["BTC/USDT:USDT"]["limits"] = {
+        "amount": {"min": "0.1004"},
+        "cost": {"min": "0.1004"},
+    }
+    client.markets["BTC/USDT:USDT"]["precision"]["amount"] = "0.01"
+
+    amount = await session.minimum_amount(Pair.parse("BTC/USDT:USDT"), Decimal("1"))
+
+    assert amount >= Decimal("0.1004")
+    assert amount * Decimal("1") >= Decimal("0.1004")
+
+
+@pytest.mark.asyncio
 async def test_okx_replacing_long_protection_does_not_cancel_short_leg():
     _, session, factory = await _connect()
     pair = Pair.parse("BTC/USDT:USDT")

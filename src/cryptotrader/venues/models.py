@@ -237,8 +237,8 @@ class OrderIntent:
         if self.client_order_id is not None and (
             type(self.client_order_id) is not str
             or not self.client_order_id
-            or len(self.client_order_id) > 36
-            or not self.client_order_id.replace("-", "").replace("_", "").isalnum()
+            or len(self.client_order_id) > 32
+            or not self.client_order_id.isalnum()
         ):
             raise ValueError("client_order_id must be a safe non-empty identifier")
 

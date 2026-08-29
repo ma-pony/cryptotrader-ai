@@ -54,9 +54,9 @@ def test_cli_does_not_accept_secret_arguments():
 def test_canary_orders_have_an_exchange_visible_client_identifier_contract():
     from cryptotrader.venues.models import OrderIntent
 
-    intent = OrderIntent(Pair.parse("BTC/USDT"), "buy", Decimal("1"), "market", None, False, "canary-abc")
+    intent = OrderIntent(Pair.parse("BTC/USDT"), "buy", Decimal("1"), "market", None, False, "CTABC123O")
 
-    assert intent.client_order_id == "canary-abc"
+    assert intent.client_order_id == "CTABC123O"
 
 
 @dataclass
@@ -228,3 +228,228 @@ async def test_subprocess_audit_rejects_nonzero_exit_noise_and_attention(monkeyp
 
     assert result["audit_status"] == "failed"
     assert result["requires_attention"] is True
+
+
+@dataclass
+class _AmbiguousCreateSession(_Session):
+    """Exchange accepted the order before the caller saw a timeout."""
+
+    pending: list[NormalizedOrder] = field(default_factory=list)
+    cancelled_ids: list[str] = field(default_factory=list)
+    partial_fill: Decimal = Decimal("0")
+    fail_cancel: bool = False
+    external_active: bool = False
+
+    async def place_order(self, intent):
+        if not intent.reduce_only:
+            self.external_active = True
+            remote = NormalizedOrder(
+                "canary-open-remote",
+                intent.pair,
+                intent.side,
+                intent.order_type,
+                intent.amount,
+                self.partial_fill,
+                Decimal("100"),
+                "open",
+                intent.reduce_only,
+                intent.client_order_id,
+            )
+            self.pending.append(remote)
+            self.signed_amount += self.partial_fill
+            raise TimeoutError("remote order accepted but response timed out")
+        return await super().place_order(intent)
+
+    async def cancel_order(self, order_id, pair):
+        if self.fail_cancel:
+            raise RuntimeError("cancel rejected")
+        self.cancelled_ids.append(order_id)
+        self.pending = [item for item in self.pending if item.id != order_id]
+
+    async def find_order(self, _pair, *, order_id=None, client_order_id=None):
+        for item in self.pending:
+            if item.id == order_id or item.client_order_id == client_order_id:
+                return item
+        return None
+
+    async def list_open_state(self, _pair):
+        external = ()
+        if self.external_active:
+            external = (
+                NormalizedOrder(
+                    "external-order",
+                    self.pair,
+                    "buy",
+                    "limit",
+                    Decimal("1"),
+                    Decimal("0"),
+                    None,
+                    "open",
+                    False,
+                    "externalrun",
+                ),
+            )
+        protections = ()
+        if self.protected:
+            from cryptotrader.venues.models import ProtectionState
+
+            protections = (
+                ProtectionState(
+                    ("external-protection",),
+                    self.pair,
+                    "long",
+                    Decimal("1"),
+                    Decimal("90"),
+                    Decimal("110"),
+                    True,
+                    False,
+                ),
+            )
+        return OpenVenueState(
+            ConnectionPosition(self.pair, self.signed_amount, Decimal("0"), None),
+            (*self.pending, *external),
+            protections,
+        )
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_remote_create_cancels_only_tagged_owned_order():
+    venue_canary = _script("venue_canary.py")
+    session = _AmbiguousCreateSession(Pair.parse("BTC/USDT:USDT"))
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_ids == ["canary-open-remote"]
+    assert "external-order" not in session.cancelled_ids
+    assert result["requires_attention"] is True
+    assert result["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_timeout_partial_fill_cancels_pending_then_closes_exact_owned_fill():
+    venue_canary = _script("venue_canary.py")
+    session = _AmbiguousCreateSession(Pair.parse("BTC/USDT:USDT"), partial_fill=Decimal("0.04"))
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_ids == ["canary-open-remote"]
+    assert session.order_amounts == [Decimal("0.04")]
+    assert session.signed_amount == Decimal("0")
+    assert result["requires_attention"] is True
+
+
+@pytest.mark.asyncio
+async def test_owned_order_cancel_failure_requires_attention_without_external_cancellation():
+    venue_canary = _script("venue_canary.py")
+    session = _AmbiguousCreateSession(Pair.parse("BTC/USDT:USDT"), fail_cancel=True)
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_ids == []
+    assert result["requires_attention"] is True
+    assert result["status"] == "failed"
+
+
+@dataclass
+class _AsyncAcknowledgementSession(_Session):
+    queried: int = 0
+
+    async def place_order(self, intent):
+        if intent.reduce_only:
+            return await super().place_order(intent)
+        return NormalizedOrder(
+            "ack-order",
+            intent.pair,
+            intent.side,
+            intent.order_type,
+            intent.amount,
+            Decimal("0"),
+            None,
+            "open",
+            False,
+            intent.client_order_id,
+        )
+
+    async def find_order(self, _pair, *, order_id=None, client_order_id=None):
+        self.queried += 1
+        assert order_id == "ack-order" or client_order_id
+        self.signed_amount = Decimal("0.1")
+        return NormalizedOrder(
+            "ack-order",
+            self.pair,
+            "buy",
+            "market",
+            Decimal("0.1"),
+            Decimal("0.1"),
+            Decimal("100"),
+            "filled",
+            False,
+            client_order_id or "",
+        )
+
+
+@pytest.mark.asyncio
+async def test_async_order_ack_is_reconciled_before_using_owned_fill():
+    venue_canary = _script("venue_canary.py")
+    session = _AsyncAcknowledgementSession(Pair.parse("BTC/USDT:USDT"))
+
+    await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.queried >= 1
+    assert session.order_amounts == [Decimal("0.1")]
+
+
+@dataclass
+class _FullyFilledTimeoutSession(_AmbiguousCreateSession):
+    async def find_order(self, _pair, *, order_id=None, client_order_id=None):
+        if client_order_id and client_order_id.endswith("O"):
+            self.signed_amount = Decimal("0.1")
+            return NormalizedOrder(
+                "remote-filled",
+                self.pair,
+                "buy",
+                "market",
+                Decimal("0.1"),
+                Decimal("0.1"),
+                Decimal("100"),
+                "filled",
+                False,
+                client_order_id,
+            )
+        return None
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_fully_filled_remote_order_uses_client_id_lookup_for_exact_cleanup():
+    venue_canary = _script("venue_canary.py")
+    session = _FullyFilledTimeoutSession(Pair.parse("BTC/USDT:USDT"))
+
+    await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.order_amounts == [Decimal("0.1")]
+
+
+@pytest.mark.asyncio
+async def test_simulated_writes_use_and_release_the_canonical_runtime_execution_lease():
+    from contextlib import asynccontextmanager
+
+    venue_canary = _script("venue_canary.py")
+    session = _Session(Pair.parse("BTC/USDT:USDT"))
+    leased_pairs: list[str] = []
+    released = False
+
+    class Runtime:
+        @asynccontextmanager
+        async def execution_lease(self, pair):
+            nonlocal released
+            leased_pairs.append(pair)
+            try:
+                yield object()
+            finally:
+                released = True
+
+    result = await venue_canary._run_with_execution_lease(Runtime(), session, session.pair)
+
+    assert leased_pairs == ["BTC/USDT:USDT"]
+    assert released is True
+    assert result["status"] == "completed"

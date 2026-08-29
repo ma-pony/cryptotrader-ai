@@ -305,6 +305,23 @@ class CcxtVenueBase:
             raise VenueOperationError(f"{self.connection_id}: order id is required")
         await self._call("cancel order", self._client.cancel_order, order_id, pair.to_ccxt())
 
+    async def find_order(
+        self, pair: Pair, *, order_id: str | None = None, client_order_id: str | None = None
+    ) -> NormalizedOrder | None:
+        if bool(order_id) == bool(client_order_id):
+            raise VenueOperationError(f"{self.connection_id}: provide exactly one order identifier")
+        if order_id:
+            raw = await self._call("fetch order", self._client.fetch_order, order_id, pair.to_ccxt())
+            return await self._normalize_order(raw, pair)
+        raw_orders = await self._call("fetch recent orders", self._client.fetch_orders, pair.to_ccxt())
+        if not isinstance(raw_orders, (list, tuple)):
+            raise VenueOperationError(f"{self.connection_id}: invalid recent orders response")
+        for raw in raw_orders:
+            order = await self._normalize_order(raw, pair)
+            if order.client_order_id == client_order_id:
+                return order
+        return None
+
     async def _normalize_order(
         self,
         raw: dict[str, Any],
