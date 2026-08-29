@@ -1,11 +1,10 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 
 import { apiClient } from '@/lib/api-client';
-import { ConnectionHealthSchema, CredentialMutationSchema, VenueMutationSchema } from '@/types/api.schema';
+import { ConnectionHealthSchema, CredentialMutationSchema, RuntimeConfigSchema, VenueMutationSchema } from '@/types/api.schema';
 import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
 import { setRuntimeConfigConflict } from './runtime-config-conflict';
 import { ApiError } from '@/lib/api-client';
-import type { RuntimeConfig } from '@/types/api';
 
 type ConnectionInput = {
   expected_revision: number;
@@ -22,42 +21,24 @@ export type CredentialInput = { api_key: string; secret: string; passphrase?: st
 
 export const useVenueConnections = () => {
   const client = useQueryClient();
-  const updateConfig = (update: (current: RuntimeConfig) => RuntimeConfig) =>
-    client.setQueryData<RuntimeConfig>(RUNTIME_CONFIG_QUERY_KEY, (current) => (current ? update(current) : current));
-  const syncConnection = (result: {
-    revision: number;
-    connection: RuntimeConfig['document']['execution']['connections'][number];
-  }) =>
-    updateConfig((current) => ({
-      ...current,
-      revision: result.revision,
-      document: {
-        ...current.document,
-        execution: {
-          ...current.document.execution,
-          connections: current.document.execution.connections.some(
-            (connection) => connection.id === result.connection.id,
-          )
-            ? current.document.execution.connections.map((connection) =>
-                connection.id === result.connection.id ? result.connection : connection,
-              )
-            : [...current.document.execution.connections, result.connection],
-        },
-      },
-    }));
+  const refreshConfig = () => client.fetchQuery({
+    queryKey: RUNTIME_CONFIG_QUERY_KEY,
+    queryFn: () => apiClient.get('/api/config', RuntimeConfigSchema),
+    staleTime: 0,
+  });
   const conflict = (error: unknown) => {
-    if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict();
+    if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
   };
   const create = useMutation({
     mutationFn: (body: ConnectionInput & { id: string }) =>
       apiClient.post('/api/venue-connections', body, VenueMutationSchema),
-    onSuccess: syncConnection,
+    onSuccess: refreshConfig,
     onError: conflict,
   });
   const update = useMutation({
     mutationFn: ({ id, body }: { id: string; body: ConnectionInput }) =>
       apiClient.put(`/api/venue-connections/${id}`, body, VenueMutationSchema),
-    onSuccess: syncConnection,
+    onSuccess: refreshConfig,
     onError: conflict,
   });
   // Credential material must never become mutation variables: this plain async boundary is intentionally not cached.
@@ -81,25 +62,7 @@ export const useVenueConnections = () => {
       conflict(error);
       throw error;
     }
-    updateConfig((current) => ({
-      ...current,
-      revision: result.revision,
-      document: {
-        ...current.document,
-        execution: {
-          ...current.document.execution,
-          connections: current.document.execution.connections.map((connection) =>
-            connection.id === id
-              ? {
-                  ...connection,
-                  credential_configured: result.credential.configured,
-                  credential_updated_at: result.credential.updated_at,
-                }
-              : connection,
-          ),
-        },
-      },
-    }));
+    await refreshConfig();
     return result;
   };
   const test = useMutation({

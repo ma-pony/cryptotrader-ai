@@ -401,23 +401,13 @@ export const JsonValueSchema: z.ZodType<JsonValueOut> = z.lazy(() =>
     })
     .strict()
     .superRefine((value, ctx) => {
-      const required =
-        value.kind === 'boolean'
-          ? value.boolean_value
-          : value.kind === 'number'
-            ? value.number_value
-            : value.kind === 'string'
-              ? value.string_value
-              : value.kind === 'datetime'
-                ? value.datetime_value
-                : value.kind === 'pair'
-                  ? value.pair_value
-                  : true;
-      if (required === null) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'kind value is required' });
-      if (value.kind === 'array' && value.entries.length)
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'array cannot contain entries' });
-      if (value.kind === 'object' && value.items.length)
-        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'object cannot contain items' });
+      const scalars = ['boolean_value', 'number_value', 'string_value', 'datetime_value', 'pair_value'] as const;
+      const owner = value.kind === 'boolean' ? 'boolean_value' : value.kind === 'number' ? 'number_value' : value.kind === 'string' ? 'string_value' : value.kind === 'datetime' ? 'datetime_value' : value.kind === 'pair' ? 'pair_value' : null;
+      for (const field of scalars) {
+        if (field === owner ? value[field] === null : value[field] !== null) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: 'JsonValue envelope field does not match kind' });
+      }
+      if (value.kind === 'array' ? value.entries.length !== 0 : value.items.length !== 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: [value.kind === 'array' ? 'entries' : 'items'], message: 'JsonValue envelope container does not match kind' });
+      if (value.kind !== 'object' && value.entries.length !== 0) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['entries'], message: 'JsonValue envelope entries do not match kind' });
     }),
 );
 export const JsonEntrySchema: z.ZodType<{ key: string; value: JsonValueOut }> = z.lazy(() =>

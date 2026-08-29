@@ -2,5 +2,16 @@
   "setup": "初始化交易系统",
   "venues": "平台连接",
   "books": "执行资金池",
-  "revision": "配置版本"
+  "revision": "配置版本",
+  "loadError": "无法加载配置",
+  "retry": "重试",
+  "reload": "重新加载",
+  "conflict": "配置已被其他操作更新，请重新加载",
+  "save": "保存完整配置",
+  "saveFailed": "保存失败，请重新加载后重试。",
+  "activate": "测试并激活",
+  "activationRequired": "请完成信号、资金池和全部已启用连接测试。",
+  "commissioning": "初始化交易系统",
+  "venuesSubtitle": "连接环境创建后固定；凭据只保留在当前输入框，永不回显。",
+  "booksSubtitle": "固定权重将一个目标敞口按作用域分配到多个连接。"
 }

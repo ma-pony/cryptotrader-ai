@@ -86,7 +86,7 @@ export const useRuntimeConfig = () => {
       client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, saved);
     },
     onError: (error) => {
-      if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict();
+      if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
     },
   });
   const document = useMemo(() => (query.data ? toRuntimeDocument(query.data.document) : undefined), [query.data]);
@@ -102,7 +102,7 @@ export const useRuntimeConfig = () => {
   );
   const reload = async () => {
     const result = await query.refetch();
-    if (result.data) clearRuntimeConfigConflict();
+    if (result.isSuccess && !result.error) clearRuntimeConfigConflict(client);
     return result;
   };
   return {

@@ -2,5 +2,16 @@
   "setup": "Commission trading system",
   "venues": "Venue connections",
   "books": "Execution books",
-  "revision": "Configuration revision"
+  "revision": "Configuration revision",
+  "loadError": "Unable to load configuration",
+  "retry": "Retry",
+  "reload": "Reload",
+  "conflict": "Configuration was updated elsewhere. Reload to continue.",
+  "save": "Save full configuration",
+  "saveFailed": "Save failed. Reload and try again.",
+  "activate": "Test and activate",
+  "activationRequired": "Complete signals, execution books, and every enabled connection test.",
+  "commissioning": "Commission trading system",
+  "venuesSubtitle": "An environment is immutable after creation; credentials remain only in this form.",
+  "booksSubtitle": "Fixed weights distribute one target exposure across connections by scope."
 }

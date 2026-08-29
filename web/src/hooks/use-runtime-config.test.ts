@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { RuntimeConfigSchema } from '@/types/api.schema';
+import { JsonValueSchema, RuntimeConfigSchema } from '@/types/api.schema';
 import { decodeJsonValue, toRuntimeDocument } from './use-runtime-config';
 
 describe('runtime config response decoder', () => {
+  it('rejects every semantically impossible JsonValue envelope field', () => {
+    const base = { kind: 'null', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [], entries: [] };
+    expect(JsonValueSchema.safeParse({ ...base, boolean_value: false }).success).toBe(false);
+    expect(JsonValueSchema.safeParse({ ...base, kind: 'number', number_value: '1', items: [{}] }).success).toBe(false);
+    expect(JsonValueSchema.safeParse({ ...base, kind: 'array', items: [], entries: [{ key: 'bad', value: base }] }).success).toBe(false);
+    expect(JsonValueSchema.safeParse({ ...base, kind: 'object', items: [{}] }).success).toBe(false);
+  });
   it('recursively converts DTO envelopes into ordinary writable JSON', () => {
     expect(decodeJsonValue({ kind: 'object', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [], entries: [{ key: 'nested', value: { kind: 'array', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [{ kind: 'number', boolean_value: null, number_value: '2.5', string_value: null, datetime_value: null, pair_value: null, items: [], entries: [] }], entries: [] } }] })).toEqual({ nested: [2.5] });
   });

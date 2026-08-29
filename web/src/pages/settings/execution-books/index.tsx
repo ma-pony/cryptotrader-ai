@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { useRuntimeConfig } from '@/hooks/use-runtime-config';
+import { toRuntimeDocument } from '@/hooks/use-runtime-config';
 import { AllocationPreview } from './allocation-preview';
 import { BookForm, newBook, validateBooks } from './book-form';
 
@@ -13,16 +14,25 @@ const ExecutionBooksPage = () => {
   const [books, setBooks] = useState<NonNullable<typeof runtime.document>['execution']['books']>([]);
   const [equity, setEquity] = useState(100000);
   const [exposure, setExposure] = useState(0.5);
+  const [saveError, setSaveError] = useState('');
   useEffect(() => {
     if (document) setBooks(document.execution.books);
   }, [document]);
   const errors = document ? validateBooks(books, document.execution.connections) : [];
-  const save = () => document && void runtime.replace({ ...document, execution: { ...document.execution, books } });
+  const save = async () => {
+    if (!document) return;
+    try { setSaveError(''); await runtime.replace({ ...document, execution: { ...document.execution, books } }); }
+    catch { setSaveError('保存资金池失败，请重新加载后重试。'); }
+  };
+  const reload = async () => {
+    const result = await runtime.reload();
+    if (result.isSuccess && !result.error && result.data) setBooks(toRuntimeDocument(result.data.document).execution.books);
+  };
   return (
     <PageBoundary
       loading={runtime.isLoading}
       isError={runtime.isError}
-      onRetry={() => void runtime.reload()}
+      onRetry={() => void reload()}
       errorTitle="无法读取资金池配置"
       errorDescription="请检查配置服务后重试。"
     >
@@ -110,12 +120,9 @@ const ExecutionBooksPage = () => {
               {error}
             </p>
           ))}
-          {runtime.conflict ? (
-            <p role="alert" className="text-sm text-trade-short">
-              配置已被其他操作更新，请重新加载
-            </p>
-          ) : null}
-          <Button disabled={runtime.isSaving || errors.length > 0} onClick={save}>
+          {runtime.conflict ? <div className="flex gap-2"><p role="alert" className="text-sm text-trade-short">配置已被其他操作更新，请重新加载</p><Button variant="outline" onClick={() => void reload()}>重新加载</Button></div> : null}
+          {saveError ? <p role="alert" className="text-sm text-trade-short">{saveError}</p> : null}
+          <Button disabled={runtime.isSaving || errors.length > 0} onClick={() => void save()}>
             <Save className="h-4 w-4" />
             保存完整配置
           </Button>

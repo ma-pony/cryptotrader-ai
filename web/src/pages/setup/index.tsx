@@ -1,5 +1,6 @@
 import { ArrowRight, CheckCircle2, Plus } from 'lucide-react';
 import { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { decodeEntries, useRuntimeConfig } from '@/hooks/use-runtime-config';
@@ -14,6 +15,7 @@ type ResponseConnection = RuntimeConfig['document']['execution']['connections'][
 const testFingerprint = (connection: DraftConnection, credentialUpdatedAt?: string | null) =>
   JSON.stringify({
     id: connection.id,
+    label: connection.label,
     adapter: connection.adapter_id,
     environment: connection.environment,
     enabled: connection.enabled,
@@ -28,7 +30,14 @@ const asDraftConnection = (connection: ResponseConnection): DraftConnection => {
   return { ...rest, parameters: decodeEntries(parameters) } as DraftConnection;
 };
 
-const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) => {
+const SetupEditor = ({
+  initialDocument,
+  onReload,
+}: {
+  initialDocument: RuntimeDocument;
+  onReload: () => Promise<void>;
+}) => {
+  const { t } = useTranslation('configuration');
   const runtime = useRuntimeConfig();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState(initialDocument);
@@ -37,11 +46,26 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
     JSON.stringify(initialDocument.market_data.parameters, null, 2),
   );
   const [marketError, setMarketError] = useState('');
+  const [marketDirty, setMarketDirty] = useState(false);
+  const [customId, setCustomId] = useState('');
+  const [customParameters, setCustomParameters] = useState('{}');
+  const [signalError, setSignalError] = useState('');
+  const [riskText, setRiskText] = useState(JSON.stringify(initialDocument.risk, null, 2));
+  const [riskError, setRiskError] = useState('');
   const [activationError, setActivationError] = useState('');
 
   const enabledConnections = draft.execution.connections.filter((connection) => connection.enabled);
   const bookErrors = validateBooks(draft.execution.books, draft.execution.connections);
-  const enabledComponents = draft.signals.components.some((component) => component.enabled);
+  const enabled = draft.signals.components.filter((component) => component.enabled);
+  const signalValid =
+    enabled.length > 0 &&
+    Math.abs(enabled.reduce((sum, component) => sum + component.weight, 0) - 1) < 1e-9 &&
+    draft.signals.neutral_threshold >= 0 &&
+    draft.signals.neutral_threshold < 1 &&
+    draft.signals.max_target_ratio > 0 &&
+    draft.signals.max_target_ratio <= 1 &&
+    draft.signals.atr_stop_multiplier > 0 &&
+    draft.signals.reward_ratio > 0;
   const connectionsTested =
     enabledConnections.length > 0 &&
     enabledConnections.every(
@@ -49,10 +73,12 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
         tested[connection.id] === testFingerprint(connection, runtime.credentialStates[connection.id]?.updatedAt),
     );
   const ready =
-    enabledComponents &&
+    signalValid &&
     draft.execution.books.some((book) => book.enabled) &&
     bookErrors.length === 0 &&
-    connectionsTested;
+    connectionsTested &&
+    !marketDirty &&
+    !marketError;
 
   const applyMarketParameters = () => {
     try {
@@ -61,6 +87,7 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
         throw new Error('object expected');
       setDraft((current) => ({ ...current, market_data: { ...current.market_data, parameters } }));
       setMarketError('');
+      setMarketDirty(false);
     } catch {
       setMarketError('行情参数必须是 JSON 对象。');
     }
@@ -117,6 +144,10 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
               />
             </label>
           ))}
+          <label>Base URL<input aria-label="LLM base URL" value={draft.llm.base_url} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, base_url: event.target.value } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <label>默认温度<input aria-label="LLM 默认温度" type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <label>超时<input aria-label="LLM 超时" type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
         </div>
       );
     }
@@ -162,30 +193,19 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
               />
             </div>
           ))}
-          <Button
-            type="button"
-            variant="outline"
-            onClick={() =>
-              setDraft((current) => ({
-                ...current,
-                signals: {
-                  ...current.signals,
-                  components: [
-                    ...current.signals.components,
-                    {
-                      component_id: `custom-${current.signals.components.length + 1}`,
-                      enabled: false,
-                      weight: 0,
-                      parameters: {},
-                    },
-                  ],
-                },
-              }))
-            }
-          >
-            <Plus className="h-4 w-4" />
-            添加自定义组件
-          </Button>
+          <div className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
+            <input aria-label="自定义 component ID" value={customId} onChange={(event) => setCustomId(event.target.value)} placeholder="自定义 component ID" className="h-10 rounded border bg-background px-3" />
+            <input aria-label="自定义 component 参数" value={customParameters} onChange={(event) => setCustomParameters(event.target.value)} placeholder="{}" className="h-10 rounded border bg-background px-3 font-mono" />
+            <Button type="button" variant="outline" onClick={() => {
+              try {
+                const id = customId.trim(); const parameters = JSON.parse(customParameters) as Record<string, unknown>;
+                if (!id || draft.signals.components.some((component) => component.component_id === id) || !parameters || Array.isArray(parameters)) throw new Error();
+                setDraft((current) => ({ ...current, signals: { ...current.signals, components: [...current.signals.components, { component_id: id, enabled: false, weight: 0, parameters }] } }));
+                setCustomId(''); setCustomParameters('{}'); setSignalError('');
+              } catch { setSignalError('自定义组件 ID 必须唯一，参数必须是 JSON 对象。'); }
+            }}><Plus className="h-4 w-4" />添加自定义组件</Button>
+          </div>
+          {signalError ? <p role="alert" className="text-sm text-trade-short">{signalError}</p> : null}
           <label>
             中性阈值
             <input
@@ -201,6 +221,10 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
+          <label>最大目标比例<input aria-label="最大目标比例" type="number" value={draft.signals.max_target_ratio} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, max_target_ratio: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>ATR 止损<input aria-label="ATR 止损" type="number" value={draft.signals.atr_stop_multiplier} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, atr_stop_multiplier: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>盈亏比<input aria-label="盈亏比" type="number" value={draft.signals.reward_ratio} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, reward_ratio: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label className="flex items-center gap-2"><input aria-label="信号 HITL" type="checkbox" checked={draft.signals.hitl_required} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, hitl_required: event.target.checked } }))} />信号 HITL</label>
         </div>
       );
     if (step === 2)
@@ -225,7 +249,7 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
             <textarea
               aria-label="行情 JSON 参数"
               value={marketParameters}
-              onChange={(event) => setMarketParameters(event.target.value)}
+              onChange={(event) => { setMarketParameters(event.target.value); setMarketDirty(true); }}
               className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs"
             />
           </label>
@@ -344,6 +368,9 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
+          <label className="md:col-span-2">完整风控 JSON（position/loss/cooldown/volatility/exchange/rate_limit）<textarea aria-label="完整风控 JSON" value={riskText} onChange={(event) => setRiskText(event.target.value)} className="mt-1 min-h-36 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
+          <Button type="button" variant="outline" onClick={() => { try { const risk = JSON.parse(riskText) as RuntimeDocument['risk']; if (!risk || Array.isArray(risk)) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); } catch { setRiskError('风控配置必须是 JSON 对象。'); } }}>应用完整风控配置</Button>
+          {riskError ? <p role="alert" className="text-sm text-trade-short">{riskError}</p> : null}
         </div>
       );
     if (step === 6)
@@ -378,6 +405,8 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
+          <label>交易对（逗号分隔）<input aria-label="调度交易对" value={draft.scheduler.pairs.join(',')} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, pairs: event.target.value.split(',').map((pair) => pair.trim()).filter(Boolean) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>日报小时<input aria-label="日报小时" type="number" value={draft.scheduler.daily_summary_hour} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, daily_summary_hour: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
         </div>
       );
     return (
@@ -405,7 +434,7 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
       <div className="mx-auto max-w-5xl">
         <header className="border-b border-amber-500/30 pb-6">
           <p className="font-mono text-xs tracking-[.24em] text-amber-500">COMMISSIONING / REV {runtime.revision}</p>
-          <h1 className="mt-3 text-3xl font-semibold">初始化交易系统</h1>
+          <h1 className="mt-3 text-3xl font-semibold">{t('commissioning')}</h1>
           <p className="mt-2 text-muted-foreground">依次完成八个 commissioning 阶段；激活后才进入操作台。</p>
         </header>
         <div className="mt-8 grid gap-6 lg:grid-cols-[230px_1fr]">
@@ -434,7 +463,7 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
                 <p role="alert" className="text-sm text-trade-short">
                   配置已被其他操作更新，请重新加载
                 </p>
-                <Button size="sm" variant="outline" onClick={() => void runtime.reload()}>
+                <Button size="sm" variant="outline" onClick={() => void onReload()}>
                   重新加载
                 </Button>
               </div>
@@ -447,19 +476,25 @@ const SetupEditor = ({ initialDocument }: { initialDocument: RuntimeDocument }) 
 };
 
 const SetupPage = () => {
+  const { t } = useTranslation('configuration');
   const runtime = useRuntimeConfig();
+  const [editorVersion, setEditorVersion] = useState(0);
+  const reloadEditor = async () => {
+    const result = await runtime.reload();
+    if (result.isSuccess && !result.error) setEditorVersion((version) => version + 1);
+  };
   if (runtime.isLoading)
     return <div className="grid min-h-screen place-items-center text-amber-500">LOADING CONFIG…</div>;
   if (runtime.isError || !runtime.document || runtime.revision === undefined)
     return (
       <main className="grid min-h-screen place-items-center">
         <div>
-          <h1>无法加载初始化配置</h1>
-          <Button onClick={() => void runtime.reload()}>重试</Button>
+          <h1>{t('loadError')}</h1>
+          <Button onClick={() => void reloadEditor()}>{t('retry')}</Button>
         </div>
       </main>
     );
-  return <SetupEditor initialDocument={runtime.document} />;
+  return <SetupEditor key={editorVersion} initialDocument={runtime.document} onReload={reloadEditor} />;
 };
 
 export default SetupPage;

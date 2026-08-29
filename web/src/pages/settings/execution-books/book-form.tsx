@@ -11,10 +11,16 @@ export const validateBooks = (books: Book[], connections: Connection[]) => {
   const used = new Set<string>();
   const errors: string[] = [];
   const bookIds = new Set<string>();
-  for (const book of books.filter((item) => item.enabled)) {
+  for (const book of books) {
     if (!book.id.trim() || !book.label.trim()) errors.push('资金池 ID 和名称不能为空');
     if (bookIds.has(book.id)) errors.push('资金池 ID 不能重复');
     bookIds.add(book.id);
+    const allAllocations = new Set<string>();
+    for (const allocation of book.allocations) {
+      if (allAllocations.has(allocation.connection_id)) errors.push('同一资金池不能重复 allocation');
+      allAllocations.add(allocation.connection_id);
+    }
+    if (!book.enabled) continue;
     const enabled = book.allocations.filter((item) => item.enabled);
     if (enabled.length === 0 || Math.abs(enabled.reduce((sum, item) => sum + item.weight, 0) - 1) > 1e-9)
       errors.push(`${book.label} 的启用 allocation 权重必须精确合计 100%`);
