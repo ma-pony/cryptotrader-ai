@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from cryptotrader.config import TriggersConfig
+from cryptotrader.runtime_config.models import TriggerConfig
 from cryptotrader.triggers.engine import PriceTriggerEngine
 
 # ---------------------------------------------------------------------------
@@ -43,17 +43,14 @@ def _make_rule(
     return rule
 
 
-def _make_config(**kwargs) -> TriggersConfig:
-    cfg = TriggersConfig()
-    for k, v in kwargs.items():
-        setattr(cfg, k, v)
-    return cfg
+def _make_config(**kwargs) -> TriggerConfig:
+    return TriggerConfig(**kwargs)
 
 
 def _make_engine(
     rules: list | None = None,
     run_cb: Any = None,
-    config: TriggersConfig | None = None,
+    config: TriggerConfig | None = None,
 ) -> tuple[PriceTriggerEngine, MagicMock, MagicMock]:
     store = AsyncMock()
     store.list_rules = AsyncMock(return_value=rules or [])
@@ -70,6 +67,11 @@ def _make_engine(
     return engine, store, redis
 
 
+def _discard_background_coroutine(coroutine):
+    coroutine.close()
+    return MagicMock()
+
+
 # ---------------------------------------------------------------------------
 # start / stop lifecycle
 # ---------------------------------------------------------------------------
@@ -78,19 +80,19 @@ def _make_engine(
 class TestLifecycle:
     async def test_start_sets_running_flag(self) -> None:
         engine, _store, _ = _make_engine()
-        with patch("cryptotrader.triggers.engine.asyncio.create_task", return_value=MagicMock()):
+        with patch("cryptotrader.triggers.engine.asyncio.create_task", side_effect=_discard_background_coroutine):
             await engine.start()
         assert engine._running is True
 
     async def test_start_calls_reload_rules(self) -> None:
         engine, store, _ = _make_engine()
-        with patch("cryptotrader.triggers.engine.asyncio.create_task", return_value=MagicMock()):
+        with patch("cryptotrader.triggers.engine.asyncio.create_task", side_effect=_discard_background_coroutine):
             await engine.start()
         store.list_rules.assert_awaited_once_with(enabled_only=True)
 
     async def test_start_twice_is_idempotent(self) -> None:
         engine, store, _ = _make_engine()
-        with patch("cryptotrader.triggers.engine.asyncio.create_task", return_value=MagicMock()):
+        with patch("cryptotrader.triggers.engine.asyncio.create_task", side_effect=_discard_background_coroutine):
             await engine.start()
             await engine.start()
         assert store.list_rules.await_count == 1
@@ -244,9 +246,9 @@ class TestDispatch:
 
         redis.set.assert_awaited_once_with("trigger:cooldown:rule-1", "1", ex=30 * 60)
 
-    async def test_dispatch_callback_failure_does_not_raise(self) -> None:
+    async def test_dispatch_callback_failure_does_not_raise_or_log_raw_error(self, caplog) -> None:
         async def _failing_cb(pair, data):
-            raise RuntimeError("callback failed")
+            raise RuntimeError("raw adapter credential")
 
         engine, _store, redis = _make_engine(run_cb=_failing_cb)
         redis.get = AsyncMock(return_value=None)
@@ -255,6 +257,7 @@ class TestDispatch:
 
         # Should not raise
         await engine._dispatch(rule, snapshot)
+        assert "credential" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

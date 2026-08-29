@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from cryptotrader.cycle_events import CycleEvent
 from cryptotrader.decision.models import CycleOutcome
+
+
+@pytest.fixture(autouse=True)
+def _reset_task_manager():
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+
+    BackgroundTaskManager.reset()
+    yield
+    BackgroundTaskManager.reset()
 
 
 class _Bus:
@@ -125,7 +134,193 @@ def _runtime_for(cycle):
     events = MultiplexedCycleEventSink(NullCycleEventSink())
     if hasattr(cycle, "events"):
         cycle.events = events
-    return SimpleNamespace(cycle=cycle, events=events)
+
+    async def reload_for_cycle():
+        return cycle
+
+    return SimpleNamespace(
+        cycle=cycle,
+        events=events,
+        snapshot=SimpleNamespace(revision=1),
+        reload_for_cycle=reload_for_cycle,
+    )
+
+
+@pytest.mark.asyncio
+async def test_chat_reloads_once_reports_each_book_and_publishes_strict_terminal() -> None:
+    from cryptotrader.chat.analysis_runner import run_analysis_and_buffer
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
+
+    books = (
+        SimpleNamespace(
+            book_id="simulation",
+            capital_scope="simulated",
+            status="completed",
+            execution=SimpleNamespace(status="completed", requires_attention=False),
+            raw_error="must never escape",
+        ),
+        SimpleNamespace(
+            book_id="live",
+            capital_scope="real",
+            status="partial",
+            execution=SimpleNamespace(status="partial", requires_attention=True),
+            raw_error="credential and adapter detail",
+        ),
+    )
+
+    class Cycle:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def run(self, request):
+            self.requests.append(request)
+            return CycleOutcome("chat-cycle", 12, None, books, "partial", "partial", True)
+
+    cycle = Cycle()
+    runtime = SimpleNamespace(
+        cycle=cycle,
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+        snapshot=SimpleNamespace(revision=11),
+        reload_for_cycle=AsyncMock(return_value=cycle),
+    )
+    bus = _Bus()
+
+    outcome = await run_analysis_and_buffer(
+        pair="BTC/USDT",
+        session_id="books",
+        event_bus=bus,
+        interrupt_event=asyncio.Event(),
+        state_mgr=_State(),
+        runtime=runtime,
+    )
+
+    assert outcome.cycle_id == "chat-cycle"
+    runtime.reload_for_cycle.assert_awaited_once_with()
+    assert len(cycle.requests) == 1
+    book_events = [data for name, data in bus.events if name == "book_result"]
+    assert book_events == [
+        {
+            "book_id": "simulation",
+            "capital_scope": "simulated",
+            "status": "completed",
+            "execution_status": "completed",
+            "requires_attention": False,
+        },
+        {
+            "book_id": "live",
+            "capital_scope": "real",
+            "status": "partial",
+            "execution_status": "partial",
+            "requires_attention": True,
+        },
+    ]
+    terminal = next(data for name, data in bus.events if name == "stream_done")
+    assert terminal == {
+        "session_id": "books",
+        "cycle_id": "chat-cycle",
+        "config_revision": 12,
+        "status": "partial",
+        "execution_status": "partial",
+        "requires_attention": True,
+    }
+    assert "raw_error" not in repr(bus.events)
+
+
+@pytest.mark.asyncio
+async def test_interrupt_after_execution_started_waits_and_returns_exact_outcome() -> None:
+    from api.routes.chat_control import interrupt_analysis
+    from cryptotrader.chat.event_buffer import EventBuffer
+    from cryptotrader.chat.event_bus import EventBus
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+    from cryptotrader.risk.state import RedisStateManager
+
+    state = RedisStateManager(None)
+    bus = EventBus("execution-session", EventBuffer("execution-session", state))
+    release = asyncio.Event()
+
+    async def runner(_interrupt_event):
+        await bus.publish(
+            "book_execution_started",
+            {"cycle_id": "order-cycle", "config_revision": 14, "book_id": "live"},
+        )
+        await release.wait()
+        return CycleOutcome("order-cycle", 14, None, (), "partial", "partial", True)
+
+    manager = BackgroundTaskManager.get_instance()
+    analysis = manager.create("execution-session", "BTC/USDT", runner, "chat", bus)
+    await bus.wait_for_execution_started()
+
+    response_task = asyncio.create_task(interrupt_analysis("execution-session"))
+    await asyncio.sleep(0)
+
+    assert not analysis.task.cancelled()
+    assert not analysis.interrupt_event.is_set()
+    assert not response_task.done()
+
+    release.set()
+    response = await response_task
+    assert response.model_dump() == {
+        "type": "execution_in_progress",
+        "session_id": "execution-session",
+        "cycle_id": "order-cycle",
+        "status": "partial",
+        "execution_status": "partial",
+        "requires_attention": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_same_session_replacement_after_execution_started_returns_safe_409() -> None:
+    from fastapi import HTTPException
+
+    from api.routes.chat import ChatStreamRequest, _handle_new_analysis
+    from cryptotrader.chat.event_buffer import EventBuffer
+    from cryptotrader.chat.event_bus import EventBus
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+    from cryptotrader.risk.state import RedisStateManager
+
+    state = RedisStateManager(None)
+    bus = EventBus("same-session", EventBuffer("same-session", state))
+    release = asyncio.Event()
+
+    async def old_runner(_interrupt_event):
+        await bus.publish(
+            "book_execution_started",
+            {"cycle_id": "old-cycle", "config_revision": 15, "book_id": "live"},
+        )
+        await release.wait()
+        return CycleOutcome("old-cycle", 15, None, (), "completed", "completed", False)
+
+    manager = BackgroundTaskManager.get_instance()
+    old = manager.create("same-session", "BTC/USDT", old_runner, "chat", bus)
+    await bus.wait_for_execution_started()
+
+    runtime = SimpleNamespace(
+        cycle=object(),
+        snapshot=SimpleNamespace(
+            document=SimpleNamespace(
+                scheduler=SimpleNamespace(pairs=("BTC/USDT",)),
+                infrastructure=SimpleNamespace(redis_url=""),
+            )
+        ),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
+
+    with pytest.raises(HTTPException) as error:
+        await _handle_new_analysis(
+            "same-session",
+            ChatStreamRequest(message="BTC/USDT"),
+            request,
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail == "Analysis execution is already in progress"
+    assert manager.get("same-session") is old
+    assert not old.interrupt_event.is_set()
+    assert not old.task.cancelled()
+
+    release.set()
+    await old.task
 
 
 @pytest.mark.asyncio
@@ -148,6 +343,7 @@ async def test_mounted_chat_handler_never_reaches_legacy_load_config():
             )
         ),
     )
+    runtime.reload_for_cycle = AsyncMock(return_value=runtime.cycle)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
 
     with patch("cryptotrader.config.load_config", side_effect=AssertionError("legacy load_config reached")):
@@ -207,6 +403,7 @@ async def test_real_runtime_cycle_routes_concurrent_component_events_to_the_corr
         venue_registry=object(),
         events=routed,
     )
+    runtime.reload_for_cycle = AsyncMock(return_value=cycle)
     first_state = _EventState()
     second_state = _EventState()
     first_bus = EventBus("first-session", EventBuffer("first-session", first_state))

@@ -4,9 +4,13 @@ from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+import pytest
+import typer
 from typer.testing import CliRunner
 
 from cli.main import app
+from cryptotrader.decision.models import CycleOutcome, CycleRequest
+from cryptotrader.pair import Pair
 from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
 from cryptotrader.signals.registry import ComponentMetadata
 from tests.factories.runtime_config import runtime_document
@@ -25,6 +29,80 @@ def test_run_command_has_no_graph_option() -> None:
 
     assert result.exit_code == 0
     assert "--graph" not in result.output
+    assert "--mode" not in result.output
+    assert "--exchange" not in result.output
+
+
+@pytest.mark.asyncio
+async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
+    from cli.main import _run
+
+    class Cycle:
+        def __init__(self) -> None:
+            self.requests = []
+
+        async def run(self, request):
+            self.requests.append(request)
+            return CycleOutcome("cli-cycle", 6, None, (), "no_change", "not_started", False)
+
+    cycle = Cycle()
+    runtime = SimpleNamespace(
+        snapshot=RuntimeConfigSnapshot(6, runtime_document(), datetime(2026, 8, 29, tzinfo=UTC)),
+        cycle=cycle,
+        reload_for_cycle=AsyncMock(return_value=cycle),
+        close=AsyncMock(),
+    )
+
+    with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
+        await _run(["BTC/USDT", "ETH/USDT"])
+
+    assert runtime.reload_for_cycle.await_count == 2
+    assert cycle.requests == [
+        CycleRequest(Pair.parse("BTC/USDT")),
+        CycleRequest(Pair.parse("ETH/USDT")),
+    ]
+    runtime.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_run_closes_setup_required_runtime() -> None:
+    from cli.main import _run
+
+    runtime = SimpleNamespace(cycle=None, close=AsyncMock())
+    with (
+        patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)),
+        pytest.raises(typer.Exit),
+    ):
+        await _run(["BTC/USDT"])
+
+    runtime.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_command_owns_runtime_and_closes_after_scheduler_stops() -> None:
+    from cli.main import _scheduler_start
+
+    document = runtime_document().model_copy(
+        update={
+            "scheduler": SimpleNamespace(
+                enabled=True,
+                pairs=("BTC/USDT",),
+                interval_minutes=15,
+                daily_summary_hour=0,
+            )
+        }
+    )
+    runtime = SimpleNamespace(snapshot=SimpleNamespace(document=document), close=AsyncMock())
+    scheduler = SimpleNamespace(start=AsyncMock())
+    with (
+        patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)),
+        patch("cryptotrader.scheduler.Scheduler", return_value=scheduler) as scheduler_type,
+    ):
+        await _scheduler_start()
+
+    scheduler_type.assert_called_once_with(document.scheduler, runtime)
+    scheduler.start.assert_awaited_once_with()
+    runtime.close.assert_awaited_once_with()
 
 
 def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:

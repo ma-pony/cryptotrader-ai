@@ -13,6 +13,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from cryptotrader.chat.event_bus import EventBus
+    from cryptotrader.decision.models import CycleOutcome
 
     WorkflowPublisher = Callable[[str, str], Awaitable[object]]
 
@@ -23,16 +24,21 @@ class TooManyTasksError(Exception):
     pass
 
 
+class ExecutionInProgressError(Exception):
+    pass
+
+
 @dataclass
 class AnalysisTask:
     session_id: str
     pair: str
     trigger_source: str
-    task: asyncio.Task[None]
+    task: asyncio.Task[CycleOutcome | None]
     interrupt_event: asyncio.Event
     event_bus: EventBus
     created_at: float = field(default_factory=time.monotonic)
     completed: bool = False
+    outcome: CycleOutcome | None = None
 
 
 class BackgroundTaskManager:
@@ -72,15 +78,18 @@ class BackgroundTaskManager:
         self,
         session_id: str,
         pair: str,
-        runner: Callable[[asyncio.Event], Awaitable[None]],
+        runner: Callable[[asyncio.Event], Awaitable[CycleOutcome | None]],
         trigger_source: str,
         event_bus: EventBus,
     ) -> AnalysisTask:
+        existing = self._tasks.get(session_id)
+        if existing and not existing.completed and existing.event_bus.execution_started:
+            raise ExecutionInProgressError("analysis execution is already in progress")
+
         active_count = sum(1 for t in self._tasks.values() if not t.completed)
         if active_count >= self._max_concurrent_tasks:
             raise TooManyTasksError(f"Max concurrent tasks ({self._max_concurrent_tasks}) reached")
 
-        existing = self._tasks.get(session_id)
         if existing and not existing.completed:
             notify_task = asyncio.ensure_future(
                 existing.event_bus.publish("session_replaced", {"session_id": session_id})
@@ -117,6 +126,8 @@ class BackgroundTaskManager:
         task = self._tasks.get(session_id)
         if task is None or task.completed:
             return None
+        if task.event_bus.execution_started:
+            return None
         if task.interrupt_event.is_set():
             return None
         task.interrupt_event.set()
@@ -140,13 +151,15 @@ class BackgroundTaskManager:
             )
             await publisher("analysis:new_workflow", payload)
         except Exception:
-            logger.info("Failed to broadcast new_workflow", exc_info=True)
+            logger.info("Failed to broadcast new_workflow")
 
-    def _on_task_done(self, session_id: str, completed_task: asyncio.Task[None]) -> None:
+    def _on_task_done(self, session_id: str, completed_task: asyncio.Task[CycleOutcome | None]) -> None:
         analysis_task = self._tasks.get(session_id)
         if analysis_task is None or analysis_task.task is not completed_task:
             return
         analysis_task.completed = True
+        if not completed_task.cancelled() and completed_task.exception() is None:
+            analysis_task.outcome = completed_task.result()
         duration_ms = int((time.monotonic() - analysis_task.created_at) * 1000)
         logger.info(
             "Analysis task completed: session_id=%s pair=%s duration_ms=%d",

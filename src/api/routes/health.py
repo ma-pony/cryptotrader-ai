@@ -31,6 +31,16 @@ _redis_clients: dict[str, aioredis.Redis] = {}  # type: ignore[name-defined]
 _db_engines: dict[str, object] = {}
 
 
+def _runtime_summary(runtime) -> dict[str, object]:
+    document = runtime.snapshot.document
+    return {
+        "config_revision": runtime.snapshot.revision,
+        "pairs": [pair.canonical() if hasattr(pair, "canonical") else str(pair) for pair in document.scheduler.pairs],
+        "enabled_books": [book.id for book in document.execution.books if book.enabled],
+        "cycle_status": "active" if runtime.cycle is not None else "inactive",
+    }
+
+
 def _reset_health_clients() -> None:
     """Clear cached clients (used by tests / on shutdown)."""
     _redis_clients.clear()
@@ -85,7 +95,7 @@ async def _check_llm(base_url: str, api_key: str) -> str:
                 return "ok"
         return "unavailable"
     except Exception:
-        logger.info("LLM health check failed", exc_info=True)
+        logger.info("LLM health check failed")
         return "unavailable"
 
 
@@ -114,6 +124,7 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
             content={
                 "status": "setup_required",
                 "checks": {"api": "ok", "runtime": "setup_required"},
+                "runtime": _runtime_summary(runtime),
                 "uptime_seconds": round(time.time() - _start_time),
             },
         )
@@ -131,7 +142,7 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
             await r.ping()
             checks["redis"] = "ok"
         except Exception:
-            logger.info("Redis health check failed", exc_info=True)
+            logger.info("Redis health check failed")
             checks["redis"] = "unavailable"
             # Drop dead client so next probe rebuilds it.
             _redis_clients.pop(redis_url, None)
@@ -150,7 +161,7 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
                 await conn.execute(text("SELECT 1"))
             checks["db"] = "ok"
         except Exception:
-            logger.info("DB health check failed", exc_info=True)
+            logger.info("DB health check failed")
             checks["db"] = "unavailable"
             # Dispose + drop dead engine so next probe rebuilds it.
             old = _db_engines.pop(db_url, None)
@@ -158,7 +169,7 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
                 try:
                     await old.dispose()  # type: ignore[union-attr]
                 except Exception:
-                    logger.info("Engine dispose failed", exc_info=True)
+                    logger.info("Engine dispose failed")
     else:
         checks["db"] = "not_configured"
 
@@ -179,6 +190,7 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
         content={
             "status": status,
             "checks": checks,
+            "runtime": _runtime_summary(runtime),
             "uptime_seconds": round(time.time() - _start_time),
         },
     )

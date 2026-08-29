@@ -15,10 +15,16 @@ def _runtime(*, setup_required=False, db_url="", redis_url="", llm_base_url=""):
         infrastructure=SimpleNamespace(redis_url=redis_url),
         llm=SimpleNamespace(base_url=llm_base_url),
         triggers=SimpleNamespace(enabled=False),
-        scheduler=SimpleNamespace(enabled=False),
+        scheduler=SimpleNamespace(enabled=False, pairs=("BTC/USDT", "ETH/USDT")),
+        execution=SimpleNamespace(
+            books=(
+                SimpleNamespace(id="simulation", enabled=True),
+                SimpleNamespace(id="disabled", enabled=False),
+            )
+        ),
     )
     return SimpleNamespace(
-        snapshot=SimpleNamespace(document=document, setup_required=setup_required),
+        snapshot=SimpleNamespace(revision=17, document=document, setup_required=setup_required),
         repository=SimpleNamespace(database_url=db_url),
         cycle=None,
         close=AsyncMock(),
@@ -220,6 +226,19 @@ def test_health_response_includes_uptime(client):
 
     assert response.json()["checks"]["api"] == "ok"
     assert response.json()["uptime_seconds"] >= 0
+
+
+def test_health_reports_safe_runtime_revision_pairs_and_books(client):
+    _use(client)
+
+    response = client.get("/health")
+
+    assert response.json()["runtime"] == {
+        "config_revision": 17,
+        "pairs": ["BTC/USDT", "ETH/USDT"],
+        "enabled_books": ["simulation"],
+        "cycle_status": "inactive",
+    }
 
 
 @pytest.mark.parametrize("status_code", [200, 401, 404])

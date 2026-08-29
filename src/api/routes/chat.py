@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import uuid
 
@@ -94,12 +95,25 @@ async def _handle_new_analysis(
     from cryptotrader.chat.analysis_runner import run_analysis_and_buffer
     from cryptotrader.chat.event_buffer import EventBuffer
     from cryptotrader.chat.event_bus import EventBus
-    from cryptotrader.chat.task_manager import BackgroundTaskManager, TooManyTasksError
+    from cryptotrader.chat.task_manager import (
+        BackgroundTaskManager,
+        ExecutionInProgressError,
+        TooManyTasksError,
+    )
     from cryptotrader.risk.state import RedisStateManager
 
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None or runtime.cycle is None:
         raise HTTPException(status_code=503, detail="Trading runtime is not active")
+    manager = BackgroundTaskManager.get_instance(workflow_publisher=None)
+    existing = manager.get(session_id)
+    if existing is not None and not existing.completed:
+        if existing.event_bus.execution_started:
+            raise HTTPException(status_code=409, detail="Analysis execution is already in progress")
+        interrupted = manager.interrupt(session_id)
+        pending = interrupted or existing
+        with contextlib.suppress(asyncio.CancelledError):
+            await pending.task
     config = runtime.snapshot.document
     pair = (
         payload.message.strip().upper()
@@ -134,6 +148,8 @@ async def _handle_new_analysis(
             "chat",
             bus,
         )
+    except ExecutionInProgressError as error:
+        raise HTTPException(status_code=409, detail="Analysis execution is already in progress") from error
     except TooManyTasksError as error:
         raise HTTPException(status_code=429, detail="Too many concurrent analyses") from error
     return StreamingResponse(

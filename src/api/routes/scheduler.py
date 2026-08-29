@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
@@ -51,7 +51,7 @@ class PairStatus(BaseModel):
     last_run: datetime | None = None
     last_action: str | None = None
     risk_passed: bool | None = None
-    last_error: str | None = None
+    last_error: Literal["cycle_failed", "cycle_timeout"] | None = None
     trace_id: str | None = None
 
 
@@ -63,8 +63,10 @@ class SchedulerStatusResponse(BaseModel):
     cycle_count: int
     interval_minutes: int
     pairs: list[str]
+    config_revision: int | None = None
+    enabled_books: list[str] = Field(default_factory=list)
     # Per-pair last-cycle outcome — empty when scheduler hasn't run yet.
-    pair_statuses: list[PairStatus] = []
+    pair_statuses: list[PairStatus] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -91,6 +93,11 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
     can degrade gracefully.
     """
     scheduler = _get_scheduler(request)
+    runtime = scheduler.runtime if scheduler is not None else getattr(request.app.state, "runtime", None)
+    revision = runtime.snapshot.revision if runtime is not None else None
+    books = (
+        [book.id for book in runtime.snapshot.document.execution.books if book.enabled] if runtime is not None else []
+    )
 
     if scheduler is None or not scheduler._scheduler.running:
         return SchedulerStatusResponse(
@@ -101,6 +108,8 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
             # Per spec 013: scheduler.pairs is list[Pair]; project to canonical
             # str for the API response (frontend type is list[str]).
             pairs=[p.canonical() for p in scheduler.pairs] if scheduler else [],
+            config_revision=revision,
+            enabled_books=books,
         )
 
     # Scheduler is running — collect live job data
@@ -156,6 +165,8 @@ async def scheduler_status(request: Request) -> SchedulerStatusResponse:
         cycle_count=scheduler._cycle_count,
         interval_minutes=scheduler.interval_minutes,
         pairs=[p.canonical() for p in scheduler.pairs],
+        config_revision=revision,
+        enabled_books=books,
         pair_statuses=pair_statuses,
     )
 
@@ -169,6 +180,9 @@ class SchedulerContractStatus(BaseModel):
     """Data-model §2 SchedulerStatus shape for the React Dashboard."""
 
     enabled: bool
+    config_revision: int
+    pairs: list[str]
+    enabled_books: list[str]
     next_pair: str | None
     next_run_at: datetime | None
     redis_available: bool
@@ -225,6 +239,9 @@ async def scheduler_status_v2(request: Request) -> SchedulerContractStatus:
 
     return SchedulerContractStatus(
         enabled=bool(getattr(config.scheduler, "enabled", False)),
+        config_revision=runtime.snapshot.revision,
+        pairs=[pair.canonical() if hasattr(pair, "canonical") else str(pair) for pair in config.scheduler.pairs],
+        enabled_books=[book.id for book in config.execution.books if book.enabled],
         next_pair=next_pair,
         next_run_at=next_run_at,
         redis_available=bool(rsm.available),

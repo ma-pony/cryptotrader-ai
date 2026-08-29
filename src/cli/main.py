@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-# Load .env into os.environ BEFORE any project import. Several CLI
-# commands (`arena migrate`, `arena scheduler start`) need DATABASE_URL /
-# REDIS_URL / API keys from .env.
+# Load the two bootstrap settings before project imports so Runtime-backed
+# commands can resolve DATABASE_URL and CONFIG_MASTER_KEY from a local .env.
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -46,11 +45,11 @@ async def _run(pairs: list[str] | None):
     from cryptotrader.runtime import build_runtime
 
     runtime = await build_runtime()
-    if runtime.cycle is None:
-        console.print("[red]Runtime setup is incomplete.[/red]")
-        raise typer.Exit(1)
-    selected = pairs or list(runtime.snapshot.document.scheduler.pairs) or ["BTC/USDT"]
     try:
+        if runtime.cycle is None:
+            console.print("[red]Runtime setup is incomplete.[/red]")
+            raise typer.Exit(1)
+        selected = pairs or list(runtime.snapshot.document.scheduler.pairs) or ["BTC/USDT"]
         await _run_pairs_loop(selected, runtime)
     finally:
         await runtime.close()
@@ -60,14 +59,17 @@ async def _run_pairs_loop(pairs, runtime):
     from cryptotrader.cycle_lock import cycle_lock
     from cryptotrader.risk.state import RedisStateManager
 
-    redis_state = RedisStateManager(runtime.snapshot.document.infrastructure.redis_url or None)
-
     for pair in pairs:
+        cycle = await runtime.reload_for_cycle()
+        if cycle is None:
+            console.print("[red]Runtime setup is incomplete.[/red]")
+            raise typer.Exit(1)
+        redis_state = RedisStateManager(runtime.snapshot.document.infrastructure.redis_url or None)
         async with cycle_lock(redis_state, pair) as acquired:
             if not acquired:
                 console.print(f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]")
                 continue
-            await _run_one_pair(pair, runtime.cycle)
+            await _run_one_pair(pair, cycle)
 
 
 async def _run_one_pair(pair: str, cycle) -> None:
@@ -80,8 +82,8 @@ async def _run_one_pair(pair: str, cycle) -> None:
 
     try:
         outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
-    except Exception as exc:
-        console.print(f"[red]ERROR: {exc}[/red]")
+    except Exception:
+        console.print(f"[red]Cycle failed. Trace: {trace_id}[/red]")
         console.print("[yellow]Check the per-book Journal before retrying.[/yellow]")
         raise typer.Exit(1) from None
 
@@ -122,11 +124,11 @@ async def _journal_log(limit: int):
     from cryptotrader.runtime import build_runtime
 
     runtime = await build_runtime()
-    store = (
-        runtime.cycle.journal if runtime.cycle is not None else MultiVenueCycleStore(runtime.repository.database_url)
-    )
-    cycles = await store.list(limit=limit)
-    await runtime.close()
+    try:
+        store = MultiVenueCycleStore(runtime.repository.database_url)
+        cycles = await store.list(limit=limit)
+    finally:
+        await runtime.close()
     if not cycles:
         console.print("[dim]No trading cycles recorded yet.[/dim]")
         return
@@ -160,11 +162,11 @@ async def _journal_show(cycle_id: str):
     from cryptotrader.runtime import build_runtime
 
     runtime = await build_runtime()
-    store = (
-        runtime.cycle.journal if runtime.cycle is not None else MultiVenueCycleStore(runtime.repository.database_url)
-    )
-    cycle = await store.get(cycle_id)
-    await runtime.close()
+    try:
+        store = MultiVenueCycleStore(runtime.repository.database_url)
+        cycle = await store.get(cycle_id)
+    finally:
+        await runtime.close()
     if not cycle:
         console.print(f"[red]Cycle {cycle_id} not found[/red]")
         return
@@ -231,23 +233,21 @@ async def _scheduler_start():
     from cryptotrader.scheduler import Scheduler
 
     runtime = await build_runtime()
-    config = runtime.snapshot.document
-    if not config.scheduler.enabled:
-        console.print("[red]Scheduler is disabled in config (scheduler.enabled=false)[/red]")
-        raise typer.Exit(1)
-    pairs = config.scheduler.pairs
-    interval = config.scheduler.interval_minutes
-    summary_hour = config.scheduler.daily_summary_hour
-    console.print(
-        f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m (daily summary at {summary_hour}:00 UTC)"
-    )
-    s = Scheduler(
-        pairs,
-        interval,
-        daily_summary_hour=summary_hour,
-        runtime=runtime,
-    )
-    await s.start()
+    try:
+        config = runtime.snapshot.document
+        if not config.scheduler.enabled:
+            console.print("[red]Scheduler is disabled in config (scheduler.enabled=false)[/red]")
+            raise typer.Exit(1)
+        pairs = config.scheduler.pairs
+        interval = config.scheduler.interval_minutes
+        summary_hour = config.scheduler.daily_summary_hour
+        console.print(
+            f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m (daily summary at {summary_hour}:00 UTC)"
+        )
+        scheduler = Scheduler(config.scheduler, runtime)
+        await scheduler.start()
+    finally:
+        await runtime.close()
 
 
 @scheduler_app.command("healthcheck")

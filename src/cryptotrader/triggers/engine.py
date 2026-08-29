@@ -14,8 +14,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
 if TYPE_CHECKING:
-    from cryptotrader.config import TriggersConfig
     from cryptotrader.risk.state import RedisStateManager
+    from cryptotrader.runtime_config.models import TriggerConfig
     from cryptotrader.triggers.store import TriggerRuleStore
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ class PriceTriggerEngine:
         store: TriggerRuleStore,
         redis_state: RedisStateManager,
         run_pair_callback: Callable[[str, dict[str, Any]], Coroutine[Any, Any, None]],
-        config: TriggersConfig,
+        config: TriggerConfig,
     ) -> None:
         self._store = store
         self._redis = redis_state
@@ -103,8 +103,7 @@ class PriceTriggerEngine:
                     await task
             setattr(self, task_attr, None)
         # ccxt async clients hold an aiohttp connector; closing here avoids
-        # the "Unclosed connector" warning ``arena run --mode live`` already
-        # carefully avoids in cli/main._run.
+        # the "Unclosed connector" warning in long-lived trigger processes.
         if self._market_client is not None:
             with contextlib.suppress(Exception):
                 await self._market_client.close()
@@ -117,18 +116,17 @@ class PriceTriggerEngine:
         The trigger engine only needs read-only public data (klines, funding
         rates, ticker) so no API key is required. Using ccxt instead of raw
         ``httpx`` calls keeps a single source of truth for symbol mapping
-        and rate-limit handling, and matches ``LiveExchange`` for the
-        order-side path.
+        and rate-limit handling. This client is market-data-only and cannot
+        select an execution venue.
         """
         if self._market_client is None:
             import ccxt.async_support as ccxt_async
 
             from cryptotrader.ccxt_options import fetch_market_types
 
-            # Binance public endpoints are the only source these polls
-            # support today; can be made configurable later by reading
-            # ``config.scheduler.exchange_id`` if other exchanges grow
-            # equivalent ``fetch_ohlcv`` / ``fetch_funding_rates`` coverage.
+            # Binance public endpoints are the first-version market-data
+            # implementation for these polls. Execution remains selected by
+            # database-backed books and connections inside TradingCycle.
             self._market_client = ccxt_async.binance(
                 {"enableRateLimit": True, "options": {"fetchMarkets": fetch_market_types("binance")}}
             )
@@ -291,7 +289,7 @@ class PriceTriggerEngine:
         try:
             await self._run_pair(rule.pair, {"trigger_event_id": event.id, "schedule_depth": rule.schedule_depth})
         except Exception:
-            logger.warning("Trigger callback failed for rule %s", rule.id, exc_info=True)
+            logger.warning("Trigger callback failed for rule %s", rule.id)
 
     async def _check_cooldown(self, key: str) -> bool:
         val = await self._redis.get(key)

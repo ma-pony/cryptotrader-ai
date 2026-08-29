@@ -16,12 +16,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from apscheduler.triggers.interval import IntervalTrigger
 
 from cryptotrader._compat import UTC
+from cryptotrader.runtime_config.models import SchedulerConfig
 from cryptotrader.scheduler import Scheduler
+from tests.factories.runtime_config import active_document
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,7 +33,20 @@ from cryptotrader.scheduler import Scheduler
 
 def _make_scheduler(interval_minutes: int = 60) -> Scheduler:
     """Return a Scheduler with a single pair and the given interval."""
-    return Scheduler(["BTC/USDT"], interval_minutes=interval_minutes)
+    document = active_document(
+        scheduler=SchedulerConfig(
+            enabled=True,
+            pairs=("BTC/USDT",),
+            interval_minutes=interval_minutes,
+        )
+    )
+    cycle = SimpleNamespace(run=AsyncMock())
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(revision=1, document=document),
+        cycle=cycle,
+        reload_for_cycle=AsyncMock(return_value=cycle),
+    )
+    return Scheduler(document.scheduler, runtime)
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +72,7 @@ async def test_run_cycle_outer_timeout_cancels_hanging_cycle(caplog):
     async def hangs_forever():
         await asyncio.Event().wait()  # never set — pure hang
 
-    with patch.object(s, "_run_cycle_impl", side_effect=hangs_forever):
+    with patch.object(s, "run_once", side_effect=hangs_forever):
         # Replace asyncio.wait_for with a fast-firing version so the test
         # doesn't actually wait 59 minutes — captures the same logic.
         original_wait_for = asyncio.wait_for
@@ -121,17 +137,12 @@ async def test_overlapping_invocation_is_skipped(caplog):
     # Counter for how many times _run_pair is actually invoked.
     invocation_count = 0
 
-    async def slow_run_pair(_pair: str) -> None:
+    async def slow_run_pair(_pair: str, _cycle, _redis_url) -> None:
         nonlocal invocation_count
         invocation_count += 1
         await gate.wait()
 
-    with (
-        patch.object(s, "_run_pair", side_effect=slow_run_pair),
-        # _write_cycle_snapshot hits real exchange/DB in live mode — mock it
-        # out so the test exercises only the overlap-prevention logic.
-        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
-    ):
+    with patch.object(s, "_run_pair", side_effect=slow_run_pair):
         s._scheduler.start(paused=True)
 
         s._scheduler.add_job(
@@ -252,15 +263,12 @@ async def test_direct_cycle_calls_do_not_block_each_other():
     barrier = asyncio.Event()
     count = 0
 
-    async def counting_run_pair(_pair: str) -> None:
+    async def counting_run_pair(_pair: str, _cycle, _redis_url) -> None:
         nonlocal count
         count += 1
         await barrier.wait()
 
-    with (
-        patch.object(s, "_run_pair", side_effect=counting_run_pair),
-        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
-    ):
+    with patch.object(s, "_run_pair", side_effect=counting_run_pair):
         t1 = asyncio.create_task(s._run_cycle())
         t2 = asyncio.create_task(s._run_cycle())
         # Yield multiple times so both gather() calls can dispatch _run_pair.

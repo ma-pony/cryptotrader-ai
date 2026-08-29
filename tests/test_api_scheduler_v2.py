@@ -39,11 +39,15 @@ def _mock_config(scheduler_enabled: bool = True, pairs: list[str] | None = None)
     cfg.scheduler.pairs = pairs if pairs is not None else ["BTC/USDT", "ETH/USDT"]
     cfg.scheduler.interval_minutes = 240
     cfg.infrastructure.redis_url = "redis://localhost:6379"
+    cfg.execution.books = (
+        SimpleNamespace(id="simulation", enabled=True),
+        SimpleNamespace(id="disabled", enabled=False),
+    )
     return cfg
 
 
 def _use_runtime(config) -> None:
-    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(document=config))
+    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(revision=21, document=config))
 
 
 class TestSchedulerStatusV2:
@@ -77,8 +81,19 @@ class TestSchedulerStatusV2:
 
         assert resp.status_code == 200
         data = resp.json()
-        assert set(data.keys()) == {"enabled", "next_pair", "next_run_at", "redis_available"}
+        assert set(data.keys()) == {
+            "enabled",
+            "config_revision",
+            "pairs",
+            "enabled_books",
+            "next_pair",
+            "next_run_at",
+            "redis_available",
+        }
         assert data["enabled"] is True
+        assert data["config_revision"] == 21
+        assert data["pairs"] == ["BTC/USDT", "ETH/USDT"]
+        assert data["enabled_books"] == ["simulation"]
         assert data["next_pair"] == "BTC/USDT"
         assert data["next_run_at"].startswith("2026-04-16T13:35:00")
         assert data["redis_available"] is True

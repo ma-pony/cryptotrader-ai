@@ -145,12 +145,13 @@ async def _init_trigger_engine(app_instance: FastAPI) -> None:
 
     async def _trigger_callback(pair: str, meta: dict) -> None:
         logger.info("Trigger fired for %s: %s", pair, meta)
-        if runtime.cycle is None:
+        cycle = await runtime.reload_for_cycle()
+        if cycle is None:
             return
         from cryptotrader.decision.models import CycleRequest
         from cryptotrader.pair import Pair
 
-        await runtime.cycle.run(CycleRequest(Pair.parse(pair)))
+        await cycle.run(CycleRequest(Pair.parse(pair)))
 
     engine = PriceTriggerEngine(store, redis_state, _trigger_callback, config.triggers)
     await engine.start()
@@ -180,19 +181,14 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
         logger.info("Scheduler disabled by config; skipping autostart")
         return
 
-    scheduler = Scheduler(
-        pairs=config.scheduler.pairs,
-        interval_minutes=config.scheduler.interval_minutes,
-        daily_summary_hour=config.scheduler.daily_summary_hour,
-        runtime=runtime,
-    )
+    scheduler = Scheduler(config.scheduler, runtime)
     # Scheduler.start() is blocking (awaits a stop_event), so run as a task.
     task = asyncio.create_task(scheduler.start(), name="trading-scheduler")
     app_instance.state.scheduler = scheduler
     app_instance.state.scheduler_task = task
     logger.info(
         "Scheduler autostarted: pairs=%s interval=%dm daily_summary_hour=%d",
-        [p.canonical() for p in config.scheduler.pairs],
+        list(config.scheduler.pairs),
         config.scheduler.interval_minutes,
         config.scheduler.daily_summary_hour,
     )

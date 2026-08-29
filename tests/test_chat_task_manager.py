@@ -9,7 +9,11 @@ import pytest
 
 from cryptotrader.chat.event_buffer import EventBuffer
 from cryptotrader.chat.event_bus import EventBus
-from cryptotrader.chat.task_manager import BackgroundTaskManager, TooManyTasksError
+from cryptotrader.chat.task_manager import (
+    BackgroundTaskManager,
+    ExecutionInProgressError,
+    TooManyTasksError,
+)
 from cryptotrader.risk.state import RedisStateManager
 
 
@@ -66,6 +70,27 @@ async def test_session_replacement(state_mgr):
     task2 = mgr.create("s1", "BTC/USDT", _long_coro, "chat", bus2)
     assert task1.interrupt_event.is_set()
     assert mgr.get("s1") is task2
+
+
+@pytest.mark.asyncio
+async def test_session_replacement_cannot_cancel_started_execution(state_mgr):
+    manager = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
+    old_bus = _make_bus("s1", state_mgr)
+    old = manager.create("s1", "BTC/USDT", _long_coro, "chat", old_bus)
+    await old_bus.publish(
+        "book_execution_started",
+        {"cycle_id": "cycle-1", "config_revision": 3, "book_id": "live"},
+    )
+
+    with pytest.raises(ExecutionInProgressError):
+        manager.create("s1", "BTC/USDT", _long_coro, "chat", _make_bus("s1", state_mgr))
+
+    assert manager.get("s1") is old
+    assert not old.interrupt_event.is_set()
+    assert not old.task.cancelled()
+    old.task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await old.task
 
 
 @pytest.mark.asyncio

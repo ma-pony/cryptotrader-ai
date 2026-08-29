@@ -11,10 +11,37 @@ from cryptotrader.pair import Pair
 
 if TYPE_CHECKING:
     from cryptotrader.chat.event_bus import EventBus
+    from cryptotrader.decision.models import CycleOutcome
     from cryptotrader.risk.state import RedisStateManager
     from cryptotrader.runtime import Runtime
 
 logger = logging.getLogger(__name__)
+
+
+async def _publish_outcome(event_bus: EventBus, session_id: str, outcome: CycleOutcome) -> None:
+    for book in outcome.books:
+        execution = book.execution
+        await event_bus.publish(
+            "book_result",
+            {
+                "book_id": book.book_id,
+                "capital_scope": book.capital_scope,
+                "status": book.status,
+                "execution_status": execution.status if execution is not None else "not_started",
+                "requires_attention": execution.requires_attention if execution is not None else False,
+            },
+        )
+    await event_bus.publish(
+        "stream_done",
+        {
+            "session_id": session_id,
+            "cycle_id": outcome.cycle_id,
+            "config_revision": outcome.config_revision,
+            "status": outcome.status,
+            "execution_status": outcome.execution_status,
+            "requires_attention": outcome.requires_attention,
+        },
+    )
 
 
 async def run_analysis_and_buffer(
@@ -25,7 +52,7 @@ async def run_analysis_and_buffer(
     state_mgr: RedisStateManager,
     runtime: Runtime,
     trigger_source: str = "chat",
-) -> None:
+) -> CycleOutcome | None:
     def published_count(event_type: str) -> int:
         counter = getattr(event_bus, "published_count", None)
         if callable(counter):
@@ -54,25 +81,25 @@ async def run_analysis_and_buffer(
         )
         if interrupt_event.is_set():
             await finish_cancelled()
-            return
+            return None
 
         await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
         from cryptotrader.chat.event_bus import EventBusCycleSink
 
-        if runtime.cycle is None:
+        cycle = await runtime.reload_for_cycle()
+        if cycle is None:
             raise RuntimeError("Trading runtime is not active")
         with runtime.events.route(EventBusCycleSink(event_bus)):
-            outcome = await runtime.cycle.run(CycleRequest(Pair.parse(pair)))
-        await event_bus.publish(
-            "stream_done",
-            {"session_id": session_id, "cycle_id": outcome.cycle_id, "status": outcome.status},
-        )
+            outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
+        await _publish_outcome(event_bus, session_id, outcome)
         await state_mgr.set(f"analysis:status:{session_id}", "done", ex=600)
+        return outcome
     except asyncio.CancelledError:
         logger.info("Trading cycle cancelled: session_id=%s", session_id)
         await finish_cancelled()
         raise
     except Exception:
-        logger.exception("Trading cycle failed: session_id=%s", session_id)
+        logger.error("Trading cycle failed: session_id=%s", session_id)
         await event_bus.publish("stream_error", {"error": "Internal analysis error"})
         await state_mgr.set(f"analysis:status:{session_id}", "error", ex=600)
+        return None

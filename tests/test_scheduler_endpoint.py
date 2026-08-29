@@ -11,7 +11,8 @@ Strategy: minimize mocks.
 from __future__ import annotations
 
 from datetime import datetime
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +20,9 @@ from fastapi.testclient import TestClient
 from api.main import app
 from api.routes.scheduler import SchedulerJobStatus, SchedulerStatusResponse
 from cryptotrader._compat import UTC
+from cryptotrader.runtime_config.models import SchedulerConfig
 from cryptotrader.scheduler import Scheduler
+from tests.factories.runtime_config import active_document
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -43,7 +46,19 @@ def client():
 @pytest.fixture
 def real_scheduler():
     """A real Scheduler instance that has NOT been started."""
-    return Scheduler(pairs=["BTC/USDT", "ETH/USDT"], interval_minutes=60)
+    document = active_document(
+        scheduler=SchedulerConfig(
+            enabled=True,
+            pairs=("BTC/USDT", "ETH/USDT"),
+            interval_minutes=60,
+        )
+    )
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(revision=7, document=document),
+        cycle=object(),
+        reload_for_cycle=AsyncMock(),
+    )
+    return Scheduler(document.scheduler, runtime)
 
 
 # ---------------------------------------------------------------------------
@@ -264,14 +279,12 @@ def test_get_scheduler_status_returns_pairs(client, real_scheduler):
 
 
 def test_get_scheduler_status_surfaces_pair_last_error(client, real_scheduler):
-    """When a pair's last cycle errored, pair_statuses must surface the
-    last_error string so the dashboard can show "what went wrong" without
-    grep-ing the scheduler log."""
+    """Pair status exposes only a fixed safe category plus trace identity."""
     real_scheduler._status["BTC/USDT"] = {
         "last_run": "2026-05-06T14:00:00+00:00",
         "last_action": "short",
         "risk_passed": True,
-        "last_error": "execution_failed: Insufficient ETH",
+        "last_error": "cycle_failed",
         "trace_id": "abc-123",
     }
     fake_jobs: list = []
@@ -282,7 +295,7 @@ def test_get_scheduler_status_surfaces_pair_last_error(client, real_scheduler):
     data = resp.json()
     btc = next((s for s in data["pair_statuses"] if s["pair"] == "BTC/USDT"), None)
     assert btc is not None
-    assert btc["last_error"] == "execution_failed: Insufficient ETH"
+    assert btc["last_error"] == "cycle_failed"
     assert btc["last_action"] == "short"
     assert btc["risk_passed"] is True
     assert btc["trace_id"] == "abc-123"
@@ -396,7 +409,19 @@ def test_scheduler_status_is_public_endpoint(client):
 
 def test_get_scheduler_status_multiple_pairs(client):
     """Scheduler with three pairs reports all three in the response."""
-    sched = Scheduler(pairs=["BTC/USDT", "ETH/USDT", "SOL/USDT"], interval_minutes=120)
+    document = active_document(
+        scheduler=SchedulerConfig(
+            enabled=True,
+            pairs=("BTC/USDT", "ETH/USDT", "SOL/USDT"),
+            interval_minutes=120,
+        )
+    )
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(revision=8, document=document),
+        cycle=object(),
+        reload_for_cycle=AsyncMock(),
+    )
+    sched = Scheduler(document.scheduler, runtime)
     fake_jobs: list = []
 
     p1, p2 = _patch_scheduler_running(sched, fake_jobs)
@@ -406,3 +431,14 @@ def test_get_scheduler_status_multiple_pairs(client):
     data = resp.json()
     assert set(data["pairs"]) == {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
     assert data["interval_minutes"] == 120
+
+
+def test_scheduler_status_reports_revision_and_enabled_books(client, real_scheduler):
+    fake_jobs: list = []
+    p1, p2 = _patch_scheduler_running(real_scheduler, fake_jobs)
+    with p1, p2, patch("api.routes.scheduler._get_scheduler", return_value=real_scheduler):
+        response = client.get("/scheduler/status")
+
+    assert response.status_code == 200
+    assert response.json()["config_revision"] == 7
+    assert response.json()["enabled_books"] == ["simulation"]

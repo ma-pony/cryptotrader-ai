@@ -106,6 +106,11 @@ async def test_interrupt_response_waits_for_exact_old_task_cleanup_before_same_s
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
 
+    async def reload_for_cycle():
+        return old_cycle
+
+    old_runtime.reload_for_cycle = reload_for_cycle
+
     async def run_old(interrupt_event):
         await run_analysis_and_buffer(
             pair="BTC/USDT:USDT",

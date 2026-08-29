@@ -53,6 +53,7 @@ class EventBus:
         self._buffer = buffer
         self._subscribers: list[asyncio.Queue[SSEEnvelope]] = []
         self._published_counts: dict[str, int] = {}
+        self._execution_started = asyncio.Event()
 
     async def publish(self, event_type: str, data: dict[str, Any] | None = None) -> SSEEnvelope:
         eid = await self._buffer.next_event_id()
@@ -65,6 +66,8 @@ class EventBus:
         )
         await self._buffer.push(envelope)
         self._published_counts[event_type] = self._published_counts.get(event_type, 0) + 1
+        if event_type == "book_execution_started":
+            self._execution_started.set()
         for q in self._subscribers:
             try:
                 q.put_nowait(envelope)
@@ -75,6 +78,15 @@ class EventBus:
     def published_count(self, event_type: str) -> int:
         """Return successfully buffered events of one type for lifecycle deduplication."""
         return self._published_counts.get(event_type, 0)
+
+    @property
+    def execution_started(self) -> bool:
+        """Whether an execution-start event has been durably buffered."""
+        return self._execution_started.is_set()
+
+    async def wait_for_execution_started(self) -> None:
+        """Wait until execution becomes non-cancellable for this session."""
+        await self._execution_started.wait()
 
     def subscribe(self) -> asyncio.Queue[SSEEnvelope]:
         q: asyncio.Queue[SSEEnvelope] = asyncio.Queue(maxsize=200)

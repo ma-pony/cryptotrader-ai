@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 import structlog
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -15,34 +15,34 @@ from apscheduler.triggers.interval import IntervalTrigger
 from cryptotrader._compat import UTC
 from cryptotrader.pair import Pair
 
+if TYPE_CHECKING:
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SchedulerConfig
+    from cryptotrader.trading_cycle import TradingCycle
+
 logger = logging.getLogger(__name__)
 _slog = structlog.get_logger(__name__)
+
+
+class RuntimeCycleSource(Protocol):
+    """Scheduler 所需的唯一可热重载 Runtime 边界。"""
+
+    snapshot: RuntimeConfigSnapshot
+    cycle: TradingCycle | None
+
+    async def reload_for_cycle(self) -> TradingCycle | None: ...
 
 
 class Scheduler:
     def __init__(
         self,
-        pairs: list,
-        interval_minutes: int = 240,
-        daily_summary_hour: int = 0,
+        config: SchedulerConfig,
+        runtime: RuntimeCycleSource,
         trigger_engine: Any | None = None,
-        *,
-        runtime=None,
-    ):
-        # Per spec 013-pair-value-object: scheduler holds list[Pair]; legacy
-        # callers passing list[str] are auto-promoted to spot Pair instances
-        # (matches D4 backwards-compat for ``[scheduler].pairs`` legacy form).
-        normalized: list[Pair] = []
-        for p in pairs:
-            if isinstance(p, Pair):
-                normalized.append(p)
-            elif isinstance(p, str):
-                normalized.append(Pair.parse(p))
-            else:
-                raise TypeError(f"Scheduler.pairs item must be Pair or str; got {type(p).__name__}")
-        self.pairs: list[Pair] = normalized
-        self.interval_minutes = interval_minutes
-        self.daily_summary_hour = daily_summary_hour
+    ) -> None:
+        self.config = config
+        self.pairs = tuple(Pair.parse(pair) for pair in config.pairs)
+        self.interval_minutes = config.interval_minutes
+        self.daily_summary_hour = config.daily_summary_hour
         self._cycle_count = 0
         # Status dict keyed by canonical pair string for stable lookups across
         # the trading-cycle / daily-summary / API surface.
@@ -51,6 +51,7 @@ class Scheduler:
         self._stop_event: asyncio.Event | None = None
         self._trigger_engine = trigger_engine
         self.runtime = runtime
+        self.config_revision = runtime.snapshot.revision
         # Watchdog state — tracks last successful cycle completion so the
         # heartbeat task can detect IntervalTrigger silent-miss bug (observed
         # 5/18 18:57 + 19:57 + 5/19 18:36; APScheduler's next_fire_time gets
@@ -66,10 +67,7 @@ class Scheduler:
         _slog.info("pair_init", spot=spot, swap=swap, future=future)
 
     async def start(self) -> None:
-        await self._ensure_trading_cycle()
-
-        # Startup reconciliation for live mode
-        await self._startup_reconcile()
+        self._require_active_cycle()
 
         # Register trading cycle job. Delay the first run by 15s so that:
         #   (a) async HTTP clients (OKX / data providers) finish their TLS
@@ -131,14 +129,6 @@ class Scheduler:
         if self._trigger_engine is not None:
             await self._trigger_engine.start()
             self._scheduler.add_job(
-                self._trigger_engine.poll_funding_rates,
-                IntervalTrigger(minutes=self.runtime.snapshot.document.triggers.funding_rate_poll_interval_minutes),
-                id="funding_rate_poll",
-                name="Funding rate poll",
-                max_instances=1,
-                misfire_grace_time=300,
-            )
-            self._scheduler.add_job(
                 self._cleanup_expired_rules,
                 CronTrigger(minute=0, timezone="UTC"),
                 id="cleanup_expired_rules",
@@ -183,7 +173,6 @@ class Scheduler:
         if self._trigger_engine is not None:
             await self._trigger_engine.stop()
         self._scheduler.shutdown(wait=False)
-        await self._close_live_exchanges()
         logger.info("Scheduler stopped gracefully")
 
     async def _scheduler_heartbeat(self) -> None:
@@ -281,37 +270,32 @@ class Scheduler:
         """
         cycle_timeout_s = max(self.interval_minutes * 60 - 60, 60)
         try:
-            await asyncio.wait_for(self._run_cycle_impl(), timeout=cycle_timeout_s)
+            await asyncio.wait_for(self.run_once(), timeout=cycle_timeout_s)
         except TimeoutError:
             logger.error(
                 "Trading cycle exceeded outer timeout of %ds — cancelled to free "
                 "the APScheduler slot for the next interval",
                 cycle_timeout_s,
             )
-
-    async def _run_cycle_impl(self) -> None:
-        """Inner cycle body — original logic, wrapped by _run_cycle."""
-        try:
-            tasks = [self._run_pair(p.canonical()) for p in self.pairs]
-            await asyncio.gather(*tasks, return_exceptions=True)
-            self._cycle_count += 1
-            for p in self.pairs:
-                next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
-                self._status[p.canonical()]["next_run"] = next_run.isoformat()
-            # Persist a portfolio snapshot every cycle so risk gate's
-            # get_daily_pnl has a real time series. nodes/execution.snapshot only
-            # fires on actual trades; on quiet days that meant zero rows for
-            # hours and the daily-loss check fell back to "unknown".
-            await self._write_cycle_snapshot()
-            # Heartbeat: write timestamp to disk after every cycle so docker
-            # healthcheck ("arena scheduler healthcheck") can detect a hung
-            # scheduler (file mtime older than 2x interval = unhealthy).
-            self._write_scheduler_heartbeat()
-            # Update watchdog state — only on success path so a stuck IntervalTrigger
-            # doesn't reset the staleness clock just by being scheduled.
-            self._last_successful_cycle_at = datetime.now(UTC)
         except Exception:
-            logger.warning("Unexpected error in trading cycle", exc_info=True)
+            logger.warning("Scheduled trading batch failed")
+
+    async def run_once(self) -> None:
+        """Reload once, then run every configured pair against that exact graph."""
+        cycle = await self.runtime.reload_for_cycle()
+        if cycle is None:
+            raise RuntimeError("runtime configuration is not active")
+        snapshot = self.runtime.snapshot
+        self.config_revision = snapshot.revision
+        redis_url = snapshot.document.infrastructure.redis_url or None
+        tasks = [self._run_pair(pair.canonical(), cycle, redis_url) for pair in self.pairs]
+        await asyncio.gather(*tasks)
+        self._cycle_count += 1
+        for pair in self.pairs:
+            next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
+            self._status[pair.canonical()]["next_run"] = next_run.isoformat()
+        self._write_scheduler_heartbeat()
+        self._last_successful_cycle_at = datetime.now(UTC)
 
     @staticmethod
     def _write_scheduler_heartbeat() -> None:
@@ -325,90 +309,54 @@ class Scheduler:
         except Exception:
             logger.info("Failed to write scheduler heartbeat", exc_info=True)
 
-    async def _write_cycle_snapshot(self) -> None:
-        """MultiVenueCycleRecord already closes over every book portfolio read."""
-
-    async def _close_live_exchanges(self) -> None:
-        if self.runtime is None:
-            return
-        try:
-            await self.runtime.close()
-        except Exception:
-            logger.info("Failed to close scheduler runtime", exc_info=True)
-
-    async def _ensure_trading_cycle(self) -> Any:
-        """Build the database runtime once and require an active cycle."""
-        if self.runtime is None:
-            from cryptotrader.runtime import build_runtime
-
-            self.runtime = await build_runtime()
+    def _require_active_cycle(self) -> TradingCycle:
         if self.runtime.cycle is None:
             raise RuntimeError("runtime configuration is not active")
-        return self.runtime.snapshot.document
+        return self.runtime.cycle
 
-    async def _startup_reconcile(self) -> None:
-        """Each venue service re-reads and reconciles exact state before execution."""
-
-    @staticmethod
-    def _get_notifier(config):
-        from cryptotrader.notifications import Notifier
-
-        return Notifier(
-            webhook_url=config.notifications.webhook_url,
-            enabled=config.notifications.enabled,
-            events=config.notifications.events,
-            webhook_timeout=config.notifications.webhook_timeout,
-            telegram_config=config.notifications.telegram,
-        )
-
-    async def _run_pair(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
+    async def _run_pair(self, pair: str, cycle: TradingCycle, redis_url: str | None) -> None:
         from cryptotrader.cycle_lock import cycle_lock
         from cryptotrader.risk.state import RedisStateManager
+        from cryptotrader.tracing import set_trace_id
 
         # Per-pair mutex prevents concurrent cycles on the same pair (e.g. a
         # manual ``arena run`` overlapping with a scheduler tick). The lock
         # holder writes its uuid; release is owner-checked so a TTL-expired
         # holder cannot wipe a fresh holder's key.
+        trace_id = set_trace_id()
+        self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
+        self._status[pair]["trace_id"] = trace_id
         try:
-            await self._ensure_trading_cycle()
-            redis_state = RedisStateManager(self.runtime.snapshot.document.infrastructure.redis_url or None)
+            redis_state = RedisStateManager(redis_url)
             async with cycle_lock(redis_state, pair) as acquired:
                 if not acquired:
                     logger.warning("cycle_lock held for %s — skipping this scheduler tick", pair)
                     return
-                await self._run_pair_locked(pair, trigger_meta)
-        except Exception as e:
+                await self._run_pair_locked(pair, cycle, trace_id)
+        except Exception:
             # Config / Redis init failures must not propagate to gather() — the
             # cycle should continue with the remaining pairs. _run_pair_locked
             # has its own catch for in-cycle errors; this wrapper covers
             # everything before the lock is acquired.
-            logger.warning("Scheduler setup failed for pair %s", pair, exc_info=True)
-            self._status[pair]["last_error"] = str(e)
+            logger.warning("Scheduler setup failed for pair %s trace=%s", pair, trace_id)
+            self._status[pair]["last_error"] = "cycle_failed"
 
-    async def _run_pair_locked(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
-        from cryptotrader.tracing import set_trace_id
-
-        trace_id = set_trace_id()
+    async def _run_pair_locked(self, pair: str, cycle: TradingCycle, trace_id: str) -> None:
         # Spec 013 FR-203 / T021: bind canonical pair so every log line in this
         # cycle is greppable by ccxt symbol regardless of which node logs.
         _slog.bind(pair=pair, trace_id=trace_id).info("cycle_pair_start")
-        self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
-        self._status[pair]["trace_id"] = trace_id
         try:
-            await self._ensure_trading_cycle()
-
             from cryptotrader.decision.models import CycleRequest
-            from cryptotrader.pair import Pair
 
             cycle_timeout = 300
             try:
                 outcome = await asyncio.wait_for(
-                    self.runtime.cycle.run(CycleRequest(Pair.parse(pair))),
+                    cycle.run(CycleRequest(Pair.parse(pair))),
                     timeout=cycle_timeout,
                 )
             except TimeoutError:
                 logger.error("Scheduler timed out after %ds for pair %s", cycle_timeout, pair)
-                self._status[pair]["last_error"] = f"timeout after {cycle_timeout}s"
+                self._status[pair]["last_error"] = "cycle_timeout"
                 return
             self._status[pair]["last_error"] = None
             action = outcome.target_position.side if outcome.target_position is not None else "flat"
@@ -426,17 +374,15 @@ class Scheduler:
                 risk_passed,
             )
 
-        except Exception as e:
-            logger.warning("Scheduler error for pair %s", pair, exc_info=True)
-            self._status[pair]["last_error"] = str(e)
+        except Exception:
+            logger.warning("Scheduler cycle failed for pair %s trace=%s", pair, trace_id)
+            self._status[pair]["last_error"] = "cycle_failed"
 
     async def _emit_daily_summary(self) -> None:
-        """Send daily summary notification with portfolio and trading stats."""
+        """Send a safe scheduler/book summary from the current Runtime snapshot."""
         try:
             from cryptotrader.notifications import Notifier
-            from cryptotrader.portfolio.manager import PortfolioManager
 
-            await self._ensure_trading_cycle()
             config = self.runtime.snapshot.document
             notifier = Notifier(
                 webhook_url=config.notifications.webhook_url,
@@ -444,17 +390,10 @@ class Scheduler:
                 webhook_timeout=config.notifications.webhook_timeout,
                 telegram_config=config.notifications.telegram,
             )
-            pm = PortfolioManager(getattr(self.runtime.repository, "database_url", None))
-            portfolio = await pm.get_portfolio()
-            # get_daily_pnl returns None when no snapshot exists in today's UTC window
-            daily_pnl_raw = await pm.get_daily_pnl()
-            drawdown = await pm.get_drawdown()
-
             summary = {
                 "date": datetime.now(UTC).strftime("%Y-%m-%d"),
-                "portfolio_value": portfolio.get("total_value", 0),
-                "daily_pnl": daily_pnl_raw,  # may be null in the notification payload
-                "drawdown": drawdown,
+                "config_revision": self.runtime.snapshot.revision,
+                "enabled_books": [book.id for book in config.execution.books if book.enabled],
                 "pairs": {
                     p: {
                         "last_action": s.get("last_action", "none"),
@@ -466,7 +405,7 @@ class Scheduler:
             }
             await notifier.notify("daily_summary", summary)
         except Exception:
-            logger.warning("Failed to emit daily summary", exc_info=True)
+            logger.warning("Failed to emit daily summary")
 
     async def _cleanup_expired_rules(self) -> None:
         """Hourly cleanup of expired agent-created trigger rules."""
@@ -478,4 +417,4 @@ class Scheduler:
             if count > 0:
                 await self._trigger_engine.reload_rules()
         except Exception:
-            logger.warning("Failed to cleanup expired rules", exc_info=True)
+            logger.warning("Failed to cleanup expired rules")

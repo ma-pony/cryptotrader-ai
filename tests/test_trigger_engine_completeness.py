@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from cryptotrader.config import TriggersConfig
+from cryptotrader.runtime_config.models import TriggerConfig
 from cryptotrader.triggers.conditions import check_candle_pattern
 from cryptotrader.triggers.engine import PriceTriggerEngine
 
@@ -51,7 +51,7 @@ def _make_engine(rules=None, cfg=None) -> PriceTriggerEngine:
     redis.get = AsyncMock(return_value=None)
     redis.set = AsyncMock()
     cb = AsyncMock()
-    return PriceTriggerEngine(store, redis, cb, cfg or TriggersConfig())
+    return PriceTriggerEngine(store, redis, cb, cfg or TriggerConfig())
 
 
 # ── conditions: alias support ──
