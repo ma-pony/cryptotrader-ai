@@ -43,6 +43,22 @@
     "success": "Saved and active from the next cycle",
     "error": "Save failed. The active runtime profile is unchanged; check the values and retry."
   },
+  "runtime": {
+    "revision": "Revision {{revision}}",
+    "updated_at": "Last configuration update: {{time}}",
+    "mixer_description": "Enabled component weights must total 100%; every cycle fuses them once.",
+    "invalid": "Enable at least one component and make weights total 100%.",
+    "weights": "Component trust weights",
+    "parameter_json": "Parameters JSON",
+    "parameter_label": "{{id}} parameters",
+    "custom_id": "Custom component ID",
+    "add": "Add",
+    "committee_models": "Internal debate models",
+    "committee_models_description": "The four committee members, debate, and summary models are stored in database configuration.",
+    "draft_notice": "Edits remain in this draft until you save them.",
+    "kronos_description": "Time-series forecasts and market structure signals",
+    "committee_description": "Internal debate across technical, on-chain, news, and macro analysis"
+  },
   "load": {
     "error_title": "Could not load the strategy profile",
     "error_description": "The server is still using the active profile. Reconnect and retry."

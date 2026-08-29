@@ -1,5 +1,6 @@
 import { FlaskConical, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { useVenueConnections } from '@/hooks/use-venue-connections';
 import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/api';
@@ -37,6 +38,7 @@ export const VenueForm = ({
   onSaved?: ((connection: RuntimeConfig['document']['execution']['connections'][number]) => void) | undefined;
   tested?: ((id: string) => void) | undefined;
 }) => {
+  const { t } = useTranslation('configuration');
   const venues = useVenueConnections();
   const [draft, setDraft] = useState<VenueDraft>(() => (connection ? { ...connection } : emptyDraft()));
   const [apiKey, setApiKey] = useState('');
@@ -66,7 +68,7 @@ export const VenueForm = ({
       onSaved?.(saved.connection);
       setSavedNeedsReload(saved.savedNeedsReload);
     } catch {
-      setError('保存连接失败，请重新加载后重试。');
+      setError(t('connection.saveFailed'));
     }
   };
   const saveCredentials = async () => {
@@ -83,7 +85,7 @@ export const VenueForm = ({
       setSecret('');
       setPassphrase('');
     } catch {
-      setError('保存凭据失败，请重新加载后重试。');
+      setError(t('connection.accessSaveFailed'));
     } finally {
       setCredentialSaving(false);
     }
@@ -94,7 +96,7 @@ export const VenueForm = ({
       const health = await venues.test.mutateAsync(draft.id);
       if (health.healthy) tested?.(draft.id);
     } catch {
-      setError('连接测试失败。');
+      setError(t('connection.testFailed'));
     }
   };
   return (
@@ -107,9 +109,9 @@ export const VenueForm = ({
     >
       <div className="grid gap-3 md:grid-cols-3">
         <label className="text-xs text-muted-foreground">
-          连接 ID
+          {t('connection.id')}
           <input
-            aria-label="连接 ID"
+            aria-label={t('connection.id')}
             disabled={existing}
             value={draft.id}
             onChange={(event) => setDraft({ ...draft, id: event.target.value })}
@@ -117,18 +119,18 @@ export const VenueForm = ({
           />
         </label>
         <label className="text-xs text-muted-foreground">
-          名称
+          {t('connection.name')}
           <input
-            aria-label="名称"
+            aria-label={t('connection.name')}
             value={draft.label}
             onChange={(event) => setDraft({ ...draft, label: event.target.value })}
             className="mt-1 h-10 w-full rounded border bg-background px-3"
           />
         </label>
         <label className="text-xs text-muted-foreground">
-          Adapter ID
+          {t('connection.adapter')}
           <input
-            aria-label="Adapter ID"
+            aria-label={t('connection.adapter')}
             list="venue-adapters"
             value={draft.adapter_id}
             onChange={(event) => setDraft({ ...draft, adapter_id: event.target.value })}
@@ -141,9 +143,9 @@ export const VenueForm = ({
           <option value="bybit" />
         </datalist>
         <label className="text-xs text-muted-foreground">
-          环境
+          {t('connection.environment')}
           <select
-            aria-label="环境"
+            aria-label={t('connection.environment')}
             disabled={existing}
             value={draft.environment}
             onChange={(event) => setDraft({ ...draft, environment: event.target.value as Environment })}
@@ -156,9 +158,9 @@ export const VenueForm = ({
           </select>
         </label>
         <label className="text-xs text-muted-foreground">
-          杠杆
+          {t('connection.leverage')}
           <input
-            aria-label="杠杆"
+            aria-label={t('connection.leverage')}
             type="number"
             min="1"
             value={draft.leverage}
@@ -172,15 +174,15 @@ export const VenueForm = ({
             checked={draft.enabled}
             onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
           />
-          启用连接
+          {t('connection.enabled')}
         </label>
       </div>
       {existing && !isPaper ? (
         <div className="grid gap-3 border-t border-border pt-3 md:grid-cols-3">
           <label className="text-xs text-muted-foreground">
-            API Key
+            {t('connection.apiAccessId')}
             <input
-              aria-label="API Key"
+              aria-label={t('connection.apiAccessId')}
               value={apiKey}
               onChange={(event) => setApiKey(event.target.value)}
               autoComplete="off"
@@ -188,9 +190,9 @@ export const VenueForm = ({
             />
           </label>
           <label className="text-xs text-muted-foreground">
-            API Secret
+            {t('connection.apiSigningPhrase')}
             <input
-              aria-label="API Secret"
+              aria-label={t('connection.apiSigningPhrase')}
               type="password"
               value={secret}
               onChange={(event) => setSecret(event.target.value)}
@@ -199,7 +201,7 @@ export const VenueForm = ({
             />
           </label>
           <label className="text-xs text-muted-foreground">
-            Passphrase（可选）
+            {t('connection.accessPhrase')}
             <input
               aria-label="Passphrase"
               type="password"
@@ -217,21 +219,21 @@ export const VenueForm = ({
               onClick={() => void saveCredentials()}
             >
               <Save className="h-4 w-4" />
-              保存凭据
+              {t('connection.saveAccess')}
             </Button>
             <Button type="button" variant="outline" disabled={venues.test.isPending} onClick={() => void test()}>
               <FlaskConical className="h-4 w-4" />
-              测试连接
+              {t('connection.test')}
             </Button>
           </div>
         </div>
       ) : null}
       {existing && isPaper ? (
         <div className="flex items-center gap-2 border-t border-border pt-3 text-sm text-muted-foreground">
-          <span>Paper 连接无需凭据。</span>
+          <span>{t('connection.paperNoAccess')}</span>
           <Button type="button" variant="outline" disabled={venues.test.isPending} onClick={() => void test()}>
             <FlaskConical className="h-4 w-4" />
-            测试连接
+            {t('connection.test')}
           </Button>
         </div>
       ) : null}
@@ -240,10 +242,10 @@ export const VenueForm = ({
           {error}
         </p>
       ) : null}
-      {savedNeedsReload ? <p role="status" className="text-sm text-amber-500">连接已保存，但配置刷新失败；请重新加载后继续。</p> : null}
+      {savedNeedsReload ? <p role="status" className="text-sm text-amber-500">{t('connection.savedNeedsReload')}</p> : null}
       <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload}>
         <Save className="h-4 w-4" />
-        {existing ? '保存连接' : '创建连接'}
+        {existing ? t('connection.save') : t('connection.create')}
       </Button>
     </form>
   );

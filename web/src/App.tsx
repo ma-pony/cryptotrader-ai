@@ -1,5 +1,6 @@
 import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes, useLocation } from 'react-router';
+import { useTranslation } from 'react-i18next';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { AppShell } from '@/components/layout/app-shell';
 import { RouteSkeleton } from '@/components/route-skeleton';
@@ -20,13 +21,14 @@ const BooksPage = lazy(() => import('@/pages/settings/execution-books'));
 const SetupPage = lazy(() => import('@/pages/setup'));
 const NotFoundPage = lazy(() => import('@/pages/not-found'));
 const GuardedRoutes = () => {
+  const { t } = useTranslation('configuration');
   const runtime = useRuntimeConfig();
   const location = useLocation();
   if (runtime.isLoading) return <RouteSkeleton />;
   if (runtime.isError)
     return (
       <main className="grid min-h-screen place-items-center">
-        <button onClick={() => void runtime.reload()}>配置加载失败，重试</button>
+        <button onClick={() => void runtime.reload()}>{t('loadError')}，{t('retry')}</button>
       </main>
     );
   if (runtime.setupRequired)

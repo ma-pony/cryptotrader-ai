@@ -14,7 +14,7 @@ describe('VenuesPage', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
     expect(await screen.findByText('凭据已配置')).toBeInTheDocument();
-    expect(screen.getByLabelText('API Key')).toHaveValue('');
+    expect(screen.getByLabelText('访问 ID')).toHaveValue('');
     expect(document.body.textContent).not.toContain('secret-marker');
   });
 });

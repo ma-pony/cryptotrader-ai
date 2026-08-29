@@ -43,6 +43,22 @@
     "success": "已保存，从下一周期开始使用",
     "error": "保存失败。当前运行配置未改变，请检查输入后重试。"
   },
+  "runtime": {
+    "revision": "配置版本 {{revision}}",
+    "updated_at": "最近配置更新时间：{{time}}",
+    "mixer_description": "启用组件权重必须合计 100%，每个周期只融合一次。",
+    "invalid": "至少启用一个组件，且权重必须合计 100%。",
+    "weights": "组件信任权重",
+    "parameter_json": "参数 JSON",
+    "parameter_label": "{{id}} 参数",
+    "custom_id": "自定义 component ID",
+    "add": "添加",
+    "committee_models": "内部辩论模型",
+    "committee_models_description": "四位委员会成员、辩论和汇总模型均在数据库配置。",
+    "draft_notice": "编辑保留在草稿中，点击保存后才会写入。",
+    "kronos_description": "时序预测与市场结构信号",
+    "committee_description": "技术、链上、新闻、宏观内部辩论"
+  },
   "load": {
     "error_title": "无法读取策略配置",
     "error_description": "服务端仍保留当前运行配置。恢复连接后重试即可。"

@@ -1,5 +1,6 @@
 import { Plus, Save } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
@@ -9,6 +10,7 @@ import { AllocationPreview } from './allocation-preview';
 import { BookForm, newBook, validateBooks } from './book-form';
 
 const ExecutionBooksPage = () => {
+  const { t } = useTranslation('configuration');
   const runtime = useRuntimeConfig();
   const document = runtime.document;
   const [books, setBooks] = useState<NonNullable<typeof runtime.document>['execution']['books']>([]);
@@ -23,7 +25,7 @@ const ExecutionBooksPage = () => {
   const save = async () => {
     if (!document) return;
     try { setSaveError(''); await runtime.replace({ ...document, execution: { ...document.execution, books } }); }
-    catch { setSaveError('保存资金池失败，请重新加载后重试。'); }
+    catch { setSaveError(t('saveFailed')); }
   };
   const reload = async () => {
     const result = await runtime.reload();
@@ -34,24 +36,23 @@ const ExecutionBooksPage = () => {
       loading={runtime.isLoading}
       isError={runtime.isError}
       onRetry={() => void reload()}
-      errorTitle="无法读取资金池配置"
-      errorDescription="请检查配置服务后重试。"
+      errorTitle={t('bookLoadError')}
+      errorDescription={t('bookLoadDescription')}
     >
       {document ? (
         <div className="space-y-6">
           <PageHeader
             eyebrow="CAPITAL ROUTING"
-            title="执行资金池"
-            subtitle="固定权重将一个目标敞口按作用域分配到多个连接。"
-            actions={<span className="font-mono text-xs text-amber-500">Revision {runtime.revision}</span>}
+            title={t('books')}
+            subtitle={t('booksSubtitle')}
+            actions={<span className="font-mono text-xs text-amber-500">{t('revisionValue', { revision: runtime.revision })}</span>}
           />
           <div className="grid gap-4">
             {(['simulated', 'real'] as const).map((scope) => (
               <section key={scope} className="rounded-2xl border border-border bg-card p-5">
-                <h2 className="font-semibold">{scope === 'simulated' ? '模拟资金池' : '实盘资金池'}</h2>
+                <h2 className="font-semibold">{scope === 'simulated' ? t('simulatedBooks') : t('realBooks')}</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  {scope === 'simulated' ? 'paper / demo / testnet' : '仅 live'}{' '}
-                  连接；每个连接只能归属于一个启用资金池。
+                  {scope === 'simulated' ? t('simulatedDescription') : t('realDescription')}
                 </p>
                 <div className="mt-4 space-y-3">
                   {books.map((book, index) =>
@@ -87,12 +88,12 @@ const ExecutionBooksPage = () => {
             ))}
           </div>
           <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="font-semibold">分配预览</h2>
+            <h2 className="font-semibold">{t('allocationPreview')}</h2>
             <div className="mt-3 flex flex-wrap gap-3">
               <label>
-                示例权益
+                {t('sampleEquity')}
                 <input
-                  aria-label="示例权益"
+                  aria-label={t('sampleEquity')}
                   type="number"
                   value={equity}
                   onChange={(event) => setEquity(Number(event.target.value))}
@@ -100,9 +101,9 @@ const ExecutionBooksPage = () => {
                 />
               </label>
               <label>
-                目标敞口
+                {t('targetExposure')}
                 <input
-                  aria-label="目标敞口"
+                  aria-label={t('targetExposure')}
                   type="number"
                   step="0.1"
                   value={exposure}
@@ -114,21 +115,21 @@ const ExecutionBooksPage = () => {
           </section>
           <Button variant="outline" onClick={() => setBooks((current) => [...current, newBook()])}>
             <Plus className="h-4 w-4" />
-            新增资金池
+            {t('addBook')}
           </Button>
           <Button variant="outline" onClick={() => void reload()}>
-            重新加载
+            {t('reload')}
           </Button>
-          {errors.map((error) => (
-            <p key={error} role="alert" className="text-sm text-trade-short">
-              {error}
+          {errors.map((error, index) => (
+            <p key={`${error.code}-${index}`} role="alert" className="text-sm text-trade-short">
+              {t(`book.errors.${error.code}`, error.params ?? {})}
             </p>
           ))}
-          {runtime.conflict ? <div className="flex gap-2"><p role="alert" className="text-sm text-trade-short">配置已被其他操作更新，请重新加载</p><Button variant="outline" onClick={() => void reload()}>重新加载</Button></div> : null}
+          {runtime.conflict ? <div className="flex gap-2"><p role="alert" className="text-sm text-trade-short">{t('conflict')}</p><Button variant="outline" onClick={() => void reload()}>{t('reload')}</Button></div> : null}
           {saveError ? <p role="alert" className="text-sm text-trade-short">{saveError}</p> : null}
           <Button disabled={runtime.isSaving || errors.length > 0} onClick={() => void save()}>
             <Save className="h-4 w-4" />
-            保存完整配置
+            {t('save')}
           </Button>
         </div>
       ) : null}

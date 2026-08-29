@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import StrategyPage from './index';
+import '@/lib/i18n';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 
 describe('StrategyPage', () => {

@@ -8,7 +8,6 @@ import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/
 import { BookForm, newBook, validateBooks } from '@/pages/settings/execution-books/book-form';
 import { VenueForm } from '@/pages/settings/venues/venue-form';
 
-const STEPS = ['LLM', '信号组件', '行情来源', '平台连接', '执行资金池', '风控与审批', '调度器', '测试并激活'];
 type DraftConnection = RuntimeDocument['execution']['connections'][number];
 type ResponseConnection = RuntimeConfig['document']['execution']['connections'][number];
 
@@ -71,6 +70,7 @@ const SetupEditor = ({
   onReload: () => Promise<void>;
 }) => {
   const { t } = useTranslation('configuration');
+  const steps = t('steps', { returnObjects: true }) as string[];
   const runtime = useRuntimeConfig();
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState(initialDocument);
@@ -130,7 +130,7 @@ const SetupEditor = ({
       setMarketError('');
       setMarketDirty(false);
     } catch {
-      setMarketError('行情参数必须是 JSON 对象。');
+      setMarketError(t('wizard.marketInvalid'));
     }
   };
   const activate = async () => {
@@ -139,7 +139,7 @@ const SetupEditor = ({
       setActivationError('');
       await runtime.replace({ ...draft, system: { ...draft.system, active: true } });
     } catch {
-      setActivationError('激活失败，请重新加载后重试。');
+      setActivationError(t('wizard.activationFailed'));
     }
   };
   const replaceConnection = (saved: ResponseConnection) =>
@@ -186,11 +186,11 @@ const SetupEditor = ({
             </label>
           ))}
           <label>Base URL<input aria-label="LLM base URL" value={draft.llm.base_url} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, base_url: event.target.value } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
-          <label>默认温度<input aria-label="LLM 默认温度" type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
-          <label>超时<input aria-label="LLM 超时" type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <label>{t('wizard.defaultTemperature')}<input aria-label={t('wizard.defaultTemperature')} type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <label>{t('wizard.timeout')}<input aria-label={t('wizard.timeout')} type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
-          <label className="md:col-span-2">Streaming / retry / model costs JSON<textarea aria-label="LLM 高级 JSON" value={llmAdvanced} onChange={(event) => setLlmAdvanced(event.target.value)} className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
-          <Button type="button" variant="outline" onClick={() => { try { const value = JSON.parse(llmAdvanced) as { streaming_models: string[]; retry: RuntimeDocument['llm']['retry']; model_costs: RuntimeDocument['llm']['model_costs']; timeout_seconds: number }; if (!Array.isArray(value.streaming_models) || !value.retry || !Array.isArray(value.model_costs) || !Number.isInteger(value.timeout_seconds)) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); } catch { setLlmError('LLM 高级配置格式无效。'); } }}>应用高级配置</Button>
+          <label className="md:col-span-2">{t('wizard.advanced')}<textarea aria-label={t('wizard.advanced')} value={llmAdvanced} onChange={(event) => setLlmAdvanced(event.target.value)} className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
+          <Button type="button" variant="outline" onClick={() => { try { const value = JSON.parse(llmAdvanced) as { streaming_models: string[]; retry: RuntimeDocument['llm']['retry']; model_costs: RuntimeDocument['llm']['model_costs']; timeout_seconds: number }; if (!Array.isArray(value.streaming_models) || !value.retry || !Array.isArray(value.model_costs) || !Number.isInteger(value.timeout_seconds)) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); } catch { setLlmError(t('wizard.advancedInvalid')); } }}>{t('wizard.applyAdvanced')}</Button>
           {llmError ? <p role="alert" className="text-sm text-trade-short">{llmError}</p> : null}
         </div>
       );
@@ -198,12 +198,12 @@ const SetupEditor = ({
     if (step === 1)
       return (
         <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">Kronos、LLM 委员会及自定义组件的权重总和必须为 100%。</p>
+          <p className="text-sm text-muted-foreground">{t('wizard.signalHint')}</p>
           {draft.signals.components.map((component, index) => (
             <div key={component.component_id} className="grid grid-cols-[1fr_auto_auto] items-center gap-3">
               <span>{component.component_id}</span>
               <input
-                aria-label={`${component.component_id} 启用`}
+                aria-label={t('wizard.enabled', { name: component.component_id })}
                 type="checkbox"
                 checked={component.enabled}
                 onChange={(event) =>
@@ -218,9 +218,9 @@ const SetupEditor = ({
                   }))
                 }
               />
-              <label className="col-span-3 block text-xs text-muted-foreground">{component.component_id} 参数 JSON<textarea aria-label={`${component.component_id} 参数`} value={componentParameterText[component.component_id] ?? JSON.stringify(component.parameters)} onChange={(event) => { const text = event.target.value; setComponentParameterText((current) => ({ ...current, [component.component_id]: text })); try { const parameters = JSON.parse(text) as RuntimeJsonObject; if (!parameters || Array.isArray(parameters)) throw new Error(); setDraft((current) => ({ ...current, signals: { ...current.signals, components: current.signals.components.map((item) => item.component_id === component.component_id ? { ...item, parameters } : item) } })); setComponentParameterErrors((current) => ({ ...current, [component.component_id]: false })); } catch { setComponentParameterErrors((current) => ({ ...current, [component.component_id]: true })); } }} className="mt-1 min-h-20 w-full rounded border bg-background p-2 font-mono" /></label>
+              <label className="col-span-3 block text-xs text-muted-foreground">{t('wizard.parameters', { name: component.component_id })}<textarea aria-label={t('wizard.parameters', { name: component.component_id })} value={componentParameterText[component.component_id] ?? JSON.stringify(component.parameters)} onChange={(event) => { const text = event.target.value; setComponentParameterText((current) => ({ ...current, [component.component_id]: text })); try { const parameters = JSON.parse(text) as RuntimeJsonObject; if (!parameters || Array.isArray(parameters)) throw new Error(); setDraft((current) => ({ ...current, signals: { ...current.signals, components: current.signals.components.map((item) => item.component_id === component.component_id ? { ...item, parameters } : item) } })); setComponentParameterErrors((current) => ({ ...current, [component.component_id]: false })); } catch { setComponentParameterErrors((current) => ({ ...current, [component.component_id]: true })); } }} className="mt-1 min-h-20 w-full rounded border bg-background p-2 font-mono" /></label>
               <input
-                aria-label={`${component.component_id} 权重`}
+                aria-label={t('wizardWeight', { name: component.component_id })}
                 className="h-9 w-24 rounded border bg-background px-2"
                 type="number"
                 value={component.weight * 100}
@@ -239,22 +239,22 @@ const SetupEditor = ({
             </div>
           ))}
           <div className="grid gap-2 md:grid-cols-[1fr_2fr_auto]">
-            <input aria-label="自定义 component ID" value={customId} onChange={(event) => setCustomId(event.target.value)} placeholder="自定义 component ID" className="h-10 rounded border bg-background px-3" />
-            <input aria-label="自定义 component 参数" value={customParameters} onChange={(event) => setCustomParameters(event.target.value)} placeholder="{}" className="h-10 rounded border bg-background px-3 font-mono" />
+            <input aria-label={t('wizard.customId')} value={customId} onChange={(event) => setCustomId(event.target.value)} placeholder={t('wizard.customId')} className="h-10 rounded border bg-background px-3" />
+            <input aria-label={t('wizard.customParameters')} value={customParameters} onChange={(event) => setCustomParameters(event.target.value)} placeholder="{}" className="h-10 rounded border bg-background px-3 font-mono" />
             <Button type="button" variant="outline" onClick={() => {
               try {
                 const id = customId.trim(); const parameters = JSON.parse(customParameters) as RuntimeJsonObject;
                 if (!id || draft.signals.components.some((component) => component.component_id === id) || !parameters || Array.isArray(parameters)) throw new Error();
                 setDraft((current) => ({ ...current, signals: { ...current.signals, components: [...current.signals.components, { component_id: id, enabled: false, weight: 0, parameters }] } }));
                 setCustomId(''); setCustomParameters('{}'); setSignalError('');
-              } catch { setSignalError('自定义组件 ID 必须唯一，参数必须是 JSON 对象。'); }
-            }}><Plus className="h-4 w-4" />添加自定义组件</Button>
+              } catch { setSignalError(t('wizard.customInvalid')); }
+            }}><Plus className="h-4 w-4" />{t('wizard.addCustom')}</Button>
           </div>
           {signalError ? <p role="alert" className="text-sm text-trade-short">{signalError}</p> : null}
           <label>
-            中性阈值
+            {t('wizard.neutral')}
             <input
-              aria-label="中性阈值"
+              aria-label={t('wizard.neutral')}
               type="number"
               value={draft.signals.neutral_threshold}
               onChange={(event) =>
@@ -266,19 +266,19 @@ const SetupEditor = ({
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
-          <label>最大目标比例<input aria-label="最大目标比例" type="number" value={draft.signals.max_target_ratio} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, max_target_ratio: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
-          <label>ATR 止损<input aria-label="ATR 止损" type="number" value={draft.signals.atr_stop_multiplier} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, atr_stop_multiplier: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
-          <label>盈亏比<input aria-label="盈亏比" type="number" value={draft.signals.reward_ratio} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, reward_ratio: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
-          <label className="flex items-center gap-2"><input aria-label="信号 HITL" type="checkbox" checked={draft.signals.hitl_required} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, hitl_required: event.target.checked } }))} />信号 HITL</label>
+          <label>{t('wizard.maxTarget')}<input aria-label={t('wizard.maxTarget')} type="number" value={draft.signals.max_target_ratio} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, max_target_ratio: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>{t('wizard.atrStop')}<input aria-label={t('wizard.atrStop')} type="number" value={draft.signals.atr_stop_multiplier} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, atr_stop_multiplier: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>{t('wizard.reward')}<input aria-label={t('wizard.reward')} type="number" value={draft.signals.reward_ratio} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, reward_ratio: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label className="flex items-center gap-2"><input aria-label={t('wizard.signalHitl')} type="checkbox" checked={draft.signals.hitl_required} onChange={(event) => setDraft((current) => ({ ...current, signals: { ...current.signals, hitl_required: event.target.checked } }))} />{t('wizard.signalHitl')}</label>
         </div>
       );
     if (step === 2)
       return (
         <div className="space-y-3">
           <label className="block text-sm">
-            行情 source ID
+            {t('wizard.marketSource')}
             <input
-              aria-label="行情 source ID"
+              aria-label={t('wizard.marketSource')}
               value={draft.market_data.source_id}
               onChange={(event) =>
                 setDraft((current) => ({
@@ -290,16 +290,16 @@ const SetupEditor = ({
             />
           </label>
           <label className="block text-sm">
-            JSON 参数
+            {t('wizard.jsonParameters')}
             <textarea
-              aria-label="行情 JSON 参数"
+              aria-label={t('wizard.jsonParameters')}
               value={marketParameters}
               onChange={(event) => { setMarketParameters(event.target.value); setMarketDirty(true); }}
               className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs"
             />
           </label>
           <Button type="button" variant="outline" onClick={applyMarketParameters}>
-            应用行情参数
+            {t('wizard.applyMarket')}
           </Button>
           {marketError ? (
             <p role="alert" className="text-sm text-trade-short">
@@ -312,7 +312,7 @@ const SetupEditor = ({
       return (
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            保存连接后会合并进当前草稿；测试只对当前连接 fingerprint 有效。
+            {t('wizard.connectionHint')}
           </p>
           {draft.execution.connections.map((connection) => (
             <VenueForm
@@ -371,11 +371,11 @@ const SetupEditor = ({
               }))
             }
           >
-            新增资金池
+            {t('addBook')}
           </Button>
-          {bookErrors.map((error) => (
-            <p key={error} role="alert" className="text-sm text-trade-short">
-              {error}
+          {bookErrors.map((error, index) => (
+            <p key={`${error.code}-${index}`} role="alert" className="text-sm text-trade-short">
+              {t(`book.errors.${error.code}`, error.params ?? {})}
             </p>
           ))}
         </div>
@@ -384,9 +384,9 @@ const SetupEditor = ({
       return (
         <div className="grid gap-3 md:grid-cols-2">
           <label>
-            最大止损比例
+            {t('wizard.riskStop')}
             <input
-              aria-label="最大止损比例"
+              aria-label={t('wizard.riskStop')}
               type="number"
               value={draft.risk.max_stop_loss_pct}
               onChange={(event) =>
@@ -399,9 +399,9 @@ const SetupEditor = ({
             />
           </label>
           <label>
-            审批 TTL（分钟）
+            {t('wizard.approvalTtl')}
             <input
-              aria-label="审批 TTL"
+              aria-label={t('wizard.approvalTtl')}
               type="number"
               value={draft.hitl.approval_ttl_minutes}
               onChange={(event) =>
@@ -413,8 +413,8 @@ const SetupEditor = ({
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
-          <label className="md:col-span-2">完整风控 JSON（position/loss/cooldown/volatility/exchange/rate_limit）<textarea aria-label="完整风控 JSON" value={riskText} onChange={(event) => { setRiskText(event.target.value); setRiskDirty(true); }} className="mt-1 min-h-36 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
-          <Button type="button" variant="outline" onClick={() => { try { const risk = validateRiskSection(JSON.parse(riskText)); if (!risk) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); setRiskDirty(false); } catch { setRiskError('风控配置必须是完整且有效的 JSON 对象。'); } }}>应用完整风控配置</Button>
+          <label className="md:col-span-2">{t('wizard.riskJson')}<textarea aria-label={t('wizard.riskJson')} value={riskText} onChange={(event) => { setRiskText(event.target.value); setRiskDirty(true); }} className="mt-1 min-h-36 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
+          <Button type="button" variant="outline" onClick={() => { try { const risk = validateRiskSection(JSON.parse(riskText)); if (!risk) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); setRiskDirty(false); } catch { setRiskError(t('wizard.riskInvalid')); } }}>{t('wizard.applyRisk')}</Button>
           {riskError ? <p role="alert" className="text-sm text-trade-short">{riskError}</p> : null}
         </div>
       );
@@ -423,7 +423,7 @@ const SetupEditor = ({
         <div className="grid gap-3 md:grid-cols-2">
           <label className="flex items-center gap-2">
             <input
-              aria-label="启用调度器"
+              aria-label={t('wizard.schedulerEnabled')}
               type="checkbox"
               checked={draft.scheduler.enabled}
               onChange={(event) =>
@@ -433,12 +433,12 @@ const SetupEditor = ({
                 }))
               }
             />
-            启用调度器
+            {t('wizard.schedulerEnabled')}
           </label>
           <label>
-            间隔（分钟）
+            {t('wizard.schedulerInterval')}
             <input
-              aria-label="调度间隔"
+              aria-label={t('wizard.schedulerInterval')}
               type="number"
               value={draft.scheduler.interval_minutes}
               onChange={(event) =>
@@ -450,20 +450,20 @@ const SetupEditor = ({
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
-          <label>交易对（逗号分隔）<input aria-label="调度交易对" value={draft.scheduler.pairs.join(',')} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, pairs: event.target.value.split(',').map((pair) => pair.trim()).filter(Boolean) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
-          <label>日报小时<input aria-label="日报小时" type="number" value={draft.scheduler.daily_summary_hour} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, daily_summary_hour: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>{t('wizard.schedulerPairs')}<input aria-label={t('wizard.schedulerPairs')} value={draft.scheduler.pairs.join(',')} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, pairs: event.target.value.split(',').map((pair) => pair.trim()).filter(Boolean) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label>{t('wizard.summaryHour')}<input aria-label={t('wizard.summaryHour')} type="number" value={draft.scheduler.daily_summary_hour} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, daily_summary_hour: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
         </div>
       );
     return (
       <div className="space-y-3">
         <p className={ready ? 'text-trade-long' : 'text-trade-short'}>
           {ready
-            ? '所有激活条件已满足。'
-            : '需有启用组件、合法 100% 资金池，以及至少一个已启用并在本向导测试成功的连接。'}
+            ? t('wizard.ready')
+            : t('wizard.notReady')}
         </p>
         <Button disabled={!ready || runtime.isSaving} onClick={() => void activate()}>
           <CheckCircle2 className="h-4 w-4" />
-          测试并激活
+          {t('activate')}
         </Button>
         {activationError ? (
           <p role="alert" className="text-sm text-trade-short">
@@ -480,11 +480,11 @@ const SetupEditor = ({
         <header className="border-b border-amber-500/30 pb-6">
           <p className="font-mono text-xs tracking-[.24em] text-amber-500">COMMISSIONING / REV {runtime.revision}</p>
           <h1 className="mt-3 text-3xl font-semibold">{t('commissioning')}</h1>
-          <p className="mt-2 text-muted-foreground">依次完成八个 commissioning 阶段；激活后才进入操作台。</p>
+          <p className="mt-2 text-muted-foreground">{t('setupIntro')}</p>
         </header>
         <div className="mt-8 grid gap-6 lg:grid-cols-[230px_1fr]">
           <ol className="border-l border-amber-500/30">
-            {STEPS.map((label, index) => (
+            {steps.map((label, index) => (
               <li
                 key={label}
                 className={`relative py-3 pl-5 text-sm ${index === step ? 'font-semibold text-amber-500' : index < step ? 'text-trade-long' : 'text-muted-foreground'}`}
@@ -495,21 +495,21 @@ const SetupEditor = ({
             ))}
           </ol>
           <section className="rounded-2xl border border-border bg-card p-6">
-            <p className="font-mono text-xs text-amber-500">STAGE 0{step + 1}</p>
-            <h2 className="mt-2 text-xl font-semibold">{STEPS[step]}</h2>
+            <p className="font-mono text-xs text-amber-500">{t('stage', { number: String(step + 1).padStart(2, '0') })}</p>
+            <h2 className="mt-2 text-xl font-semibold">{steps[step]}</h2>
             <div className="mt-4">{content}</div>
             {step < 7 ? (
               <Button className="mt-6" onClick={() => setStep((current) => Math.min(current + 1, 7))}>
-                下一阶段 <ArrowRight className="h-4 w-4" />
+                {t('nextStage')} <ArrowRight className="h-4 w-4" />
               </Button>
             ) : null}
             {runtime.conflict ? (
               <div className="mt-4 flex gap-2">
                 <p role="alert" className="text-sm text-trade-short">
-                  配置已被其他操作更新，请重新加载
+                  {t('conflict')}
                 </p>
                 <Button size="sm" variant="outline" onClick={() => void onReload()}>
-                  重新加载
+                  {t('reload')}
                 </Button>
               </div>
             ) : null}
