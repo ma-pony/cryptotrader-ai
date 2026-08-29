@@ -53,6 +53,7 @@ async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
         snapshot=snapshot,
         cycle=cycle,
         cycle_lease=static_cycle_lease(cycle),
+        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
         close=AsyncMock(),
     )
 
@@ -80,33 +81,6 @@ async def test_run_closes_setup_required_runtime() -> None:
     runtime.close.assert_awaited_once_with()
 
 
-@pytest.mark.asyncio
-async def test_scheduler_command_owns_runtime_and_closes_after_scheduler_stops() -> None:
-    from cli.main import _scheduler_start
-
-    document = runtime_document().model_copy(
-        update={
-            "scheduler": SimpleNamespace(
-                enabled=True,
-                pairs=("BTC/USDT",),
-                interval_minutes=15,
-                daily_summary_hour=0,
-            )
-        }
-    )
-    runtime = SimpleNamespace(snapshot=SimpleNamespace(document=document), close=AsyncMock())
-    scheduler = SimpleNamespace(start=AsyncMock())
-    with (
-        patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)),
-        patch("cryptotrader.scheduler.Scheduler", return_value=scheduler) as scheduler_type,
-    ):
-        await _scheduler_start()
-
-    scheduler_type.assert_called_once_with(document.scheduler, runtime)
-    scheduler.start.assert_awaited_once_with()
-    runtime.close.assert_awaited_once_with()
-
-
 def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:
     from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
     from cryptotrader.runtime import Runtime
@@ -131,32 +105,4 @@ def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:
     assert result.exit_code == 0
     assert "llm_committee" in result.output
     assert "enabled" in result.output
-    runtime.close.assert_awaited_once_with()
-
-
-def test_scheduler_status_reads_runtime_snapshot_and_closes_runtime() -> None:
-    runtime = SimpleNamespace(
-        snapshot=SimpleNamespace(
-            revision=12,
-            document=SimpleNamespace(
-                scheduler=SimpleNamespace(
-                    enabled=True,
-                    pairs=(),
-                    interval_minutes=15,
-                ),
-                execution=SimpleNamespace(
-                    books=(SimpleNamespace(id="simulation", enabled=True),),
-                ),
-            ),
-        ),
-        cycle=object(),
-        close=AsyncMock(),
-    )
-    with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
-        result = CliRunner().invoke(app, ["scheduler", "status"])
-
-    assert result.exit_code == 0
-    assert "Config revision" in result.output
-    assert "12" in result.output
-    assert "simulation" in result.output
     runtime.close.assert_awaited_once_with()

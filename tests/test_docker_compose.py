@@ -1,10 +1,10 @@
 """Tests for docker-compose.yml structure (Task 9.2).
 
 Validates:
-- Service naming: api, scheduler, web, redis, postgres
-- Resource limits on api/scheduler/web
+- Service naming: api, web, redis, postgres
+- Resource limits on api/web
 - ctdata named volume mounted at /home/appuser/.cryptotrader
-- API and scheduler receive only the two database bootstrap variables
+- API receives only the two database bootstrap variables
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ def test_required_services_exist(compose):
     """All required service names must be present."""
     services = set(compose["services"].keys())
     assert "api" in services, "service 'api' not found"
-    assert "scheduler" in services, "service 'scheduler' not found"
+    assert "scheduler" not in services, "API is the only scheduler owner"
     assert "web" in services, "service 'web' not found"
     assert "redis" in services, "service 'redis' not found"
     assert "postgres" in services, "service 'postgres' not found"
@@ -49,7 +49,7 @@ def test_no_legacy_app_service(compose):
 # ---- Resource limits ----
 
 
-@pytest.mark.parametrize(("service_name", "expected"), [("api", "512m"), ("scheduler", "2g")])
+@pytest.mark.parametrize(("service_name", "expected"), [("api", "2g")])
 def test_resource_limits_memory(compose, service_name, expected):
     """Each service must retain its workload-specific memory limit."""
     svc = compose["services"][service_name]
@@ -59,7 +59,7 @@ def test_resource_limits_memory(compose, service_name, expected):
     )
 
 
-@pytest.mark.parametrize(("service_name", "expected"), [("api", "1.0"), ("scheduler", "2.0")])
+@pytest.mark.parametrize(("service_name", "expected"), [("api", "2.0")])
 def test_resource_limits_cpus(compose, service_name, expected):
     """Each service must retain its workload-specific CPU limit."""
     svc = compose["services"][service_name]
@@ -86,9 +86,9 @@ def test_ctdata_volume_declared(compose):
     assert "ctdata" in volumes, "named volume 'ctdata' not declared at top level"
 
 
-@pytest.mark.parametrize("service_name", ["api", "scheduler"])
+@pytest.mark.parametrize("service_name", ["api"])
 def test_ctdata_volume_mounted(compose, service_name):
-    """ctdata volume must be mounted at /home/appuser/.cryptotrader in api/scheduler."""
+    """ctdata volume must be mounted at /home/appuser/.cryptotrader in API."""
     svc = compose["services"][service_name]
     vol_list = svc.get("volumes", [])
     # Accept both short ("ctdata:/home/appuser/.cryptotrader") and long form
@@ -106,7 +106,7 @@ def test_ctdata_volume_mounted(compose, service_name):
     assert found, f"service '{service_name}' missing ctdata volume mount at /home/appuser/.cryptotrader"
 
 
-@pytest.mark.parametrize("service_name", ["api", "scheduler"])
+@pytest.mark.parametrize("service_name", ["api"])
 def test_application_services_receive_only_database_runtime_bootstrap(compose, service_name):
     """Containers must not smuggle TOML, dotenv, or mode flags into runtime."""
     environment = compose["services"][service_name]["environment"]
@@ -156,7 +156,6 @@ def test_clean_compose_config_needs_no_dotenv_and_exposes_no_browser_api_hostnam
     assert postgres_password
     assert postgres_password in services["api"]["environment"]["DATABASE_URL"]
     assert set(services["api"]["environment"]) == {"DATABASE_URL", "CONFIG_MASTER_KEY"}
-    assert set(services["scheduler"]["environment"]) == {"DATABASE_URL", "CONFIG_MASTER_KEY"}
     assert services["api"]["ports"][0]["host_ip"] == "127.0.0.1"
     assert services["web"]["ports"][0]["host_ip"] == "127.0.0.1"
     assert "VITE_API_BASE_URL" not in services["web"].get("environment", {})
