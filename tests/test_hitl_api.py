@@ -299,6 +299,9 @@ async def test_concurrent_runtime_close_during_lease_acquisition_returns_fixed_u
         venue_registry=object(),
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
+    # This lifecycle test isolates Runtime graph ownership; Redis admission is
+    # covered separately by execution-lease tests.
+    runtime.execution_lease = lambda _pair: runtime.cycle_lease()
     lease_entered = asyncio.Event()
     original_lease = runtime.cycle_lease
 
@@ -429,6 +432,11 @@ async def test_approve_lease_pins_session_during_claim_reload_and_runtime_close(
         venue_registry=object(),
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
+    # This lifecycle test owns a graph lease directly.  Its fake cycle is not
+    # backed by a real Redis server, so keep the production HITL entrypoint on
+    # the same lifecycle boundary without trying to test distributed admission
+    # a second time here.
+    runtime.execution_lease = lambda _pair: runtime.cycle_lease()
     reload_calls = 0
 
     async def reload_graph():

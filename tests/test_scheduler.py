@@ -39,13 +39,25 @@ class _Runtime:
     def __init__(self, cycle: _Cycle | None) -> None:
         self.cycle = cycle
         self.snapshot = SimpleNamespace(revision=4, document=active_document())
+        if cycle is not None:
+            cycle.snapshot = self.snapshot
         self.repository = SimpleNamespace(database_url=None)
         self.lease_count = 0
+        self.execution_lease_count = 0
         self.close = AsyncMock()
 
     @asynccontextmanager
     async def cycle_lease(self):
         self.lease_count += 1
+        if self.cycle is None:
+            raise RuntimeError("runtime configuration is not active")
+        self.cycle.snapshot = self.snapshot
+        yield self.cycle
+
+    @asynccontextmanager
+    async def execution_lease(self, _pair: str):
+        """Production scheduler admission is pair-scoped, not a batch lease."""
+        self.execution_lease_count += 1
         if self.cycle is None:
             raise RuntimeError("runtime configuration is not active")
         self.cycle.snapshot = self.snapshot
@@ -80,7 +92,7 @@ async def test_scheduled_batch_reloads_once_and_uses_one_cycle_for_every_pair() 
 
     await scheduler.run_once()
 
-    assert runtime.lease_count == 1
+    assert runtime.execution_lease_count == 2
     assert cycle.requests == [
         CycleRequest(Pair.parse("BTC/USDT")),
         CycleRequest(Pair.parse("ETH/USDT")),
@@ -202,13 +214,17 @@ async def test_scheduler_status_redacts_cycle_exception_and_keeps_trace_id() -> 
 
 @pytest.mark.asyncio
 async def test_scheduler_setup_failure_is_safe_and_traceable(caplog) -> None:
-    scheduler = Scheduler(_config(), _Runtime(_Cycle()))
+    runtime = _Runtime(_Cycle())
+    scheduler = Scheduler(_config(), runtime)
 
-    with patch(
-        "cryptotrader.risk.state.RedisStateManager",
-        side_effect=RuntimeError("raw redis credential"),
-    ):
-        await scheduler.run_once()
+    @asynccontextmanager
+    async def unavailable_execution_lease(_pair: str):
+        raise RuntimeError("raw redis credential")
+        yield  # pragma: no cover - context-manager shape only
+
+    runtime.execution_lease = unavailable_execution_lease
+
+    await scheduler.run_once()
 
     status = scheduler.status["BTC/USDT"]
     assert status["last_error"] == "cycle_failed"

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from importlib import import_module
 from types import SimpleNamespace
@@ -87,6 +89,7 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
         repository=SimpleNamespace(database_url="sqlite+aiosqlite://"),
         cycle=cycle,
         cycle_lease=static_cycle_lease(cycle),
+        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
     )
     application = SimpleNamespace(state=SimpleNamespace(runtime=runtime))
 
@@ -100,6 +103,83 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
     await Engine.instance.callback("BTC/USDT", {"trigger_event_id": "event-1"})
 
     assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT"))]
+
+
+@pytest.mark.asyncio
+async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lease() -> None:
+    """Changing either production source to a graph lease would run two cycles."""
+    from api import main
+    from cryptotrader.decision.models import CycleOutcome, CycleRequest
+    from cryptotrader.pair import Pair
+    from cryptotrader.runtime import RuntimeLeaseUnavailableError
+    from cryptotrader.scheduler import Scheduler
+
+    class Cycle:
+        def __init__(self) -> None:
+            self.requests: list[CycleRequest] = []
+            self.entered = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def run(self, request: CycleRequest) -> CycleOutcome:
+            self.requests.append(request)
+            self.entered.set()
+            await self.release.wait()
+            return CycleOutcome("shared-cycle", 9, None, (), "no_change", "not_started", False)
+
+    class Engine:
+        instance = None
+
+        def __init__(self, _store, _redis_state, callback, _config) -> None:
+            self.callback = callback
+            self.start = AsyncMock()
+            Engine.instance = self
+
+    cycle = Cycle()
+    document = active_document(
+        triggers=TriggerConfig(enabled=True),
+        scheduler=SchedulerConfig(enabled=True, pairs=("BTC/USDT:USDT",), interval_minutes=15),
+    )
+    snapshot = RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC))
+    held: set[str] = set()
+
+    @asynccontextmanager
+    async def cycle_lease():
+        yield cycle
+
+    @asynccontextmanager
+    async def execution_lease(pair: str):
+        canonical = Pair.parse(pair).canonical()
+        if canonical in held:
+            raise RuntimeLeaseUnavailableError("execution lease held")
+        held.add(canonical)
+        try:
+            yield cycle
+        finally:
+            held.remove(canonical)
+
+    runtime = SimpleNamespace(
+        snapshot=snapshot,
+        repository=SimpleNamespace(database_url="sqlite+aiosqlite://"),
+        cycle=cycle,
+        cycle_lease=cycle_lease,
+        execution_lease=execution_lease,
+    )
+    application = SimpleNamespace(state=SimpleNamespace(runtime=runtime))
+    with (
+        patch("cryptotrader.triggers.engine.PriceTriggerEngine", Engine),
+        patch("cryptotrader.triggers.store.TriggerRuleStore.ensure_tables", AsyncMock()),
+    ):
+        await main._init_trigger_engine(application)
+
+    trigger_task = asyncio.create_task(Engine.instance.callback("BTC/USDT:USDT", {}))
+    await cycle.entered.wait()
+    scheduler = Scheduler(document.scheduler, runtime)
+    await scheduler._run_pair("BTC/USDT:USDT")
+    cycle.release.set()
+    await trigger_task
+
+    assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT:USDT"))]
+    assert scheduler.status["BTC/USDT:USDT"]["last_error"] == "cycle_failed"
 
 
 @pytest.mark.asyncio
