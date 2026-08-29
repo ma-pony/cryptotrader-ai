@@ -51,11 +51,11 @@ export const validateLlmAdvanced = (value: unknown): Pick<RuntimeDocument['llm']
   if (Object.keys(record).length !== 4 || !Array.isArray(record.streaming_models) || !record.streaming_models.every((item) => typeof item === 'string') || typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds)) return undefined;
   const retry = record.retry;
   if (typeof retry !== 'object' || retry === null || Array.isArray(retry)) return undefined;
-  const retryRecord: Record<string, unknown> = retry;
+  const retryRecord = retry as Record<string, unknown>;
   const maxAttempts: unknown = retryRecord.max_attempts;
   if (Object.keys(retry).length !== 4 || typeof maxAttempts !== 'number' || !Number.isInteger(maxAttempts) || !['retry_base_delay_s', 'retry_backoff_factor'].every((key) => { const candidate: unknown = retryRecord[key]; return typeof candidate === 'number' && Number.isFinite(candidate); }) || typeof retryRecord.retry_jitter !== 'boolean') return undefined;
   const costs: unknown = record.model_costs;
-  if (!Array.isArray(costs) || !costs.every((cost: unknown) => { if (typeof cost !== 'object' || cost === null || Array.isArray(cost)) return false; const costRecord: Record<string, unknown> = cost; const input: unknown = costRecord.input_usd_per_mtok; const output: unknown = costRecord.output_usd_per_mtok; return Object.keys(cost).length === 3 && typeof costRecord.name === 'string' && typeof input === 'number' && Number.isFinite(input) && typeof output === 'number' && Number.isFinite(output); })) return undefined;
+  if (!Array.isArray(costs) || !costs.every((cost: unknown) => { if (typeof cost !== 'object' || cost === null || Array.isArray(cost)) return false; const costRecord = cost as Record<string, unknown>; const input: unknown = costRecord.input_usd_per_mtok; const output: unknown = costRecord.output_usd_per_mtok; return Object.keys(cost).length === 3 && typeof costRecord.name === 'string' && typeof input === 'number' && Number.isFinite(input) && typeof output === 'number' && Number.isFinite(output); })) return undefined;
   return value as Pick<RuntimeDocument['llm'], 'streaming_models' | 'retry' | 'model_costs'> & { timeout_seconds: number };
 };
 
