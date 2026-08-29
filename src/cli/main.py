@@ -253,23 +253,34 @@ async def _scheduler_start():
 @scheduler_app.command("healthcheck")
 def scheduler_healthcheck(
     max_age_seconds: int = typer.Option(
-        0, help="Max heartbeat age in seconds. 0 = derive from scheduler.interval_minutes * 2."
+        0,
+        help="Max heartbeat age in seconds. 0 = derive from the active Runtime snapshot.",
     ),
 ):
-    """Exit 0 if scheduler heartbeat is fresh, 1 otherwise (for docker healthcheck)."""
+    """Exit 0 if the scheduler heartbeat is fresh, 1 otherwise."""
+    asyncio.run(_scheduler_healthcheck(max_age_seconds))
+
+
+async def _scheduler_healthcheck(max_age_seconds: int) -> None:
     import time
     from pathlib import Path
 
     if max_age_seconds <= 0:
-        from cryptotrader.config import load_config
+        from cryptotrader.runtime import build_runtime
 
-        max_age_seconds = max(120, load_config().scheduler.interval_minutes * 60 * 2)
-
-    hb = Path.home() / ".cryptotrader" / "scheduler.heartbeat"
-    if not hb.exists():
-        console.print(f"[red]heartbeat missing: {hb}[/red]")
+        runtime = await build_runtime()
+        try:
+            max_age_seconds = max(
+                120,
+                runtime.snapshot.document.scheduler.interval_minutes * 60 * 2,
+            )
+        finally:
+            await runtime.close()
+    heartbeat = Path.home() / ".cryptotrader" / "scheduler.heartbeat"
+    if not heartbeat.exists():
+        console.print(f"[red]heartbeat missing: {heartbeat}[/red]")
         raise typer.Exit(1)
-    age = time.time() - hb.stat().st_mtime
+    age = time.time() - heartbeat.stat().st_mtime
     if age > max_age_seconds:
         console.print(f"[red]heartbeat stale: {age:.0f}s > {max_age_seconds}s[/red]")
         raise typer.Exit(1)
@@ -278,67 +289,30 @@ def scheduler_healthcheck(
 
 @scheduler_app.command("status")
 def scheduler_status():
-    """Show scheduler status."""
+    """Show the database-backed scheduler and execution-book configuration."""
     asyncio.run(_scheduler_status())
 
 
-async def _scheduler_status():
-    from cryptotrader.config import load_config
-    from cryptotrader.portfolio.manager import PortfolioManager
+async def _scheduler_status() -> None:
+    from cryptotrader.runtime import build_runtime
 
-    config = load_config()
-    db_url = config.infrastructure.database_url
-    pm = PortfolioManager(db_url)
+    runtime = await build_runtime()
     try:
-        portfolio = await pm.get_portfolio()
-        daily_pnl = await pm.get_daily_pnl()
-        drawdown = await pm.get_drawdown()
-    except Exception:
-        logger.info("Failed to load portfolio status", exc_info=True)
-        portfolio = {"total_value": 0, "positions": {}}
-        daily_pnl = 0.0
-        drawdown = 0.0
-
-    table = Table(title="Portfolio Status")
-    table.add_column("Metric", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_row("Total Value", f"${portfolio.get('total_value', 0):,.2f}")
-    table.add_row("Daily PnL", f"${daily_pnl:,.2f}")
-    table.add_row("Drawdown", f"{drawdown:.2%}")
-    positions = portfolio.get("positions", {})
-    if positions:
-        for pair, pos in positions.items():
-            table.add_row(f"  {pair}", f"{pos['amount']:.6f} @ ${pos['avg_price']:,.2f}")
-    else:
-        table.add_row("Positions", "(none)")
-    console.print(table)
-
-
-# ── Migrate command ──
-
-
-@app.command()
-def migrate():
-    """Apply database schema migrations (create tables if needed)."""
-    asyncio.run(_migrate())
-
-
-async def _migrate():
-    from cryptotrader.config import load_config
-
-    config = load_config()
-    db_url = config.infrastructure.database_url
-    if not db_url:
-        console.print("[red]DATABASE_URL not configured — nothing to migrate.[/red]")
-        raise typer.Exit(1)
-    from cryptotrader.hitl.store import ApprovalStore
-    from cryptotrader.journal.store import CycleJournalStore
-    from cryptotrader.profiles.repository import SignalProfileRepository
-
-    await CycleJournalStore(db_url).ensure_table()
-    await ApprovalStore(db_url).ensure_table()
-    await SignalProfileRepository(db_url).ensure_table()
-    console.print("[green]Database tables created / verified.[/green]")
+        document = runtime.snapshot.document
+        scheduler = document.scheduler
+        books = tuple(book for book in document.execution.books if book.enabled)
+        table = Table(title="Scheduler Runtime Status")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green")
+        table.add_row("Config revision", str(runtime.snapshot.revision))
+        table.add_row("Runtime", "setup required" if runtime.cycle is None else "active")
+        table.add_row("Scheduler", "enabled" if scheduler.enabled else "disabled")
+        table.add_row("Pairs", ", ".join(str(pair) for pair in scheduler.pairs) or "(none)")
+        table.add_row("Interval", f"{scheduler.interval_minutes}m")
+        table.add_row("Execution books", ", ".join(book.id for book in books) or "(none)")
+        console.print(table)
+    finally:
+        await runtime.close()
 
 
 @app.command()
@@ -358,27 +332,6 @@ def web(
 
 
 @app.command()
-def sync():
-    """Sync and persist historical market data from all sources."""
-    asyncio.run(_sync())
-
-
-async def _sync():
-    from cryptotrader.config import load_config
-    from cryptotrader.data.sync import sync_all
-
-    config = load_config()
-    console.print("[bold]Syncing market data...[/bold]")
-    results = await sync_all(config.providers)
-    table = Table(title="Data Sync Results")
-    table.add_column("Source", style="cyan")
-    table.add_column("Records", style="green")
-    for source, count in sorted(results.items()):
-        table.add_row(source, str(count))
-    console.print(table)
-
-
-@app.command()
 def serve(
     port: int = typer.Option(8003, "--port"),
     reload: bool = typer.Option(False, "--reload", help="Enable auto-reload (dev only)"),
@@ -388,141 +341,6 @@ def serve(
     import uvicorn
 
     uvicorn.run("api.main:app", host=host, port=port, reload=reload)
-
-
-# ── Risk subcommands ──
-
-risk_app = typer.Typer(help="Risk management commands")
-app.add_typer(risk_app, name="risk")
-
-
-@risk_app.command("reset-breaker")
-def risk_reset_breaker():
-    """Reset the daily-loss circuit breaker to allow trading to resume."""
-    asyncio.run(_risk_reset_breaker())
-
-
-async def _risk_reset_breaker():
-    from cryptotrader.config import load_config
-    from cryptotrader.risk.state import RedisStateManager
-
-    config = load_config()
-    redis_url = config.infrastructure.redis_url
-    redis_state = RedisStateManager(redis_url)
-    await redis_state.reset_circuit_breaker()
-    console.print("[green]Circuit breaker reset — trading is now allowed.[/green]")
-
-
-@app.command("live-check")
-def live_check(
-    exchange: Annotated[str, typer.Option("--exchange", "-e", help="Exchange (default: from config)")] = "",
-):
-    """Run pre-flight checks for live trading."""
-    asyncio.run(_live_check(exchange))
-
-
-def _check_credentials(config, exchange_id: str) -> tuple[str, bool, str]:
-    creds = config.exchanges.get(exchange_id)
-    if creds and creds.api_key and creds.secret:
-        sandbox_note = " (SANDBOX)" if creds.sandbox else ""
-        return ("Credentials", True, f"{exchange_id}{sandbox_note}")
-    missing = []
-    if creds is None or not creds.api_key:
-        missing.append("api_key")
-    if creds is None or not creds.secret:
-        missing.append("secret")
-    fields = ", ".join(missing) if missing else "api_key/secret"
-    hint = f"config/local.toml [exchanges.{exchange_id}]"
-    return ("Credentials", False, f"No credentials for {exchange_id} — {fields} missing. Set in {hint}")
-
-
-async def _check_exchange_api(config, exchange_id: str) -> tuple[str, bool, str]:
-    import time
-
-    creds = config.exchanges.get(exchange_id)
-    if not creds or not creds.api_key:
-        return ("Exchange API", False, "Skipped (no credentials)")
-    try:
-        from cryptotrader.execution.exchange import LiveExchange
-
-        ex = LiveExchange(
-            exchange_id,
-            creds.api_key,
-            creds.secret,
-            sandbox=creds.sandbox,
-            passphrase=creds.passphrase,
-            leverage=creds.leverage,
-            margin_mode=creds.margin_mode,
-        )
-        t0 = time.monotonic()
-        bal = await ex.get_balance()
-        latency = int((time.monotonic() - t0) * 1000)
-        await ex.close()
-        return ("Exchange API", True, f"{latency}ms latency, {len(bal)} assets")
-    except Exception as e:
-        return ("Exchange API", False, str(e))
-
-
-async def _check_redis(config) -> tuple[str, bool, str]:
-    redis_url = config.infrastructure.redis_url
-    if not redis_url:
-        return ("Redis", False, "Not configured")
-    from cryptotrader.risk.state import RedisStateManager
-
-    rsm = RedisStateManager(redis_url)
-    if await rsm.ping():
-        return ("Redis", True, "Connected")
-    return ("Redis", False, "Configured but unreachable")
-
-
-async def _check_database(config) -> tuple[str, bool, str]:
-    db_url = config.infrastructure.database_url
-    if not db_url:
-        return ("Database", False, "Not configured")
-    try:
-        from cryptotrader.portfolio.manager import PortfolioManager
-
-        pm = PortfolioManager(db_url)
-        portfolio = await pm.get_portfolio()
-        total = portfolio.get("total_value", 0)
-        return ("Database", True, f"Portfolio: ${total:,.2f}")
-    except Exception as e:
-        return ("Database", False, str(e))
-
-
-async def _live_check(exchange_id: str):
-    from cryptotrader.config import load_config
-
-    config = load_config()
-    if not exchange_id:
-        exchange_id = config.exchange_id
-    checks = [
-        _check_credentials(config, exchange_id),
-        await _check_exchange_api(config, exchange_id),
-        await _check_redis(config),
-        await _check_database(config),
-    ]
-
-    # Output
-    table = Table(title=f"Live Trading Pre-flight — {exchange_id}")
-    table.add_column("Check", style="cyan")
-    table.add_column("Status")
-    table.add_column("Detail")
-
-    all_pass = True
-    for name, ok, detail in checks:
-        status = "[green]PASS[/green]" if ok else "[red]FAIL[/red]"
-        if not ok:
-            all_pass = False
-        table.add_row(name, status, detail)
-
-    console.print(table)
-
-    if all_pass:
-        console.print("\n[bold green]GO[/bold green] — All checks passed")
-    else:
-        console.print("\n[bold red]NO-GO[/bold red] — Fix failing checks before live trading")
-        raise typer.Exit(1)
 
 
 # ── Skills subcommands ──
@@ -558,157 +376,40 @@ def skills_list():
     console.print(table)
 
 
-# ── Portfolio subcommands ──
-
-portfolio_app = typer.Typer(help="Portfolio management commands")
-app.add_typer(portfolio_app, name="portfolio")
-
-
-@portfolio_app.command("show")
-def portfolio_show():
-    """Show current portfolio (cash + positions)."""
-    asyncio.run(_portfolio_show())
-
-
-async def _portfolio_show():
-    from cryptotrader.config import load_config
-    from cryptotrader.portfolio.manager import PortfolioManager
-
-    cfg = load_config()
-    pm = PortfolioManager(cfg.infrastructure.database_url)
-    p = await pm.get_portfolio()
-
-    table = Table(title="Portfolio")
-    table.add_column("Item", style="cyan")
-    table.add_column("Value", justify="right")
-    table.add_row("Cash (USDT)", f"${p.get('cash', 0):,.2f}")
-    positions = p.get("positions", {})
-    for pair, pos in positions.items():
-        amount = pos["amount"]
-        avg_price = pos["avg_price"]
-        side = "Long" if amount > 0 else "Short"
-        table.add_row(
-            f"{pair} ({side})",
-            f"{abs(amount):.6f} @ ${avg_price:,.2f} = ${abs(amount) * avg_price:,.2f}",
-        )
-    table.add_row("Total Value", f"[bold]${p['total_value']:,.2f}[/bold]")
-    console.print(table)
-
-
-@portfolio_app.command("reset")
-def portfolio_reset(
-    confirm: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation")] = False,
-    capital: Annotated[float, typer.Option("--capital", "-c", help="Initial cash")] = 10000.0,
-):
-    """Reset portfolio to initial state (delete positions + snapshots, set cash)."""
-    if not confirm:
-        typer.confirm(
-            f"This will delete all positions and snapshots, set cash to ${capital:,.2f}. Continue?",
-            abort=True,
-        )
-    asyncio.run(_portfolio_reset(capital))
-
-
-async def _portfolio_reset(capital: float):
-    from cryptotrader.config import load_config
-    from cryptotrader.portfolio.manager import PortfolioManager
-
-    cfg = load_config()
-    pm = PortfolioManager(cfg.infrastructure.database_url)
-    await pm.reset("default")
-    await pm.update_cash("default", capital)
-    await pm.snapshot("default", capital, capital)
-    console.print(f"[green]Portfolio reset. Cash: ${capital:,.2f}[/green]")
-
-
-@portfolio_app.command("reset-baseline")
-def portfolio_reset_baseline(
-    reason: Annotated[str, typer.Option("--reason", "-r", help="Why are you resetting? (audit log)")] = "",
-    operator: Annotated[str, typer.Option("--operator", help="Who is doing this (audit log)")] = "",
-    account_id: Annotated[str, typer.Option("--account-id", help="Account to reset")] = "default",
-    confirm: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation prompt")] = False,
-):
-    """Acknowledge current equity as the new drawdown peak baseline.
-
-    Subsequent ``DrawdownLimit`` checks measure peak/trough only against
-    snapshots taken AFTER this reset, so historical losses no longer
-    permanently gate new trades. Writes an audit row including the operator
-    and the reason — required for any production-grade reset.
-
-    Use this AFTER deciding the past drawdown is "accepted history" and
-    you want the system to start a fresh baseline. This does NOT delete any
-    snapshot data; only the drawdown computation window changes.
-    """
-    if not reason:
-        console.print("[red]--reason is required for audit log[/red]")
-        raise typer.Exit(2)
-    if not operator:
-        import getpass
-
-        operator = getpass.getuser() or "unknown"
-    asyncio.run(_portfolio_reset_baseline(account_id, reason, operator, confirm))
-
-
-async def _portfolio_reset_baseline(account_id: str, reason: str, operator: str, confirm: bool):
-    from cryptotrader.config import load_config
-    from cryptotrader.portfolio.manager import PortfolioManager
-
-    cfg = load_config()
-    pm = PortfolioManager(cfg.infrastructure.database_url)
-    portfolio = await pm.get_portfolio(account_id)
-    current_equity = portfolio.get("total_value", 0.0)
-    current_dd = await pm.get_drawdown(account_id)
-
-    console.print(f"Account: [cyan]{account_id}[/cyan]")
-    console.print(f"Current equity: [bold]${current_equity:,.2f}[/bold]")
-    console.print(f"Current drawdown (from existing peak): [yellow]{current_dd * 100:.2f}%[/yellow]")
-    console.print(f"After reset, drawdown baseline starts fresh from ${current_equity:,.2f}.")
-    console.print(f"Operator: [cyan]{operator}[/cyan]")
-    console.print(f"Reason: [cyan]{reason}[/cyan]")
-
-    if not confirm:
-        typer.confirm("Proceed with baseline reset?", abort=True)
-
-    row = await pm.record_baseline_reset(
-        account_id=account_id,
-        baseline_equity=current_equity,
-        operator=operator,
-        reason=reason,
-    )
-    console.print(f"[green]Baseline reset recorded.[/green]  id={row['id']}  at={row['reset_at'].isoformat()}")
-    console.print("[dim]Note: existing snapshots are preserved; only drawdown computation window changed.[/dim]")
-
-
 # ── Agent subcommands ──
 
-agent_app = typer.Typer(help="Agent management commands")
+agent_app = typer.Typer(help="Signal component commands")
 app.add_typer(agent_app, name="agent")
 
 
 @agent_app.command("list")
 def agent_list():
-    """List registered agents and their configuration."""
-    from cryptotrader.config import load_config
+    """List signal components registered by the database-backed Runtime."""
+    asyncio.run(_agent_list())
 
-    cfg = load_config()
-    active = cfg.agents.list_active()
 
-    table = Table(title="Registered Agents")
-    table.add_column("Name", style="cyan")
-    table.add_column("Type")
-    table.add_column("Model")
-    table.add_column("Status")
-    table.add_column("Skills")
+async def _agent_list() -> None:
+    from cryptotrader.runtime import build_runtime
 
-    builtin_ids = {"tech_agent", "chain_agent", "news_agent", "macro_agent"}
-    for ac in sorted(active, key=lambda a: a.agent_id):
-        agent_type = "builtin" if ac.agent_id in builtin_ids else "custom"
-        model_display = ac.model if ac.model else "<default>"
-        status = "[green]enabled[/green]" if ac.enabled else "[red]disabled[/red]"
-        skill_count = len(ac.skills) + sum(len(v) for v in ac.regime_skills.values())
-        table.add_row(ac.agent_id, agent_type, model_display, status, str(skill_count))
-
-    console.print(table)
+    runtime = await build_runtime()
+    try:
+        enabled = {item.component_id for item in runtime.snapshot.document.signals.components if item.enabled}
+        table = Table(title="Registered Signal Components")
+        table.add_column("ID", style="cyan")
+        table.add_column("Name")
+        table.add_column("Status")
+        table.add_column("Description")
+        for component in runtime.signals.metadata():
+            status = "[green]enabled[/green]" if component.component_id in enabled else "[dim]disabled[/dim]"
+            table.add_row(
+                component.component_id,
+                component.display_name,
+                status,
+                component.description,
+            )
+        console.print(table)
+    finally:
+        await runtime.close()
 
 
 # ── MCP subcommands ──
@@ -717,29 +418,38 @@ mcp_app = typer.Typer(help="MCP data layer management commands")
 app.add_typer(mcp_app, name="mcp")
 
 
+def _mcp_config():
+    """Return the code-owned MCP catalog; it is independent of trading config."""
+    from cryptotrader.mcp.config import MCPConfig, MCPServerConfig
+
+    return MCPConfig(
+        enabled=False,
+        servers=[
+            MCPServerConfig(name="cryptotrader-binance"),
+            MCPServerConfig(name="cryptotrader-macro"),
+            MCPServerConfig(name="cryptotrader-onchain"),
+            MCPServerConfig(name="cryptotrader-news"),
+        ],
+    )
+
+
 @mcp_app.command("list")
 def mcp_list():
-    """List registered MCP tools and server health status."""
-    from cryptotrader.config import load_config
-
-    cfg = load_config()
-    if not cfg.mcp.enabled:
-        console.print("[yellow]MCP is disabled (mcp.enabled=false). Showing configured servers:[/yellow]")
+    """List code-owned MCP servers without loading trading configuration."""
+    config = _mcp_config()
+    if not config.enabled:
+        console.print("[yellow]MCP is disabled. Showing installed servers:[/yellow]")
 
     table = Table(title="MCP Servers & Tools")
     table.add_column("Server", style="cyan")
     table.add_column("Transport")
     table.add_column("Enabled")
     table.add_column("Tools")
-
-    for sc in cfg.mcp.servers:
-        enabled_display = "[green]yes[/green]" if sc.enabled else "[red]no[/red]"
-        tools_display = ", ".join(sc.tools) if sc.tools else "<auto-discover>"
-        table.add_row(sc.name, sc.transport, enabled_display, tools_display)
-
+    for server in config.servers:
+        enabled = "[green]yes[/green]" if config.enabled and server.enabled else "[red]no[/red]"
+        tools = ", ".join(server.tools) if server.tools else "<auto-discover>"
+        table.add_row(server.name, server.transport, enabled, tools)
     console.print(table)
-    tool_count = sum(len(sc.tools) for sc in cfg.mcp.servers if sc.enabled)
-    console.print(f"\nTotal tools configured: {tool_count}")
 
 
 @mcp_app.command("call")
@@ -747,24 +457,21 @@ def mcp_call(
     tool_name: str = typer.Argument(..., help="MCP tool name to call"),
     args: str = typer.Option("{}", "--args", help="JSON arguments for the tool"),
 ):
-    """Call an MCP tool directly for debugging."""
+    """Call an enabled code-owned MCP tool directly for debugging."""
     import json
 
-    from cryptotrader.config import load_config
     from cryptotrader.mcp.registry import MCPRegistry, MCPToolNotFoundError
 
-    cfg = load_config()
-    if not cfg.mcp.enabled:
-        console.print("[red]MCP is disabled. Set mcp.enabled=true in config.[/red]")
+    config = _mcp_config()
+    if not config.enabled:
+        console.print("[red]MCP is disabled.[/red]")
         raise typer.Exit(code=1)
-
     try:
         parsed_args = json.loads(args)
-    except json.JSONDecodeError as e:
-        console.print(f"[red]Invalid JSON args: {e}[/red]")
-        raise typer.Exit(code=1) from e
-
-    registry = MCPRegistry.from_config(cfg.mcp)
+    except json.JSONDecodeError as exc:
+        console.print(f"[red]Invalid JSON args: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
+    registry = MCPRegistry.from_config(config)
 
     async def _call():
         return await registry.call_tool(tool_name, parsed_args)
@@ -775,9 +482,9 @@ def mcp_call(
     except MCPToolNotFoundError as exc:
         console.print(f"[red]Tool '{tool_name}' not found. Use 'arena mcp list' to see available tools.[/red]")
         raise typer.Exit(code=1) from exc
-    except Exception as e:
-        console.print(f"[red]Error calling tool: {e}[/red]")
-        raise typer.Exit(code=1) from e
+    except Exception as exc:
+        console.print(f"[red]Error calling tool: {exc}[/red]")
+        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

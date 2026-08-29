@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 from cryptotrader.execution.models import (
     BookExecutionProposal,
     BookExecutionResult,
+    ConnectionExecutionPlan,
     ConnectionExecutionResult,
 )
-from cryptotrader.venues.protocol import VenueOperationError
 
 if TYPE_CHECKING:
     from cryptotrader.execution.service import VenueExecutionService
@@ -54,7 +54,13 @@ class ExecutionCoordinator:
         for plan, outcome in zip(proposal.connection_plans, outcomes, strict=True):
             if isinstance(outcome, asyncio.CancelledError):
                 raise outcome
-            if isinstance(outcome, VenueOperationError):
+            if isinstance(outcome, BaseException) and not isinstance(outcome, Exception):
+                raise outcome
+            if (
+                isinstance(outcome, Exception)
+                or not isinstance(outcome, ConnectionExecutionResult)
+                or not self._matches_plan(outcome, plan)
+            ):
                 results.append(
                     ConnectionExecutionResult.failed(
                         plan,
@@ -65,10 +71,6 @@ class ExecutionCoordinator:
                     )
                 )
                 continue
-            if isinstance(outcome, BaseException):
-                raise outcome
-            if not isinstance(outcome, ConnectionExecutionResult):
-                raise TypeError("venue execution service must return ConnectionExecutionResult")
             results.append(outcome)
 
         result_tuple = tuple(results)
@@ -79,4 +81,13 @@ class ExecutionCoordinator:
             status,
             any(result.requires_attention for result in result_tuple),
             False,
+        )
+
+    @staticmethod
+    def _matches_plan(result: ConnectionExecutionResult, plan: ConnectionExecutionPlan) -> bool:
+        return (
+            result.book_id == plan.book_id
+            and result.connection_id == plan.connection_id
+            and result.pair == plan.pair
+            and result.target_signed_notional == plan.target_signed_notional
         )

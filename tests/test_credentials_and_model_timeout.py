@@ -11,13 +11,7 @@ Requirements: 3.4, 8.7
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock
-
-import pytest
-
 from cryptotrader.config import (
-    ExchangeCredentials,
-    ExchangesConfig,
     ModelConfig,
     _build_config,
 )
@@ -56,120 +50,6 @@ def test_build_config_model_timeout_default():
     toml_data = {"models": {"fallback": "gpt-4o-mini"}}
     cfg = _build_config(toml_data)
     assert cfg.models.timeout_seconds == 90
-
-
-# -- live-check credential detection --
-
-
-def _make_config(exchanges: dict) -> MagicMock:
-    """Create mock config object with specified exchange credentials."""
-    ex_cfg = ExchangesConfig(_exchanges=exchanges)
-    cfg = MagicMock()
-    cfg.exchanges = ex_cfg
-    cfg.exchange_id = "binance"
-    cfg.infrastructure.redis_url = ""
-    cfg.infrastructure.database_url = ""
-    return cfg
-
-
-def test_check_credentials_returns_fail_when_no_creds():
-    """When exchange has no credentials, _check_credentials should return FAIL (not KeyError)."""
-    from cli.main import _check_credentials
-
-    cfg = _make_config({})
-    name, ok, detail = _check_credentials(cfg, "binance")
-    assert name == "Credentials"
-    assert ok is False
-    assert "binance" in detail
-    # Should not raise KeyError
-    assert "KeyError" not in detail
-
-
-def test_check_credentials_returns_fail_when_api_key_empty():
-    """When api_key is empty, _check_credentials should return FAIL."""
-    from cli.main import _check_credentials
-
-    creds = ExchangeCredentials(api_key="", secret="some_secret", sandbox=True)
-    cfg = _make_config({"binance": creds})
-    _name, ok, detail = _check_credentials(cfg, "binance")
-    assert not ok
-    assert "binance" in detail
-
-
-def test_check_credentials_returns_fail_when_secret_empty():
-    """When secret is empty, _check_credentials should return FAIL."""
-    from cli.main import _check_credentials
-
-    creds = ExchangeCredentials(api_key="some_key", secret="", sandbox=True)
-    cfg = _make_config({"binance": creds})
-    _name, ok, detail = _check_credentials(cfg, "binance")
-    assert not ok
-    assert "binance" in detail
-
-
-def test_check_credentials_passes_with_valid_creds():
-    """When api_key and secret are both non-empty, _check_credentials should return PASS."""
-    from cli.main import _check_credentials
-
-    creds = ExchangeCredentials(api_key="key123", secret="sec456", sandbox=True)
-    cfg = _make_config({"binance": creds})
-    _name, ok, detail = _check_credentials(cfg, "binance")
-    assert ok is True
-    assert "binance" in detail
-    assert "SANDBOX" in detail  # sandbox=True should be noted
-
-
-def test_check_credentials_no_sandbox_note_when_live():
-    """When sandbox=False, detail should not contain SANDBOX."""
-    from cli.main import _check_credentials
-
-    creds = ExchangeCredentials(api_key="key123", secret="sec456", sandbox=False)
-    cfg = _make_config({"binance": creds})
-    _, ok, detail = _check_credentials(cfg, "binance")
-    assert ok is True
-    assert "SANDBOX" not in detail
-
-
-def test_check_credentials_message_contains_guidance():
-    """When credentials are missing, detail should contain guidance for the user."""
-    from cli.main import _check_credentials
-
-    cfg = _make_config({})
-    _, ok, detail = _check_credentials(cfg, "okx")
-    assert not ok
-    # Message should be clear enough, containing the exchange name
-    assert "okx" in detail.lower() or "okx" in detail
-
-
-# -- live-check does not crash during full iteration --
-
-
-def test_live_check_no_keyerror_for_unconfigured_exchange():
-    """_check_credentials should not raise KeyError for unconfigured exchanges."""
-    from cli.main import _check_credentials
-
-    # Exchange has no registered credentials
-    cfg = _make_config({})
-    cfg.exchange_id = "binance"
-
-    # Should not raise any exception
-    _name, ok, detail = _check_credentials(cfg, "binance")
-    assert not ok
-    assert "KeyError" not in detail
-    assert "binance" in detail
-
-
-@pytest.mark.asyncio
-async def test_live_check_all_exchanges_iterated_safely():
-    """When multiple exchanges lack credentials, _check_credentials returns safely for each."""
-    from cli.main import _check_credentials
-
-    # Simulate multiple exchanges with no credentials
-    cfg = _make_config({})
-    for ex_id in ("binance", "okx", "kraken"):
-        _name, ok, detail = _check_credentials(cfg, ex_id)
-        assert not ok
-        assert ex_id in detail or "No credentials" in detail
 
 
 # -- RetryConfig env var overrides --

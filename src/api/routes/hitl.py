@@ -81,17 +81,18 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
         if body.decision == "approve":
             await cycle.approvals.approve(approval_id)
             outcome = await cycle.execute_approved(approval_id)
-            approval_status = "executed"
         else:
             outcome = await cycle.reject_approval(approval_id)
-            approval_status = "rejected"
     except ApprovalStateError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    final_approval = await cycle.approvals.get(approval_id)
+    if final_approval is None:
+        raise HTTPException(status_code=404, detail="Approval request not found")
     return HitlRespondOut(
         approval_id=approval_id,
         cycle_id=outcome.cycle_id,
-        status=approval_status,
+        status=final_approval.status,
         cycle_status=outcome.status,
     )

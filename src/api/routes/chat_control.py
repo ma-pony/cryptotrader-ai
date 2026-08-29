@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import suppress
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -36,8 +36,8 @@ async def interrupt_analysis(session_id: str) -> InterruptResponse:
 
 
 @router.get("/watch")
-async def watch_workflows():
-    state = _get_state_manager()
+async def watch_workflows(request: Request):
+    state = _get_state_manager(request)
 
     async def generate():
         async for message in state.subscribe_iter("analysis:new_workflow"):
@@ -54,8 +54,10 @@ async def watch_workflows():
     )
 
 
-def _get_state_manager():
-    from cryptotrader.config import load_config
+def _get_state_manager(request: Request):
     from cryptotrader.risk.state import RedisStateManager
 
-    return RedisStateManager(load_config().infrastructure.redis_url or None)
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    return RedisStateManager(runtime.snapshot.document.infrastructure.redis_url or None)

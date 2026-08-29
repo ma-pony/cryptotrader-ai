@@ -28,7 +28,6 @@ from api.routes import (
     backtest,
     chat,
     chat_control,
-    decisions,
     events,
     health,
     hitl,
@@ -404,7 +403,6 @@ app.include_router(scheduler.router)
 
 # Protected routes require API key
 app.include_router(portfolio_v2.router, dependencies=[Depends(verify_api_key)])
-app.include_router(decisions.router, dependencies=[Depends(verify_api_key)])
 app.include_router(backtest.router, dependencies=[Depends(verify_api_key)])
 app.include_router(risk.router, dependencies=[Depends(verify_api_key)])
 app.include_router(scheduler.api_router, dependencies=[Depends(verify_api_key)])

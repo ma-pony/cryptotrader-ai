@@ -12,7 +12,7 @@ from cryptotrader.pair import Pair
 if TYPE_CHECKING:
     from cryptotrader.chat.event_bus import EventBus
     from cryptotrader.risk.state import RedisStateManager
-    from cryptotrader.trading_cycle import TradingCycle
+    from cryptotrader.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ async def run_analysis_and_buffer(
     event_bus: EventBus,
     interrupt_event: asyncio.Event,
     state_mgr: RedisStateManager,
-    cycle: TradingCycle,
+    runtime: Runtime,
     trigger_source: str = "chat",
 ) -> None:
     def published_count(event_type: str) -> int:
@@ -57,7 +57,12 @@ async def run_analysis_and_buffer(
             return
 
         await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
-        outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
+        from cryptotrader.chat.event_bus import EventBusCycleSink
+
+        if runtime.cycle is None:
+            raise RuntimeError("Trading runtime is not active")
+        with runtime.events.route(EventBusCycleSink(event_bus)):
+            outcome = await runtime.cycle.run(CycleRequest(Pair.parse(pair)))
         await event_bus.publish(
             "stream_done",
             {"session_id": session_id, "cycle_id": outcome.cycle_id, "status": outcome.status},

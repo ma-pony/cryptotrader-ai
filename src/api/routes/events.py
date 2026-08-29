@@ -312,12 +312,8 @@ async def get_heartbeat_events(
     db_event_types = _parse_types_param(types)
     cursor_ts, cursor_trace_id, since_dt = _parse_cursor_and_since(cursor, since)
 
-    try:
-        from cryptotrader.config import load_config
-
-        database_url: str | None = load_config().infrastructure.database_url
-    except Exception:
-        database_url = None
+    runtime = getattr(request.app.state, "runtime", None)
+    database_url = getattr(runtime.repository, "database_url", None) if runtime is not None else None
 
     rows = await _query_heartbeat_events(
         database_url,

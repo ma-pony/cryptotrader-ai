@@ -132,33 +132,34 @@ async def _known_pairs(
     """
     pairs: set[str] = set()
     if portfolio is not None:
-        for p, pos in (portfolio.get("positions", {}) or {}).items():
-            if float(pos.get("amount", 0.0) or 0.0) != 0.0:
-                pairs.add(p)
+        pairs.update(_open_pair_names(portfolio))
     else:
         try:
             from cryptotrader.portfolio.manager import PortfolioManager
 
             pm = PortfolioManager(database_url)
-            pf = await pm.get_portfolio()
-            for p, pos in (pf.get("positions", {}) or {}).items():
-                if float(pos.get("amount", 0.0) or 0.0) != 0.0:
-                    pairs.add(p)
+            pairs.update(_open_pair_names(await pm.get_portfolio()))
         except Exception:
             logger.info("known pairs: portfolio read failed", exc_info=True)
 
-    try:
-        from cryptotrader.journal.store import CycleJournalStore
-
-        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
-        cycles = await store.list(limit=30, status="completed")
-        for cycle in cycles:
-            if cycle.pair:
-                pairs.add(cycle.pair)
-    except Exception:
-        logger.info("known pairs: journal read failed", exc_info=True)
+    if journal_store is not None:
+        try:
+            cycles = await journal_store.list(limit=30)
+            for cycle in cycles:
+                if cycle.cycle_status == "completed":
+                    pairs.update(book.pair.canonical() for book in cycle.book_results)
+        except Exception:
+            logger.info("known pairs: journal read failed", exc_info=True)
 
     return sorted(pairs)
+
+
+def _open_pair_names(portfolio: dict) -> set[str]:
+    return {
+        pair
+        for pair, position in (portfolio.get("positions", {}) or {}).items()
+        if float(position.get("amount", 0.0) or 0.0) != 0.0
+    }
 
 
 async def _build_cooldowns(
@@ -199,19 +200,28 @@ async def _build_cooldowns(
 
 async def _build_recent_blocks(database_url: str | None, journal_store=None) -> list[RecentBlockOut]:
     """Last 10 risk-gate rejections."""
-    from cryptotrader.journal.store import CycleJournalStore
-
+    if journal_store is None:
+        return []
     try:
-        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
-        cycles = await store.list(limit=10, status="risk_rejected")
+        cycles = [cycle for cycle in await journal_store.list(limit=10) if cycle.cycle_status == "risk_rejected"]
     except Exception:
         logger.info("recent blocks: journal read failed", exc_info=True)
         return []
 
     blocks: list[RecentBlockOut] = []
     for cycle in cycles:
-        gate = cycle.risk_result or {}
-        if gate.get("passed", True):
+        rejected = next(
+            (
+                book.proposal.risk
+                for book in cycle.book_results
+                if book.failure is not None
+                and book.failure.stage == "risk"
+                and book.proposal is not None
+                and not book.proposal.risk.passed
+            ),
+            None,
+        )
+        if rejected is None:
             continue
         ts = cycle.created_at
         ts_str = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
@@ -219,8 +229,8 @@ async def _build_recent_blocks(database_url: str | None, journal_store=None) -> 
             RecentBlockOut(
                 ts=ts_str,
                 cycle_id=cycle.cycle_id,
-                rule=str(gate.get("rejected_by") or "unknown"),
-                detail=str(gate.get("reason") or ""),
+                rule=rejected.rejected_by or "risk",
+                detail=rejected.reason,
             )
         )
         if len(blocks) >= 10:
@@ -378,10 +388,12 @@ def _build_thresholds(config: object) -> RiskThresholds:
 
 @router.get("/status", response_model=RiskStatusOut)
 async def get_risk_status(request: Request) -> RiskStatusOut:
-    from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
 
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    config = runtime.snapshot.document
     rsm = RedisStateManager(config.infrastructure.redis_url)
     # Real liveness check — `available` only checks the client exists, not that
     # the server is reachable. Use ping() so /api/risk/status reports the same
@@ -414,8 +426,8 @@ async def get_risk_status(request: Request) -> RiskStatusOut:
     else:
         cb = CircuitBreakerStatus(state="inactive")
 
-    db_url = config.infrastructure.database_url
-    journal = getattr(request.app.state, "cycle_journal_store", None)
+    db_url = getattr(runtime.repository, "database_url", None)
+    journal = runtime.cycle.journal if runtime.cycle is not None else None
 
     # Fetch portfolio + snapshots + pnl_24h once, then reuse across all 7 helpers.
     # Previously: 4x get_portfolio() + 2x _load_snapshots() sequential = ~400-800ms.
@@ -471,11 +483,13 @@ async def get_risk_status(request: Request) -> RiskStatusOut:
 
 
 @router.post("/circuit-breaker/reset", response_model=CircuitBreakerResetOut)
-async def reset_circuit_breaker() -> CircuitBreakerResetOut:
-    from cryptotrader.config import load_config
+async def reset_circuit_breaker(request: Request) -> CircuitBreakerResetOut:
     from cryptotrader.risk.state import RedisStateManager
 
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    config = runtime.snapshot.document
     rsm = RedisStateManager(config.infrastructure.redis_url)
 
     if not await rsm.ping():

@@ -135,6 +135,30 @@ async def test_revision_change_invalidates_unexecuted_approval(tmp_path, initial
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("initial_status", ["pending", "approved"])
+@pytest.mark.parametrize("database", [False, True])
+async def test_orchestration_can_explicitly_invalidate_an_unclaimed_approval(
+    tmp_path,
+    initial_status,
+    database,
+):
+    from cryptotrader.hitl.store import ApprovalInvalidated, BookApprovalStore
+
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'explicit-invalidate.db'}" if database else None)
+    approval = await store.create(_book_proposal(), cycle_id=f"cycle-{initial_status}")
+    if initial_status == "approved":
+        await store.approve(approval.id)
+
+    invalidated = await store.invalidate(approval.id)
+
+    assert invalidated.status == "invalidated"
+    assert invalidated.claimed_at is None
+    assert await store.invalidate(approval.id) == invalidated
+    with pytest.raises(ApprovalInvalidated):
+        await store.claim_for_execution(approval.id, current_revision=7)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("database", [False, True])
 async def test_pending_rejected_missing_and_claimed_states_raise_distinct_safe_errors(tmp_path, database):
     from cryptotrader.hitl.store import (

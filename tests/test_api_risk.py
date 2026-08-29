@@ -6,19 +6,25 @@ confirmation, 409 when already inactive, 503 when Redis unavailable.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
-
-from tests.factories.signal_fusion import cycle_record
 
 
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
 
-    return TestClient(app, raise_server_exceptions=False)
+    previous = getattr(app.state, "runtime", None)
+    app.state.runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(document=_mock_config()),
+        repository=SimpleNamespace(database_url=None),
+        cycle=None,
+    )
+    yield TestClient(app, raise_server_exceptions=False)
+    app.state.runtime = previous
 
 
 def _mock_config() -> MagicMock:
@@ -176,17 +182,19 @@ class TestCircuitBreakerReset:
 @pytest.mark.asyncio
 async def test_recent_blocks_are_read_from_risk_rejected_cycles() -> None:
     from api.routes.risk import _build_recent_blocks
+    from tests.test_multi_venue_journal import _preparation_failure_book, _record
 
-    record = cycle_record(
+    record = _record(
         cycle_id="cycle-risk",
-        status="risk_rejected",
-        risk_result={"passed": False, "rejected_by": "max_position", "reason": "too large"},
+        book_results=(_preparation_failure_book("risk"),),
+        cycle_status="risk_rejected",
+        execution_status="not_started",
+        requires_attention=False,
     )
     store = MagicMock()
     store.list = AsyncMock(return_value=[record])
-    with patch("cryptotrader.journal.store.CycleJournalStore", return_value=store):
-        blocks = await _build_recent_blocks(None)
+    blocks = await _build_recent_blocks(None, store)
 
     assert blocks[0].cycle_id == "cycle-risk"
-    assert blocks[0].rule == "max_position"
-    store.list.assert_awaited_once_with(limit=10, status="risk_rejected")
+    assert blocks[0].rule == "book_risk"
+    store.list.assert_awaited_once_with(limit=10)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -21,8 +22,12 @@ NOW = datetime.now(UTC)
 class _Cycle:
     def __init__(self, approvals=None) -> None:
         self.approvals = approvals or BookApprovalStore()
-        self.execute_approved = AsyncMock(return_value=_outcome("completed"))
+        self.execute_approved = AsyncMock(side_effect=self._execute)
         self.reject_approval = AsyncMock(side_effect=self._reject)
+
+    async def _execute(self, approval_id):
+        await self.approvals.claim_for_execution(approval_id, current_revision=9)
+        return _outcome("completed")
 
     async def _reject(self, approval_id):
         await self.approvals.reject(approval_id)
@@ -76,6 +81,26 @@ async def test_approve_api_executes_original_proposal_on_the_unique_runtime_cycl
     cycle.execute_approved.assert_awaited_once_with("approval-1")
     assert result.status == "executed"
     assert result.cycle_status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_revision_invalidation_response_never_reports_executed():
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    await _seed(cycle)
+
+    async def invalidate_after_approval(approval_id):
+        current = await cycle.approvals.get(approval_id)
+        cycle.approvals.records[0] = replace(current, status="invalidated")
+        return _outcome("approval_rejected")
+
+    cycle.execute_approved.side_effect = invalidate_after_approval
+
+    result = await respond_approval("approval-1", HitlRespondIn(decision="approve"), _request_for(cycle))
+
+    assert result.status == "invalidated"
+    assert result.cycle_status == "approval_rejected"
 
 
 @pytest.mark.asyncio

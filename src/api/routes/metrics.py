@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import logging
+from collections.abc import Mapping
 
 from fastapi import APIRouter, Request
 from fastapi.responses import Response
@@ -280,11 +281,10 @@ async def _llm_accounting_last_24h(
 
     Returns ``(calls_24h, cost_24h, cache_hit_rate, decisions_per_day_last_30d)``.
     """
-    from cryptotrader.journal.store import CycleJournalStore
-
+    if journal_store is None:
+        return 0, 0.0, 0.0, 0.0
     try:
-        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
-        cycles = await store.list(limit=2000, status="completed")
+        cycles = [cycle for cycle in await journal_store.list(limit=2000) if cycle.cycle_status == "completed"]
     except Exception:
         logger.info("metrics: journal read failed", exc_info=True)
         return 0, 0.0, 0.0, 0.0
@@ -309,9 +309,9 @@ async def _llm_accounting_last_24h(
             continue
         in_last_24h += 1
         for component in cycle.component_signals:
-            details = component.get("details") or {}
+            details = component.details
             usage = details.get("token_usage") or {}
-            if not isinstance(usage, dict):
+            if not isinstance(usage, Mapping):
                 continue
             calls += int(usage.get("calls", 0) or 0)
             cost += float(usage.get("cost_usd", 0.0) or 0.0)
@@ -328,11 +328,10 @@ async def _llm_accounting_last_24h(
 
 async def _cost_14d_series(database_url: str | None, journal_store=None) -> list[DailyCostPointOut]:
     """Per-day cost total for the last 14 calendar days (UTC), including zero-fill days."""
-    from cryptotrader.journal.store import CycleJournalStore
-
+    if journal_store is None:
+        return []
     try:
-        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
-        cycles = await store.list(limit=3000, status="completed")
+        cycles = [cycle for cycle in await journal_store.list(limit=3000) if cycle.cycle_status == "completed"]
     except Exception:
         logger.info("cost_14d: journal read failed", exc_info=True)
         return []
@@ -352,9 +351,9 @@ async def _cost_14d_series(database_url: str | None, journal_store=None) -> list
         if day not in daily:
             continue
         for component in cycle.component_signals:
-            details = component.get("details") or {}
+            details = component.details
             usage = details.get("token_usage") or {}
-            if isinstance(usage, dict):
+            if isinstance(usage, Mapping):
                 daily[day] += float(usage.get("cost_usd", 0.0) or 0.0)
 
     return [DailyCostPointOut(ts=d, cost_usd=round(v, 4)) for d, v in daily.items()]
@@ -383,11 +382,9 @@ async def metrics_summary_v2(request: Request) -> MetricsSummaryV2Response:
     execution_p50 = _histogram_quantile("ct_execution_latency_ms", 0.50)
     execution_p95 = _histogram_quantile("ct_execution_latency_ms", 0.95)
 
-    from cryptotrader.config import load_config
-
-    cfg = load_config()
-    db_url = cfg.infrastructure.database_url
-    journal = getattr(request.app.state, "cycle_journal_store", None)
+    runtime = getattr(request.app.state, "runtime", None)
+    db_url = getattr(runtime.repository, "database_url", None) if runtime is not None else None
+    journal = runtime.cycle.journal if runtime is not None and runtime.cycle is not None else None
     # Parallel fetch: both helpers scan the journal independently — gather saves ~50% latency.
     (calls_24h, cost_24h, cache_hit_rate, decisions_per_day), cost_14d = await asyncio.gather(
         _llm_accounting_last_24h(db_url, journal),

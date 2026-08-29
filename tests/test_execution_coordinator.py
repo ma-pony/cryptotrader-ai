@@ -301,6 +301,84 @@ async def test_coordinator_redacts_explicit_venue_failure_without_losing_sibling
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_outcome", [RuntimeError("RAW_SECRET_UNEXPECTED"), object()])
+async def test_coordinator_preserves_success_when_sibling_raises_or_returns_invalid_result(bad_outcome):
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+
+    proposal = _proposal()
+
+    class _UnexpectedService:
+        connection_id = "second"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def execute(self, plan):
+            self.calls += 1
+            if isinstance(bad_outcome, BaseException):
+                raise bad_outcome
+            return bad_outcome
+
+    successful = _Service("first", _result(proposal, 0, "completed"))
+    unexpected = _UnexpectedService()
+
+    result = await ExecutionCoordinator({"first": successful, "second": unexpected}).execute(proposal)
+
+    assert result.status == "partial"
+    assert tuple(item.status for item in result.connection_results) == ("completed", "failed")
+    assert result.connection_results[0].final_position is not None
+    assert result.connection_results[1].final_position is None
+    assert result.connection_results[1].requires_attention is True
+    assert unexpected.calls == 1
+    assert "RAW_SECRET" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_coordinator_does_not_convert_non_exception_base_exception_to_connection_failure():
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+
+    proposal = _proposal()
+
+    class _Fatal(BaseException):
+        pass
+
+    class _FatalService:
+        connection_id = "second"
+
+        async def execute(self, plan):
+            raise _Fatal
+
+    with pytest.raises(_Fatal):
+        await ExecutionCoordinator(
+            {
+                "first": _Service("first", _result(proposal, 0, "completed")),
+                "second": _FatalService(),
+            }
+        ).execute(proposal)
+
+
+@pytest.mark.asyncio
+async def test_coordinator_converts_semantically_mismatched_result_for_only_that_connection():
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+
+    proposal = _proposal()
+    wrong_connection = _result(proposal, 0, "completed")
+
+    result = await ExecutionCoordinator(
+        {
+            "first": _Service("first", _result(proposal, 0, "completed")),
+            "second": _Service("second", wrong_connection),
+        }
+    ).execute(proposal)
+
+    assert result.status == "partial"
+    assert tuple(item.status for item in result.connection_results) == ("completed", "failed")
+    assert result.connection_results[1].connection_id == "second"
+    assert result.connection_results[1].final_position is None
+    assert result.connection_results[1].requires_attention is True
+
+
+@pytest.mark.asyncio
 async def test_coordinator_counts_unavailable_target_as_failed_book_outcome():
     from cryptotrader.execution.coordinator import ExecutionCoordinator
 

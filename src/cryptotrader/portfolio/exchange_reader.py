@@ -19,7 +19,7 @@ class MarketPriceUnavailableError(RuntimeError):
 
 
 class TickerSource(Protocol):
-    async def latest_price(self, pair: str, exchange_id: str) -> float: ...
+    async def latest_price(self, pair: str, connection_id: str) -> float: ...
 
 
 def _is_dust(amount: float) -> bool:
@@ -44,11 +44,11 @@ async def _market_price(exchange: Any, pair: str) -> float:
         return 0.0
 
 
-async def _required_market_price(source: TickerSource | None, pair: str, exchange_id: str) -> float:
+async def _required_market_price(source: TickerSource | None, pair: str, connection_id: str) -> float:
     if source is None:
         raise MarketPriceUnavailableError(f"current ticker source is unavailable for {pair}")
     try:
-        price = float(await source.latest_price(pair, exchange_id))
+        price = float(await source.latest_price(pair, connection_id))
     except Exception as error:
         message = f"current ticker unavailable for {pair}: {type(error).__name__}: {error}"
         raise MarketPriceUnavailableError(message) from error
@@ -65,10 +65,14 @@ class ExchangePortfolioReader:
         exchange: Any,
         database_url: str | None = None,
         *,
+        connection_id: str,
         ticker_source: TickerSource | None = None,
     ) -> None:
+        if type(connection_id) is not str or not connection_id.strip():
+            raise ValueError("connection_id must be a non-empty string")
         self.exchange = exchange
         self.database_url = database_url
+        self.connection_id = connection_id
         self.ticker_source = ticker_source
 
     async def read(
@@ -80,7 +84,7 @@ class ExchangePortfolioReader:
     ) -> dict[str, Any]:
         pair = request.pair.canonical()
         execution_price = (
-            await _required_market_price(self.ticker_source, pair, request.exchange_id)
+            await _required_market_price(self.ticker_source, pair, self.connection_id)
             if refresh_price
             else current_price
         )

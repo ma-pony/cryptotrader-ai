@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 
 import pytest
 
@@ -103,6 +104,12 @@ async def test_interrupt_response_waits_for_exact_old_task_cleanup_before_same_s
     shared_buffer = EventBuffer("s1", state_mgr)
     old_bus = EventBus("s1", shared_buffer)
     old_cycle = _BlockingCancellationCycle(old_bus)
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
+
+    old_runtime = SimpleNamespace(
+        cycle=old_cycle,
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+    )
 
     async def run_old(interrupt_event):
         await run_analysis_and_buffer(
@@ -111,7 +118,7 @@ async def test_interrupt_response_waits_for_exact_old_task_cleanup_before_same_s
             event_bus=old_bus,
             interrupt_event=interrupt_event,
             state_mgr=state_mgr,
-            cycle=old_cycle,
+            runtime=old_runtime,
         )
 
     old_analysis = manager.create("s1", "BTC/USDT:USDT", run_old, "chat", old_bus)

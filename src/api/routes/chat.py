@@ -114,7 +114,6 @@ async def _handle_new_analysis(
         1000,
     )
     bus = EventBus(session_id, buffer)
-    cycle = runtime.cycle
 
     async def run_cycle(interrupt_event: asyncio.Event) -> None:
         await run_analysis_and_buffer(
@@ -123,7 +122,7 @@ async def _handle_new_analysis(
             event_bus=bus,
             interrupt_event=interrupt_event,
             state_mgr=state,
-            cycle=cycle,
+            runtime=runtime,
             trigger_source="chat",
         )
 

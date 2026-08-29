@@ -1,58 +1,75 @@
-"""Tests for `arena agent list` CLI command."""
+"""Tests for database-Runtime-backed CLI discovery commands."""
 
-from __future__ import annotations
-
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
 
 from cli.main import app
-from cryptotrader.config import AgentConfig, AgentsConfig, AppConfig
-
-runner = CliRunner()
+from cryptotrader.signals.registry import ComponentMetadata
 
 
-def test_run_command_has_no_graph_option():
-    result = runner.invoke(app, ["run", "--help"])
+def test_cli_unmounts_legacy_configuration_commands() -> None:
+    result = CliRunner().invoke(app, ["--help"])
+
+    assert result.exit_code == 0
+    for command in ("portfolio", "risk", "live-check", "migrate", "sync"):
+        assert command not in result.output
+
+
+def test_run_command_has_no_graph_option() -> None:
+    result = CliRunner().invoke(app, ["run", "--help"])
+
     assert result.exit_code == 0
     assert "--graph" not in result.output
 
 
-def _make_config(**agents_overrides) -> AppConfig:
-    agents_map = {}
-    for agent_id, data in agents_overrides.items():
-        agents_map[agent_id] = AgentConfig(agent_id=agent_id, **data)
-    return AppConfig(agents=AgentsConfig(_agents=agents_map))
+def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(
+            document=SimpleNamespace(
+                signals=SimpleNamespace(
+                    components=(SimpleNamespace(component_id="llm_committee", enabled=True),),
+                )
+            )
+        ),
+        signals=SimpleNamespace(
+            metadata=lambda: (ComponentMetadata("llm_committee", "LLM committee", "Internal debate"),)
+        ),
+        close=AsyncMock(),
+    )
+    with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
+        result = CliRunner().invoke(app, ["agent", "list"])
+
+    assert result.exit_code == 0
+    assert "llm_committee" in result.output
+    assert "enabled" in result.output
+    runtime.close.assert_awaited_once_with()
 
 
-class TestAgentList:
-    def test_lists_builtin_agents(self):
-        with patch("cryptotrader.config.load_config", return_value=AppConfig()):
-            result = runner.invoke(app, ["agent", "list"])
-        assert result.exit_code == 0
-        assert "tech_agent" in result.output
-        assert "chain_agent" in result.output
-        assert "news_agent" in result.output
-        assert "macro_agent" in result.output
-        assert "builtin" in result.output
+def test_scheduler_status_reads_runtime_snapshot_and_closes_runtime() -> None:
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(
+            revision=12,
+            document=SimpleNamespace(
+                scheduler=SimpleNamespace(
+                    enabled=True,
+                    pairs=(),
+                    interval_minutes=15,
+                ),
+                execution=SimpleNamespace(
+                    books=(SimpleNamespace(id="simulation", enabled=True),),
+                ),
+            ),
+        ),
+        cycle=object(),
+        close=AsyncMock(),
+    )
+    with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
+        result = CliRunner().invoke(app, ["scheduler", "status"])
 
-    def test_lists_custom_agent(self):
-        cfg = _make_config(whale_agent={"model": "gpt-5"})
-        with patch("cryptotrader.config.load_config", return_value=cfg):
-            result = runner.invoke(app, ["agent", "list"])
-        assert result.exit_code == 0
-        assert "whale_agent" in result.output
-        assert "custom" in result.output
-        assert "gpt-5" in result.output
-
-    def test_shows_default_model_placeholder(self):
-        with patch("cryptotrader.config.load_config", return_value=AppConfig()):
-            result = runner.invoke(app, ["agent", "list"])
-        assert result.exit_code == 0
-        assert "<default>" in result.output
-
-    def test_no_runtime_error(self):
-        with patch("cryptotrader.config.load_config", return_value=AppConfig()):
-            result = runner.invoke(app, ["agent", "list"])
-        assert result.exit_code == 0
-        assert result.exception is None
+    assert result.exit_code == 0
+    assert "Config revision" in result.output
+    assert "12" in result.output
+    assert "simulation" in result.output
+    runtime.close.assert_awaited_once_with()

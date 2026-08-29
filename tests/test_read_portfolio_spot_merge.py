@@ -18,7 +18,6 @@ These tests pin down:
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -26,9 +25,10 @@ import pytest
 
 
 def _request(pair: str = "ETH/USDT"):
+    from cryptotrader.decision.models import CycleRequest
     from cryptotrader.pair import Pair
 
-    return SimpleNamespace(pair=Pair.parse(pair), exchange_id="okx")
+    return CycleRequest(Pair.parse(pair))
 
 
 def _make_exchange(
@@ -65,7 +65,7 @@ async def test_reader_returns_latest_pair_ticker_for_hitl_execution_refresh():
     ticker_source = AsyncMock()
     ticker_source.latest_price = AsyncMock(return_value=125.0)
 
-    result = await ExchangePortfolioReader(ex, ticker_source=ticker_source).read(
+    result = await ExchangePortfolioReader(ex, connection_id="okx", ticker_source=ticker_source).read(
         _request("BTC/USDT:USDT"),
         100.0,
         refresh_price=True,
@@ -85,7 +85,7 @@ async def test_spot_eth_balance_appears_as_position():
         perps={},
         ticker_prices={"ETH/USDT": 2285.0},
     )
-    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("ETH/USDT"), 2300.0)
 
     assert result["cash"] == pytest.approx(4697.51)
     assert "ETH/USDT" in result["positions"]
@@ -102,7 +102,7 @@ async def test_usdt_balance_stays_as_cash_not_position():
     from cryptotrader.portfolio.exchange_reader import ExchangePortfolioReader
 
     ex = _make_exchange(balances={"USDT": 10000.0}, perps={}, ticker_prices={})
-    result = await ExchangePortfolioReader(ex).read(_request("BTC/USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("BTC/USDT"), 2300.0)
 
     assert result["cash"] == pytest.approx(10000.0)
     assert result["positions"] == {}
@@ -120,7 +120,7 @@ async def test_perp_position_not_overwritten_by_spot_balance():
         perps=perps,
         ticker_prices={"ETH/USDT": 2285.0},
     )
-    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT:USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("ETH/USDT:USDT"), 2300.0)
 
     # Both spot ETH/USDT and perp ETH/USDT:USDT should appear (different pairs, both real)
     assert result["positions"]["ETH/USDT:USDT"]["avg_price"] == 2300.0  # perp untouched
@@ -137,7 +137,7 @@ async def test_spot_balance_without_ticker_uses_zero_price():
         perps={},
         ticker_raises=True,
     )
-    result = await ExchangePortfolioReader(ex).read(_request("BTC/USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("BTC/USDT"), 2300.0)
 
     assert "OBSCURE/USDT" in result["positions"]
     assert result["positions"]["OBSCURE/USDT"]["avg_price"] == 0.0
@@ -154,7 +154,7 @@ async def test_multiple_spot_balances_all_appear():
         perps={},
         ticker_prices={"ETH/USDT": 2200.0, "BTC/USDT": 77000.0},
     )
-    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("ETH/USDT"), 2300.0)
 
     assert "ETH/USDT" in result["positions"]
     assert "BTC/USDT" in result["positions"]
@@ -170,7 +170,7 @@ async def test_zero_amount_balance_is_skipped():
         perps={},
         ticker_prices={"ETH/USDT": 2200.0},
     )
-    result = await ExchangePortfolioReader(ex).read(_request("ETH/USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("ETH/USDT"), 2300.0)
 
     assert "ETH/USDT" not in result["positions"]
 
@@ -190,7 +190,7 @@ async def test_dust_balance_is_skipped():
         perps={},
         ticker_prices={"ETH/USDT": 2200.0, "BTC/USDT": 77000.0},
     )
-    result = await ExchangePortfolioReader(ex).read(_request("BTC/USDT"), 2300.0)
+    result = await ExchangePortfolioReader(ex, connection_id="okx").read(_request("BTC/USDT"), 2300.0)
 
     assert "ETH/USDT" not in result["positions"]
     assert "BTC/USDT" not in result["positions"]

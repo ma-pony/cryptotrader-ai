@@ -11,8 +11,7 @@ from uuid import uuid4
 
 from cryptotrader.cycle_events import CycleEvent
 from cryptotrader.decision.models import CycleOutcome, CycleRequest
-from cryptotrader.execution.models import BookExecutionResult, ConnectionExecutionResult
-from cryptotrader.hitl.store import ApprovalInvalidated
+from cryptotrader.hitl.store import ApprovalNotFound
 from cryptotrader.journal.models import (
     BookCycleResult,
     BookHitlSnapshot,
@@ -106,6 +105,8 @@ class TradingCycle:
         signals: tuple[ComponentSignal, ...] = ()
         fused: FusedSignal | None = None
         target: TargetPosition | None = None
+        created_approval_ids: list[str] = []
+        initial_record_saved = False
         try:
             components = self.registry.enabled(profile)
             requirements = DataRequirements.merge(
@@ -147,6 +148,7 @@ class TradingCycle:
                         cycle_id=cycle_id,
                         config_revision=snapshot.revision,
                         created_at=created_at,
+                        created_approval_ids=created_approval_ids,
                     )
                     for book in books
                 )
@@ -168,6 +170,8 @@ class TradingCycle:
                 created_at=created_at,
             )
             await self.journal.save(record)
+            initial_record_saved = True
+            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
             await self._publish(
                 "cycle_completed",
                 cycle_id=cycle_id,
@@ -178,16 +182,18 @@ class TradingCycle:
             )
             return self._outcome(record)
         except asyncio.CancelledError:
-            await self._save_empty_record(
-                cycle_id,
-                snapshot.revision,
-                context.market_data_source_id if context is not None else document.market_data.source_id,
-                signals,
-                fused,
-                target,
-                created_at,
-                "cancelled",
-            )
+            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            if not initial_record_saved:
+                await self._record_or_save_empty(
+                    cycle_id,
+                    snapshot.revision,
+                    context.market_data_source_id if context is not None else document.market_data.source_id,
+                    signals,
+                    fused,
+                    target,
+                    created_at,
+                    "cancelled",
+                )
             await self._publish(
                 "cycle_cancelled",
                 cycle_id=cycle_id,
@@ -196,16 +202,20 @@ class TradingCycle:
             )
             raise
         except ComponentRunError:
-            record = await self._save_empty_record(
-                cycle_id,
-                snapshot.revision,
-                context.market_data_source_id if context is not None else document.market_data.source_id,
-                (),
-                None,
-                None,
-                created_at,
-                "component_failed",
-            )
+            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            if initial_record_saved:
+                record = await self._required_record(cycle_id)
+            else:
+                record = await self._record_or_save_empty(
+                    cycle_id,
+                    snapshot.revision,
+                    context.market_data_source_id if context is not None else document.market_data.source_id,
+                    (),
+                    None,
+                    None,
+                    created_at,
+                    "component_failed",
+                )
             await self._publish(
                 "cycle_failed",
                 cycle_id=cycle_id,
@@ -214,16 +224,20 @@ class TradingCycle:
             )
             return self._outcome(record)
         except Exception:
-            record = await self._save_empty_record(
-                cycle_id,
-                snapshot.revision,
-                context.market_data_source_id if context is not None else document.market_data.source_id,
-                signals,
-                fused,
-                target,
-                created_at,
-                "cycle_failed",
-            )
+            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            if initial_record_saved:
+                record = await self._required_record(cycle_id)
+            else:
+                record = await self._record_or_save_empty(
+                    cycle_id,
+                    snapshot.revision,
+                    context.market_data_source_id if context is not None else document.market_data.source_id,
+                    signals,
+                    fused,
+                    target,
+                    created_at,
+                    "cycle_failed",
+                )
             await self._publish(
                 "cycle_failed",
                 cycle_id=cycle_id,
@@ -235,23 +249,15 @@ class TradingCycle:
     async def execute_approved(self, approval_id: str) -> CycleOutcome:
         snapshot = await self.repository.get_or_create()
         approval = await self.approvals.get(approval_id)
-        try:
-            proposal = await self.approvals.claim_for_execution(
-                approval_id,
-                current_revision=snapshot.revision,
-            )
-        except ApprovalInvalidated:
-            if approval is None:
-                raise
-            record = await self._required_record(approval.cycle_id)
-            original = self._required_approval_book(record, approval_id, approval.book_id)
-            invalidated = replace(
-                original,
-                hitl=BookHitlSnapshot(approval_id, "invalidated", original.config_revision),
-                status="approval_rejected",
-            )
-            replacement = self._replace_book(record, invalidated)
-            await self.journal.replace(replacement)
+        if approval is None:
+            raise LookupError("approval was not found")
+        record = await self._required_record(approval.cycle_id)
+        original = self._required_approval_book(record, approval_id, approval.book_id)
+        if original.proposal != approval.proposal:
+            raise ValueError("approval proposal does not match the journaled approval")
+        if snapshot.revision != approval.config_revision:
+            await self.approvals.invalidate(approval_id)
+            replacement = await self._persist_approval_transition(record, original, "invalidated")
             await self._publish(
                 "book_execution_completed",
                 cycle_id=record.cycle_id,
@@ -261,18 +267,13 @@ class TradingCycle:
             )
             return self._outcome(replacement)
 
-        if approval is None:
-            raise LookupError("approval was not found")
-        record = await self._required_record(approval.cycle_id)
-        original = self._required_approval_book(record, approval_id, proposal.book_id)
-        if original.proposal is not proposal and original.proposal != proposal:
-            raise ValueError("claimed proposal does not match the journaled approval")
-        book = next(
-            (item for item in snapshot.document.execution.books if item.id == proposal.book_id),
-            None,
+        book = self._validated_execution_book(snapshot, approval.proposal)
+        proposal = await self.approvals.claim_for_execution(
+            approval_id,
+            current_revision=snapshot.revision,
         )
-        if book is None:
-            raise ValueError("approved book is absent from its configuration revision")
+        if proposal != approval.proposal:
+            raise ValueError("claimed proposal does not match the validated approval")
         terminal = await self._execute_book(
             _PreparedBook(book, original),
             CycleRequest(proposal.pair),
@@ -280,21 +281,19 @@ class TradingCycle:
             config_revision=record.config_revision,
             approval_id=approval_id,
         )
-        replacement = self._replace_book(record, terminal)
-        await self.journal.replace(replacement)
+        replacement = await self._persist_book_transition(record, original, terminal)
         return self._outcome(replacement)
 
     async def reject_approval(self, approval_id: str) -> CycleOutcome:
+        existing = await self.approvals.get(approval_id)
+        if existing is None:
+            raise LookupError("approval was not found")
+        record = await self._required_record(existing.cycle_id)
+        original = self._required_approval_book(record, approval_id, existing.book_id)
+        if original.proposal != existing.proposal:
+            raise ValueError("approval proposal does not match the journaled approval")
         approval = await self.approvals.reject(approval_id)
-        record = await self._required_record(approval.cycle_id)
-        original = self._required_approval_book(record, approval_id, approval.book_id)
-        rejected = replace(
-            original,
-            hitl=BookHitlSnapshot(approval_id, "rejected", original.config_revision),
-            status="approval_rejected",
-        )
-        replacement = self._replace_book(record, rejected)
-        await self.journal.replace(replacement)
+        replacement = await self._persist_approval_transition(record, original, approval.status)
         return self._outcome(replacement)
 
     async def _prepare_book(  # noqa: C901 - stages are explicit audit boundaries
@@ -307,6 +306,7 @@ class TradingCycle:
         cycle_id: str,
         config_revision: int,
         created_at: datetime,
+        created_approval_ids: list[str],
     ) -> _PreparedBook:
         try:
             portfolio = await self.portfolios.read(book, self.sessions, request.pair)
@@ -390,10 +390,13 @@ class TradingCycle:
                 ),
             )
         if book.hitl_required:
+            approval_id = str(uuid4())
+            created_approval_ids.append(approval_id)
             try:
                 approval = await self.approvals.create(
                     proposal,
                     cycle_id=cycle_id,
+                    approval_id=approval_id,
                     created_at=created_at,
                 )
             except asyncio.CancelledError:
@@ -492,27 +495,7 @@ class TradingCycle:
             book_id=proposal.book_id,
             config_revision=config_revision,
         )
-        try:
-            execution = await self.coordinator.execute(proposal)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            results = tuple(
-                ConnectionExecutionResult.failed(
-                    plan,
-                    "execute",
-                    requires_attention=True,
-                    trace=("execute",),
-                    execution_quote=plan.quote,
-                )
-                for plan in proposal.connection_plans
-            )
-            execution = BookExecutionResult(
-                proposal,
-                results,
-                BookExecutionResult.expected_status(proposal, results),
-                True,
-            )
+        execution = await self.coordinator.execute(proposal)
         for result in execution.connection_results:
             await self._publish(
                 "connection_execution_completed",
@@ -612,6 +595,31 @@ class TradingCycle:
         await self.journal.save(record)
         return record
 
+    async def _record_or_save_empty(
+        self,
+        cycle_id: str,
+        config_revision: int,
+        market_data_source_id: str,
+        signals: tuple[ComponentSignal, ...],
+        fused: FusedSignal | None,
+        target: TargetPosition | None,
+        created_at: datetime,
+        status: str,
+    ) -> MultiVenueCycleRecord:
+        durable = await self.journal.get(cycle_id)
+        if durable is not None:
+            return durable
+        return await self._save_empty_record(
+            cycle_id,
+            config_revision,
+            market_data_source_id,
+            signals,
+            fused,
+            target,
+            created_at,
+            status,
+        )
+
     @staticmethod
     def _record(
         *,
@@ -686,6 +694,102 @@ class TradingCycle:
         if record is None:
             raise LookupError("cycle was not found")
         return record
+
+    def _validated_execution_book(self, snapshot, proposal):
+        if snapshot.setup_required or snapshot.revision != proposal.config_revision:
+            raise ValueError("approved proposal revision is not active")
+        book = next(
+            (item for item in snapshot.document.execution.books if item.id == proposal.book_id and item.enabled),
+            None,
+        )
+        if book is None or book.capital_scope != proposal.capital_scope:
+            raise ValueError("approved book is absent from its configuration revision")
+        enabled_allocations = {item.connection_id for item in book.allocations if item.enabled}
+        configured_connections = {item.id for item in snapshot.document.execution.connections if item.enabled}
+        planned_connections = {item.connection_id for item in proposal.connection_plans}
+        if not planned_connections <= enabled_allocations or not planned_connections <= configured_connections:
+            raise ValueError("approved proposal connections do not match the active book")
+        if not planned_connections <= self.sessions.keys():
+            raise ValueError("approved proposal session is unavailable")
+        return book
+
+    async def _persist_approval_transition(
+        self,
+        record: MultiVenueCycleRecord,
+        original: BookCycleResult,
+        status: str,
+    ) -> MultiVenueCycleRecord:
+        if status not in {"rejected", "invalidated"}:
+            raise ValueError("unsupported approval transition")
+        transitioned = replace(
+            original,
+            hitl=BookHitlSnapshot(original.hitl.approval_id, status, original.config_revision),
+            status="approval_rejected",
+        )
+        return await self._persist_book_transition(record, original, transitioned)
+
+    async def _persist_book_transition(
+        self,
+        record: MultiVenueCycleRecord,
+        original: BookCycleResult,
+        terminal: BookCycleResult,
+    ) -> MultiVenueCycleRecord:
+        replacement = self._replace_book(record, terminal)
+        try:
+            await self.journal.replace(replacement)
+            return replacement
+        except ValueError:
+            latest = await self._required_record(record.cycle_id)
+            latest_original = self._required_approval_book(
+                latest,
+                original.hitl.approval_id or "",
+                original.book_id,
+            )
+            prior_by_book = {item.book_id: item for item in record.book_results}
+            sibling_changed = any(
+                item.book_id != original.book_id and item != prior_by_book[item.book_id] for item in latest.book_results
+            )
+            if latest_original != original or not sibling_changed:
+                raise
+            merged = self._replace_book(latest, terminal)
+            await self.journal.replace(merged)
+            return merged
+
+    async def _invalidate_unjournaled_approvals(
+        self,
+        cycle_id: str,
+        approval_ids: list[str],
+    ) -> None:
+        if not approval_ids:
+            return
+        durable_ids: set[str] = set()
+        try:
+            record = await self.journal.get(cycle_id)
+        except Exception:
+            record = None
+        if record is not None:
+            durable_ids = {item.hitl.approval_id for item in record.book_results if item.hitl.approval_id is not None}
+        pending_cleanup = tuple(
+            self.approvals.invalidate(approval_id) for approval_id in approval_ids if approval_id not in durable_ids
+        )
+        if pending_cleanup:
+            outcomes = await asyncio.gather(*pending_cleanup, return_exceptions=True)
+            if any(isinstance(outcome, asyncio.CancelledError) for outcome in outcomes):
+                raise asyncio.CancelledError
+            fatal = next(
+                (
+                    outcome
+                    for outcome in outcomes
+                    if isinstance(outcome, BaseException) and not isinstance(outcome, Exception)
+                ),
+                None,
+            )
+            if fatal is not None:
+                raise fatal
+            if any(
+                isinstance(outcome, Exception) and not isinstance(outcome, ApprovalNotFound) for outcome in outcomes
+            ):
+                raise RuntimeError("failed to invalidate unjournaled approval") from None
 
     @staticmethod
     def _required_approval_book(

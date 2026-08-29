@@ -50,8 +50,8 @@ async def test_paper_protection_triggers_long_and_short_at_exact_decimal_trigger
     )
     await session.set_quote(PAIR, Decimal(quote))
 
-    state = await session.list_open_state(PAIR)
     portfolio = await session.fetch_portfolio(PAIR)
+    state = await session.list_open_state(PAIR)
 
     assert state.triggered_protections == (
         type(protection)(

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -17,6 +17,7 @@ from api.routes.risk import (
     _known_pairs,
 )
 from cryptotrader._compat import UTC
+from cryptotrader.pair import Pair
 
 
 class TestComputeDailyLossPct:
@@ -193,60 +194,77 @@ class TestBuildCorrelationGroups:
 class TestKnownPairs:
     @pytest.mark.asyncio
     async def test_union_of_positions_and_recent_commits(self) -> None:
+        from tests.test_multi_venue_journal import _book_cycle, _record
+
         portfolio = {"positions": {"BTC/USDT": {"amount": 0.1}}}
-        recent = [MagicMock(pair="ETH/USDT"), MagicMock(pair="BTC/USDT")]
-        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
-            js_cls.return_value.list = AsyncMock(return_value=recent)
-            pairs = await _known_pairs(None, portfolio=portfolio)
-        assert set(pairs) == {"BTC/USDT", "ETH/USDT"}
+        recent = _record(
+            book_results=(_book_cycle(status="completed", pair=Pair.parse("ETH/USDT:USDT")),),
+            cycle_status="completed",
+            execution_status="completed",
+            requires_attention=False,
+        )
+        store = MagicMock()
+        store.list = AsyncMock(return_value=[recent])
+        pairs = await _known_pairs(None, portfolio=portfolio, journal_store=store)
+        assert set(pairs) == {"BTC/USDT", "ETH/USDT:USDT"}
 
     @pytest.mark.asyncio
     async def test_zero_amount_position_excluded(self) -> None:
         portfolio = {"positions": {"BTC/USDT": {"amount": 0.0}}}
-        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
-            js_cls.return_value.list = AsyncMock(return_value=[])
-            pairs = await _known_pairs(None, portfolio=portfolio)
+        store = MagicMock()
+        store.list = AsyncMock(return_value=[])
+        pairs = await _known_pairs(None, portfolio=portfolio, journal_store=store)
         assert pairs == []
 
 
 class TestBuildRecentBlocks:
     @pytest.mark.asyncio
     async def test_only_rejected_commits_included(self) -> None:
-        from tests.factories.signal_fusion import cycle_record
+        from tests.test_multi_venue_journal import _book_cycle, _preparation_failure_book, _record
 
-        passed = cycle_record(status="risk_rejected", risk_result={"passed": True})
-        rejected = cycle_record(
-            status="risk_rejected",
-            created_at=datetime(2026, 1, 1, tzinfo=UTC),
-            risk_result={"passed": False, "rejected_by": "CooldownCheck", "reason": "same-pair"},
+        passed = _record(
+            cycle_id="completed",
+            book_results=(_book_cycle(status="completed"),),
+            cycle_status="completed",
+            execution_status="completed",
+            requires_attention=False,
+        )
+        rejected = _record(
+            cycle_id="rejected",
+            book_results=(_preparation_failure_book("risk"),),
+            cycle_status="risk_rejected",
+            execution_status="not_started",
+            requires_attention=False,
         )
 
-        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
-            js_cls.return_value.list = AsyncMock(return_value=[passed, rejected])
-            blocks = await _build_recent_blocks(None)
+        store = MagicMock()
+        store.list = AsyncMock(return_value=[passed, rejected])
+        blocks = await _build_recent_blocks(None, store)
         assert len(blocks) == 1
-        assert blocks[0].rule == "CooldownCheck"
+        assert blocks[0].rule == "book_risk"
 
     @pytest.mark.asyncio
     async def test_capped_at_10(self) -> None:
-        from tests.factories.signal_fusion import cycle_record
+        from tests.test_multi_venue_journal import _preparation_failure_book, _record
 
         many = [
-            cycle_record(
-                status="risk_rejected",
-                created_at=datetime(2026, 1, 1, tzinfo=UTC),
-                risk_result={"passed": False, "rejected_by": "X", "reason": f"y{i}"},
+            _record(
+                cycle_id=f"risk-{i}",
+                book_results=(_preparation_failure_book("risk"),),
+                cycle_status="risk_rejected",
+                execution_status="not_started",
+                requires_attention=False,
             )
             for i in range(20)
         ]
-        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
-            js_cls.return_value.list = AsyncMock(return_value=many)
-            blocks = await _build_recent_blocks(None)
+        store = MagicMock()
+        store.list = AsyncMock(return_value=many)
+        blocks = await _build_recent_blocks(None, store)
         assert len(blocks) == 10
 
     @pytest.mark.asyncio
     async def test_journal_error_returns_empty(self) -> None:
-        with patch("cryptotrader.journal.store.CycleJournalStore") as js_cls:
-            js_cls.return_value.list = AsyncMock(side_effect=RuntimeError("db down"))
-            blocks = await _build_recent_blocks(None)
+        store = MagicMock()
+        store.list = AsyncMock(side_effect=RuntimeError("db down"))
+        blocks = await _build_recent_blocks(None, store)
         assert blocks == []

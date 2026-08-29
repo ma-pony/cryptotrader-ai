@@ -219,14 +219,12 @@ async def _load_snapshots(database_url: str | None) -> list[dict]:
 
 
 async def _load_cycles(database_url: str | None, journal_store=None) -> list:
-    from cryptotrader.journal.store import CycleJournalStore
-
-    try:
-        store = journal_store if journal_store is not None else CycleJournalStore(database_url)
-        return await store.list(limit=1000, status="completed")
-    except Exception:
-        logger.info("cycle journal read failed for pnl stats", exc_info=True)
+    if journal_store is None:
         return []
+    # The strict multi-venue execution DTO does not yet carry realized-PnL
+    # attribution. Task 12 will restore these derived statistics from the new
+    # fill ledger instead of reading the removed single-exchange Journal.
+    return []
 
 
 def _cycle_realized_pnl(cycle: Any) -> float:

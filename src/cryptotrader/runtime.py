@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from cryptotrader.cycle_events import NullCycleEventSink
+from cryptotrader.cycle_events import CycleEventSink, MultiplexedCycleEventSink, NullCycleEventSink
 from cryptotrader.decision.engine import DecisionEngine
 from cryptotrader.decision.exit_policy import AtrExitPolicy
 from cryptotrader.execution.allocation import WeightedAllocationPolicy
@@ -34,7 +34,6 @@ from cryptotrader.venues.registry import VenueAdapterRegistry
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from cryptotrader.cycle_events import CycleEventSink
     from cryptotrader.venues.protocol import VenueSession
 
 
@@ -49,6 +48,7 @@ class Runtime:
     signal_registry: SignalComponentRegistry
     market_registry: MarketSourceRegistry
     venue_registry: VenueAdapterRegistry
+    events: MultiplexedCycleEventSink
     _closed: bool = field(default=False, init=False, repr=False)
 
     async def close(self) -> None:
@@ -77,7 +77,11 @@ async def build_runtime(
 
     runtime_repository = repository or _repository_from_bootstrap_environment()
     frozen = snapshot or await runtime_repository.get_or_create()
-    event_sink = events or NullCycleEventSink()
+    event_sink = (
+        events
+        if isinstance(events, MultiplexedCycleEventSink)
+        else MultiplexedCycleEventSink(events or NullCycleEventSink())
+    )
     signals = signal_registry or SignalComponentRegistry.discover(frozen.document, event_sink)
     venues = venue_registry or VenueAdapterRegistry.discover(
         connection.adapter_id for connection in frozen.document.execution.connections
@@ -90,7 +94,7 @@ async def build_runtime(
         set(markets.installed_ids()),
     )
     if frozen.setup_required:
-        return Runtime(frozen, runtime_repository, None, {}, signals, markets, venues)
+        return Runtime(frozen, runtime_repository, None, {}, signals, markets, venues, event_sink)
 
     sessions = await _open_sessions(frozen, runtime_repository, venues)
     services = {connection_id: VenueExecutionService(session) for connection_id, session in sessions.items()}
@@ -131,7 +135,7 @@ async def build_runtime(
         events=event_sink,
         exit_requirement=DataRequirements(candles=(CandleRequirement(timeframe, max(20, limit)),)),
     )
-    return Runtime(frozen, runtime_repository, cycle, sessions, signals, markets, venues)
+    return Runtime(frozen, runtime_repository, cycle, sessions, signals, markets, venues, event_sink)
 
 
 def _repository_from_bootstrap_environment() -> RuntimeConfigRepository:

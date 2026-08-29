@@ -44,6 +44,7 @@ class _PaperAccount:
     spot_entry_prices: dict[Pair, Decimal] = field(default_factory=dict)
     orders: dict[str, NormalizedOrder] = field(default_factory=dict)
     protections: dict[Pair, ProtectionState] = field(default_factory=dict)
+    triggered_protections: dict[Pair, ProtectionState] = field(default_factory=dict)
     protection_pairs: dict[str, Pair] = field(default_factory=dict)
     pair_locks: dict[Pair, asyncio.Lock] = field(default_factory=dict)
     order_sequence: int = 0
@@ -120,7 +121,11 @@ class PaperVenueSession:
         self._require_supported_pair(pair)
         async with self._account.lock_for(pair):
             self._quote_locked(pair)
-            self._apply_bankruptcy_locked()
+            bankrupt = self._apply_bankruptcy_locked()
+            if not bankrupt:
+                triggered = self._trigger_protection_locked(pair)
+                if triggered is not None:
+                    self._account.triggered_protections[pair] = triggered
             return self._portfolio_locked(pair)
 
     async def replace_protection(self, spec: ProtectionSpec) -> ProtectionState:
@@ -180,7 +185,9 @@ class PaperVenueSession:
         async with self._account.lock_for(pair):
             self._quote_locked(pair)
             bankrupt = self._apply_bankruptcy_locked()
-            triggered = None if bankrupt else self._trigger_protection_locked(pair)
+            triggered = None if bankrupt else self._account.triggered_protections.pop(pair, None)
+            if triggered is None and not bankrupt:
+                triggered = self._trigger_protection_locked(pair)
             position = self._position_dto_locked(pair)
             open_orders = tuple(
                 order for order in self._account.orders.values() if order.pair == pair and order.status == "open"
@@ -345,6 +352,7 @@ class PaperVenueSession:
         self._account.positions.clear()
         self._account.spot_entry_prices.clear()
         self._account.protections.clear()
+        self._account.triggered_protections.clear()
         self._account.protection_pairs.clear()
         return True
 

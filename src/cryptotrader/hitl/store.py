@@ -530,6 +530,66 @@ class BookApprovalStore:
     async def reject(self, approval_id: str) -> BookApproval:
         return await self._decide_book(approval_id, "rejected")
 
+    async def invalidate(self, approval_id: str) -> BookApproval:
+        """Invalidate an unclaimed approval without making it executable."""
+        if self.database_url is None:
+            return await self._invalidate_memory(approval_id)
+        return await self._invalidate_database(approval_id)
+
+    async def _invalidate_memory(self, approval_id: str) -> BookApproval:
+        decided_at = datetime.now(UTC)
+        async with self._lock:
+            for index, record in enumerate(self.records):
+                if record.approval_id != approval_id:
+                    continue
+                if record.status == "invalidated":
+                    return record
+                if record.status not in {"pending", "approved"} or record.claimed_at is not None:
+                    raise ApprovalStateError("approval cannot be invalidated")
+                invalidated = replace(record, status="invalidated", decided_at=decided_at)
+                self.records[index] = invalidated
+                return invalidated
+        raise ApprovalNotFound("approval was not found")
+
+    async def _invalidate_database(self, approval_id: str) -> BookApproval:
+        decided_at = datetime.now(UTC)
+        await self.ensure_table()
+        statement = (
+            update(_BookApprovalRow)
+            .where(
+                _BookApprovalRow.approval_id == approval_id,
+                _BookApprovalRow.status.in_(("pending", "approved")),
+                _BookApprovalRow.claimed_at.is_(None),
+            )
+            .values(status="invalidated", decided_at=decided_at)
+            .returning(_BookApprovalRow)
+        )
+        session = await get_async_session(self.database_url)
+        transitioned: BookApproval | None = None
+        invalid_payload = False
+        try:
+            result = await session.execute(statement)
+            row = result.scalar_one_or_none()
+            if row is not None:
+                transitioned = _decode_book_record(row)
+            if transitioned is not None:
+                await session.commit()
+            else:
+                await session.rollback()
+                invalid_payload = row is not None
+        finally:
+            await session.close()
+        if invalid_payload:
+            raise ValueError("stored approval payload is invalid")
+        if transitioned is not None:
+            return transitioned
+        record = await self.get(approval_id)
+        if record is None:
+            raise ApprovalNotFound("approval was not found")
+        if record.status == "invalidated":
+            return record
+        raise ApprovalStateError("approval cannot be invalidated")
+
     async def _decide_book(
         self,
         approval_id: str,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import fields, replace
 from datetime import UTC, datetime
 from importlib import import_module
@@ -167,6 +168,20 @@ class _Coordinator:
         return _execution(proposal)
 
 
+class _ConcurrentCoordinator:
+    def __init__(self, expected_calls: int) -> None:
+        self.expected_calls = expected_calls
+        self.proposals = []
+        self._all_entered = asyncio.Event()
+
+    async def execute(self, proposal):
+        self.proposals.append(proposal)
+        if len(self.proposals) == self.expected_calls:
+            self._all_entered.set()
+        await self._all_entered.wait()
+        return _execution(proposal)
+
+
 def _cycle(snapshot, *, failed_books=(), execution_failed_books=(), repository=None):
     proposals = {
         book.id: _proposal_for(
@@ -189,7 +204,11 @@ def _cycle(snapshot, *, failed_books=(), execution_failed_books=(), repository=N
         fusion=WeightedSignalFusion(),
         decisions=DecisionEngine(),
         exits=AtrExitPolicy(),
-        sessions={},
+        sessions={
+            allocation.connection_id: object()
+            for book in snapshot.document.execution.books
+            for allocation in book.allocations
+        },
         portfolios=_Aggregator(proposals, failed_books=failed_books),
         allocation_policy=_AllocationPolicy(),
         book_risk=object(),
@@ -234,7 +253,7 @@ async def test_book_failure_does_not_block_sibling():
 
 
 @pytest.mark.asyncio
-async def test_unexpected_book_execution_failure_does_not_block_sibling():
+async def test_coordinator_contract_violation_does_not_fabricate_connection_results():
     simulation = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False)
     live = _book("live", "real", ("live-first", "live-second"), hitl=False)
     cycle, _, coordinator, _, _ = _cycle(
@@ -244,9 +263,8 @@ async def test_unexpected_book_execution_failure_does_not_block_sibling():
 
     outcome = await cycle.run(CycleRequest(PAIR))
 
-    assert outcome.book("simulation").status == "failed"
-    assert outcome.book("simulation").execution.requires_attention is True
-    assert outcome.book("live").status == "completed"
+    assert outcome.status == "cycle_failed"
+    assert outcome.books == ()
     assert {proposal.book_id for proposal in coordinator.proposals} == {"simulation", "live"}
 
 
@@ -296,6 +314,129 @@ async def test_execute_approved_uses_original_proposal_once_and_replaces_same_cy
     assert completed.book("live").status == "completed"
     assert len(journal.records) == 1
     assert journal.records[0].cycle_id == awaiting.cycle_id
+
+
+@pytest.mark.asyncio
+async def test_execute_approved_invalidates_revision_change_without_claiming_or_execution():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    initial = _snapshot(live, revision=9)
+    repository = _Repository(initial, replace(initial, revision=10))
+    cycle, _, coordinator, journal, approvals = _cycle(initial, repository=repository)
+    awaiting = await cycle.run(CycleRequest(PAIR))
+    approval_id = awaiting.book("live").hitl.approval_id
+    await approvals.approve(approval_id)
+
+    invalidated = await cycle.execute_approved(approval_id)
+
+    approval = await approvals.get(approval_id)
+    assert approval is not None
+    assert approval.status == "invalidated"
+    assert approval.claimed_at is None
+    assert invalidated.book("live").hitl.status == "invalidated"
+    assert invalidated.book("live").status == "approval_rejected"
+    assert coordinator.proposals == []
+    stored = await journal.get(awaiting.cycle_id)
+    assert stored is not None
+    assert stored.book_results[0] == invalidated.book("live")
+
+
+@pytest.mark.asyncio
+async def test_cancellation_after_approval_creation_invalidates_unjournaled_approval():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    cycle, _, _, journal, approvals = _cycle(_snapshot(live))
+
+    class _CancelAtAwaiting:
+        async def publish(self, event):
+            if event.name == "book_awaiting_approval":
+                raise asyncio.CancelledError
+
+    cycle.events = _CancelAtAwaiting()
+
+    with pytest.raises(asyncio.CancelledError):
+        await cycle.run(CycleRequest(PAIR))
+
+    assert len(approvals.records) == 1
+    assert approvals.records[0].status == "invalidated"
+    assert await approvals.list_pending() == []
+    assert journal.records[0].cycle_status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_approval_durably_created_before_create_error_is_invalidated_when_not_journaled():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    cycle, _, _, _, _ = _cycle(_snapshot(live))
+
+    class _CommitThenFailStore(BookApprovalStore):
+        async def create(self, *args, **kwargs):
+            await super().create(*args, **kwargs)
+            raise RuntimeError("create response failed")
+
+    approvals = _CommitThenFailStore()
+    cycle.approvals = approvals
+
+    outcome = await cycle.run(CycleRequest(PAIR))
+
+    assert outcome.book("live").status == "failed"
+    assert outcome.book("live").failure.stage == "planning"
+    assert len(approvals.records) == 1
+    assert approvals.records[0].status == "invalidated"
+    assert await approvals.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_approval_without_journal_is_not_claimed():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    cycle, _, coordinator, _, approvals = _cycle(_snapshot(live))
+    proposal = _proposal_for("live", "real", ("live-first", "live-second"), PAIR)
+    approval = await approvals.create(proposal, cycle_id="missing-cycle")
+    await approvals.approve(approval.approval_id)
+
+    with pytest.raises(LookupError, match="cycle"):
+        await cycle.execute_approved(approval.approval_id)
+
+    assert (await approvals.get(approval.approval_id)).status == "approved"
+    assert coordinator.proposals == []
+
+
+@pytest.mark.asyncio
+async def test_approval_mismatched_with_journal_is_not_claimed():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    cycle, _, coordinator, _, approvals = _cycle(_snapshot(live))
+    awaiting = await cycle.run(CycleRequest(PAIR))
+    proposal = awaiting.book("live").proposal
+    mismatch = await approvals.create(
+        proposal,
+        cycle_id=awaiting.cycle_id,
+        approval_id="mismatched-approval",
+    )
+    await approvals.approve(mismatch.approval_id)
+
+    with pytest.raises(ValueError, match="approval"):
+        await cycle.execute_approved(mismatch.approval_id)
+
+    assert (await approvals.get(mismatch.approval_id)).status == "approved"
+    assert coordinator.proposals == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_book_approvals_execute_once_and_merge_both_terminal_facts():
+    first = _book("first-book", "simulated", ("first-a", "first-b"), hitl=True)
+    second = _book("second-book", "real", ("second-a", "second-b"), hitl=True)
+    cycle, _, _, journal, approvals = _cycle(_snapshot(first, second))
+    awaiting = await cycle.run(CycleRequest(PAIR))
+    approval_ids = tuple(book.hitl.approval_id for book in awaiting.books)
+    for approval_id in approval_ids:
+        await approvals.approve(approval_id)
+    coordinator = _ConcurrentCoordinator(expected_calls=2)
+    cycle.coordinator = coordinator
+
+    await asyncio.gather(*(cycle.execute_approved(approval_id) for approval_id in approval_ids))
+
+    stored = await journal.get(awaiting.cycle_id)
+    assert stored is not None
+    assert tuple(book.status for book in stored.book_results) == ("completed", "completed")
+    assert {proposal.book_id for proposal in coordinator.proposals} == {"first-book", "second-book"}
+    assert len(coordinator.proposals) == 2
 
 
 def test_cycle_request_and_signal_context_are_hard_cut_over():
