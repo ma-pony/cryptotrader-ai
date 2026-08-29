@@ -161,6 +161,37 @@ async def test_active_lifespan_attempts_all_owner_shutdowns_when_scheduler_stop_
     runtime.close.assert_awaited_once_with()
 
 
+@pytest.mark.asyncio
+async def test_shutdown_attempts_every_owner_when_each_preceding_owner_fails():
+    from api import main
+
+    runtime = _runtime()
+    runtime.close = AsyncMock(side_effect=RuntimeError("runtime close failed"))
+    application = FastAPI()
+    trigger = SimpleNamespace(stop=AsyncMock(side_effect=RuntimeError("trigger stop failed")))
+    application.state.trigger_engine = trigger
+    manager = SimpleNamespace(drain=AsyncMock(side_effect=RuntimeError("chat drain failed")))
+
+    with (
+        patch(
+            "cryptotrader.chat.task_manager.BackgroundTaskManager.get_instance",
+            return_value=manager,
+        ),
+        patch.object(
+            main,
+            "_shutdown_scheduler",
+            new=AsyncMock(side_effect=RuntimeError("scheduler stop failed")),
+        ) as scheduler_shutdown,
+        pytest.raises(RuntimeError, match="chat drain failed"),
+    ):
+        await main._shutdown_runtime_owners(application, runtime, active=True)
+
+    manager.drain.assert_awaited_once_with()
+    scheduler_shutdown.assert_awaited_once_with(application)
+    trigger.stop.assert_awaited_once_with()
+    runtime.close.assert_awaited_once_with()
+
+
 def test_health_uses_runtime_llm_base_url(client):
     _use(client, llm_base_url="https://llm.example/v1")
     with patch("api.routes.health._check_llm", new=AsyncMock(return_value="ok")) as check:

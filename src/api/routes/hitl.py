@@ -48,10 +48,15 @@ class HitlRespondOut(BaseModel):
 
 
 def _cycle(request: Request):
+    runtime = _runtime(request)
+    return runtime.cycle
+
+
+def _runtime(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None or runtime.cycle is None:
         raise HTTPException(status_code=503, detail="Trading runtime is not active")
-    return runtime.cycle
+    return runtime
 
 
 def _response(record: BookApproval) -> ApprovalRequestOut:
@@ -84,20 +89,20 @@ async def get_approval(approval_id: str, request: Request) -> ApprovalRequestOut
 
 @router.post("/{approval_id}/respond")
 async def respond_approval(approval_id: str, body: HitlRespondIn, request: Request) -> HitlRespondOut:
-    cycle = _cycle(request)
     try:
-        if body.decision == "approve":
-            await cycle.approvals.approve(approval_id)
-            outcome = await cycle.execute_approved(approval_id)
-        else:
-            outcome = await cycle.reject_approval(approval_id)
+        async with _runtime(request).cycle_lease() as cycle:
+            if body.decision == "approve":
+                await cycle.approvals.approve(approval_id)
+                outcome = await cycle.execute_approved(approval_id)
+            else:
+                outcome = await cycle.reject_approval(approval_id)
+            final_approval = await cycle.approvals.get(approval_id)
     except ApprovalStateError:
         raise HTTPException(status_code=409, detail="Approval state conflict") from None
     except LookupError:
         raise HTTPException(status_code=404, detail="Approval request not found") from None
     except ValueError as error:
         raise HTTPException(status_code=422, detail="Approval proposal is invalid") from error
-    final_approval = await cycle.approvals.get(approval_id)
     if final_approval is None:
         raise HTTPException(status_code=404, detail="Approval request not found")
     return HitlRespondOut(

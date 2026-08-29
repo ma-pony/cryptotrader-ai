@@ -10,6 +10,8 @@ import time
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.execution_ownership import wait_for_owned
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Coroutine
 
@@ -80,6 +82,7 @@ class PriceTriggerEngine:
         self._klines: dict[tuple[str, str], list[dict[str, float]]] = {}
         self._reconnect_delay = 1.0
         self._callback_tasks: set[asyncio.Task[None]] = set()
+        self._stop_completion: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._running:
@@ -95,14 +98,21 @@ class PriceTriggerEngine:
         logger.info("PriceTriggerEngine started with %d rules", len(self._rules))
 
     async def stop(self) -> None:
+        if self._stop_completion is None or self._stop_completion.done():
+            self._stop_completion = asyncio.create_task(self._stop_owned())
+        await wait_for_owned(self._stop_completion)
+
+    async def _stop_owned(self) -> None:
         self._running = False
+        watchers = []
         for task_attr in ("_ws_task", "_kline_task", "_funding_task"):
             task = getattr(self, task_attr, None)
             if task is not None and not task.done():
                 task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await task
+                watchers.append(task)
             setattr(self, task_attr, None)
+        if watchers:
+            await asyncio.gather(*watchers, return_exceptions=True)
         if self._callback_tasks:
             await asyncio.gather(*tuple(self._callback_tasks), return_exceptions=True)
         # ccxt async clients hold an aiohttp connector; closing here avoids
@@ -295,9 +305,8 @@ class PriceTriggerEngine:
         self._callback_tasks.add(callback)
         callback.add_done_callback(self._callback_tasks.discard)
         try:
-            await asyncio.shield(callback)
+            await wait_for_owned(callback)
         except asyncio.CancelledError:
-            await callback
             raise
         except Exception:
             logger.warning("Trigger callback failed for rule %s", rule.id)

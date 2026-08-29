@@ -4,13 +4,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
+from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
 from cryptotrader.decision.models import CycleOutcome, TargetPosition
 from cryptotrader.hitl.store import ApprovalStateError, BookApprovalStore
 from cryptotrader.pair import Pair
+from cryptotrader.runtime import Runtime
+from tests.runtime_lease import static_cycle_lease
 from tests.test_multi_venue_journal import _proposal_for
 from tests.test_runtime_config_api import api_harness
 
@@ -46,9 +50,14 @@ async def _seed(cycle: _Cycle, approval_id: str = "approval-1"):
     )
 
 
+def _mount_cycle(api_harness, cycle: _Cycle) -> None:
+    api_harness.runtime.cycle = cycle
+    api_harness.runtime.cycle_lease = static_cycle_lease(cycle)
+
+
 async def test_pending_api_exposes_frozen_book_proposal(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
 
     response = await api_harness.client.get("/api/hitl/pending")
@@ -66,7 +75,7 @@ async def test_pending_api_exposes_frozen_book_proposal(api_harness):
 
 async def test_approve_api_returns_final_approval_and_cycle_state(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
 
     response = await api_harness.client.post(
@@ -88,7 +97,7 @@ async def test_approve_api_returns_final_approval_and_cycle_state(api_harness):
 
 async def test_revision_invalidation_response_never_reports_executed(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
 
     async def invalidate_after_approval(approval_id):
@@ -110,7 +119,7 @@ async def test_revision_invalidation_response_never_reports_executed(api_harness
 
 async def test_reject_api_updates_same_cycle_without_execution(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
 
     response = await api_harness.client.post(
@@ -127,7 +136,7 @@ async def test_reject_api_updates_same_cycle_without_execution(api_harness):
 
 async def test_already_decided_approval_returns_conflict(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
     await cycle.approvals.reject("approval-1")
 
@@ -140,7 +149,7 @@ async def test_already_decided_approval_returns_conflict(api_harness):
 
 
 async def test_unknown_approval_returns_not_found(api_harness):
-    api_harness.runtime.cycle = _Cycle()
+    _mount_cycle(api_harness, _Cycle())
 
     response = await api_harness.client.get("/api/hitl/missing")
 
@@ -149,7 +158,7 @@ async def test_unknown_approval_returns_not_found(api_harness):
 
 async def test_approval_state_error_returns_fixed_detail_without_internal_marker(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
     marker = "approval-1 internal-state-marker"
     cycle.execute_approved.side_effect = ApprovalStateError(marker)
@@ -167,7 +176,7 @@ async def test_approval_state_error_returns_fixed_detail_without_internal_marker
 
 async def test_lookup_error_returns_fixed_detail_without_internal_marker(api_harness):
     cycle = _Cycle()
-    api_harness.runtime.cycle = cycle
+    _mount_cycle(api_harness, cycle)
     await _seed(cycle)
     marker = "approval-1 internal-lookup-marker"
     cycle.reject_approval.side_effect = LookupError(marker)
@@ -184,7 +193,7 @@ async def test_lookup_error_returns_fixed_detail_without_internal_marker(api_har
 
 
 async def test_hitl_request_rejects_unknown_fields(api_harness):
-    api_harness.runtime.cycle = _Cycle()
+    _mount_cycle(api_harness, _Cycle())
 
     response = await api_harness.client.post(
         "/api/hitl/approval-1/respond",
@@ -192,3 +201,69 @@ async def test_hitl_request_rejects_unknown_fields(api_harness):
     )
 
     assert response.status_code == 422
+
+
+async def test_approve_lease_pins_session_during_claim_reload_and_runtime_close(api_harness):
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    await _seed(cycle)
+    claimed = asyncio.Event()
+    release = asyncio.Event()
+
+    async def execute_after_claim(approval_id):
+        await cycle.approvals.claim_for_execution(approval_id, current_revision=9)
+        claimed.set()
+        await release.wait()
+        return _outcome("completed", "completed")
+
+    cycle.execute_approved.side_effect = execute_after_claim
+
+    class Session:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        async def close(self):
+            self.close_calls += 1
+
+    old_session = Session()
+    replacement_session = Session()
+    runtime = Runtime(
+        snapshot=api_harness.runtime.snapshot,
+        repository=api_harness.runtime.repository,
+        cycle=cycle,
+        sessions={"old": old_session},
+        signal_registry=object(),
+        market_registry=object(),
+        venue_registry=object(),
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+    )
+    reload_calls = 0
+
+    async def reload_graph():
+        nonlocal reload_calls
+        reload_calls += 1
+        if reload_calls == 2:
+            runtime.sessions = {"replacement": replacement_session}
+            await runtime._retire_sessions((old_session,))
+        return cycle
+
+    runtime._reload_for_cycle_locked = reload_graph
+    request = type("Request", (), {"app": type("App", (), {"state": type("State", (), {"runtime": runtime})()})()})()
+
+    responding = asyncio.create_task(respond_approval("approval-1", HitlRespondIn(decision="approve"), request))
+    await claimed.wait()
+    await runtime.reload_for_cycle()
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+
+    assert old_session.close_calls == 0
+    assert replacement_session.close_calls == 0
+    assert closing.done() is False
+
+    release.set()
+    response = await responding
+    await closing
+    assert response.approval_status == "executed"
+    assert old_session.close_calls == 1
+    assert replacement_session.close_calls == 1

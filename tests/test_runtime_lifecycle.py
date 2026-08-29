@@ -251,6 +251,80 @@ async def test_multiple_reloads_accumulate_unique_retired_sessions_until_lease_d
     assert runtime.sessions["paper-a"].close_calls == 0
     assert len(adapter.sessions) == 3
     await runtime.close()
+    assert first_session.close_calls == 1
+    assert second_session.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_runtime_close_waits_active_lease_and_unique_session_terminal():
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    lease = runtime.cycle_lease()
+    await lease.__aenter__()
+    blocking = _BlockingCloseSession("paper-a")
+    runtime.sessions = {"paper-a": blocking}
+
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+    closing.cancel()
+    await asyncio.sleep(0)
+    closing.cancel()
+    assert closing.done() is False
+    assert blocking.started.is_set() is False
+
+    await lease.__aexit__(None, None, None)
+    await blocking.started.wait()
+    assert closing.done() is False
+    blocking.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+
+    assert blocking.completed is True
+    assert blocking.close_calls == 1
+    assert runtime._active_leases == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_lease_exit_waits_for_lifecycle_lock_then_signals_drained():
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    lease = runtime.cycle_lease()
+    await lease.__aenter__()
+    await runtime._lifecycle_lock.acquire()
+
+    exiting = asyncio.create_task(lease.__aexit__(None, None, None))
+    await asyncio.sleep(0)
+    exiting.cancel()
+    await asyncio.sleep(0)
+    exiting.cancel()
+    assert runtime._active_leases == 1
+    assert exiting.done() is False
+
+    runtime._lifecycle_lock.release()
+    with pytest.raises(asyncio.CancelledError):
+        await exiting
+    assert runtime._active_leases == 0
+    assert runtime._leases_drained.is_set()
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_close_callers_share_one_owned_completion():
+    runtime, _, _, _ = await _build(_document(active=False))
+    blocking = _BlockingCloseSession("shared")
+    runtime.sessions = {"first": blocking, "alias": blocking}
+
+    first = asyncio.create_task(runtime.close())
+    second = asyncio.create_task(runtime.close())
+    await blocking.started.wait()
+    first.cancel()
+    await asyncio.sleep(0)
+    assert first.done() is False
+    assert second.done() is False
+
+    blocking.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    await second
+    assert blocking.close_calls == 1
 
 
 @pytest.mark.asyncio

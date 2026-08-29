@@ -150,6 +150,42 @@ async def test_scheduler_stop_pauses_new_fires_and_waits_for_inflight_batch() ->
 
 
 @pytest.mark.asyncio
+async def test_cancelled_scheduler_start_finally_drains_inflight_batch() -> None:
+    scheduler = Scheduler(_config(), _Runtime(_Cycle()))
+    entered = asyncio.Event()
+    terminal = asyncio.Event()
+    batch_cancelled = False
+
+    async def blocking_batch():
+        nonlocal batch_cancelled
+        entered.set()
+        try:
+            await terminal.wait()
+        except asyncio.CancelledError:
+            batch_cancelled = True
+            raise
+
+    scheduler.run_once = blocking_batch
+    loop = asyncio.get_running_loop()
+    with patch.object(loop, "add_signal_handler"):
+        serving = asyncio.create_task(scheduler.start())
+        await asyncio.sleep(0)
+        batch = asyncio.create_task(scheduler._run_cycle())
+        await entered.wait()
+        serving.cancel()
+        await asyncio.sleep(0)
+        serving.cancel()
+        assert serving.done() is False
+        assert batch_cancelled is False
+
+        terminal.set()
+        await batch
+        with pytest.raises(asyncio.CancelledError):
+            await serving
+        assert batch_cancelled is False
+
+
+@pytest.mark.asyncio
 async def test_scheduler_status_redacts_cycle_exception_and_keeps_trace_id() -> None:
     class FailingCycle(_Cycle):
         async def run(self, request: CycleRequest) -> CycleOutcome:

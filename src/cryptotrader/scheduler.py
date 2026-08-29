@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -14,9 +13,12 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from cryptotrader._compat import UTC
+from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.pair import Pair
 
 if TYPE_CHECKING:
+    from contextlib import AbstractAsyncContextManager
+
     from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SchedulerConfig
     from cryptotrader.trading_cycle import TradingCycle
 
@@ -50,6 +52,7 @@ class Scheduler:
         self._status: dict[str, dict[str, Any]] = {p.canonical(): {} for p in self.pairs}
         self._scheduler = AsyncIOScheduler()
         self._stop_event: asyncio.Event | None = None
+        self._heartbeat_task: asyncio.Task[None] | None = None
         self._trigger_engine = trigger_engine
         self.runtime = runtime
         self.config_revision = runtime.snapshot.revision
@@ -69,6 +72,23 @@ class Scheduler:
         _slog.info("pair_init", spot=spot, swap=swap, future=future)
 
     async def start(self) -> None:
+        self._stop_event = asyncio.Event()
+        primary_failure: BaseException | None = None
+        try:
+            await self._run_until_stopped()
+        except BaseException as error:
+            primary_failure = error
+        try:
+            await wait_for_owned(asyncio.create_task(self._shutdown_owned_tasks()))
+        except BaseException as cleanup_error:
+            if not isinstance(cleanup_error, Exception):
+                raise
+            if primary_failure is None:
+                raise
+        if primary_failure is not None:
+            raise primary_failure
+
+    async def _run_until_stopped(self) -> None:
         self._require_active_cycle()
 
         # Register trading cycle job. Delay the first run by 15s so that:
@@ -156,8 +176,6 @@ class Scheduler:
         )
 
         # Block until stop() is called
-        self._stop_event = asyncio.Event()
-
         # Defensive heartbeat against APScheduler timer-state staleness.
         # Observed twice (2026-05-12 11:21 / 2026-05-13 00:53 UTC):
         # AsyncIOScheduler stops firing after ~10h uptime, with
@@ -170,9 +188,6 @@ class Scheduler:
 
         await self._stop_event.wait()
 
-        await self._shutdown_owned_tasks()
-        logger.info("Scheduler stopped gracefully")
-
     async def _shutdown_owned_tasks(self) -> None:
         """Pause fires, drain batches, and release scheduler-owned resources."""
 
@@ -181,9 +196,10 @@ class Scheduler:
             self._scheduler.pause()
         except BaseException as error:
             failures.append(error)
-        self._heartbeat_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await self._heartbeat_task
+        if self._heartbeat_task is not None:
+            self._heartbeat_task.cancel()
+            await asyncio.gather(self._heartbeat_task, return_exceptions=True)
+            self._heartbeat_task = None
         current = asyncio.current_task()
         pending = tuple(task for task in self._inflight_batches if task is not current)
         if pending:
@@ -202,6 +218,7 @@ class Scheduler:
             raise control_flow
         if failures:
             raise failures[0]
+        logger.info("Scheduler stopped gracefully")
 
     async def _scheduler_heartbeat(self) -> None:
         """Periodic wakeup nudge + staleness watchdog.

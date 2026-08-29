@@ -153,6 +153,39 @@ class TestLifecycle:
         await stopping
         assert cancelled is False
 
+    async def test_cancelled_stop_still_drains_active_callback(self) -> None:
+        entered = asyncio.Event()
+        terminal = asyncio.Event()
+        callback_cancelled = False
+
+        async def order_bearing_callback(_pair, _meta):
+            nonlocal callback_cancelled
+            entered.set()
+            try:
+                await terminal.wait()
+            except asyncio.CancelledError:
+                callback_cancelled = True
+                raise
+
+        engine, _, _ = _make_engine(run_cb=order_bearing_callback)
+        engine._running = True
+        engine._ws_task = asyncio.create_task(
+            engine._dispatch(_make_rule(), {"pair": "BTC/USDT", "price": 49_000.0, "ts": 0.0})
+        )
+        await entered.wait()
+        stopping = asyncio.create_task(engine.stop())
+        await asyncio.sleep(0)
+        stopping.cancel()
+        await asyncio.sleep(0)
+        stopping.cancel()
+
+        assert stopping.done() is False
+        assert callback_cancelled is False
+        terminal.set()
+        with pytest.raises(asyncio.CancelledError):
+            await stopping
+        assert callback_cancelled is False
+
 
 # ---------------------------------------------------------------------------
 # reload_rules

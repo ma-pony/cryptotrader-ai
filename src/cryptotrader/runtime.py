@@ -17,6 +17,7 @@ from cryptotrader.execution.allocation import WeightedAllocationPolicy
 from cryptotrader.execution.coordinator import ExecutionCoordinator
 from cryptotrader.execution.planner import ExecutionPlanner
 from cryptotrader.execution.service import VenueExecutionService
+from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.hitl.store import BookApprovalStore
 from cryptotrader.journal.store import MultiVenueCycleStore
 from cryptotrader.market_sources.registry import MarketSourceRegistry
@@ -72,6 +73,7 @@ class Runtime:
     _leases_drained: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
     _closing: bool = field(default=False, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
+    _close_completion: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _started_setup_required: bool = field(default=False, init=False, repr=False)
     _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
@@ -94,20 +96,25 @@ class Runtime:
         try:
             yield cycle
         finally:
-            async with self._lifecycle_lock:
-                self._active_leases -= 1
-                if self._active_leases == 0:
-                    try:
-                        await self._cleanup_retired_sessions(
-                            tuple(self._deferred_retired.values()),
-                            retry_pending=False,
-                        )
-                    except BaseException:
-                        self._leases_drained.set()
-                        raise
-                    else:
-                        self._deferred_retired.clear()
-                        self._leases_drained.set()
+            await wait_for_owned(asyncio.create_task(self._release_cycle_lease()))
+
+    async def _release_cycle_lease(self) -> None:
+        retired = ()
+        async with self._lifecycle_lock:
+            self._active_leases -= 1
+            if self._active_leases == 0:
+                retired = tuple(self._deferred_retired.values())
+                self._deferred_retired.clear()
+        if not retired:
+            if self._active_leases == 0:
+                self._leases_drained.set()
+            return
+
+        result = await _close_session_batch(retired)
+        async with self._lifecycle_lock:
+            self._pending_retired.update((id(session), session) for session in result.failed_sessions)
+            self._leases_drained.set()
+        _raise_close_control(result)
 
     async def reload_for_cycle(self) -> TradingCycle | None:
         """Synchronize one active runtime to the latest validated database graph."""
@@ -169,6 +176,15 @@ class Runtime:
 
     async def close(self) -> None:
         async with self._lifecycle_lock:
+            if not self._closed:
+                self._closing = True
+            if self._close_completion is None or (self._close_completion.done() and self._pending_retired):
+                self._close_completion = asyncio.create_task(self._close_owned())
+            completion = self._close_completion
+        await wait_for_owned(completion)
+
+    async def _close_owned(self) -> None:
+        async with self._lifecycle_lock:
             if self._closed and not self._pending_retired:
                 return
             self._closing = True
@@ -183,11 +199,14 @@ class Runtime:
             targets = tuple(self._pending_retired.values())
             if first_close:
                 targets += tuple(self._deferred_retired.values()) + tuple(self.sessions.values())
-            result = await _close_session_batch(targets)
+            self._pending_retired.clear()
+            self._deferred_retired.clear()
+        result = await _close_session_batch(targets)
+        async with self._lifecycle_lock:
             self._pending_retired = {id(session): session for session in result.failed_sessions}
-            _raise_close_control(result)
-            if result.ordinary_failures:
-                raise RuntimeError("failed to close venue session") from None
+        _raise_close_control(result)
+        if result.ordinary_failures:
+            raise RuntimeError("failed to close venue session") from None
 
     async def _cleanup_retired_sessions(self, sessions=(), *, retry_pending: bool = True) -> None:
         carried = {} if retry_pending else dict(self._pending_retired)
@@ -403,16 +422,11 @@ async def _close_session_batch(sessions) -> _CloseBatchResult:
     tasks = tuple(asyncio.create_task(session.close()) for session in unique)
     completion = asyncio.gather(*tasks, return_exceptions=True)
     external_cancellation = None
-    while True:
-        try:
-            outcomes = await asyncio.shield(completion)
-            break
-        except asyncio.CancelledError as error:
-            if external_cancellation is None:
-                external_cancellation = error
-            if completion.done():
-                outcomes = completion.result()
-                break
+    try:
+        outcomes = await wait_for_owned(completion)
+    except asyncio.CancelledError as error:
+        external_cancellation = error
+        outcomes = completion.result()
 
     ordinary_failures = tuple(
         session for session, outcome in zip(unique, outcomes, strict=True) if isinstance(outcome, Exception)

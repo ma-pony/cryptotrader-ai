@@ -393,7 +393,23 @@ async def test_mounted_chat_execution_started_interrupt_returns_exact_cycle_outc
     )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
 
-    await _handle_new_analysis("mounted-execution", ChatStreamRequest(message="BTC/USDT"), request)
+    class FailingAfterExecutionBuffer:
+        def __init__(self, *_args, **_kwargs):
+            self.sequence = 0
+            self.failed = False
+
+        async def next_event_id(self):
+            self.sequence += 1
+            return self.sequence
+
+        async def push(self, envelope):
+            if self.failed:
+                raise RuntimeError("terminal observer unavailable")
+            if envelope.type == "book_execution_started":
+                self.failed = True
+
+    with patch("cryptotrader.chat.event_buffer.EventBuffer", FailingAfterExecutionBuffer):
+        await _handle_new_analysis("mounted-execution", ChatStreamRequest(message="BTC/USDT"), request)
     managed = BackgroundTaskManager.get_instance().get("mounted-execution")
     assert managed is not None
     await managed.event_bus.wait_for_execution_started()
@@ -403,6 +419,7 @@ async def test_mounted_chat_execution_started_interrupt_returns_exact_cycle_outc
     terminal.set()
 
     response = await interrupting
+    assert managed.outcome == expected
     assert response.model_dump() == {
         "type": "execution_in_progress",
         "session_id": "mounted-execution",
@@ -473,6 +490,41 @@ async def test_background_manager_drain_cancels_pre_execution_and_waits_for_exec
     terminal.set()
     await draining
     assert bearing.outcome.cycle_id == "terminal"
+
+
+@pytest.mark.asyncio
+async def test_cancelled_manager_drain_still_records_order_bearing_outcome():
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+
+    manager = BackgroundTaskManager.get_instance()
+    bus = _Bus()
+    bus._execution_started = True
+    terminal = asyncio.Event()
+    child_cancelled = False
+
+    async def order_bearing(_interrupt):
+        nonlocal child_cancelled
+        try:
+            await terminal.wait()
+        except asyncio.CancelledError:
+            child_cancelled = True
+            raise
+        return CycleOutcome("drained", 3, None, (), "partial", "partial", True)
+
+    managed = manager.create("drained", "BTC/USDT", order_bearing, "chat", bus)
+    draining = asyncio.create_task(manager.drain())
+    await asyncio.sleep(0)
+    draining.cancel()
+    await asyncio.sleep(0)
+    draining.cancel()
+    assert draining.done() is False
+    assert child_cancelled is False
+
+    terminal.set()
+    with pytest.raises(asyncio.CancelledError):
+        await draining
+    assert managed.task.cancelled() is False
+    assert managed.outcome == CycleOutcome("drained", 3, None, (), "partial", "partial", True)
 
 
 @pytest.mark.asyncio
