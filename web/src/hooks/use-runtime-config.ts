@@ -29,6 +29,9 @@ export const assertRuntimeJsonDocument = <T>(value: T): T => {
       if (Object.getPrototypeOf(candidate) !== Array.prototype || Object.getOwnPropertySymbols(candidate).length > 0) throw new Error('Invalid runtime JSON: arrays must be ordinary');
       const names = Object.getOwnPropertyNames(candidate);
       if (names.length !== candidate.length + 1 || names[names.length - 1] !== 'length') throw new Error('Invalid runtime JSON: arrays must be dense');
+      const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, 'length');
+      const lengthValue: unknown = lengthDescriptor?.value;
+      if (!lengthDescriptor || !('value' in lengthDescriptor) || lengthValue !== candidate.length || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable) throw new Error('Invalid runtime JSON: array length must be ordinary');
       for (let index = 0; index < candidate.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
         if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || !descriptor.writable || !descriptor.configurable) throw new Error('Invalid runtime JSON: array entries must be ordinary values');
