@@ -14,6 +14,7 @@ type ConnectionInput = {
   adapter_id: string;
   environment: 'paper' | 'demo' | 'testnet' | 'live';
   enabled: boolean;
+  canary_only: boolean;
   leverage: number;
   margin_mode: string;
   parameters: RuntimeJsonObject;

@@ -296,6 +296,7 @@ export const RuntimeConnectionSchema = z
     credential_updated_at: z.string().nullable(),
     leverage: z.number().int(),
     margin_mode: z.enum(['cross', 'isolated']),
+    canary_only: z.boolean(),
     parameters: z.array(JsonEntrySchema),
   })
   .strict();

@@ -175,6 +175,7 @@ class BacktestEngine:
             credential_ref=None,
             leverage=1,
             margin_mode="isolated",
+            canary_only=False,
             parameters={"initial_equity": str(self.capital)},
         )
         book = ExecutionBook(

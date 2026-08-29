@@ -36,6 +36,13 @@ def test_venue_canary_refuses_live_environment():
         venue_canary.require_simulated_environment("live")
 
 
+def test_venue_canary_refuses_a_normal_simulated_connection_before_connecting():
+    venue_canary = _script("venue_canary.py")
+
+    with pytest.raises(venue_canary.CanarySafetyError, match="canary_only"):
+        venue_canary.require_canary_only(type("Connection", (), {"canary_only": False})())
+
+
 def test_signal_canary_defaults_to_no_execution():
     signal_canary = _script("signal_canary.py")
 
@@ -445,29 +452,3 @@ async def test_timeout_after_fully_filled_remote_order_uses_client_id_lookup_for
     await venue_canary.run_simulated_canary(session, session.pair)
 
     assert session.order_amounts == [Decimal("0.1")]
-
-
-@pytest.mark.asyncio
-async def test_simulated_writes_use_and_release_the_canonical_runtime_execution_lease():
-    from contextlib import asynccontextmanager
-
-    venue_canary = _script("venue_canary.py")
-    session = _Session(Pair.parse("BTC/USDT:USDT"))
-    leased_pairs: list[str] = []
-    released = False
-
-    class Runtime:
-        @asynccontextmanager
-        async def execution_lease(self, pair):
-            nonlocal released
-            leased_pairs.append(pair)
-            try:
-                yield object()
-            finally:
-                released = True
-
-    result = await venue_canary._run_with_execution_lease(Runtime(), session, session.pair)
-
-    assert leased_pairs == ["BTC/USDT:USDT"]
-    assert released is True
-    assert result["status"] == "completed"

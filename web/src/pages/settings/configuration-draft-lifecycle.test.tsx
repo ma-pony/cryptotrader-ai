@@ -19,19 +19,19 @@ describe('configuration draft lifecycle', () => {
         ...base.document,
         execution: {
           ...base.document.execution,
-          connections: [{ id: 'paper', label, adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }],
+          connections: [{ id: 'paper', label, adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }],
         },
       },
     });
   };
   it('does not render credential inputs for a Paper connection', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenueForm revision={1} connection={{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} } as const} /></QueryClientProvider>);
+    render(<QueryClientProvider client={client}><VenueForm revision={1} connection={{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} } as const} /></QueryClientProvider>);
     expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
   });
   it('retains a dirty venue label when the same connection props refresh', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper' as const, enabled: true, leverage: 1, margin_mode: 'cross' as const, parameters: {} };
+    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper' as const, enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross' as const, parameters: {} };
     const view = render(<QueryClientProvider client={client}><VenueForm revision={1} connection={connection} /></QueryClientProvider>);
     fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'Dirty name' } });
     view.rerender(<QueryClientProvider client={client}><VenueForm revision={2} connection={{ ...connection, label: 'Server name' }} /></QueryClientProvider>);

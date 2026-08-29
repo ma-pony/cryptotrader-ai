@@ -14,6 +14,7 @@ export type VenueDraft = {
   enabled: boolean;
   leverage: number;
   margin_mode: string;
+  canary_only: boolean;
   parameters: RuntimeJsonObject;
 };
 const emptyDraft = (): VenueDraft => ({
@@ -24,6 +25,7 @@ const emptyDraft = (): VenueDraft => ({
   enabled: true,
   leverage: 1,
   margin_mode: 'cross',
+  canary_only: false,
   parameters: {},
 });
 
@@ -193,7 +195,16 @@ export const VenueForm = ({
           />
           {t('connection.enabled')}
         </label>
+        <label className="flex items-center gap-2 pt-5 text-sm">
+          <input
+            type="checkbox"
+            checked={draft.canary_only}
+            onChange={(event) => setDraft({ ...draft, canary_only: event.target.checked })}
+          />
+          {t('connection.canaryOnly')}
+        </label>
       </div>
+      {draft.canary_only ? <p className="text-sm text-amber-500">{t('connection.canaryWarning')}</p> : null}
       <label className="text-xs text-muted-foreground">
         {t('connection.parameters')}
         <textarea

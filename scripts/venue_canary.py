@@ -18,6 +18,8 @@ from typing import Any
 from uuid import uuid4
 
 from cryptotrader.bootstrap import BootstrapSettings
+from cryptotrader.cycle_lock import execution_pair_lease
+from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.pair import Pair
 from cryptotrader.runtime_config.repository import RuntimeConfigRepository
 from cryptotrader.runtime_config.secrets import CredentialVault
@@ -47,6 +49,11 @@ def require_simulated_environment(environment: str) -> None:
         raise CanarySafetyError("live connections are read-only in canary")
     if environment not in _SIMULATED_ENVIRONMENTS:
         raise CanarySafetyError("canary requires an explicit paper, demo, or testnet connection")
+
+
+def require_canary_only(connection) -> None:
+    if not connection.canary_only:
+        raise CanarySafetyError("simulated write canary requires a canary_only connection")
 
 
 def _safe_value(value: Any, key: str = "") -> Any:
@@ -104,9 +111,14 @@ async def inspect_residual(session, pair: Pair) -> dict[str, Any]:
 async def _find_owned_order(session, pair: Pair, client_order_id: str, order_id: str | None = None):
     """Read back one exchange-visible client id; never infer ownership from a position."""
     if order_id:
-        order = await session.find_order(pair, order_id=order_id)
-        if order is not None and order.client_order_id == client_order_id:
-            return order
+        try:
+            order = await session.find_order(pair, order_id=order_id)
+            if order is not None and order.client_order_id == client_order_id:
+                return order
+        except Exception:
+            # Exchange order indexes can lag acknowledgement; client id is the
+            # independent ownership proof and must still be queried.
+            pass
     order = await session.find_order(pair, client_order_id=client_order_id)
     return order if order is not None and order.client_order_id == client_order_id else None
 
@@ -226,7 +238,8 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
         result["protection_ids"] = owned_protection_ids
         result["steps"].append("install_protection")
         state = await session.list_open_state(pair)
-        if not state.protections:
+        visible_protection_ids = {item_id for item in state.protections for item_id in item.protection_ids}
+        if not set(owned_protection_ids) <= visible_protection_ids:
             raise CanarySafetyError("platform protection was not observable")
         if state.position.signed_amount != opened.filled_amount:
             raise CanarySafetyError("owned exposure cannot be separated from current position")
@@ -258,19 +271,13 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
             result.update(await inspect_residual(session, pair))
         if close_session:
             try:
-                await session.close()
+                await wait_for_owned(asyncio.create_task(session.close()))
             except Exception as error:
                 result["close_error"] = type(error).__name__
                 result["requires_attention"] = True
         if result["requires_attention"]:
             result["status"] = "failed"
     return _safe_value(result)
-
-
-async def _run_with_execution_lease(runtime, session, pair: Pair) -> dict[str, Any]:
-    """Use the Runtime's sole strict Redis admission path before any canary write."""
-    async with runtime.execution_lease(pair.canonical()):
-        return await run_simulated_canary(session, pair, close_session=False)
 
 
 async def audit_in_subprocess(connection_id: str, pair: str) -> dict[str, Any]:
@@ -330,24 +337,22 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
             return {"status": "completed" if not result["requires_attention"] else "failed", **result}
         finally:
             await session.close()
-    from cryptotrader.runtime import build_runtime
-
-    runtime = await build_runtime(repository=repository, snapshot=snapshot)
+    require_canary_only(connection)
+    result: dict[str, Any] = {"status": "failed", "requires_attention": True}
     try:
-        session = runtime.sessions.get(connection.id)
-        if session is None:
-            raise CanarySafetyError("configured connection is unavailable in the active runtime")
-        result = await _run_with_execution_lease(runtime, session, pair)
-    finally:
-        await runtime.close()
+        async with execution_pair_lease(snapshot.document.infrastructure.redis_url, pair.canonical()):
+            session = await _open_connection(connection, repository)
+            result = await run_simulated_canary(session, pair)
+    except Exception as error:
+        result = {"status": "failed", "requires_attention": True, "error_type": type(error).__name__}
     result.update(
         {"connection_id": connection.id, "environment": connection.environment, "config_revision": snapshot.revision}
     )
-    if result["status"] == "completed":
-        result.update(await audit_in_subprocess(connection.id, pair.canonical()))
-        if result["audit_status"] != "completed":
-            result["status"] = "failed"
-            result["requires_attention"] = True
+    audit = await audit_in_subprocess(connection.id, pair.canonical())
+    result.update(audit)
+    if audit["audit_status"] != "completed":
+        result["status"] = "failed"
+        result["requires_attention"] = True
     return result
 
 

@@ -5,8 +5,8 @@ import type { RuntimeDocument } from '@/types/api';
 
 type Book = RuntimeDocument['execution']['books'][number];
 type Connection = RuntimeDocument['execution']['connections'][number];
-const eligible = (scope: Book['capital_scope'], environment: Connection['environment']) =>
-  scope === 'simulated' ? environment !== 'live' : environment === 'live';
+const eligible = (scope: Book['capital_scope'], connection: Connection) =>
+  !connection.canary_only && (scope === 'simulated' ? connection.environment !== 'live' : connection.environment === 'live');
 
 export type BookValidationError = { code: string; params?: Record<string, string> };
 
@@ -30,7 +30,7 @@ export const validateBooks = (books: Book[], connections: Connection[]): BookVal
     const local = new Set<string>();
     for (const allocation of enabled) {
       const connection = connections.find((item) => item.id === allocation.connection_id);
-      if (!connection || !connection.enabled || !eligible(book.capital_scope, connection.environment))
+      if (!connection || !connection.enabled || !eligible(book.capital_scope, connection))
         errors.push({ code: book.capital_scope === 'simulated' ? 'invalidSimulated' : 'invalidReal' });
       if (local.has(allocation.connection_id)) errors.push({ code: 'duplicateAllocation' });
       local.add(allocation.connection_id);
@@ -53,7 +53,7 @@ export const BookForm = ({
   onRemove: () => void;
 }) => {
   const { t } = useTranslation('configuration');
-  const allowed = connections.filter((connection) => eligible(book.capital_scope, connection.environment));
+  const allowed = connections.filter((connection) => eligible(book.capital_scope, connection));
   const allocationFor = (id: string) =>
     book.allocations.find((allocation) => allocation.connection_id === id) ?? {
       connection_id: id,

@@ -28,7 +28,7 @@ def test_live_connection_requires_credential_reference():
     from cryptotrader.venues.models import VenueConnection
 
     with pytest.raises(ValueError, match="credential_ref"):
-        VenueConnection("live", "Live", "okx", "live", True, None, 1, "isolated")
+        VenueConnection("live", "Live", "okx", "live", True, None, 1, "isolated", False)
 
 
 def test_connection_parameters_default_to_an_immutable_empty_mapping():

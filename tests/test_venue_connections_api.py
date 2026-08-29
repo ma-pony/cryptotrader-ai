@@ -30,6 +30,7 @@ def create_payload(
         "enabled": True,
         "leverage": 1,
         "margin_mode": "isolated",
+        "canary_only": False,
         "parameters": {},
     }
 
@@ -43,6 +44,7 @@ def update_payload(revision: int, connection: dict, **overrides) -> dict:
         "enabled": connection["enabled"],
         "leverage": connection["leverage"],
         "margin_mode": connection["margin_mode"],
+        "canary_only": connection["canary_only"],
         "parameters": {},
     } | overrides
 

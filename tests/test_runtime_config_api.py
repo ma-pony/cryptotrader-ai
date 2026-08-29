@@ -52,6 +52,7 @@ def _connection(
         credential_ref=credential_ref,
         leverage=1,
         margin_mode="isolated",
+        canary_only=False,
         parameters={},
     )
 

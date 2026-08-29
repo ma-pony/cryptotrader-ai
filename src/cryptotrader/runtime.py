@@ -12,7 +12,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from cryptotrader.cycle_events import CycleEventSink, MultiplexedCycleEventSink, NullCycleEventSink
-from cryptotrader.cycle_lock import cycle_lock
 from cryptotrader.decision.engine import DecisionEngine
 from cryptotrader.decision.exit_policy import AtrExitPolicy
 from cryptotrader.execution.allocation import WeightedAllocationPolicy
@@ -148,22 +147,19 @@ class Runtime:
         Unlike the graph lease this is a strict distributed ownership lease:
         an absent or unhealthy Redis is an execution refusal.
         """
+        from cryptotrader.cycle_lock import execution_pair_lease
         from cryptotrader.pair import Pair
-        from cryptotrader.risk.state import RedisStateManager
 
         canonical_pair = Pair.parse(pair).canonical()
         async with self.cycle_lease() as cycle:
             redis_url = cycle.snapshot.document.infrastructure.redis_url.strip()
             if not redis_url:
                 raise RuntimeLeaseUnavailableError("Redis is required for production execution")
-            redis_state = RedisStateManager(redis_url)
             try:
-                async with cycle_lock(redis_state, canonical_pair) as acquired:
-                    if not acquired:
-                        raise RuntimeLeaseUnavailableError(f"execution lease held for {canonical_pair}")
+                async with execution_pair_lease(redis_url, canonical_pair):
                     yield cycle
-            finally:
-                await redis_state.aclose()
+            except RuntimeError as error:
+                raise RuntimeLeaseUnavailableError(str(error)) from error
 
     async def _release_cycle_lease(self) -> None:
         deferred_control: BaseException | None = None
@@ -558,7 +554,7 @@ async def _candidate_sessions(
     opened: list[VenueSession] = []
     try:
         for connection in snapshot.document.execution.connections:
-            if not connection.enabled:
+            if not connection.enabled or connection.canary_only:
                 continue
             key = await _session_key(connection, repository)
             keys[connection.id] = key

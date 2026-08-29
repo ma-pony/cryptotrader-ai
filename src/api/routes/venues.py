@@ -45,6 +45,7 @@ class CreateConnectionIn(BaseModel):
     enabled: bool
     leverage: int
     margin_mode: MarginMode
+    canary_only: bool
     parameters: dict[str, Any]
 
 
@@ -58,6 +59,7 @@ class UpdateConnectionIn(BaseModel):
     enabled: bool
     leverage: int
     margin_mode: MarginMode
+    canary_only: bool
     parameters: dict[str, Any]
 
 
@@ -128,6 +130,7 @@ def _build_connection(
             credential_ref=credential_ref,
             leverage=body.leverage,
             margin_mode=body.margin_mode,
+            canary_only=body.canary_only,
             parameters=body.parameters,
         )
     except (TypeError, ValueError) as error:

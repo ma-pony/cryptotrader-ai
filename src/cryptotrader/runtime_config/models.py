@@ -208,6 +208,7 @@ class ExecutionConfig(_FrozenConfigModel):
                 "credential_ref": None,
                 "leverage": 1,
                 "margin_mode": "isolated",
+                "canary_only": False,
                 "parameters": {"secret": "[redacted]"},  # pragma: allowlist secret
             }
             changed = True
@@ -225,6 +226,7 @@ class ExecutionConfig(_FrozenConfigModel):
                 "credential_ref": connection.credential_ref,
                 "leverage": connection.leverage,
                 "margin_mode": connection.margin_mode,
+                "canary_only": connection.canary_only,
                 "parameters": _thaw_parameters(connection.parameters),
             }
             for connection in connections
@@ -359,6 +361,8 @@ def _validate_capital_scopes(connections: tuple[VenueConnection, ...], books: tu
             connection = by_id.get(allocation.connection_id)
             if connection is None:
                 raise ValueError(f"unknown connection_id: {allocation.connection_id}")
+            if connection.canary_only:
+                raise ValueError(f"canary_only connection {connection.id} cannot be allocated to an execution book")
             expected_scope = "simulated" if connection.environment in simulated_environments else "real"
             if book.capital_scope != expected_scope:
                 raise ValueError(

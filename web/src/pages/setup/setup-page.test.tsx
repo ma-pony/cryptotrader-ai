@@ -49,7 +49,7 @@ describe('SetupPage', () => {
   });
 
   it('invalidates a connection test fingerprint when label, config, or credential state changes', () => {
-    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper' as const, enabled: true, leverage: 1, margin_mode: 'cross' as const, parameters: { sandbox: true } };
+    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper' as const, enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross' as const, parameters: { sandbox: true } };
     const fingerprint = testFingerprint(connection, '2026-08-29T00:00:00Z');
     expect(testFingerprint({ ...connection, label: 'Renamed' }, '2026-08-29T00:00:00Z')).not.toBe(fingerprint);
     expect(testFingerprint({ ...connection, parameters: { sandbox: false } }, '2026-08-29T00:00:00Z')).not.toBe(fingerprint);

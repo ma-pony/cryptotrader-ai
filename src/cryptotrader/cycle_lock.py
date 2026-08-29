@@ -58,3 +58,20 @@ async def cycle_lock(
                 await redis_state.release_strict_lock(key, owner_id)
             except Exception:
                 logger.info("cycle_lock release failed for %s", key, exc_info=True)
+
+
+@asynccontextmanager
+async def execution_pair_lease(redis_url: str, pair: str) -> AsyncIterator[None]:
+    """Acquire the sole strict Redis lease for one already-canonical pair."""
+    from cryptotrader.risk.state import RedisStateManager
+
+    if not redis_url.strip():
+        raise RuntimeError("Redis is required for production execution lease")
+    redis_state = RedisStateManager(redis_url)
+    try:
+        async with cycle_lock(redis_state, pair) as acquired:
+            if not acquired:
+                raise RuntimeError(f"execution lease held for {pair}")
+            yield
+    finally:
+        await redis_state.aclose()

@@ -72,6 +72,7 @@ class VenueConnectionOut(StrictOut):
     credential_updated_at: datetime | None
     leverage: int
     margin_mode: MarginMode
+    canary_only: bool
     parameters: list[JsonEntryOut]
 
 
@@ -292,6 +293,7 @@ class VenueConnectionDocumentIn(BaseModel):
     enabled: bool
     leverage: int
     margin_mode: MarginMode
+    canary_only: bool
     parameters: dict[str, Any]
 
 
@@ -362,6 +364,7 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
                 ),
                 leverage=item.leverage,
                 margin_mode=item.margin_mode,
+                canary_only=item.canary_only,
                 parameters=item.parameters,
             )
             for item in body.execution.connections
@@ -435,6 +438,7 @@ async def connection_out(repository, connection: VenueConnection) -> VenueConnec
         credential_updated_at=state.updated_at,
         leverage=connection.leverage,
         margin_mode=connection.margin_mode,
+        canary_only=connection.canary_only,
         parameters=json_entries_out(connection.parameters),
     )
 

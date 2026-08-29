@@ -13,12 +13,12 @@ import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 describe('venue connection write recovery', () => {
   it('keeps a successful create as saved when the follow-up config refresh fails', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'paper-1', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] } }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'paper-1', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] } }), { status: 201 }))
       .mockResolvedValueOnce(new Response('down', { status: 503 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const hook = renderHook(() => useVenueConnections(), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
-    const result = await hook.result.current.create.mutateAsync({ expected_revision: 1, id: 'paper-1', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} });
+    const result = await hook.result.current.create.mutateAsync({ expected_revision: 1, id: 'paper-1', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} });
     expect(result.savedNeedsReload).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -33,7 +33,7 @@ describe('venue connection write recovery', () => {
     client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, runtimeConfigFixture({ document: { ...base.document, execution: { ...base.document.execution, connections: [{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }] } } }));
     render(
       <QueryClientProvider client={client}>
-        <VenueForm revision={1} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} }} />
+        <VenueForm revision={1} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} }} />
       </QueryClientProvider>,
     );
     fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: 'secret-marker-key' } });
@@ -58,7 +58,7 @@ describe('venue connection write recovery', () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <VenueForm revision={7} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} }} />
+        <VenueForm revision={7} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} }} />
       </QueryClientProvider>,
     );
     const write = async () => {
@@ -86,7 +86,7 @@ describe('venue connection write recovery', () => {
 
   it('shows saved reload required and prevents a second create after a refresh failure', async () => {
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'paper-2', label: 'Paper Two', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] } }), { status: 201 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'paper-2', label: 'Paper Two', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] } }), { status: 201 }))
       .mockResolvedValueOnce(new Response('down', { status: 503 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });

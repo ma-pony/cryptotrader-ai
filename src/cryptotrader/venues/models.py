@@ -128,9 +128,10 @@ class VenueConnection:
     credential_ref: str | None
     leverage: int
     margin_mode: MarginMode
+    canary_only: bool
     parameters: Mapping[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:
+    def __post_init__(self) -> None:  # noqa: C901 - one immutable connection contract validator
         if type(self.id) is not str or not self.id.strip():
             raise ValueError("venue connection id must be a non-empty string")
         if type(self.label) is not str or not self.label.strip():
@@ -151,6 +152,8 @@ class VenueConnection:
             raise ValueError("leverage must be at least one")
         if type(self.margin_mode) is not str or self.margin_mode not in _MARGIN_MODES:
             raise ValueError("unsupported margin_mode")
+        if type(self.canary_only) is not bool:
+            raise ValueError("canary_only must be a boolean")
         object.__setattr__(self, "parameters", _freeze_connection_parameters(self.parameters))
 
 

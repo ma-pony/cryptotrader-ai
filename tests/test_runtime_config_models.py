@@ -294,7 +294,7 @@ def test_venue_connection_rejects_non_boolean_enabled(enabled):
     from cryptotrader.venues.models import VenueConnection
 
     with pytest.raises(ValueError, match="enabled"):
-        VenueConnection("paper", "Paper", "paper", "paper", enabled, None, 1, "isolated")
+        VenueConnection("paper", "Paper", "paper", "paper", enabled, None, 1, "isolated", False)
 
 
 @pytest.mark.parametrize("enabled", ["false", 0, 1])
@@ -318,9 +318,9 @@ def test_execution_models_reject_invalid_critical_scalar_types():
     from cryptotrader.venues.models import VenueConnection
 
     with pytest.raises(ValueError, match="id"):
-        VenueConnection(1, "Paper", "paper", "paper", True, None, 1, "isolated")
+        VenueConnection(1, "Paper", "paper", "paper", True, None, 1, "isolated", False)
     with pytest.raises(ValueError, match="leverage"):
-        VenueConnection("paper", "Paper", "paper", "paper", True, None, True, "isolated")
+        VenueConnection("paper", "Paper", "paper", "paper", True, None, True, "isolated", False)
     with pytest.raises(ValueError, match="weight"):
         ConnectionAllocation("paper", True, 1)
     with pytest.raises(ValueError, match="allocations"):

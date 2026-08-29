@@ -14,7 +14,7 @@ describe('ExecutionBooksPage', () => {
     render(<AllocationPreview equity={100000} targetExposure={0.5} allocations={[{ connectionId: 'paper', label: 'Paper', weight: 40 }, { connectionId: 'demo', label: 'Demo', weight: 60 }]} />);
     expect(screen.getByText('20,000 USDT')).toBeInTheDocument();
     expect(screen.getByText('30,000 USDT')).toBeInTheDocument();
-    expect(validateBooks([{ id: 'sim', label: '模拟资金池', capital_scope: 'simulated', enabled: true, hitl_required: true, allocations: [{ connection_id: 'live', enabled: true, weight: 1 }] }], [{ id: 'live', label: 'Live', adapter_id: 'okx', environment: 'live', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} }])).toContainEqual({ code: 'invalidSimulated' });
+    expect(validateBooks([{ id: 'sim', label: '模拟资金池', capital_scope: 'simulated', enabled: true, hitl_required: true, allocations: [{ connection_id: 'live', enabled: true, weight: 1 }] }], [{ id: 'live', label: 'Live', adapter_id: 'okx', environment: 'live', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} }])).toContainEqual({ code: 'invalidSimulated' });
   });
 
   const configWithBook = (label = 'Server book') => {
