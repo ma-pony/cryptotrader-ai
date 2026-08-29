@@ -60,6 +60,21 @@ uv run trader journal show <cycle-id>
 
 回测只使用临时 Paper 资金池，不连接 Demo、Testnet 或 Live。真实模型与模拟盘验证应在网页完成配置后，使用已启用的测试环境连接；实盘连接只允许只读检查，禁止自动化真实资金订单。
 
+## 验收金丝雀
+
+完成网页配置后，可对数据库中已启用的 Paper、Demo 或 Testnet 连接运行一次最小仓位闭环。脚本不会接收或输出平台凭据；它会先确认目标交易对没有仓位、挂单或保护单，随后执行最小开仓、平台保护、`reduce-only` 平仓、清理，并在独立新进程重新连接审计零残留。任何失败都会清理并输出 `requires_attention`。
+
+```bash
+uv run python scripts/venue_canary.py --connection bybit-testnet --pair BTC/USDT:USDT
+uv run python scripts/signal_canary.py --pair BTC/USDT
+```
+
+`signal_canary.py` 只收集真实行情，运行 Kronos 和四智能体内部辩论、融合及目标仓位；它不进入任何执行资金池。Live 连接仅可显式作只读检查：
+
+```bash
+uv run python scripts/venue_canary.py --connection bybit-live --pair BTC/USDT:USDT --live-read-only
+```
+
 ## 验证
 
 ```bash

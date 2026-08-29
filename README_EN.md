@@ -60,6 +60,21 @@ uv run trader journal show <cycle-id>
 
 Backtests use an isolated temporary Paper book and never connect demo, testnet, or live venues. Validate live models with simulated connections after web setup; live-money connections are read-only checks and must not receive automated real-money orders.
 
+## Acceptance canaries
+
+After configuration in the web UI, a database-enabled Paper, Demo, or Testnet connection can run a minimal position loop. The script accepts and prints no venue credentials. It verifies that the pair begins with no position, orders, or protections; opens the minimum amount, installs native protection, closes with `reduce-only`, cleans up, and reconnects in a separate process to audit zero residual state. Any failure still cleans up and reports `requires_attention`.
+
+```bash
+uv run python scripts/venue_canary.py --connection bybit-testnet --pair BTC/USDT:USDT
+uv run python scripts/signal_canary.py --pair BTC/USDT
+```
+
+`signal_canary.py` gathers live market evidence, runs Kronos plus the four-agent internal debate, fusion, and target generation, but never enters an execution book. A live connection can only be checked explicitly in read-only mode:
+
+```bash
+uv run python scripts/venue_canary.py --connection bybit-live --pair BTC/USDT:USDT --live-read-only
+```
+
 ## Verification
 
 ```bash
