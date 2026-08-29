@@ -25,6 +25,7 @@ from cryptotrader._compat import UTC
 from cryptotrader.runtime_config.models import SchedulerConfig
 from cryptotrader.scheduler import Scheduler
 from tests.factories.runtime_config import active_document
+from tests.runtime_lease import static_cycle_lease
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -41,10 +42,12 @@ def _make_scheduler(interval_minutes: int = 60) -> Scheduler:
         )
     )
     cycle = SimpleNamespace(run=AsyncMock())
+    snapshot = SimpleNamespace(revision=1, document=document)
+    cycle.snapshot = snapshot
     runtime = SimpleNamespace(
-        snapshot=SimpleNamespace(revision=1, document=document),
+        snapshot=snapshot,
         cycle=cycle,
-        reload_for_cycle=AsyncMock(return_value=cycle),
+        cycle_lease=static_cycle_lease(cycle),
     )
     return Scheduler(document.scheduler, runtime)
 

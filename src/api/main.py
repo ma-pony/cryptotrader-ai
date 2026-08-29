@@ -92,6 +92,12 @@ async def _shutdown_runtime_owners(app_instance: FastAPI, runtime, *, active: bo
     failures: list[BaseException] = []
     if active:
         try:
+            from cryptotrader.chat.task_manager import BackgroundTaskManager
+
+            await BackgroundTaskManager.get_instance().drain()
+        except BaseException as error:
+            failures.append(error)
+        try:
             await _shutdown_scheduler(app_instance)
         except BaseException as error:
             failures.append(error)
@@ -145,13 +151,11 @@ async def _init_trigger_engine(app_instance: FastAPI) -> None:
 
     async def _trigger_callback(pair: str, meta: dict) -> None:
         logger.info("Trigger fired for %s: %s", pair, meta)
-        cycle = await runtime.reload_for_cycle()
-        if cycle is None:
-            return
         from cryptotrader.decision.models import CycleRequest
         from cryptotrader.pair import Pair
 
-        await cycle.run(CycleRequest(Pair.parse(pair)))
+        async with runtime.cycle_lease() as cycle:
+            await cycle.run(CycleRequest(Pair.parse(pair)))
 
     engine = PriceTriggerEngine(store, redis_state, _trigger_callback, config.triggers)
     await engine.start()
@@ -196,22 +200,12 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
 
 async def _shutdown_scheduler(app_instance: FastAPI) -> None:
     """Signal the Scheduler to stop and await its background task."""
-    import asyncio
-
     scheduler = getattr(app_instance.state, "scheduler", None)
     task = getattr(app_instance.state, "scheduler_task", None)
     if scheduler is None or task is None:
         return
-    import contextlib
-
     scheduler.stop()
-    try:
-        await asyncio.wait_for(task, timeout=10)
-    except TimeoutError:
-        logger.warning("Scheduler did not exit within 10s; cancelling")
-        task.cancel()
-        with contextlib.suppress(asyncio.CancelledError, Exception):
-            await task
+    await task
 
 
 # ── Docs endpoint control ──

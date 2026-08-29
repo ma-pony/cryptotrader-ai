@@ -134,6 +134,16 @@ class BackgroundTaskManager:
         task.task.cancel()
         return task
 
+    async def drain(self) -> None:
+        """Stop cancellable analysis and await order-bearing work to terminal state."""
+        active = tuple(task for task in self._tasks.values() if not task.completed)
+        for analysis in active:
+            if not analysis.event_bus.execution_started:
+                analysis.interrupt_event.set()
+                analysis.task.cancel()
+        if active:
+            await asyncio.gather(*(analysis.task for analysis in active), return_exceptions=True)
+
     @staticmethod
     async def _broadcast_new_workflow(
         publisher: WorkflowPublisher,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import AbstractAsyncContextManager, suppress
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -29,7 +30,7 @@ class RuntimeCycleSource(Protocol):
     snapshot: RuntimeConfigSnapshot
     cycle: TradingCycle | None
 
-    async def reload_for_cycle(self) -> TradingCycle | None: ...
+    def cycle_lease(self) -> AbstractAsyncContextManager[TradingCycle]: ...
 
 
 class Scheduler:
@@ -58,6 +59,7 @@ class Scheduler:
         # stuck and wakeup() alone doesn't recover). When > 1.5x interval has
         # elapsed without a success, watchdog force-reschedules the job.
         self._last_successful_cycle_at: datetime | None = None
+        self._inflight_batches: set[asyncio.Task[Any]] = set()
 
         # FR-103: structured boot log so ops can grep `pair_init` for
         # spot/swap/future split at startup.
@@ -168,12 +170,38 @@ class Scheduler:
 
         await self._stop_event.wait()
 
-        # Cleanup
-        self._heartbeat_task.cancel()
-        if self._trigger_engine is not None:
-            await self._trigger_engine.stop()
-        self._scheduler.shutdown(wait=False)
+        await self._shutdown_owned_tasks()
         logger.info("Scheduler stopped gracefully")
+
+    async def _shutdown_owned_tasks(self) -> None:
+        """Pause fires, drain batches, and release scheduler-owned resources."""
+
+        failures: list[BaseException] = []
+        try:
+            self._scheduler.pause()
+        except BaseException as error:
+            failures.append(error)
+        self._heartbeat_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._heartbeat_task
+        current = asyncio.current_task()
+        pending = tuple(task for task in self._inflight_batches if task is not current)
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        if self._trigger_engine is not None:
+            try:
+                await self._trigger_engine.stop()
+            except BaseException as error:
+                failures.append(error)
+        try:
+            self._scheduler.shutdown(wait=False)
+        except BaseException as error:
+            failures.append(error)
+        control_flow = next((error for error in failures if not isinstance(error, Exception)), None)
+        if control_flow is not None:
+            raise control_flow
+        if failures:
+            raise failures[0]
 
     async def _scheduler_heartbeat(self) -> None:
         """Periodic wakeup nudge + staleness watchdog.
@@ -268,6 +296,9 @@ class Scheduler:
         outer cap forces the asyncio.CancelledError back to APScheduler
         so the slot frees and the next interval fires normally.
         """
+        owner = asyncio.current_task()
+        if owner is not None:
+            self._inflight_batches.add(owner)
         cycle_timeout_s = max(self.interval_minutes * 60 - 60, 60)
         try:
             await asyncio.wait_for(self.run_once(), timeout=cycle_timeout_s)
@@ -279,17 +310,18 @@ class Scheduler:
             )
         except Exception:
             logger.warning("Scheduled trading batch failed")
+        finally:
+            if owner is not None:
+                self._inflight_batches.discard(owner)
 
     async def run_once(self) -> None:
         """Reload once, then run every configured pair against that exact graph."""
-        cycle = await self.runtime.reload_for_cycle()
-        if cycle is None:
-            raise RuntimeError("runtime configuration is not active")
-        snapshot = self.runtime.snapshot
-        self.config_revision = snapshot.revision
-        redis_url = snapshot.document.infrastructure.redis_url or None
-        tasks = [self._run_pair(pair.canonical(), cycle, redis_url) for pair in self.pairs]
-        await asyncio.gather(*tasks)
+        async with self.runtime.cycle_lease() as cycle:
+            snapshot = cycle.snapshot
+            self.config_revision = snapshot.revision
+            redis_url = snapshot.document.infrastructure.redis_url or None
+            tasks = [self._run_pair(pair.canonical(), cycle, redis_url) for pair in self.pairs]
+            await asyncio.gather(*tasks)
         self._cycle_count += 1
         for pair in self.pairs:
             next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)

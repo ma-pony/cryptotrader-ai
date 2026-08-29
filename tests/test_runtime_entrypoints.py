@@ -11,6 +11,7 @@ import pytest
 
 from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SchedulerConfig, TriggerConfig
 from tests.factories.runtime_config import active_document, runtime_document
+from tests.runtime_lease import static_cycle_lease
 
 
 class _Repository:
@@ -85,7 +86,7 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
         snapshot=RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC)),
         repository=SimpleNamespace(database_url="sqlite+aiosqlite://"),
         cycle=cycle,
-        reload_for_cycle=AsyncMock(return_value=cycle),
+        cycle_lease=static_cycle_lease(cycle),
     )
     application = SimpleNamespace(state=SimpleNamespace(runtime=runtime))
 
@@ -98,7 +99,6 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
     assert Engine.instance is not None
     await Engine.instance.callback("BTC/USDT", {"trigger_event_id": "event-1"})
 
-    runtime.reload_for_cycle.assert_awaited_once_with()
     assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT"))]
 
 

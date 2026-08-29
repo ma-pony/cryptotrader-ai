@@ -14,6 +14,7 @@ from cryptotrader.pair import Pair
 from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
 from cryptotrader.signals.registry import ComponentMetadata
 from tests.factories.runtime_config import runtime_document
+from tests.runtime_lease import static_cycle_lease
 
 
 def test_cli_unmounts_legacy_configuration_commands() -> None:
@@ -46,17 +47,18 @@ async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
             return CycleOutcome("cli-cycle", 6, None, (), "no_change", "not_started", False)
 
     cycle = Cycle()
+    snapshot = RuntimeConfigSnapshot(6, runtime_document(), datetime(2026, 8, 29, tzinfo=UTC))
+    cycle.snapshot = snapshot
     runtime = SimpleNamespace(
-        snapshot=RuntimeConfigSnapshot(6, runtime_document(), datetime(2026, 8, 29, tzinfo=UTC)),
+        snapshot=snapshot,
         cycle=cycle,
-        reload_for_cycle=AsyncMock(return_value=cycle),
+        cycle_lease=static_cycle_lease(cycle),
         close=AsyncMock(),
     )
 
     with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
         await _run(["BTC/USDT", "ETH/USDT"])
 
-    assert runtime.reload_for_cycle.await_count == 2
     assert cycle.requests == [
         CycleRequest(Pair.parse("BTC/USDT")),
         CycleRequest(Pair.parse("ETH/USDT")),

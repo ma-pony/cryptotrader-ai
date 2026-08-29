@@ -196,6 +196,64 @@ async def test_active_runtime_opens_each_enabled_connection_once_and_closes_all(
 
 
 @pytest.mark.asyncio
+async def test_cycle_lease_defers_retired_session_close_until_all_execution_owners_exit():
+    first = _connection("paper-a", parameters={"initial_equity": "10000"})
+    runtime, repository, adapter, _ = await _build(_document(first))
+    old_session = runtime.sessions["paper-a"]
+
+    async with runtime.cycle_lease() as leased_cycle:
+        assert leased_cycle.snapshot.revision == 7
+        changed = _connection("paper-a", parameters={"initial_equity": "20000"})
+        repository.publish(_document(changed))
+        replacement = await runtime.reload_for_cycle()
+        assert replacement.snapshot.revision == 8
+        assert old_session.close_calls == 0
+
+    assert old_session.close_calls == 1
+    assert len(adapter.sessions) == 2
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_runtime_close_rejects_new_lease_and_waits_for_inflight_owner():
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    lease = runtime.cycle_lease()
+    await lease.__aenter__()
+
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+    assert not closing.done()
+    with pytest.raises(RuntimeError, match="closing"):
+        async with runtime.cycle_lease():
+            pass
+
+    await lease.__aexit__(None, None, None)
+    await closing
+
+
+@pytest.mark.asyncio
+async def test_multiple_reloads_accumulate_unique_retired_sessions_until_lease_drain():
+    initial = _connection("paper-a", parameters={"initial_equity": "10000"})
+    runtime, repository, adapter, _ = await _build(_document(initial))
+    first_session = runtime.sessions["paper-a"]
+
+    async with runtime.cycle_lease():
+        repository.publish(_document(_connection("paper-a", parameters={"initial_equity": "20000"})))
+        await runtime.reload_for_cycle()
+        second_session = runtime.sessions["paper-a"]
+        repository.publish(_document(_connection("paper-a", parameters={"initial_equity": "30000"})))
+        await runtime.reload_for_cycle()
+        assert first_session.close_calls == 0
+        assert second_session.close_calls == 0
+
+    assert first_session.close_calls == 1
+    assert second_session.close_calls == 1
+    assert runtime.sessions["paper-a"].close_calls == 0
+    assert len(adapter.sessions) == 3
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_reload_publishes_latest_snapshot_and_new_cycle_without_reopening_unchanged_connections():
     first = _connection("paper-a")
     second = _connection("paper-b")

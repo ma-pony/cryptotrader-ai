@@ -79,6 +79,10 @@ class EventBus:
         """Return successfully buffered events of one type for lifecycle deduplication."""
         return self._published_counts.get(event_type, 0)
 
+    def mark_execution_started(self) -> None:
+        """Synchronously make the session non-cancellable before observer I/O."""
+        self._execution_started.set()
+
     @property
     def execution_started(self) -> bool:
         """Whether an execution-start event has been durably buffered."""
@@ -107,4 +111,6 @@ class EventBusCycleSink:
     async def publish(self, event) -> None:
         from cryptotrader.cycle_serialization import json_value
 
+        if event.name == "book_execution_started":
+            self.event_bus.mark_execution_started()
         await self.event_bus.publish(event.name, json_value(event.data))

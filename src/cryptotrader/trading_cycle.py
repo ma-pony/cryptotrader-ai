@@ -46,6 +46,7 @@ class TradingCycle:
     def __init__(
         self,
         *,
+        snapshot,
         repository,
         market_source,
         registry,
@@ -66,6 +67,7 @@ class TradingCycle:
         exit_requirement: DataRequirements | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
+        self.snapshot = snapshot
         self.repository = repository
         self.market_source = market_source
         self.registry = registry
@@ -87,7 +89,7 @@ class TradingCycle:
         self.clock = clock or (lambda: datetime.now(UTC))
 
     async def run(self, request: CycleRequest) -> CycleOutcome:
-        snapshot = await self.repository.get_or_create()
+        snapshot = self.snapshot
         if snapshot.setup_required:
             raise RuntimeError("runtime configuration is not active")
         document = snapshot.document

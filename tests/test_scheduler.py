@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import fields
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -38,8 +40,16 @@ class _Runtime:
         self.cycle = cycle
         self.snapshot = SimpleNamespace(revision=4, document=active_document())
         self.repository = SimpleNamespace(database_url=None)
-        self.reload_for_cycle = AsyncMock(return_value=cycle)
+        self.lease_count = 0
         self.close = AsyncMock()
+
+    @asynccontextmanager
+    async def cycle_lease(self):
+        self.lease_count += 1
+        if self.cycle is None:
+            raise RuntimeError("runtime configuration is not active")
+        self.cycle.snapshot = self.snapshot
+        yield self.cycle
 
 
 def _config(*pairs: str) -> SchedulerConfig:
@@ -71,7 +81,7 @@ async def test_scheduled_batch_reloads_once_and_uses_one_cycle_for_every_pair() 
 
     await scheduler.run_once()
 
-    runtime.reload_for_cycle.assert_awaited_once_with()
+    assert runtime.lease_count == 1
     assert cycle.requests == [
         CycleRequest(Pair.parse("BTC/USDT")),
         CycleRequest(Pair.parse("ETH/USDT")),
@@ -110,6 +120,33 @@ async def test_scheduler_does_not_close_runtime_it_does_not_own() -> None:
     await scheduler.run_once()
 
     runtime.close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_stop_pauses_new_fires_and_waits_for_inflight_batch() -> None:
+    scheduler = Scheduler(_config(), _Runtime(_Cycle()))
+    entered = asyncio.Event()
+    terminal = asyncio.Event()
+
+    async def blocking_batch():
+        entered.set()
+        await terminal.wait()
+
+    scheduler.run_once = blocking_batch
+    loop = asyncio.get_running_loop()
+    with patch.object(loop, "add_signal_handler"):
+        serving = asyncio.create_task(scheduler.start())
+        await asyncio.sleep(0)
+        assert scheduler._stop_event is not None
+        batch = asyncio.create_task(scheduler._run_cycle())
+        await entered.wait()
+        scheduler.stop()
+        await asyncio.sleep(0)
+        assert not serving.done()
+
+        terminal.set()
+        await batch
+        await serving
 
 
 @pytest.mark.asyncio

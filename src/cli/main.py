@@ -60,16 +60,15 @@ async def _run_pairs_loop(pairs, runtime):
     from cryptotrader.risk.state import RedisStateManager
 
     for pair in pairs:
-        cycle = await runtime.reload_for_cycle()
-        if cycle is None:
-            console.print("[red]Runtime setup is incomplete.[/red]")
-            raise typer.Exit(1)
-        redis_state = RedisStateManager(runtime.snapshot.document.infrastructure.redis_url or None)
-        async with cycle_lock(redis_state, pair) as acquired:
-            if not acquired:
-                console.print(f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]")
-                continue
-            await _run_one_pair(pair, cycle)
+        async with runtime.cycle_lease() as cycle:
+            redis_state = RedisStateManager(cycle.snapshot.document.infrastructure.redis_url or None)
+            async with cycle_lock(redis_state, pair) as acquired:
+                if not acquired:
+                    console.print(
+                        f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]"
+                    )
+                    continue
+                await _run_one_pair(pair, cycle)
 
 
 async def _run_one_pair(pair: str, cycle) -> None:

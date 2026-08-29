@@ -6,10 +6,14 @@ import asyncio
 import contextlib
 import json
 import uuid
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from cryptotrader.decision.models import CycleOutcome
 
 router = APIRouter(prefix="/api/chat")
 
@@ -129,8 +133,8 @@ async def _handle_new_analysis(
     )
     bus = EventBus(session_id, buffer)
 
-    async def run_cycle(interrupt_event: asyncio.Event) -> None:
-        await run_analysis_and_buffer(
+    async def run_cycle(interrupt_event: asyncio.Event) -> CycleOutcome | None:
+        return await run_analysis_and_buffer(
             pair=pair,
             session_id=session_id,
             event_bus=bus,

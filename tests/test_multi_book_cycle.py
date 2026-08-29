@@ -212,6 +212,7 @@ def _cycle(snapshot, *, failed_books=(), execution_failed_books=(), repository=N
     journal = MultiVenueCycleStore()
     approvals = BookApprovalStore()
     cycle = TradingCycle(
+        snapshot=snapshot,
         repository=repository or _Repository(snapshot),
         market_source=_MarketSource(),
         registry=_Registry(),
@@ -313,7 +314,7 @@ async def test_completed_simulation_is_preserved_while_live_waits_for_approval()
 
 
 @pytest.mark.asyncio
-async def test_cycle_keeps_initial_revision_when_repository_changes_mid_run():
+async def test_cycle_uses_constructor_snapshot_without_repository_reread():
     simulation = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False)
     first = _snapshot(simulation, revision=9)
     repository = _Repository(first, replace(first, revision=10))
@@ -321,7 +322,7 @@ async def test_cycle_keeps_initial_revision_when_repository_changes_mid_run():
 
     outcome = await cycle.run(CycleRequest(PAIR))
 
-    assert repository.calls == 1
+    assert repository.calls == 0
     assert outcome.config_revision == 9
     assert all(book.config_revision == 9 for book in outcome.books)
 
@@ -350,7 +351,7 @@ async def test_execute_approved_uses_original_proposal_once_and_replaces_same_cy
 async def test_execute_approved_invalidates_revision_change_without_claiming_or_execution():
     live = _book("live", "real", ("live-first", "live-second"), hitl=True)
     initial = _snapshot(live, revision=9)
-    repository = _Repository(initial, replace(initial, revision=10))
+    repository = _Repository(replace(initial, revision=10))
     cycle, _, coordinator, journal, approvals = _cycle(initial, repository=repository)
     awaiting = await cycle.run(CycleRequest(PAIR))
     approval_id = awaiting.book("live").hitl.approval_id
@@ -390,7 +391,7 @@ async def test_execute_approved_reads_revision_after_approval_and_journal_identi
 
     invalidated = await cycle.execute_approved(approval_id)
 
-    assert repository.calls == 2
+    assert repository.calls == 1
     assert invalidated.book("live").hitl.status == "invalidated"
     approval = await approvals.get(approval_id)
     assert approval is not None

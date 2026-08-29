@@ -123,6 +123,36 @@ class TestLifecycle:
         engine._running = False
         await engine.stop()  # Should not raise
 
+    async def test_stop_shields_active_trigger_callback_until_terminal(self) -> None:
+        entered = asyncio.Event()
+        terminal = asyncio.Event()
+        cancelled = False
+
+        async def order_bearing_callback(_pair, _meta):
+            nonlocal cancelled
+            entered.set()
+            try:
+                await terminal.wait()
+            except asyncio.CancelledError:
+                cancelled = True
+                raise
+
+        engine, _, _ = _make_engine(run_cb=order_bearing_callback)
+        engine._running = True
+        engine._ws_task = asyncio.create_task(
+            engine._dispatch(_make_rule(), {"pair": "BTC/USDT", "price": 49_000.0, "ts": 0.0})
+        )
+        await entered.wait()
+
+        stopping = asyncio.create_task(engine.stop())
+        await asyncio.sleep(0)
+        assert not stopping.done()
+        assert cancelled is False
+
+        terminal.set()
+        await stopping
+        assert cancelled is False
+
 
 # ---------------------------------------------------------------------------
 # reload_rules

@@ -79,6 +79,7 @@ class PriceTriggerEngine:
         # 2-tuple key so multiple intervals can coexist on the same pair.
         self._klines: dict[tuple[str, str], list[dict[str, float]]] = {}
         self._reconnect_delay = 1.0
+        self._callback_tasks: set[asyncio.Task[None]] = set()
 
     async def start(self) -> None:
         if self._running:
@@ -102,6 +103,8 @@ class PriceTriggerEngine:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             setattr(self, task_attr, None)
+        if self._callback_tasks:
+            await asyncio.gather(*tuple(self._callback_tasks), return_exceptions=True)
         # ccxt async clients hold an aiohttp connector; closing here avoids
         # the "Unclosed connector" warning in long-lived trigger processes.
         if self._market_client is not None:
@@ -286,8 +289,16 @@ class PriceTriggerEngine:
 
         logger.info("Rule %s triggered: %s", rule.name, reason)
 
+        callback = asyncio.create_task(
+            self._run_pair(rule.pair, {"trigger_event_id": event.id, "schedule_depth": rule.schedule_depth})
+        )
+        self._callback_tasks.add(callback)
+        callback.add_done_callback(self._callback_tasks.discard)
         try:
-            await self._run_pair(rule.pair, {"trigger_event_id": event.id, "schedule_depth": rule.schedule_depth})
+            await asyncio.shield(callback)
+        except asyncio.CancelledError:
+            await callback
+            raise
         except Exception:
             logger.warning("Trigger callback failed for rule %s", rule.id)
 

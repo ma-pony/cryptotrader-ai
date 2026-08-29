@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from cryptotrader.cycle_events import CycleEvent
 from cryptotrader.decision.models import CycleOutcome
+from tests.runtime_lease import static_cycle_lease
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +26,11 @@ def _reset_task_manager():
 class _Bus:
     def __init__(self) -> None:
         self.events = []
+        self._execution_started = False
+
+    @property
+    def execution_started(self):
+        return self._execution_started
 
     async def publish(self, name, data=None):
         self.events.append((name, data or {}))
@@ -135,14 +142,11 @@ def _runtime_for(cycle):
     if hasattr(cycle, "events"):
         cycle.events = events
 
-    async def reload_for_cycle():
-        return cycle
-
     return SimpleNamespace(
         cycle=cycle,
         events=events,
         snapshot=SimpleNamespace(revision=1),
-        reload_for_cycle=reload_for_cycle,
+        cycle_lease=static_cycle_lease(cycle),
     )
 
 
@@ -181,7 +185,7 @@ async def test_chat_reloads_once_reports_each_book_and_publishes_strict_terminal
         cycle=cycle,
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
         snapshot=SimpleNamespace(revision=11),
-        reload_for_cycle=AsyncMock(return_value=cycle),
+        cycle_lease=static_cycle_lease(cycle),
     )
     bus = _Bus()
 
@@ -195,7 +199,6 @@ async def test_chat_reloads_once_reports_each_book_and_publishes_strict_terminal
     )
 
     assert outcome.cycle_id == "chat-cycle"
-    runtime.reload_for_cycle.assert_awaited_once_with()
     assert len(cycle.requests) == 1
     book_events = [data for name, data in bus.events if name == "book_result"]
     assert book_events == [
@@ -343,7 +346,7 @@ async def test_mounted_chat_handler_never_reaches_legacy_load_config():
             )
         ),
     )
-    runtime.reload_for_cycle = AsyncMock(return_value=runtime.cycle)
+    runtime.cycle_lease = static_cycle_lease(runtime.cycle)
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
 
     with patch("cryptotrader.config.load_config", side_effect=AssertionError("legacy load_config reached")):
@@ -355,6 +358,121 @@ async def test_mounted_chat_handler_never_reaches_legacy_load_config():
         task = BackgroundTaskManager.get_instance().get("mounted-chat")
         assert task is not None
         await task.task
+        assert task.outcome == CycleOutcome("cycle-chat", 4, None, (), "completed", "not_started", False)
+
+
+@pytest.mark.asyncio
+async def test_mounted_chat_execution_started_interrupt_returns_exact_cycle_outcome():
+    from api.routes.chat import ChatStreamRequest, _handle_new_analysis
+    from api.routes.chat_control import interrupt_analysis
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
+
+    terminal = asyncio.Event()
+    expected = CycleOutcome("mounted-execution", 8, None, (), "completed", "completed", False)
+
+    class RouteCycle:
+        async def run(self, _request):
+            await self.events.publish(CycleEvent("book_execution_started", {"book_id": "live"}))
+            await terminal.wait()
+            return expected
+
+    cycle = RouteCycle()
+    events = MultiplexedCycleEventSink(NullCycleEventSink())
+    cycle.events = events
+    runtime = SimpleNamespace(
+        cycle=cycle,
+        events=events,
+        snapshot=SimpleNamespace(
+            document=SimpleNamespace(
+                scheduler=SimpleNamespace(pairs=()),
+                infrastructure=SimpleNamespace(redis_url=""),
+            )
+        ),
+        cycle_lease=static_cycle_lease(cycle),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
+
+    await _handle_new_analysis("mounted-execution", ChatStreamRequest(message="BTC/USDT"), request)
+    managed = BackgroundTaskManager.get_instance().get("mounted-execution")
+    assert managed is not None
+    await managed.event_bus.wait_for_execution_started()
+    interrupting = asyncio.create_task(interrupt_analysis("mounted-execution"))
+    await asyncio.sleep(0)
+    assert not interrupting.done()
+    terminal.set()
+
+    response = await interrupting
+    assert response.model_dump() == {
+        "type": "execution_in_progress",
+        "session_id": "mounted-execution",
+        "cycle_id": "mounted-execution",
+        "status": "completed",
+        "execution_status": "completed",
+        "requires_attention": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_event_sink_latches_execution_before_buffer_failure_blocks_interrupt_and_replacement():
+    from cryptotrader.chat.event_bus import EventBus, EventBusCycleSink
+    from cryptotrader.chat.task_manager import BackgroundTaskManager, ExecutionInProgressError
+    from cryptotrader.cycle_events import CycleEvent
+
+    class FailingBuffer:
+        async def next_event_id(self):
+            return 1
+
+        async def push(self, _event):
+            raise RuntimeError("buffer unavailable")
+
+    bus = EventBus("failed-observer", FailingBuffer())
+    manager = BackgroundTaskManager.get_instance()
+    terminal = asyncio.Event()
+
+    with contextlib.suppress(RuntimeError):
+        await EventBusCycleSink(bus).publish(CycleEvent("book_execution_started", {"book_id": "live"}))
+
+    async def runner(_interrupt):
+        await terminal.wait()
+        return CycleOutcome("cycle", 1, None, (), "completed", "completed", False)
+
+    manager.create("failed-observer", "BTC/USDT", runner, "chat", bus)
+    assert bus.execution_started
+    assert bus.published_count("book_execution_started") == 0
+    assert manager.interrupt("failed-observer") is None
+    with pytest.raises(ExecutionInProgressError):
+        manager.create("failed-observer", "BTC/USDT", runner, "chat", bus)
+    terminal.set()
+    await manager.drain()
+
+
+@pytest.mark.asyncio
+async def test_background_manager_drain_cancels_pre_execution_and_waits_for_execution_terminal():
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+
+    manager = BackgroundTaskManager.get_instance()
+    pre_bus = _Bus()
+    execution_bus = _Bus()
+    execution_bus._execution_started = True
+    terminal = asyncio.Event()
+
+    async def pending(_interrupt):
+        await asyncio.Future()
+
+    async def order_bearing(_interrupt):
+        await terminal.wait()
+        return CycleOutcome("terminal", 1, None, (), "completed", "completed", False)
+
+    pre = manager.create("pre", "BTC/USDT", pending, "chat", pre_bus)
+    bearing = manager.create("bearing", "BTC/USDT", order_bearing, "chat", execution_bus)
+    draining = asyncio.create_task(manager.drain())
+    await asyncio.sleep(0)
+    assert pre.interrupt_event.is_set()
+    assert not draining.done()
+    terminal.set()
+    await draining
+    assert bearing.outcome.cycle_id == "terminal"
 
 
 @pytest.mark.asyncio
@@ -403,7 +521,7 @@ async def test_real_runtime_cycle_routes_concurrent_component_events_to_the_corr
         venue_registry=object(),
         events=routed,
     )
-    runtime.reload_for_cycle = AsyncMock(return_value=cycle)
+    runtime.cycle_lease = static_cycle_lease(cycle)
     first_state = _EventState()
     second_state = _EventState()
     first_bus = EventBus("first-session", EventBuffer("first-session", first_state))

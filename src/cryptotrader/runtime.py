@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping as MappingABC
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -66,76 +67,114 @@ class Runtime:
     events: MultiplexedCycleEventSink
     _session_keys: dict[str, tuple[object, ...]] = field(default_factory=dict, repr=False)
     _pending_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
+    _deferred_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
+    _active_leases: int = field(default=0, init=False, repr=False)
+    _leases_drained: asyncio.Event = field(default_factory=asyncio.Event, init=False, repr=False)
+    _closing: bool = field(default=False, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _started_setup_required: bool = field(default=False, init=False, repr=False)
     _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._started_setup_required = self.snapshot.setup_required
+        self._leases_drained.set()
+
+    @asynccontextmanager
+    async def cycle_lease(self):
+        """Publish and pin one frozen runtime graph for an execution owner."""
+
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("runtime is closing")
+            cycle = await self._reload_for_cycle_locked()
+            if cycle is None:
+                raise RuntimeError("runtime configuration is not active")
+            self._active_leases += 1
+            self._leases_drained.clear()
+        try:
+            yield cycle
+        finally:
+            async with self._lifecycle_lock:
+                self._active_leases -= 1
+                if self._active_leases == 0:
+                    try:
+                        await self._cleanup_retired_sessions(
+                            tuple(self._deferred_retired.values()),
+                            retry_pending=False,
+                        )
+                    except BaseException:
+                        self._leases_drained.set()
+                        raise
+                    else:
+                        self._deferred_retired.clear()
+                        self._leases_drained.set()
 
     async def reload_for_cycle(self) -> TradingCycle | None:
         """Synchronize one active runtime to the latest validated database graph."""
 
         async with self._lifecycle_lock:
-            if self._closed:
+            if self._closing or self._closed:
                 raise RuntimeError("runtime is closed")
-            if self._started_setup_required:
-                return None
+            return await self._reload_for_cycle_locked()
 
+    async def _reload_for_cycle_locked(self) -> TradingCycle | None:
+        if self._started_setup_required:
+            return None
+
+        if self._active_leases == 0:
             await self._cleanup_retired_sessions()
-            candidate_snapshot = await self.repository.get_or_create()
-            _validate_snapshot(
-                candidate_snapshot,
-                self.signal_registry,
-                self.venue_registry,
-                self.market_registry,
-            )
-            if candidate_snapshot.setup_required:
-                retired = tuple(self.sessions.values())
-                self.snapshot, self.sessions, self.cycle, self._session_keys = (
-                    candidate_snapshot,
-                    {},
-                    None,
-                    {},
-                )
-                await self._cleanup_retired_sessions(retired, retry_pending=False)
-                return None
+        candidate_snapshot = await self.repository.get_or_create()
+        _validate_snapshot(candidate_snapshot, self.signal_registry, self.venue_registry, self.market_registry)
+        if candidate_snapshot.setup_required:
+            retired = tuple(self.sessions.values())
+            self.snapshot, self.sessions, self.cycle, self._session_keys = candidate_snapshot, {}, None, {}
+            await self._retire_sessions(retired)
+            return None
 
-            candidate_sessions, candidate_keys, opened = await _candidate_sessions(
+        candidate_sessions, candidate_keys, opened = await _candidate_sessions(
+            candidate_snapshot, self.repository, self.venue_registry, self.sessions, self._session_keys
+        )
+        try:
+            candidate_cycle = _assemble_cycle(
                 candidate_snapshot,
                 self.repository,
-                self.venue_registry,
-                self.sessions,
-                self._session_keys,
-            )
-            try:
-                candidate_cycle = _assemble_cycle(
-                    candidate_snapshot,
-                    self.repository,
-                    candidate_sessions,
-                    self.signal_registry,
-                    self.market_registry,
-                    self.events,
-                )
-            except BaseException:
-                await _close_candidate_sessions(opened)
-                raise
-
-            retired = tuple(
-                session
-                for session in self.sessions.values()
-                if all(session is not candidate for candidate in candidate_sessions.values())
-            )
-            self.snapshot, self.sessions, self.cycle, self._session_keys = (
-                candidate_snapshot,
                 candidate_sessions,
-                candidate_cycle,
-                candidate_keys,
+                self.signal_registry,
+                self.market_registry,
+                self.events,
             )
-            await self._cleanup_retired_sessions(retired, retry_pending=False)
-            return candidate_cycle
+        except BaseException:
+            await _close_candidate_sessions(opened)
+            raise
+
+        retired = tuple(
+            session
+            for session in self.sessions.values()
+            if all(session is not candidate for candidate in candidate_sessions.values())
+        )
+        self.snapshot, self.sessions, self.cycle, self._session_keys = (
+            candidate_snapshot,
+            candidate_sessions,
+            candidate_cycle,
+            candidate_keys,
+        )
+        await self._retire_sessions(retired)
+        return candidate_cycle
+
+    async def _retire_sessions(self, sessions) -> None:
+        if self._active_leases:
+            self._deferred_retired.update((id(session), session) for session in sessions)
+            return
+        await self._cleanup_retired_sessions(sessions, retry_pending=False)
 
     async def close(self) -> None:
+        async with self._lifecycle_lock:
+            if self._closed and not self._pending_retired:
+                return
+            self._closing = True
+            wait_for_leases = self._active_leases > 0
+        if wait_for_leases:
+            await self._leases_drained.wait()
         async with self._lifecycle_lock:
             first_close = not self._closed
             if not first_close and not self._pending_retired:
@@ -143,7 +182,7 @@ class Runtime:
             self._closed = True
             targets = tuple(self._pending_retired.values())
             if first_close:
-                targets += tuple(self.sessions.values())
+                targets += tuple(self._deferred_retired.values()) + tuple(self.sessions.values())
             result = await _close_session_batch(targets)
             self._pending_retired = {id(session): session for session in result.failed_sessions}
             _raise_close_control(result)
@@ -264,6 +303,7 @@ def _assemble_cycle(snapshot, repository, sessions, signals, markets, event_sink
     timeframe = str(frozen.document.market_data.parameters.get("timeframe", "1h"))
     limit = int(frozen.document.market_data.parameters.get("limit", 100))
     return TradingCycle(
+        snapshot=frozen,
         repository=runtime_repository,
         market_source=market_source,
         registry=signals,

@@ -86,11 +86,9 @@ async def run_analysis_and_buffer(
         await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
         from cryptotrader.chat.event_bus import EventBusCycleSink
 
-        cycle = await runtime.reload_for_cycle()
-        if cycle is None:
-            raise RuntimeError("Trading runtime is not active")
-        with runtime.events.route(EventBusCycleSink(event_bus)):
-            outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
+        async with runtime.cycle_lease() as cycle:
+            with runtime.events.route(EventBusCycleSink(event_bus)):
+                outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
         await _publish_outcome(event_bus, session_id, outcome)
         await state_mgr.set(f"analysis:status:{session_id}", "done", ex=600)
         return outcome
