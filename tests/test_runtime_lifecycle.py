@@ -284,6 +284,72 @@ async def test_cancelled_runtime_close_waits_active_lease_and_unique_session_ter
 
 
 @pytest.mark.asyncio
+async def test_release_cleanup_cannot_signal_drain_for_a_new_active_generation():
+    connection = _connection("paper-a", parameters={"initial_equity": "10000"})
+    runtime, repository, _, _ = await _build(_document(connection))
+    first_lease = runtime.cycle_lease()
+    await first_lease.__aenter__()
+    retired = _BlockingCloseSession("paper-a")
+    runtime.sessions = {"paper-a": retired}
+
+    repository.publish(_document(_connection("paper-a", parameters={"initial_equity": "20000"})))
+    await runtime.reload_for_cycle()
+    current = runtime.sessions["paper-a"]
+
+    first_exit = asyncio.create_task(first_lease.__aexit__(None, None, None))
+    await retired.started.wait()
+    assert runtime._active_leases == 1
+
+    repository.publish(_document(_connection("paper-a", parameters={"initial_equity": "30000"})))
+    second_lease = runtime.cycle_lease()
+    await second_lease.__aenter__()
+    latest = runtime.sessions["paper-a"]
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+    assert closing.done() is False
+
+    retired.release.set()
+    await first_exit
+    await asyncio.sleep(0)
+
+    assert runtime._active_leases == 1
+    assert runtime._leases_drained.is_set() is False
+    assert current.close_calls == 0
+    assert latest.close_calls == 0
+    assert closing.done() is False
+
+    await second_lease.__aexit__(None, None, None)
+    await closing
+    assert retired.close_calls == 1
+    assert current.close_calls == 1
+    assert latest.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_cancelled_close_publishes_owned_completion_before_waiting_for_lifecycle_lock():
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    session = runtime.sessions["paper-a"]
+    await runtime._lifecycle_lock.acquire()
+
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+    completion = runtime._close_completion
+    assert completion is not None
+    assert completion.done() is False
+
+    closing.cancel()
+    await asyncio.sleep(0)
+    closing.cancel()
+    assert closing.done() is False
+
+    runtime._lifecycle_lock.release()
+    with pytest.raises(asyncio.CancelledError):
+        await closing
+    assert completion.done()
+    assert session.close_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_cancelled_lease_exit_waits_for_lifecycle_lock_then_signals_drained():
     runtime, _, _, _ = await _build(_document(_connection("paper-a")))
     lease = runtime.cycle_lease()
@@ -325,6 +391,42 @@ async def test_concurrent_close_callers_share_one_owned_completion():
         await first
     await second
     assert blocking.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_close_concurrent_retry_callers_share_one_new_completion():
+    class FailThenBlockSession:
+        def __init__(self) -> None:
+            self.close_calls = 0
+            self.retry_started = asyncio.Event()
+            self.retry_release = asyncio.Event()
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls == 1:
+                raise RuntimeError("first close failed")
+            self.retry_started.set()
+            await self.retry_release.wait()
+
+    runtime, _, _, _ = await _build(_document(active=False))
+    session = FailThenBlockSession()
+    runtime.sessions = {"session": session}
+
+    with pytest.raises(RuntimeError, match="failed to close venue session"):
+        await runtime.close()
+    failed_completion = runtime._close_completion
+
+    first_retry = asyncio.create_task(runtime.close())
+    await session.retry_started.wait()
+    retry_completion = runtime._close_completion
+    second_retry = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+
+    assert retry_completion is not failed_completion
+    assert runtime._close_completion is retry_completion
+    session.retry_release.set()
+    await asyncio.gather(first_retry, second_retry)
+    assert session.close_calls == 2
 
 
 @pytest.mark.asyncio

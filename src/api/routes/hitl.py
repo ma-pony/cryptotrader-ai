@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from api.routes.response_dto import BookExecutionProposalOut, proposal_out
+from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.hitl.store import ApprovalStateError
 
 if TYPE_CHECKING:
@@ -49,12 +51,15 @@ class HitlRespondOut(BaseModel):
 
 def _cycle(request: Request):
     runtime = _runtime(request)
-    return runtime.cycle
+    cycle = runtime.cycle
+    if cycle is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not active")
+    return cycle
 
 
 def _runtime(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
-    if runtime is None or runtime.cycle is None:
+    if runtime is None:
         raise HTTPException(status_code=503, detail="Trading runtime is not active")
     return runtime
 
@@ -90,13 +95,8 @@ async def get_approval(approval_id: str, request: Request) -> ApprovalRequestOut
 @router.post("/{approval_id}/respond")
 async def respond_approval(approval_id: str, body: HitlRespondIn, request: Request) -> HitlRespondOut:
     try:
-        async with _runtime(request).cycle_lease() as cycle:
-            if body.decision == "approve":
-                await cycle.approvals.approve(approval_id)
-                outcome = await cycle.execute_approved(approval_id)
-            else:
-                outcome = await cycle.reject_approval(approval_id)
-            final_approval = await cycle.approvals.get(approval_id)
+        operation = asyncio.create_task(_respond_owned(_runtime(request), approval_id, body.decision))
+        outcome, final_approval = await wait_for_owned(operation)
     except ApprovalStateError:
         raise HTTPException(status_code=409, detail="Approval state conflict") from None
     except LookupError:
@@ -113,3 +113,20 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
         execution_status=outcome.execution_status,
         requires_attention=outcome.requires_attention,
     )
+
+
+async def _respond_owned(runtime, approval_id: str, decision: Literal["approve", "reject"]):
+    async with runtime.cycle_lease() as cycle:
+        approval = await cycle.approvals.get(approval_id)
+        if approval is None:
+            raise LookupError("approval request does not exist")
+        if decision == "approve":
+            if approval.status == "pending":
+                await cycle.approvals.approve(approval_id)
+            elif approval.status != "approved":
+                raise ApprovalStateError("approval is not executable")
+            outcome = await cycle.execute_approved(approval_id)
+        else:
+            outcome = await cycle.reject_approval(approval_id)
+        final_approval = await cycle.approvals.get(approval_id)
+        return outcome, final_approval

@@ -99,22 +99,32 @@ class Runtime:
             await wait_for_owned(asyncio.create_task(self._release_cycle_lease()))
 
     async def _release_cycle_lease(self) -> None:
-        retired = ()
-        async with self._lifecycle_lock:
-            self._active_leases -= 1
-            if self._active_leases == 0:
-                retired = tuple(self._deferred_retired.values())
-                self._deferred_retired.clear()
-        if not retired:
-            if self._active_leases == 0:
-                self._leases_drained.set()
-            return
+        deferred_control: BaseException | None = None
+        while True:
+            retired = ()
+            async with self._lifecycle_lock:
+                if self._active_leases > 1:
+                    self._active_leases -= 1
+                    release_complete = True
+                elif self._deferred_retired:
+                    retired = tuple(self._deferred_retired.values())
+                    self._deferred_retired.clear()
+                    release_complete = False
+                else:
+                    self._active_leases = 0
+                    self._leases_drained.set()
+                    release_complete = True
 
-        result = await _close_session_batch(retired)
-        async with self._lifecycle_lock:
-            self._pending_retired.update((id(session), session) for session in result.failed_sessions)
-            self._leases_drained.set()
-        _raise_close_control(result)
+            if release_complete:
+                if deferred_control is not None:
+                    raise deferred_control
+                return
+
+            result = await _close_session_batch(retired)
+            async with self._lifecycle_lock:
+                self._pending_retired.update((id(session), session) for session in result.failed_sessions)
+            if deferred_control is None:
+                deferred_control = _close_control(result)
 
     async def reload_for_cycle(self) -> TradingCycle | None:
         """Synchronize one active runtime to the latest validated database graph."""
@@ -175,12 +185,12 @@ class Runtime:
         await self._cleanup_retired_sessions(sessions, retry_pending=False)
 
     async def close(self) -> None:
-        async with self._lifecycle_lock:
-            if not self._closed:
-                self._closing = True
-            if self._close_completion is None or (self._close_completion.done() and self._pending_retired):
-                self._close_completion = asyncio.create_task(self._close_owned())
-            completion = self._close_completion
+        if not self._closed:
+            self._closing = True
+        completion = self._close_completion
+        if completion is None or (completion.done() and self._pending_retired):
+            completion = asyncio.create_task(self._close_owned())
+            self._close_completion = completion
         await wait_for_owned(completion)
 
     async def _close_owned(self) -> None:
@@ -440,7 +450,12 @@ async def _close_session_batch(sessions) -> _CloseBatchResult:
 
 
 def _raise_close_control(result: _CloseBatchResult) -> None:
+    control = _close_control(result)
+    if control is not None:
+        raise control
+
+
+def _close_control(result: _CloseBatchResult) -> BaseException | None:
     if result.control_failures:
-        raise result.control_failures[0][1]
-    if result.external_cancellation is not None:
-        raise result.external_cancellation
+        return result.control_failures[0][1]
+    return result.external_cancellation

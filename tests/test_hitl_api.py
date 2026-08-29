@@ -9,6 +9,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
+import pytest
+
 from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
 from cryptotrader.decision.models import CycleOutcome, TargetPosition
 from cryptotrader.hitl.store import ApprovalStateError, BookApprovalStore
@@ -95,6 +97,79 @@ async def test_approve_api_returns_final_approval_and_cycle_state(api_harness):
     }
 
 
+async def test_cancelled_approve_response_waits_for_owned_execution_terminal(api_harness):
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    _mount_cycle(api_harness, cycle)
+    await _seed(cycle)
+    execution_started = asyncio.Event()
+    release_execution = asyncio.Event()
+    execution_terminal = asyncio.Event()
+    child_cancelled = False
+
+    async def blocking_execute(approval_id):
+        nonlocal child_cancelled
+        await cycle.approvals.claim_for_execution(approval_id, current_revision=9)
+        execution_started.set()
+        try:
+            await release_execution.wait()
+        except asyncio.CancelledError:
+            child_cancelled = True
+            raise
+        execution_terminal.set()
+        return _outcome("completed", "completed")
+
+    cycle.execute_approved.side_effect = blocking_execute
+    request = type(
+        "Request",
+        (),
+        {"app": type("App", (), {"state": type("State", (), {"runtime": api_harness.runtime})()})()},
+    )()
+    responding = asyncio.create_task(respond_approval("approval-1", HitlRespondIn(decision="approve"), request))
+    await execution_started.wait()
+
+    responding.cancel()
+    await asyncio.sleep(0)
+    responding.cancel()
+    assert responding.done() is False
+    assert child_cancelled is False
+
+    release_execution.set()
+    with pytest.raises(asyncio.CancelledError):
+        await responding
+    approval = await cycle.approvals.get("approval-1")
+    assert execution_terminal.is_set()
+    assert child_cancelled is False
+    assert approval.status == "executed"
+
+
+async def test_approved_response_resumes_after_ordinary_execution_failure(api_harness):
+    from api.routes.hitl import HitlRespondIn, respond_approval
+
+    cycle = _Cycle()
+    _mount_cycle(api_harness, cycle)
+    await _seed(cycle)
+    request = type(
+        "Request",
+        (),
+        {"app": type("App", (), {"state": type("State", (), {"runtime": api_harness.runtime})()})()},
+    )()
+    cycle.execute_approved.side_effect = RuntimeError("execution failed before claim")
+
+    with pytest.raises(RuntimeError, match="execution failed before claim"):
+        await respond_approval("approval-1", HitlRespondIn(decision="approve"), request)
+    approved = await cycle.approvals.get("approval-1")
+    assert approved.status == "approved"
+
+    cycle.execute_approved.side_effect = cycle._execute
+    response = await respond_approval("approval-1", HitlRespondIn(decision="approve"), request)
+
+    assert response.approval_status == "executed"
+    assert response.execution_status == "completed"
+    assert cycle.execute_approved.await_count == 2
+
+
 async def test_revision_invalidation_response_never_reports_executed(api_harness):
     cycle = _Cycle()
     _mount_cycle(api_harness, cycle)
@@ -146,6 +221,27 @@ async def test_already_decided_approval_returns_conflict(api_harness):
     )
 
     assert response.status_code == 409
+
+
+@pytest.mark.parametrize("terminal_status", ["invalidated", "executed"])
+async def test_terminal_approval_never_repeats_execution(api_harness, terminal_status):
+    cycle = _Cycle()
+    _mount_cycle(api_harness, cycle)
+    await _seed(cycle)
+    if terminal_status == "invalidated":
+        await cycle.approvals.invalidate("approval-1")
+    else:
+        await cycle.approvals.approve("approval-1")
+        await cycle.approvals.claim_for_execution("approval-1", current_revision=9)
+    cycle.execute_approved.reset_mock()
+
+    response = await api_harness.client.post(
+        "/api/hitl/approval-1/respond",
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 409
+    cycle.execute_approved.assert_not_awaited()
 
 
 async def test_unknown_approval_returns_not_found(api_harness):
