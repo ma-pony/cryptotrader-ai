@@ -4,9 +4,11 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { decodeEntries, useRuntimeConfig } from '@/hooks/use-runtime-config';
+import { useRuntimeSecrets } from '@/hooks/use-runtime-secrets';
 import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/api';
 import { BookForm, newBook, validateBooks } from '@/pages/settings/execution-books/book-form';
 import { VenueForm } from '@/pages/settings/venues/venue-form';
+import { useSettingsStore } from '@/stores/use-settings-store';
 
 type DraftConnection = RuntimeDocument['execution']['connections'][number];
 type ResponseConnection = RuntimeConfig['document']['execution']['connections'][number];
@@ -87,6 +89,8 @@ const SetupEditor = ({
   const { t } = useTranslation('configuration');
   const steps = t('steps', { returnObjects: true }) as string[];
   const runtime = useRuntimeConfig();
+  const secrets = useRuntimeSecrets();
+  const setApiKey = useSettingsStore((state) => state.setApiKey);
   const [step, setStep] = useState(0);
   const [draft, setDraft] = useState(initialDocument);
   const [tested, setTested] = useState<Record<string, string>>({});
@@ -107,6 +111,8 @@ const SetupEditor = ({
   const [llmError, setLlmError] = useState('');
   const [llmAdvancedDirty, setLlmAdvancedDirty] = useState(false);
   const [activationError, setActivationError] = useState('');
+  const [gatewayToken, setGatewayToken] = useState('');
+  const [accessToken, setAccessToken] = useState('');
 
   const enabledConnections = draft.execution.connections.filter((connection) => connection.enabled);
   const bookErrors = validateBooks(draft.execution.books, draft.execution.connections);
@@ -161,6 +167,23 @@ const SetupEditor = ({
       setActivationError(t('wizard.activationFailed'));
     }
   };
+  const saveGatewayToken = async () => {
+    if (!gatewayToken || runtime.revision === undefined || runtime.conflict) return;
+    try {
+      await secrets.writeLlmGateway(runtime.revision, gatewayToken);
+    } finally {
+      setGatewayToken('');
+    }
+  };
+  const saveAccessToken = async () => {
+    if (!accessToken || runtime.revision === undefined || runtime.conflict) return;
+    try {
+      await secrets.writeApiAccess(runtime.revision, accessToken);
+      setApiKey(accessToken);
+    } finally {
+      setAccessToken('');
+    }
+  };
   const replaceConnection = (saved: ResponseConnection) =>
     setDraft((current) => ({
       ...current,
@@ -205,6 +228,8 @@ const SetupEditor = ({
             </label>
           ))}
           <label>Base URL<input aria-label="LLM base URL" value={draft.llm.base_url} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, base_url: event.target.value } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <label>LLM gateway key<input aria-label="LLM gateway key" type="password" value={gatewayToken} onChange={(event) => setGatewayToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <Button type="button" variant="outline" disabled={!gatewayToken || runtime.conflict} onClick={() => void saveGatewayToken()}>{runtime.secretStates.llmGateway.configured ? 'Rotate gateway key' : 'Save gateway key'}</Button>
           <label>{t('wizard.defaultTemperature')}<input aria-label={t('wizard.defaultTemperature')} type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label>{t('wizard.timeout')}<input aria-label={t('wizard.timeout')} type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
@@ -485,6 +510,11 @@ const SetupEditor = ({
           <CheckCircle2 className="h-4 w-4" />
           {t('activate')}
         </Button>
+        <label className="block text-sm">API access key
+          <input aria-label="API access key" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" />
+        </label>
+        <label className="flex items-center gap-2"><input aria-label="Enable API access security" type="checkbox" checked={draft.security.enabled} onChange={(event) => setDraft((current) => ({ ...current, security: { enabled: event.target.checked } }))} />Enable API access security</label>
+        <Button type="button" variant="outline" disabled={!accessToken || runtime.conflict} onClick={() => void saveAccessToken()}>{runtime.secretStates.apiAccess.configured ? 'Rotate API access key' : 'Save API access key'}</Button>
         {activationError ? (
           <p role="alert" className="text-sm text-trade-short">
             {activationError}

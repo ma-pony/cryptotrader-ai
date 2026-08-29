@@ -323,6 +323,11 @@ const LlmModelsSchema = strictRecord({
 });
 const RuntimeDocumentSchema = strictRecord({
   system: strictRecord({ active: z.boolean() }),
+  security: strictRecord({
+    enabled: z.boolean(),
+    access_credential_configured: z.boolean(),
+    access_credential_updated_at: z.string().nullable(),
+  }),
   market_data: strictRecord({ source_id: z.string(), parameters: z.array(JsonEntrySchema) }),
   llm: strictRecord({
     base_url: z.string(),
@@ -340,6 +345,8 @@ const RuntimeDocumentSchema = strictRecord({
       strictRecord({ name: z.string(), input_usd_per_mtok: z.number(), output_usd_per_mtok: z.number() }),
     ),
     models: LlmModelsSchema,
+    gateway_credential_configured: z.boolean(),
+    gateway_credential_updated_at: z.string().nullable(),
   }),
   signals: strictRecord({
     components: z.array(
@@ -406,6 +413,7 @@ const RuntimeDocumentSchema = strictRecord({
     telegram: strictRecord({ enabled: z.boolean(), chat_id: z.string() }),
   }),
   infrastructure: strictRecord({ redis_url: z.string() }),
+  observability: strictRecord({ otlp_endpoint: z.string() }),
 });
 export const RuntimeConfigSchema = strictRecord({
   revision: z.number().int(),
@@ -417,6 +425,11 @@ export const VenueMutationSchema = strictRecord({ revision: z.number().int(), co
 export const CredentialMutationSchema = strictRecord({
   revision: z.number().int(),
   credential: strictRecord({ configured: z.boolean(), updated_at: z.string().nullable() }),
+});
+export const RuntimeTokenMutationSchema = strictRecord({
+  revision: z.number().int(),
+  configured: z.boolean(),
+  updated_at: z.string(),
 });
 export const ConnectionHealthSchema = strictRecord({
   connection_id: z.string(),

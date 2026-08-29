@@ -5,9 +5,11 @@ import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { toRuntimeDocument, useRuntimeConfig } from '@/hooks/use-runtime-config';
+import { useRuntimeSecrets } from '@/hooks/use-runtime-secrets';
 import type { RuntimeDocument, RuntimeJsonObject } from '@/types/api';
 import { ComponentWeightCard, type ComponentWeightDraft } from './components/component-weight-card';
 import { DecisionSettingsCard, type DecisionSettingsDraft } from './components/decision-settings-card';
+import { useSettingsStore } from '@/stores/use-settings-store';
 
 const ACCENTS = ['#f59e0b', '#38bdf8', '#a78bfa', '#34d399', '#fb7185'];
 type Draft = DecisionSettingsDraft & {
@@ -23,11 +25,15 @@ const fromDocument = (document: RuntimeDocument): Draft => ({
 const StrategyPage = () => {
   const { t } = useTranslation(['configuration', 'strategy']);
   const runtime = useRuntimeConfig();
+  const secrets = useRuntimeSecrets();
+  const setApiKey = useSettingsStore((state) => state.setApiKey);
   const [draft, setDraft] = useState<Draft>();
   const [customId, setCustomId] = useState('');
   const [saved, setSaved] = useState(false);
   const [parameterText, setParameterText] = useState<Record<string, string>>({});
   const [parameterErrors, setParameterErrors] = useState<Record<string, boolean>>({});
+  const [gatewayToken, setGatewayToken] = useState('');
+  const [accessToken, setAccessToken] = useState('');
   // A query cache revision may change while this editor is open.  Only an empty
   // editor hydrates from it; explicit reload is the sole path that discards a draft.
   useEffect(() => {
@@ -82,6 +88,16 @@ const StrategyPage = () => {
   const reload = async () => {
     const result = await runtime.reload();
     if (result.isSuccess && !result.error && result.data) setDraft(fromDocument(toRuntimeDocument(result.data.document)));
+  };
+  const rotateSecret = async (kind: 'llm' | 'api') => {
+    const token = kind === 'llm' ? gatewayToken : accessToken;
+    if (!token || runtime.revision === undefined || runtime.conflict) return;
+    try {
+      if (kind === 'llm') await secrets.writeLlmGateway(runtime.revision, token);
+      else { await secrets.writeApiAccess(runtime.revision, token); setApiKey(token); }
+    } finally {
+      if (kind === 'llm') setGatewayToken(''); else setAccessToken('');
+    }
   };
   const labels = useMemo(
     () => ({
@@ -198,6 +214,20 @@ const StrategyPage = () => {
                   />
                 </label>
               ))}
+            </div>
+          </section>
+          <section className="rounded-2xl border border-border bg-card p-5">
+            <h2 className="font-semibold">Runtime credentials</h2>
+            <p className="mt-1 text-sm text-muted-foreground">Tokens are held only for this write, then cleared from the page.</p>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <label className="text-xs text-muted-foreground">LLM gateway key
+                <input aria-label="LLM gateway key" type="password" value={gatewayToken} onChange={(event) => setGatewayToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" />
+                <Button type="button" variant="outline" disabled={!gatewayToken || runtime.conflict} onClick={() => void rotateSecret('llm')}>Rotate gateway key</Button>
+              </label>
+              <label className="text-xs text-muted-foreground">API access key
+                <input aria-label="API access key" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" />
+                <Button type="button" variant="outline" disabled={!accessToken || runtime.conflict} onClick={() => void rotateSecret('api')}>Rotate API access key</Button>
+              </label>
             </div>
           </section>
           {runtime.conflict ? (

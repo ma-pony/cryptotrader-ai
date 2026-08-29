@@ -92,6 +92,8 @@ export const decodeEntries = (entries: { key: string; value: JsonValueOut }[]): 
 /** Converts response-only JsonValueOut envelopes to a plain writable document. */
 export const toRuntimeDocument = (response: RuntimeConfig['document']): RuntimeDocument => ({
   ...response,
+  security: { enabled: response.security.enabled },
+  llm: (({ gateway_credential_configured: _configured, gateway_credential_updated_at: _updatedAt, ...llm }) => llm)(response.llm),
   market_data: { ...response.market_data, parameters: decodeEntries(response.market_data.parameters) },
   signals: {
     ...response.signals,
@@ -142,6 +144,19 @@ export const useRuntimeConfig = () => {
       ),
     [query.data],
   );
+  const secretStates = useMemo(
+    () => ({
+      llmGateway: {
+        configured: query.data?.document.llm.gateway_credential_configured ?? false,
+        updatedAt: query.data?.document.llm.gateway_credential_updated_at ?? null,
+      },
+      apiAccess: {
+        configured: query.data?.document.security.access_credential_configured ?? false,
+        updatedAt: query.data?.document.security.access_credential_updated_at ?? null,
+      },
+    }),
+    [query.data],
+  );
   const reload = async () => {
     const result = await query.refetch();
     if (result.isSuccess && !result.error) clearRuntimeConfigConflict(client);
@@ -151,6 +166,7 @@ export const useRuntimeConfig = () => {
     revision: query.data?.revision,
     document,
     credentialStates,
+    secretStates,
     setupRequired: query.data?.setup_required ?? false,
     updatedAt: query.data?.updated_at,
     replace: mutation.mutateAsync,

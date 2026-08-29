@@ -46,6 +46,7 @@ import type {
   RuntimeBookSchema,
   VenueMutationSchema,
   CredentialMutationSchema,
+  RuntimeTokenMutationSchema,
   ConnectionHealthSchema,
   TargetPositionSchema,
   TriggerEventSchema,
@@ -90,13 +91,16 @@ export type RuntimeJsonPrimitive = null | boolean | number | string;
 export type RuntimeJsonValue = RuntimeJsonPrimitive | RuntimeJsonValue[] | RuntimeJsonObject;
 export type RuntimeJsonObject = { [key: string]: RuntimeJsonValue };
 type RuntimeResponseDocument = RuntimeConfig['document'];
-export type RuntimeDocument = Omit<RuntimeResponseDocument, 'market_data' | 'signals' | 'execution'> & {
+export type RuntimeDocument = Omit<RuntimeResponseDocument, 'market_data' | 'signals' | 'execution' | 'security' | 'llm'> & {
+  security: Pick<RuntimeResponseDocument['security'], 'enabled'>;
+  llm: Omit<RuntimeResponseDocument['llm'], 'gateway_credential_configured' | 'gateway_credential_updated_at'>;
   market_data: Omit<RuntimeResponseDocument['market_data'], 'parameters'> & { parameters: RuntimeJsonObject };
   signals: Omit<RuntimeResponseDocument['signals'], 'components'> & { components: Array<Omit<RuntimeResponseDocument['signals']['components'][number], 'parameters'> & { parameters: RuntimeJsonObject }> };
   execution: Omit<RuntimeResponseDocument['execution'], 'connections'> & { connections: Array<Omit<RuntimeResponseDocument['execution']['connections'][number], 'credential_configured' | 'credential_updated_at' | 'parameters'> & { parameters: RuntimeJsonObject }> };
 };
 export type VenueMutation = z.output<typeof VenueMutationSchema>;
 export type CredentialMutation = z.output<typeof CredentialMutationSchema>;
+export type RuntimeTokenMutation = z.output<typeof RuntimeTokenMutationSchema>;
 export type ConnectionHealth = z.output<typeof ConnectionHealthSchema>;
 
 // §5 Risk
