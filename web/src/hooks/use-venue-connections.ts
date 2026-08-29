@@ -5,6 +5,7 @@ import { ConnectionHealthSchema, CredentialMutationSchema, RuntimeConfigSchema, 
 import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
 import { setRuntimeConfigConflict } from './runtime-config-conflict';
 import { ApiError } from '@/lib/api-client';
+import type { RuntimeJsonObject } from '@/types/api';
 
 type ConnectionInput = {
   expected_revision: number;
@@ -15,7 +16,7 @@ type ConnectionInput = {
   enabled: boolean;
   leverage: number;
   margin_mode: string;
-  parameters: Record<string, unknown>;
+  parameters: RuntimeJsonObject;
 };
 export type CredentialInput = { api_key: string; secret: string; passphrase?: string };
 

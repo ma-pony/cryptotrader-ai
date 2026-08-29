@@ -3,14 +3,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
-import { useRuntimeConfig } from '@/hooks/use-runtime-config';
-import type { RuntimeDocument } from '@/types/api';
+import { toRuntimeDocument, useRuntimeConfig } from '@/hooks/use-runtime-config';
+import type { RuntimeDocument, RuntimeJsonObject } from '@/types/api';
 import { ComponentWeightCard, type ComponentWeightDraft } from './components/component-weight-card';
 import { DecisionSettingsCard, type DecisionSettingsDraft } from './components/decision-settings-card';
 
 const ACCENTS = ['#f59e0b', '#38bdf8', '#a78bfa', '#34d399', '#fb7185'];
 type Draft = DecisionSettingsDraft & {
-  components: Array<ComponentWeightDraft & { parameters: Record<string, unknown> }>;
+  components: Array<ComponentWeightDraft & { parameters: RuntimeJsonObject }>;
   models: Record<string, string>;
 };
 const fromDocument = (document: RuntimeDocument): Draft => ({
@@ -75,6 +75,10 @@ const StrategyPage = () => {
       setSaved(false);
     }
   };
+  const reload = async () => {
+    const result = await runtime.reload();
+    if (result.isSuccess && !result.error && result.data) setDraft(fromDocument(toRuntimeDocument(result.data.document)));
+  };
   const labels = useMemo(
     () => ({
       kronos: ['Kronos', '时序预测与市场结构信号'],
@@ -86,7 +90,7 @@ const StrategyPage = () => {
     <PageBoundary
       loading={runtime.isLoading}
       isError={runtime.isError}
-      onRetry={() => void runtime.reload()}
+      onRetry={() => void reload()}
       errorTitle="无法读取运行时配置"
       errorDescription="请检查配置服务后重试。"
     >
@@ -201,10 +205,7 @@ const StrategyPage = () => {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
-                  setDraft(undefined);
-                  void runtime.reload();
-                }}
+                onClick={() => void reload()}
               >
                 重新加载
               </Button>

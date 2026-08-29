@@ -2,7 +2,7 @@ import { FlaskConical, Save } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useVenueConnections } from '@/hooks/use-venue-connections';
-import type { RuntimeConfig, RuntimeDocument } from '@/types/api';
+import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/api';
 
 type Environment = 'paper' | 'demo' | 'testnet' | 'live';
 export type VenueDraft = {
@@ -13,7 +13,7 @@ export type VenueDraft = {
   enabled: boolean;
   leverage: number;
   margin_mode: string;
-  parameters: Record<string, unknown>;
+  parameters: RuntimeJsonObject;
 };
 const emptyDraft = (): VenueDraft => ({
   id: '',

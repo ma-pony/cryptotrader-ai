@@ -3,7 +3,7 @@ import { useMemo } from 'react';
 
 import { ApiError, apiClient } from '@/lib/api-client';
 import { RuntimeConfigSchema, type JsonValueOut } from '@/types/api.schema';
-import type { RuntimeConfig, RuntimeDocument } from '@/types/api';
+import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject, RuntimeJsonValue } from '@/types/api';
 import {
   clearRuntimeConfigConflict,
   setRuntimeConfigConflict,
@@ -12,8 +12,6 @@ import {
 
 export const RUNTIME_CONFIG_QUERY_KEY = ['runtime-config'] as const;
 
-type JsonPrimitive = null | boolean | number | string;
-export type RuntimeJsonValue = JsonPrimitive | RuntimeJsonValue[] | { [key: string]: RuntimeJsonValue };
 
 export const decodeJsonValue = (value: JsonValueOut): RuntimeJsonValue => {
   switch (value.kind) {
@@ -44,7 +42,7 @@ export const decodeJsonValue = (value: JsonValueOut): RuntimeJsonValue => {
   }
 };
 
-export const decodeEntries = (entries: { key: string; value: JsonValueOut }[]): Record<string, RuntimeJsonValue> =>
+export const decodeEntries = (entries: { key: string; value: JsonValueOut }[]): RuntimeJsonObject =>
   Object.fromEntries(entries.map((entry) => [entry.key, decodeJsonValue(entry.value)]));
 
 /** Converts response-only JsonValueOut envelopes to a plain writable document. */

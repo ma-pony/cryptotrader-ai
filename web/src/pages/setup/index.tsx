@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { Button } from '@/components/ui/button';
 import { decodeEntries, useRuntimeConfig } from '@/hooks/use-runtime-config';
-import type { RuntimeConfig, RuntimeDocument } from '@/types/api';
+import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/api';
 import { BookForm, newBook, validateBooks } from '@/pages/settings/execution-books/book-form';
 import { VenueForm } from '@/pages/settings/venues/venue-form';
 
@@ -52,6 +52,9 @@ const SetupEditor = ({
   const [signalError, setSignalError] = useState('');
   const [riskText, setRiskText] = useState(JSON.stringify(initialDocument.risk, null, 2));
   const [riskError, setRiskError] = useState('');
+  const [riskDirty, setRiskDirty] = useState(false);
+  const [llmAdvanced, setLlmAdvanced] = useState(JSON.stringify({ streaming_models: initialDocument.llm.streaming_models, retry: initialDocument.llm.retry, model_costs: initialDocument.llm.model_costs, timeout_seconds: initialDocument.llm.models.timeout_seconds }, null, 2));
+  const [llmError, setLlmError] = useState('');
   const [activationError, setActivationError] = useState('');
 
   const enabledConnections = draft.execution.connections.filter((connection) => connection.enabled);
@@ -78,11 +81,13 @@ const SetupEditor = ({
     bookErrors.length === 0 &&
     connectionsTested &&
     !marketDirty &&
-    !marketError;
+    !marketError &&
+    !riskDirty &&
+    !riskError;
 
   const applyMarketParameters = () => {
     try {
-      const parameters = JSON.parse(marketParameters) as Record<string, unknown>;
+      const parameters = JSON.parse(marketParameters) as RuntimeJsonObject;
       if (!parameters || Array.isArray(parameters) || typeof parameters !== 'object')
         throw new Error('object expected');
       setDraft((current) => ({ ...current, market_data: { ...current.market_data, parameters } }));
@@ -148,6 +153,9 @@ const SetupEditor = ({
           <label>默认温度<input aria-label="LLM 默认温度" type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label>超时<input aria-label="LLM 超时" type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
+          <label className="md:col-span-2">Streaming / retry / model costs JSON<textarea aria-label="LLM 高级 JSON" value={llmAdvanced} onChange={(event) => setLlmAdvanced(event.target.value)} className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
+          <Button type="button" variant="outline" onClick={() => { try { const value = JSON.parse(llmAdvanced) as { streaming_models: string[]; retry: RuntimeDocument['llm']['retry']; model_costs: RuntimeDocument['llm']['model_costs']; timeout_seconds: number }; if (!Array.isArray(value.streaming_models) || !value.retry || !Array.isArray(value.model_costs) || !Number.isInteger(value.timeout_seconds)) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); } catch { setLlmError('LLM 高级配置格式无效。'); } }}>应用高级配置</Button>
+          {llmError ? <p role="alert" className="text-sm text-trade-short">{llmError}</p> : null}
         </div>
       );
     }
@@ -198,7 +206,7 @@ const SetupEditor = ({
             <input aria-label="自定义 component 参数" value={customParameters} onChange={(event) => setCustomParameters(event.target.value)} placeholder="{}" className="h-10 rounded border bg-background px-3 font-mono" />
             <Button type="button" variant="outline" onClick={() => {
               try {
-                const id = customId.trim(); const parameters = JSON.parse(customParameters) as Record<string, unknown>;
+                const id = customId.trim(); const parameters = JSON.parse(customParameters) as RuntimeJsonObject;
                 if (!id || draft.signals.components.some((component) => component.component_id === id) || !parameters || Array.isArray(parameters)) throw new Error();
                 setDraft((current) => ({ ...current, signals: { ...current.signals, components: [...current.signals.components, { component_id: id, enabled: false, weight: 0, parameters }] } }));
                 setCustomId(''); setCustomParameters('{}'); setSignalError('');
@@ -368,8 +376,8 @@ const SetupEditor = ({
               className="ml-2 h-9 rounded border bg-background px-2"
             />
           </label>
-          <label className="md:col-span-2">完整风控 JSON（position/loss/cooldown/volatility/exchange/rate_limit）<textarea aria-label="完整风控 JSON" value={riskText} onChange={(event) => setRiskText(event.target.value)} className="mt-1 min-h-36 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
-          <Button type="button" variant="outline" onClick={() => { try { const risk = JSON.parse(riskText) as RuntimeDocument['risk']; if (!risk || Array.isArray(risk)) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); } catch { setRiskError('风控配置必须是 JSON 对象。'); } }}>应用完整风控配置</Button>
+          <label className="md:col-span-2">完整风控 JSON（position/loss/cooldown/volatility/exchange/rate_limit）<textarea aria-label="完整风控 JSON" value={riskText} onChange={(event) => { setRiskText(event.target.value); setRiskDirty(true); }} className="mt-1 min-h-36 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
+          <Button type="button" variant="outline" onClick={() => { try { const risk = JSON.parse(riskText) as RuntimeDocument['risk']; if (!risk || Array.isArray(risk)) throw new Error(); setDraft((current) => ({ ...current, risk })); setRiskError(''); setRiskDirty(false); } catch { setRiskError('风控配置必须是 JSON 对象。'); } }}>应用完整风控配置</Button>
           {riskError ? <p role="alert" className="text-sm text-trade-short">{riskError}</p> : null}
         </div>
       );
