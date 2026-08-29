@@ -21,6 +21,20 @@ class StepResult:
         return f"{message}\n  ERROR: {self.error}" if self.error else message
 
 
+@dataclass
+class StagingRuntime:
+    """只持有一次只读配置快照和候选注册表，不持有长期 session。"""
+
+    repository: object
+    snapshot: object
+    signal_registry: object | None = None
+    venue_registry: object | None = None
+    market_registry: object | None = None
+
+    async def close(self) -> None:
+        """保持门禁统一的 finally 所有权边界；连接已由第三步逐个关闭。"""
+
+
 def run_step(idx: int, name: str, fn: Callable[[], None]) -> StepResult:
     started = time.monotonic()
     try:
@@ -41,7 +55,7 @@ async def _load_runtime_config():
     snapshot = await repository.get_existing()
     if snapshot.setup_required:
         raise RuntimeError("runtime configuration is not active")
-    return type("StagingRuntime", (), {"repository": repository, "snapshot": snapshot})()
+    return StagingRuntime(repository=repository, snapshot=snapshot)
 
 
 async def _check_runtime_health(runtime) -> None:

@@ -8,6 +8,7 @@ import json
 from dataclasses import asdict
 
 import pytest
+from sqlalchemy import text
 
 from tests.factories.runtime_config import active_document, runtime_document
 
@@ -44,6 +45,115 @@ async def test_get_or_create_is_stable_and_round_trips_the_exact_document(reposi
     assert loaded == saved
     assert loaded.document == document
     assert loaded.document.model_dump(mode="json") == document.model_dump(mode="json")
+
+
+async def test_get_existing_never_creates_schema_or_default_row(tmp_path):
+    from cryptotrader.db import get_async_session
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository, RuntimeConfigUnavailable
+    from cryptotrader.runtime_config.secrets import CredentialVault
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'empty.db'}"
+    repo = RuntimeConfigRepository(url, CredentialVault(base64.urlsafe_b64encode(b"s" * 32).decode()))
+    with pytest.raises(RuntimeConfigUnavailable):
+        await repo.get_existing()
+    session = await get_async_session(url)
+    try:
+        names = await session.scalars(text("SELECT name FROM sqlite_master WHERE type='table'"))
+        assert set(names) == set()
+    finally:
+        await session.close()
+
+
+async def test_get_existing_preserves_empty_runtime_tables(repository):
+    from cryptotrader.db import get_async_session
+    from cryptotrader.runtime_config.repository import RuntimeConfigUnavailable
+
+    await repository.ensure_tables()
+    session = await get_async_session(repository.database_url)
+    try:
+        names = set(await session.scalars(text("SELECT name FROM sqlite_master WHERE type='table'")))
+        before = tuple(
+            await session.execute(
+                text("SELECT (SELECT count(*) FROM runtime_config), (SELECT count(*) FROM runtime_credentials)")
+            )
+        )
+    finally:
+        await session.close()
+
+    with pytest.raises(RuntimeConfigUnavailable):
+        await repository.get_existing()
+
+    session = await get_async_session(repository.database_url)
+    try:
+        after = tuple(
+            await session.execute(
+                text("SELECT (SELECT count(*) FROM runtime_config), (SELECT count(*) FROM runtime_credentials)")
+            )
+        )
+    finally:
+        await session.close()
+
+    assert {"runtime_config", "runtime_credentials"} <= names
+    assert before == ((0, 0),)
+    assert after == before
+
+
+async def test_get_existing_preserves_existing_document_and_credentials(repository):
+    from cryptotrader.db import get_async_session
+    from cryptotrader.runtime_config.repository import LLM_GATEWAY_CREDENTIAL_REF
+    from cryptotrader.runtime_config.secrets import TokenPayload
+
+    first = await repository.get_or_create()
+    configured = await repository.put_token(
+        first.revision,
+        LLM_GATEWAY_CREDENTIAL_REF,
+        TokenPayload(token="staging-token"),
+    )
+    before_document = configured.document.model_dump(mode="json")
+    session = await get_async_session(repository.database_url)
+    try:
+        before_rows = tuple(
+            await session.execute(
+                text(
+                    "SELECT "
+                    "(SELECT revision FROM runtime_config WHERE id = 'global'), "
+                    "(SELECT document FROM runtime_config WHERE id = 'global'), "
+                    "(SELECT count(*) FROM runtime_config), "
+                    "(SELECT count(*) FROM runtime_credentials), "
+                    "(SELECT encrypted_payload FROM runtime_credentials "
+                    "WHERE credential_ref = :credential_ref)"
+                ),
+                {"credential_ref": LLM_GATEWAY_CREDENTIAL_REF},
+            )
+        )
+    finally:
+        await session.close()
+
+    loaded = await repository.get_existing()
+
+    session = await get_async_session(repository.database_url)
+    try:
+        after_rows = tuple(
+            await session.execute(
+                text(
+                    "SELECT "
+                    "(SELECT revision FROM runtime_config WHERE id = 'global'), "
+                    "(SELECT document FROM runtime_config WHERE id = 'global'), "
+                    "(SELECT count(*) FROM runtime_config), "
+                    "(SELECT count(*) FROM runtime_credentials), "
+                    "(SELECT encrypted_payload FROM runtime_credentials "
+                    "WHERE credential_ref = :credential_ref)"
+                ),
+                {"credential_ref": LLM_GATEWAY_CREDENTIAL_REF},
+            )
+        )
+    finally:
+        await session.close()
+
+    assert loaded.revision == configured.revision
+    assert loaded.document.model_dump(mode="json") == before_document
+    assert (await repository.reveal_token(LLM_GATEWAY_CREDENTIAL_REF)).token == "staging-token"
+    assert after_rows == before_rows
 
 
 async def test_replace_is_compare_and_swap_and_increments_revision(repository):
