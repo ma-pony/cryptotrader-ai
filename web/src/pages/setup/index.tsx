@@ -132,6 +132,12 @@ const SetupEditor = ({
       (connection) =>
         tested[connection.id] === testFingerprint(connection, runtime.credentialStates[connection.id]?.updatedAt),
     );
+  const llmCommitteeEnabled = draft.signals.components.some(
+    (component) => component.enabled && component.component_id === 'llm_committee',
+  );
+  const credentialReady =
+    (!draft.security.enabled || runtime.secretStates.apiAccess.configured) &&
+    (!llmCommitteeEnabled || runtime.secretStates.llmGateway.configured);
   const ready =
     signalValid &&
     draft.execution.books.some((book) => book.enabled) &&
@@ -144,6 +150,7 @@ const SetupEditor = ({
     !llmAdvancedDirty &&
     !llmError &&
     !Object.values(componentParameterErrors).some(Boolean) &&
+    credentialReady &&
     !runtime.conflict;
 
   const applyMarketParameters = () => {
@@ -501,6 +508,13 @@ const SetupEditor = ({
       );
     return (
       <div className="space-y-3">
+        {runtime.applyStatus !== 'applied' ? (
+          <p role="alert" className="text-sm text-trade-short">
+            {runtime.applyStatus === 'pending'
+              ? t('apply.pending')
+              : t('apply.failed', { error: t('apply.unknown') })}
+          </p>
+        ) : null}
         <p className={ready ? 'text-trade-long' : 'text-trade-short'}>
           {ready
             ? t('wizard.ready')
@@ -510,6 +524,7 @@ const SetupEditor = ({
           <CheckCircle2 className="h-4 w-4" />
           {t('activate')}
         </Button>
+        {!credentialReady ? <p role="alert" className="text-sm text-trade-short">{t('activationRequired')}</p> : null}
         <label className="block text-sm">{t('runtimeSecrets.api')}
           <input aria-label={t('runtimeSecrets.api')} type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" />
         </label>

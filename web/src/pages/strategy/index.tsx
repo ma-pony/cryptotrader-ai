@@ -127,6 +127,13 @@ const StrategyPage = () => {
             }
           />
           <p className="text-xs text-muted-foreground">{t('strategy:runtime.updated_at', { time: runtime.updatedAt ?? '—' })}</p>
+          {runtime.applyStatus !== 'applied' ? (
+            <p role="alert" className="text-sm text-trade-short">
+              {runtime.applyStatus === 'pending'
+                ? t('configuration:apply.pending')
+                : t('configuration:apply.failed', { error: t('configuration:apply.unknown') })}
+            </p>
+          ) : null}
           <section className="relative overflow-hidden rounded-2xl border border-border bg-card p-6">
             <div className="flex items-end justify-between gap-4">
               <div>

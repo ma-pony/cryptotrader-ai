@@ -1,8 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import { JsonValueSchema, RuntimeBookSchema, RuntimeConfigSchema, RuntimeConnectionSchema } from '@/types/api.schema';
+import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 import { assertRuntimeJsonDocument, decodeJsonValue, toRuntimeDocument } from './use-runtime-config';
 
 describe('runtime config response decoder', () => {
+  it('requires explicit desired-versus-applied status rather than treating a saved revision as active', () => {
+    const applied = runtimeConfigFixture({ apply_status: 'applied', applied_revision: 1, apply_error: null });
+    expect(RuntimeConfigSchema.safeParse(applied).success).toBe(true);
+    expect(RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'pending' }).success).toBe(true);
+    expect(RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'active' }).success).toBe(false);
+    expect(RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'failed', applied_revision: null, apply_error: null }).success).toBe(true);
+  });
   it('rejects every semantically impossible JsonValue envelope field', () => {
     const base = { kind: 'null', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [], entries: [] };
     expect(JsonValueSchema.safeParse({ ...base, boolean_value: false }).success).toBe(false);

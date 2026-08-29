@@ -419,6 +419,9 @@ export const RuntimeConfigSchema = strictRecord({
   revision: z.number().int(),
   updated_at: z.string(),
   setup_required: z.boolean(),
+  apply_status: z.enum(['pending', 'applied', 'failed']),
+  applied_revision: z.number().int().nullable(),
+  apply_error: z.string().nullable(),
   document: RuntimeDocumentSchema,
 });
 export const VenueMutationSchema = strictRecord({ revision: z.number().int(), connection: RuntimeConnectionSchema });

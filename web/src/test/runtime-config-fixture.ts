@@ -1,7 +1,7 @@
 import { RuntimeConfigSchema } from '@/types/api.schema';
 
 export const runtimeConfigFixture = (overrides: Record<string, unknown> = {}) => RuntimeConfigSchema.parse({
-  revision: 1, updated_at: '2026-08-28T00:00:00Z', setup_required: false,
+  revision: 1, updated_at: '2026-08-28T00:00:00Z', setup_required: false, apply_status: 'applied', applied_revision: 1, apply_error: null,
   document: {
     system: { active: true }, security: { enabled: false, access_credential_configured: false, access_credential_updated_at: null }, market_data: { source_id: 'binance', parameters: [] },
     llm: { base_url: 'https://gateway.example', streaming_models: [], default_temperature: 0.2, timeout: 30, prompt_caching: false, retry: { max_attempts: 1, retry_base_delay_s: 1, retry_backoff_factor: 2, retry_jitter: false }, model_costs: [], models: { analysis: 'analysis', debate: 'debate', committee_summary: 'summary', tech_agent: 'tech', chain_agent: 'chain', news_agent: 'news', macro_agent: 'macro', fallback: 'fallback', timeout_seconds: 30 }, gateway_credential_configured: false, gateway_credential_updated_at: null },
