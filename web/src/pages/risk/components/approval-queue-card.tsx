@@ -20,7 +20,9 @@ export const ApprovalQueueCard = () => {
       {outcome ? (
         <div className="rounded border border-amber-500 bg-amber-500/10 p-3 text-sm">
           <p>
-            {outcome.approval_status} · {outcome.cycle_status} · {outcome.execution_status}
+            {t(`hitl.outcome_status.${outcome.approval_status}`, { defaultValue: outcome.approval_status })} ·{' '}
+            {t(`hitl.outcome_status.${outcome.cycle_status}`, { defaultValue: outcome.cycle_status })} ·{' '}
+            {t(`hitl.outcome_status.${outcome.execution_status}`, { defaultValue: outcome.execution_status })}
           </p>
           {outcome.requires_attention ? <p className="font-medium">{t('hitl.requires_attention')}</p> : null}
           <Link className="underline" to={`/cycles/${outcome.cycle_id}`}>

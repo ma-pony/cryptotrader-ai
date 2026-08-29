@@ -44,6 +44,8 @@
     "frozen_book_plan": "冻结的账本提案",
     "scope": "资金范围",
     "status": "状态",
+    "created_at": "创建时间",
+    "decided_at": "决策时间",
     "requested": "请求敞口",
     "target": "目标敞口",
     "risk": "风控",
@@ -59,10 +61,12 @@
     "reduce_only": "只减仓",
     "market": "市场",
     "protection": "保护",
+    "old_protections": "既有保护单",
     "capabilities": "能力",
     "view_cycle": "查看周期",
     "dismiss": "关闭",
     "requires_attention": "需要关注",
-    "response_error": "审批响应失败，请求仍处于待处理状态。"
+    "response_error": "审批响应失败，请求仍处于待处理状态。",
+    "outcome_status": { "approved": "已批准", "rejected": "已拒绝", "partial": "部分完成", "completed": "已完成", "failed": "失败" }
   }
 }

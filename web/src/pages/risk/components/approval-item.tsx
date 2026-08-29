@@ -66,6 +66,17 @@ export const ApprovalItem = ({ approval, onOutcome }: Props) => {
                 {t('hitl.scope')}: {proposal.capital_scope}
               </div>
               <div>
+                {t('hitl.status')}: {approval.status}
+              </div>
+              <div>
+                {t('hitl.created_at')}: {approval.created_at}
+              </div>
+              {approval.decided_at ? (
+                <div>
+                  {t('hitl.decided_at')}: {approval.decided_at}
+                </div>
+              ) : null}
+              <div>
                 {t('hitl.requested')}: {proposal.requested_target_exposure}
               </div>
               <div>
@@ -106,6 +117,9 @@ export const ApprovalItem = ({ approval, onOutcome }: Props) => {
                   </div>
                   <div>
                     {t('hitl.protection')}: {plan.stop_loss}/{plan.take_profit}
+                  </div>
+                  <div>
+                    {t('hitl.old_protections')}: {plan.old_protection_ids.join(', ') || '—'}
                   </div>
                   <div>
                     {t('hitl.capabilities')}: {plan.capabilities.market_types.join(', ')} ·{' '}

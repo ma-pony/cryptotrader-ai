@@ -7,8 +7,7 @@ import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/cn';
-import { useMultiVenueCycle } from '@/hooks/use-multi-venue-cycles';
-import { useDecisions } from '@/hooks/use-decisions';
+import { useMultiVenueCycle, useMultiVenueCycles } from '@/hooks/use-multi-venue-cycles';
 import type { CommitteeDebateTurn, Cycle } from '@/types/api';
 import { decodeEntries } from '@/hooks/use-runtime-config';
 
@@ -60,8 +59,13 @@ const toScenario = (d: Cycle): DebateScenario | null => {
   const analyses = details.analyses ? Object.values(details.analyses) : [];
   const groupedInitial = new Map<AgentKind, { dir: NormalizedDir; conf: number }>();
 
-  // Initial positions = before-state of each agent's first-round turn; fall
-  // back to agent_analyses when no turns exist (skipped debate).
+  // The committee analyses are the complete initial panel. A first-round turn
+  // can involve only the agents selected to challenge each other, so it must
+  // never make the other two initial stances disappear from the audit view.
+  for (const a of analyses) {
+    const kind = normalizeKind(a.agent_id);
+    groupedInitial.set(kind, { dir: normalizeDir(a.direction), conf: a.confidence });
+  }
   for (const t of turnsApi) {
     if (t.round !== 1) continue;
     const kind = normalizeKind(t.from);
@@ -70,13 +74,6 @@ const toScenario = (d: Cycle): DebateScenario | null => {
         dir: normalizeDir(t.before.direction),
         conf: t.before.confidence,
       });
-    }
-  }
-  if (groupedInitial.size === 0) {
-    for (const a of analyses) {
-      const kind = normalizeKind(a.agent_id);
-      const dir = normalizeDir(a.direction);
-      groupedInitial.set(kind, { dir, conf: a.confidence });
     }
   }
 
@@ -93,7 +90,7 @@ const toScenario = (d: Cycle): DebateScenario | null => {
       turns: turns.map((t) => ({
         from: normalizeKind(t.from),
         to: t.to ? normalizeKind(t.to) : null,
-        critique: t.reasoning || t.new_findings || '（无论点文本）',
+        critique: [t.reasoning, t.new_findings].filter(Boolean).join(' · ') || '（无论点文本）',
         dir: normalizeDir(t.after.direction),
         conf: t.after.confidence,
         move: t.move,
@@ -161,13 +158,13 @@ const DebateEmpty = ({ message }: { message: string }) => (
 const DebateContent = () => {
   const navigate = useNavigate();
   const { cycleId } = useParams<{ cycleId?: string }>();
-  const decisions = useDecisions({ page: 1, size: 20 });
+  const cycles = useMultiVenueCycles(1, 20);
 
   const targetCycleId = useMemo(() => {
     if (cycleId) return cycleId;
-    const items = decisions.data?.items ?? [];
+    const items = cycles.data?.items ?? [];
     return items[0]?.cycle_id;
-  }, [cycleId, decisions.data]);
+  }, [cycleId, cycles.data]);
 
   const detail = useMultiVenueCycle(targetCycleId);
 
@@ -179,7 +176,7 @@ const DebateContent = () => {
     [detail.data],
   );
 
-  if (decisions.isLoading || detail.isLoading) {
+  if (cycles.isLoading || detail.isLoading) {
     return <Skeleton className="h-96 w-full" />;
   }
 
