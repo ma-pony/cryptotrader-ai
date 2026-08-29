@@ -17,7 +17,9 @@ from cryptotrader.runtime_config.models import (
     ExecutionConfig,
     InfrastructureConfig,
     RuntimeConfigSnapshot,
+    SchedulerConfig,
     SystemConfig,
+    TriggerConfig,
 )
 from cryptotrader.runtime_config.repository import CredentialState
 from cryptotrader.venues.models import VenueConnection
@@ -720,6 +722,86 @@ async def test_application_protocol_starts_real_owner_factories_for_pending_grap
     assert runtime.snapshot == applied
     assert runtime.cycle is not None
     assert runtime.cycle.snapshot.revision == 8
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_published_revision_replaces_api_scheduler_with_its_new_runtime_schedule(monkeypatch):
+    """The API-owned scheduler must be reconstructed from the published revision."""
+    from api import main as api_main
+    from api.routes.config import publish_pending_snapshot
+    from cryptotrader.scheduler import Scheduler
+
+    runtime, repository, _, _ = await _build(_document(_connection("paper-a")))
+    revised_document = runtime.snapshot.document.model_copy(
+        update={
+            "scheduler": SchedulerConfig(
+                enabled=True,
+                pairs=("ETH/USDT:USDT", "SOL/USDT:USDT"),
+                interval_minutes=90,
+                daily_summary_hour=13,
+            ),
+            "triggers": TriggerConfig(
+                enabled=True,
+                max_rules=9,
+                ws_reconnect_max_s=17,
+                funding_rate_poll_interval_minutes=11,
+            ),
+        }
+    )
+    pending = RuntimeConfigSnapshot(8, revised_document, NOW + timedelta(seconds=1), "pending", 7)
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+    stopped: list[str] = []
+
+    class OldScheduler:
+        def stop(self):
+            stopped.append("scheduler")
+
+    class OldTrigger:
+        async def stop(self):
+            stopped.append("trigger")
+
+    async def wait_for_stop(self):
+        self._stop_event = asyncio.Event()
+        await self._stop_event.wait()
+
+    async def install_trigger(_app, *, snapshot=None):
+        _app.state.trigger_engine = SimpleNamespace(config=snapshot.document.triggers, stop=OldTrigger().stop)
+        _app.state.trigger_store = object()
+
+    monkeypatch.setattr(Scheduler, "start", wait_for_stop)
+    monkeypatch.setattr(api_main, "_init_trigger_engine", install_trigger)
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtime=runtime,
+            scheduler=OldScheduler(),
+            scheduler_task=asyncio.create_task(asyncio.sleep(0)),
+            trigger_engine=OldTrigger(),
+            trigger_store=object(),
+        )
+    )
+    await app.state.scheduler_task
+
+    async with runtime.application_barrier():
+        applied = await publish_pending_snapshot(
+            runtime,
+            pending,
+            lambda snapshot: api_main._refresh_runtime_owners(app, snapshot=snapshot),
+            candidate,
+        )
+
+    scheduler = app.state.scheduler
+    assert stopped == ["scheduler", "trigger"]
+    assert scheduler.config_revision == 8
+    assert tuple(pair.canonical() for pair in scheduler.pairs) == ("ETH/USDT:USDT", "SOL/USDT:USDT")
+    assert scheduler.interval_minutes == 90
+    assert scheduler.daily_summary_hour == 13
+    assert scheduler.config == applied.document.scheduler
+    assert app.state.trigger_engine.config == applied.document.triggers
+    assert app.state.trigger_store is not None
+
+    await api_main._clear_runtime_owners(app)
     await runtime.close()
 
 
