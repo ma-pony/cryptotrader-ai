@@ -165,6 +165,16 @@ async def test_okx_canary_client_order_id_uses_the_strict_common_platform_format
 
 
 @pytest.mark.asyncio
+async def test_okx_spot_order_keeps_the_common_client_order_identifier():
+    _, session, factory = await _connect()
+    await session.place_order(
+        OrderIntent(Pair.parse("BTC/USDT"), "buy", Decimal("0.1"), "market", None, False, "CTSPOTOKXO")
+    )
+    request = next(payload for name, payload in factory.clients[-1].calls if name == "create_order")
+    assert request[5] == {"clOrdId": "CTSPOTOKXO"}
+
+
+@pytest.mark.asyncio
 async def test_minimum_amount_never_rounds_below_platform_amount_or_cost_limit():
     _, session, factory = await _connect()
     client = factory.clients[-1]

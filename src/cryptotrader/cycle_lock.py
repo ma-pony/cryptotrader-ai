@@ -74,16 +74,21 @@ async def execution_pair_lease(redis_url: str, pair: str) -> AsyncIterator[None]
     canonical_pair = Pair.parse(pair).canonical()
     redis_state = RedisStateManager(redis_url)
     lease = cycle_lock(redis_state, canonical_pair)
+    entered = False
+
+    async def finalize() -> None:
+        if entered:
+            await lease.__aexit__(None, None, None)
+        await redis_state.aclose()
+
     try:
         try:
             acquired = await lease.__aenter__()
+            entered = True
         except RuntimeError as error:
             raise ExecutionLeaseUnavailableError(str(error)) from error
         if not acquired:
             raise ExecutionLeaseUnavailableError(f"execution lease held for {canonical_pair}")
-        try:
-            yield
-        finally:
-            await wait_for_owned(lease.__aexit__(None, None, None))
+        yield
     finally:
-        await wait_for_owned(redis_state.aclose())
+        await wait_for_owned(finalize())

@@ -153,28 +153,83 @@ async def _confirmed_order(session, pair: Pair, order, client_order_id: str):  #
     raise CanarySafetyError("canary order fill is not confirmed")
 
 
+def _protection_matches(spec: ProtectionSpec, protection) -> bool:
+    """Claim a lost protection response only with an exact dedicated-account match."""
+    return (
+        protection.pair == spec.pair
+        and protection.position_side == spec.position_side
+        and protection.amount == spec.amount
+        and protection.stop_loss == spec.stop_loss
+        and protection.take_profit == spec.take_profit
+    )
+
+
+async def _recover_protection_ids(session, pair: Pair, spec: ProtectionSpec) -> tuple[str, ...] | None:
+    """Boundedly recover an accepted protection whose response was lost."""
+    for attempt in range(_ORDER_POLL_ATTEMPTS):
+        state = await session.list_open_state(pair)
+        matches = tuple(item for item in state.protections if _protection_matches(spec, item))
+        if len(matches) == 1:
+            return tuple(matches[0].protection_ids)
+        if len(matches) > 1:
+            return None
+        if attempt + 1 < _ORDER_POLL_ATTEMPTS:
+            await asyncio.sleep(_ORDER_POLL_SECONDS)
+    return None
+
+
+def _record_order(ledger: dict[str, Any], order) -> None:
+    """Keep cumulative fills monotonic while replacing the order state view."""
+    if order is not None and order.client_order_id is not None:
+        prior = ledger.get(order.client_order_id)
+        if prior is None or order.filled_amount >= prior.filled_amount:
+            ledger[order.client_order_id] = order
+
+
+def _owned_exposure(ledger: Mapping[str, Any]) -> Decimal:
+    return sum(
+        (order.filled_amount if order.side == "buy" else -order.filled_amount for order in ledger.values()),
+        Decimal("0"),
+    )
+
+
 async def _cleanup_owned(  # noqa: C901 - bounded cleanup state machine
     session,
     pair: Pair,
     *,
     allowed_client_order_ids: frozenset[str],
-    owned_exposure: Decimal,
+    fill_ledger: dict[str, Any],
     cleanup_client_order_id: str,
     protection_ids: tuple[str, ...],
+    expected_protection: ProtectionSpec | None,
 ) -> dict[str, Any]:
     """Cancel and close only objects positively tagged as belonging to this run."""
     errors: list[str] = []
     attention = False
     try:
+        if expected_protection is not None and not protection_ids:
+            recovered = await _recover_protection_ids(session, pair, expected_protection)
+            if recovered is None:
+                # Unknown protections are never guessed/cancelled, but known
+                # client-id orders and the dedicated account position still
+                # need exact reduce-only cleanup.
+                attention = True
+                errors.append("UnknownProtectionOwnership")
+            else:
+                protection_ids = recovered
         state = await session.list_open_state(pair)
         owned_open = tuple(order for order in state.open_orders if order.client_order_id in allowed_client_order_ids)
+        order_cancel_failed = False
+        for order in owned_open:
+            _record_order(fill_ledger, order)
         for order in owned_open:
             try:
                 await session.cancel_order(order.id, pair)
             except Exception as error:
                 attention = True
+                order_cancel_failed = True
                 errors.append(type(error).__name__)
-        if owned_open and attention:
+        if order_cancel_failed:
             raise CanarySafetyError("owned pending orders could not be cancelled")
         if owned_open:
             confirmed = await session.list_open_state(pair)
@@ -186,7 +241,20 @@ async def _cleanup_owned(  # noqa: C901 - bounded cleanup state machine
             except Exception as error:
                 attention = True
                 errors.append(type(error).__name__)
-        if owned_exposure:
+        # Also recover a timed-out acknowledgement that only became visible
+        # during finalization.  Each client id is overwritten, never summed.
+        for client_order_id in allowed_client_order_ids:
+            try:
+                observed = await _find_owned_order(session, pair, client_order_id)
+            except Exception as error:
+                # The ledger may already have a positively confirmed fill;
+                # an unavailable historical-order query cannot erase it.
+                attention = True
+                errors.append(type(error).__name__)
+            else:
+                _record_order(fill_ledger, observed)
+        owned_exposure = _owned_exposure(fill_ledger)
+        if owned_exposure > 0:
             state = await session.list_open_state(pair)
             if state.position.signed_amount != owned_exposure:
                 attention = True
@@ -196,7 +264,8 @@ async def _cleanup_owned(  # noqa: C901 - bounded cleanup state machine
                     OrderIntent(pair, "sell", owned_exposure, "market", None, True, cleanup_client_order_id)
                 )
                 closed = await _confirmed_order(session, pair, closing, cleanup_client_order_id)
-                owned_exposure -= min(owned_exposure, closed.filled_amount)
+                _record_order(fill_ledger, closed)
+                owned_exposure = _owned_exposure(fill_ledger)
                 if owned_exposure:
                     attention = True
                     errors.append("UnclosedOwnedExposure")
@@ -212,6 +281,21 @@ async def _cleanup_owned(  # noqa: C901 - bounded cleanup state machine
     return {**residual, "cleanup_errors": errors, "requires_attention": attention or residual["requires_attention"]}
 
 
+async def _cleanup_and_close(session, pair: Pair, **kwargs: Any) -> dict[str, Any]:
+    """One owned finalizer: cancellation cannot strand an open transport session."""
+    cleanup: dict[str, Any]
+    try:
+        cleanup = await _cleanup_owned(session, pair, **kwargs)
+    except BaseException as error:
+        cleanup = {"cleanup_errors": [type(error).__name__], "requires_attention": True}
+    try:
+        await session.close()
+    except BaseException as error:
+        cleanup["close_error"] = type(error).__name__
+        cleanup["requires_attention"] = True
+    return cleanup
+
+
 async def run_simulated_canary(session, pair: Pair, *, close_session: bool = True) -> dict[str, Any]:  # noqa: C901 - bounded safety procedure
     """Run writes only against a session already proven simulated by the caller."""
     result: dict[str, Any] = {"status": "failed", "started_at": datetime.now(UTC), "steps": []}
@@ -221,7 +305,8 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
     close_client_order_id = f"{client_order_prefix}C"
     cleanup_client_order_id = f"{client_order_prefix}X"
     owned_protection_ids: tuple[str, ...] = ()
-    owned_exposure = Decimal("0")
+    expected_protection: ProtectionSpec | None = None
+    fill_ledger: dict[str, Any] = {}
     try:
         await session.fetch_portfolio(pair)
         quote = await session.fetch_quote(pair)
@@ -235,18 +320,20 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")
         canary_write_attempted = True
         try:
-            opened = await session.place_order(
+            raw_opened = await session.place_order(
                 OrderIntent(pair, "buy", amount, "market", None, False, open_client_order_id)
             )
-            opened = await _confirmed_order(session, pair, opened, open_client_order_id)
         except Exception:
-            opened = await _find_owned_order(session, pair, open_client_order_id)
-            if opened is None:
+            raw_opened = await _find_owned_order(session, pair, open_client_order_id)
+            if raw_opened is None:
                 raise
-        owned_exposure = opened.filled_amount
+        # A recovered acknowledgement is still subject to the same bounded
+        # confirmation/cancellation state machine; never promote it directly.
+        opened = await _confirmed_order(session, pair, raw_opened, open_client_order_id)
+        _record_order(fill_ledger, opened)
         result["open_order_id"] = opened.id
         result["steps"].append("open_minimum_position")
-        protection = await session.replace_protection(
+        expected_protection = await session.normalize_protection(
             ProtectionSpec(
                 pair,
                 "long",
@@ -255,6 +342,7 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
                 quote.last * Decimal("1.02"),
             )
         )
+        protection = await session.replace_protection(expected_protection)
         owned_protection_ids = tuple(protection.protection_ids)
         result["protection_ids"] = owned_protection_ids
         result["steps"].append("install_protection")
@@ -268,11 +356,11 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
             OrderIntent(pair, "sell", opened.filled_amount, "market", None, True, close_client_order_id)
         )
         closing = await _confirmed_order(session, pair, closing, close_client_order_id)
-        owned_exposure -= min(owned_exposure, closing.filled_amount)
-        if not owned_exposure:
+        _record_order(fill_ledger, closing)
+        if _owned_exposure(fill_ledger) == 0:
             await session.cancel_protection(owned_protection_ids)
         result["steps"].append("reduce_only_close_and_cancel")
-        if not owned_exposure:
+        if _owned_exposure(fill_ledger) == 0:
             result["status"] = "completed"
     except Exception as error:
         result["error_type"] = type(error).__name__
@@ -280,22 +368,23 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
         if canary_write_attempted:
             cleanup = await wait_for_owned(
                 asyncio.create_task(
-                    _cleanup_owned(
+                    _cleanup_and_close(
                         session,
                         pair,
                         allowed_client_order_ids=frozenset(
                             {open_client_order_id, close_client_order_id, cleanup_client_order_id}
                         ),
-                        owned_exposure=owned_exposure,
+                        fill_ledger=fill_ledger,
                         cleanup_client_order_id=cleanup_client_order_id,
                         protection_ids=owned_protection_ids,
+                        expected_protection=expected_protection,
                     )
                 )
             )
             result.update(cleanup)
         else:
             result.update(await inspect_residual(session, pair))
-        if close_session:
+        if close_session and not canary_write_attempted:
             try:
                 await wait_for_owned(asyncio.create_task(session.close()))
             except Exception as error:
@@ -384,17 +473,33 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
         finally:
             await wait_for_owned(asyncio.create_task(session.close()))
     require_canary_only(connection)
+    if pair.market_type != "swap":
+        raise CanarySafetyError("simulated write canary requires a swap pair")
     result: dict[str, Any] = {"status": "failed", "requires_attention": True}
+    cancellation: asyncio.CancelledError | None = None
     try:
         async with execution_pair_lease(snapshot.document.infrastructure.redis_url, pair.canonical()):
             session = await _open_connection(connection, repository)
             result = await run_simulated_canary(session, pair)
+    except asyncio.CancelledError as error:
+        # The lease context has already completed its cancellation-owned exit;
+        # preserve the original cancellation after independent read-only audit.
+        cancellation = error
+        result = {"status": "failed", "requires_attention": True, "error_type": type(error).__name__}
     except Exception as error:
         result = {"status": "failed", "requires_attention": True, "error_type": type(error).__name__}
     result.update(
         {"connection_id": connection.id, "environment": connection.environment, "config_revision": snapshot.revision}
     )
-    return merge_audit_result(result, await audit_in_subprocess(connection.id, pair.canonical()))
+    try:
+        audit = await wait_for_owned(asyncio.create_task(audit_in_subprocess(connection.id, pair.canonical())))
+    except asyncio.CancelledError as error:
+        cancellation = cancellation or error
+        audit = {"audit_status": "failed", "requires_attention": True}
+    merged = merge_audit_result(result, audit)
+    if cancellation is not None:
+        raise cancellation
+    return merged
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -13,6 +13,7 @@ from cryptotrader.venues.models import (
     NormalizedOrder,
     OpenVenueState,
     OrderIntent,
+    ProtectionSpec,
     ProtectionState,
     VenueCapabilities,
     VenueQuote,
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
 
     from cryptotrader.pair import Pair
-    from cryptotrader.venues.models import ProtectionSpec, VenueConnection
+    from cryptotrader.venues.models import VenueConnection
 
 
 def create_async_client(adapter_id: str, config: dict[str, Any], client_factory: Callable | None = None) -> Any:
@@ -411,6 +412,13 @@ class CcxtVenueBase:
 
     async def _order_params(self, intent: OrderIntent) -> dict[str, Any]:
         raise NotImplementedError
+
+    async def normalize_protection(self, spec: ProtectionSpec) -> ProtectionSpec:
+        """Return the exact platform-neutral values later exposed by readback."""
+        amount = await self.normalize_amount(spec.pair, spec.amount)
+        stop_loss = await self._price_to_venue(spec.pair, spec.stop_loss) if spec.stop_loss is not None else None
+        take_profit = await self._price_to_venue(spec.pair, spec.take_profit) if spec.take_profit is not None else None
+        return ProtectionSpec(spec.pair, spec.position_side, amount, stop_loss, take_profit)
 
     async def _configure_market(self, pair: Pair, market: dict[str, Any]) -> None:
         raise NotImplementedError

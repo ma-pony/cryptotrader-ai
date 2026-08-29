@@ -49,6 +49,16 @@ async def test_bybit_uses_unified_account_order_params_for_hedge_position():
 
 
 @pytest.mark.asyncio
+async def test_bybit_spot_order_keeps_the_common_client_order_identifier():
+    _, session, factory = await _connect()
+    await session.place_order(
+        OrderIntent(Pair.parse("BTC/USDT"), "buy", Decimal("0.1"), "market", None, False, "CTSPOTBYBITO")
+    )
+    create = next(payload for name, payload in factory.clients[-1].calls if name == "create_order")
+    assert create[5] == {"orderLinkId": "CTSPOTBYBITO"}
+
+
+@pytest.mark.asyncio
 async def test_bybit_uses_official_zero_position_index_for_one_way_mode():
     _, session, factory = await _connect()
     factory.clients[-1].position_contracts = "0"

@@ -23,8 +23,13 @@ export const validateBooks = (books: Book[], connections: Connection[]): BookVal
       if (allAllocations.has(allocation.connection_id)) errors.push({ code: 'duplicateAllocation' });
       allAllocations.add(allocation.connection_id);
     }
-    if (!book.enabled) continue;
     const enabled = book.allocations.filter((item) => item.enabled);
+    for (const allocation of book.allocations) {
+      const connection = connections.find((item) => item.id === allocation.connection_id);
+      if (!connection || connection.canary_only)
+        errors.push({ code: book.capital_scope === 'simulated' ? 'invalidSimulated' : 'invalidReal' });
+    }
+    if (!book.enabled) continue;
     if (enabled.length === 0 || Math.abs(enabled.reduce((sum, item) => sum + item.weight, 0) - 1) > 1e-9)
       errors.push({ code: 'weightTotal', params: { label: book.label } });
     const local = new Set<string>();

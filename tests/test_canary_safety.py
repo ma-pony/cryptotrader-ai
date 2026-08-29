@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -14,6 +15,8 @@ from cryptotrader.venues.models import (
     ConnectionPosition,
     NormalizedOrder,
     OpenVenueState,
+    ProtectionSpec,
+    ProtectionState,
     VenueCapabilities,
     VenueQuote,
 )
@@ -118,6 +121,9 @@ class _Session:
     async def replace_protection(self, _spec):
         self.protected = True
         return type("Protection", (), {"protection_ids": ("canary",)})()
+
+    async def normalize_protection(self, spec):
+        return spec
 
     async def cancel_protection(self, _ids):
         self.cleaned = True
@@ -514,3 +520,186 @@ async def test_partial_close_cancels_exact_remainder_then_closes_only_remaining_
     assert session.order_amounts == [Decimal("0.1"), Decimal("0.1"), Decimal("0.05")]
     assert session.signed_amount == Decimal("0")
     assert result["status"] == "completed"
+
+
+@dataclass
+class _LostProtectionSession(_Session):
+    protection_matches: int = 1
+    cancelled_protections: list[tuple[str, ...]] = field(default_factory=list)
+
+    async def replace_protection(self, spec):
+        self.protected = True
+        self._spec = spec
+        raise TimeoutError("accepted before response")
+
+    async def normalize_protection(self, spec):
+        return ProtectionSpec(spec.pair, spec.position_side, spec.amount, Decimal("98.1"), Decimal("101.9"))
+
+    async def cancel_protection(self, ids):
+        self.cancelled_protections.append(tuple(ids))
+        self.protected = False
+
+    async def list_open_state(self, _pair):
+        protections = (
+            tuple(
+                ProtectionState(
+                    (f"lost-{index}",),
+                    self._spec.pair,
+                    self._spec.position_side,
+                    self._spec.amount,
+                    self._spec.stop_loss,
+                    self._spec.take_profit,
+                    True,
+                    False,
+                )
+                for index in range(self.protection_matches)
+            )
+            if self.protected
+            else ()
+        )
+        return OpenVenueState(ConnectionPosition(self.pair, self.signed_amount, Decimal("0"), None), (), protections)
+
+
+@pytest.mark.asyncio
+async def test_timeout_after_remote_protection_acceptance_recovers_exactly_one_owned_protection():
+    venue_canary = _script("venue_canary.py")
+    session = _LostProtectionSession(Pair.parse("BTC/USDT:USDT"))
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_protections == [("lost-0",)]
+    assert result["status"] == "failed"
+
+
+@dataclass
+class _CancelledProtectionSession(_LostProtectionSession):
+    async def replace_protection(self, spec):
+        self.protected = True
+        self._spec = spec
+        raise asyncio.CancelledError
+
+
+@pytest.mark.asyncio
+async def test_cancelled_after_remote_protection_acceptance_still_runs_owned_finalizer():
+    venue_canary = _script("venue_canary.py")
+    session = _CancelledProtectionSession(Pair.parse("BTC/USDT:USDT"))
+
+    with pytest.raises(asyncio.CancelledError):
+        await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_protections == [("lost-0",)]
+    assert session.cleaned is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("matches", [0, 2])
+async def test_lost_protection_without_one_exact_match_requires_attention(matches):
+    venue_canary = _script("venue_canary.py")
+    session = _LostProtectionSession(Pair.parse("BTC/USDT:USDT"), protection_matches=matches)
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.cancelled_protections == []
+    assert result["requires_attention"] is True
+    assert session.signed_amount == Decimal("0")
+
+
+@dataclass
+class _PendingOpenCancelFailureSession(_Session):
+    pending: NormalizedOrder | None = None
+
+    async def place_order(self, intent):
+        if intent.reduce_only:
+            return await super().place_order(intent)
+        self.pending = NormalizedOrder(
+            "pending-open",
+            intent.pair,
+            "buy",
+            "market",
+            intent.amount,
+            Decimal("0"),
+            None,
+            "open",
+            False,
+            intent.client_order_id,
+        )
+        return self.pending
+
+    async def find_order(self, _pair, *, order_id=None, client_order_id=None):
+        return self.pending if order_id == "pending-open" or client_order_id == self.pending.client_order_id else None
+
+    async def cancel_order(self, _order_id, _pair):
+        raise RuntimeError("cancel failed")
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_open_cancellation_failure_never_installs_protection(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    monkeypatch.setattr(venue_canary, "_ORDER_POLL_SECONDS", 0)
+    session = _PendingOpenCancelFailureSession(Pair.parse("BTC/USDT:USDT"))
+
+    result = await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.protected is False
+    assert result["status"] == "failed"
+
+
+def test_fill_ledger_never_replaces_a_cumulative_fill_with_stale_smaller_readback():
+    venue_canary = _script("venue_canary.py")
+    pair = Pair.parse("BTC/USDT:USDT")
+    ledger = {}
+    filled = NormalizedOrder(
+        "open", pair, "buy", "market", Decimal("1"), Decimal("1"), Decimal("100"), "filled", False, "CTLEDGERO"
+    )
+    stale = NormalizedOrder(
+        "open", pair, "buy", "market", Decimal("1"), Decimal("0.5"), Decimal("100"), "partial", False, "CTLEDGERO"
+    )
+
+    venue_canary._record_order(ledger, filled)
+    venue_canary._record_order(ledger, stale)
+
+    assert venue_canary._owned_exposure(ledger) == Decimal("1")
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_protection_still_cancels_owned_open_order_and_closes_ledger_exposure():
+    venue_canary = _script("venue_canary.py")
+    pair = Pair.parse("BTC/USDT:USDT")
+    session = _LostProtectionSession(pair, protection_matches=2, signed_amount=Decimal("0.1"))
+    session._spec = ProtectionSpec(pair, "long", Decimal("0.1"), Decimal("98.1"), Decimal("101.9"))
+    session.protected = True
+    pending = NormalizedOrder(
+        "owned-open", pair, "buy", "market", Decimal("0.1"), Decimal("0.1"), Decimal("100"), "open", False, "CTCOMBOO"
+    )
+    cancelled: list[str] = []
+
+    async def state(_pair):
+        protections = tuple(
+            ProtectionState(
+                (f"unknown-{index}",), pair, "long", Decimal("0.1"), Decimal("98.1"), Decimal("101.9"), True, False
+            )
+            for index in range(2)
+        )
+        orders = () if cancelled else (pending,)
+        return OpenVenueState(ConnectionPosition(pair, session.signed_amount, Decimal("0"), None), orders, protections)
+
+    async def cancel(order_id, _pair):
+        cancelled.append(order_id)
+
+    session.list_open_state = state
+    session.cancel_order = cancel
+    ledger = {"CTCOMBOO": pending}
+    result = await venue_canary._cleanup_owned(
+        session,
+        pair,
+        allowed_client_order_ids=frozenset({"CTCOMBOO", "CTCOMBOX"}),
+        fill_ledger=ledger,
+        cleanup_client_order_id="CTCOMBOX",
+        protection_ids=(),
+        expected_protection=session._spec,
+    )
+
+    assert cancelled == ["owned-open"]
+    assert session.signed_amount == Decimal("0")
+    assert session.cancelled_protections == []
+    assert result["requires_attention"] is True

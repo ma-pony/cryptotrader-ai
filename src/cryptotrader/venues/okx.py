@@ -39,7 +39,7 @@ class OkxVenueSession(CcxtVenueBase):
 
     async def _order_params(self, intent: OrderIntent) -> dict[str, Any]:
         if intent.pair.market_type == "spot":
-            return {}
+            return {"clOrdId": intent.client_order_id} if intent.client_order_id is not None else {}
         hedged = await self._position_mode_is_hedged()
         if not hedged:
             position_side = "net"

@@ -118,4 +118,24 @@ describe('venue connection write recovery', () => {
     const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
     expect(body).toMatchObject({ margin_mode: 'isolated', parameters: { region: 'sg' } });
   });
+
+  it('persists the dedicated canary checkbox, shows its warning, and hydrates it after reload', async () => {
+    await i18n.changeLanguage('en-US');
+    const saved = { id: 'canary-1', label: 'Canary', adapter_id: 'bybit', environment: 'testnet', enabled: true, canary_only: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] };
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: saved }), { status: 201 })).mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, updated_at: 'x', setup_required: false, document: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const view = render(<QueryClientProvider client={client}><VenueForm revision={1} /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText('Connection ID'), { target: { value: 'canary-1' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Canary' } });
+    fireEvent.change(screen.getByLabelText('Adapter ID'), { target: { value: 'bybit' } });
+    fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'testnet' } });
+    fireEvent.click(screen.getByLabelText('Canary-only validation'));
+    expect(screen.getByText('For Canary validation only; never use this platform account or credentials manually or from another system.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Create connection' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string)).toMatchObject({ canary_only: true });
+    view.rerender(<QueryClientProvider client={client}><VenueForm revision={2} connection={{ id: 'canary-2', label: 'Reloaded', adapter_id: 'bybit', environment: 'testnet', enabled: true, canary_only: true, leverage: 1, margin_mode: 'cross', parameters: {} }} /></QueryClientProvider>);
+    expect(screen.getByLabelText('Canary-only validation')).toBeChecked();
+  });
 });

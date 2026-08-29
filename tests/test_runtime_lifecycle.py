@@ -34,6 +34,7 @@ class _Repository:
     def __init__(self, snapshot: RuntimeConfigSnapshot) -> None:
         self.snapshot = snapshot
         self.credentials: dict[str, tuple[object, datetime]] = {}
+        self.revealed_credentials: list[str] = []
 
     async def get_or_create(self):
         return self.snapshot
@@ -43,6 +44,7 @@ class _Repository:
         return CredentialState(credential_ref, value is not None, value[1] if value else None)
 
     async def reveal_credentials(self, credential_ref):
+        self.revealed_credentials.append(credential_ref)
         return self.credentials[credential_ref][0]
 
     async def reveal_token(self, _credential_ref):
@@ -147,6 +149,7 @@ def _connection(
     parameters: dict | None = None,
     enabled: bool = True,
     credential_ref: str | None = None,
+    canary_only: bool = False,
 ) -> VenueConnection:
     return VenueConnection(
         id=connection_id,
@@ -157,6 +160,7 @@ def _connection(
         credential_ref=credential_ref,
         leverage=1,
         margin_mode="isolated",
+        canary_only=canary_only,
         parameters=parameters or {"initial_equity": "10000"},
     )
 
@@ -226,6 +230,29 @@ async def test_active_runtime_opens_each_enabled_connection_once_and_closes_all(
     await runtime.close()
 
     assert all(session.close_calls == 1 for session in sessions)
+
+
+@pytest.mark.asyncio
+async def test_runtime_never_reveals_or_connects_an_enabled_canary_only_connection():
+    ordinary = _connection("paper-a")
+    dedicated = _connection("canary-demo", credential_ref="canary-secret", canary_only=True)
+    document = _document(ordinary)
+    document = runtime_document(
+        connections=(ordinary, dedicated),
+        books=document.execution.books,
+        system=SystemConfig(active=True),
+        infrastructure=InfrastructureConfig(redis_url="redis://runtime-test"),
+    )
+    snapshot = RuntimeConfigSnapshot(7, document, NOW)
+    repository = _Repository(snapshot)
+    repository.credentials["canary-secret"] = (object(), NOW)
+
+    runtime, _, adapter, _ = await _build(document, repository=repository, snapshot=snapshot)
+
+    assert set(runtime.sessions) == {"paper-a"}
+    assert [connection.id for connection, _credentials in adapter.connect_calls] == ["paper-a"]
+    assert repository.revealed_credentials == []
+    await runtime.close()
 
 
 @pytest.mark.asyncio

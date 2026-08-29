@@ -139,3 +139,70 @@ async def test_execution_pair_lease_uses_dedicated_contention_error(monkeypatch)
     with pytest.raises(ExecutionLeaseUnavailableError):
         async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
             pass
+
+
+@pytest.mark.asyncio
+async def test_execution_pair_lease_closes_an_entered_false_context_before_raising(monkeypatch):
+    closed = False
+
+    class State:
+        async def aclose(self):
+            return None
+
+    class FalseLease:
+        async def __aenter__(self):
+            return False
+
+        async def __aexit__(self, *_args):
+            nonlocal closed
+            closed = True
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
+    monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", lambda *_args: FalseLease())
+
+    with pytest.raises(ExecutionLeaseUnavailableError):
+        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+            pass
+    assert closed is True
+
+
+@pytest.mark.asyncio
+async def test_execution_pair_lease_cancellation_owns_release_and_redis_close(monkeypatch):
+    released = False
+    redis_closed = False
+    release_started = asyncio.Event()
+    release_gate = asyncio.Event()
+
+    class State:
+        async def aclose(self):
+            nonlocal redis_closed
+            redis_closed = True
+
+    class Lease:
+        async def __aenter__(self):
+            return True
+
+        async def __aexit__(self, *_args):
+            nonlocal released
+            release_started.set()
+            await release_gate.wait()
+            released = True
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
+    monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", lambda *_args: Lease())
+
+    async def worker():
+        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(worker())
+    await asyncio.sleep(0)
+    task.cancel()
+    await release_started.wait()
+    task.cancel()
+    release_gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert release_started.is_set()
+    assert released is True
+    assert redis_closed is True

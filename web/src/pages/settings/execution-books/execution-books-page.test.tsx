@@ -17,6 +17,13 @@ describe('ExecutionBooksPage', () => {
     expect(validateBooks([{ id: 'sim', label: '模拟资金池', capital_scope: 'simulated', enabled: true, hitl_required: true, allocations: [{ connection_id: 'live', enabled: true, weight: 1 }] }], [{ id: 'live', label: 'Live', adapter_id: 'okx', environment: 'live', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} }])).toContainEqual({ code: 'invalidSimulated' });
   });
 
+  it('rejects a canary-only allocation even when its execution book is disabled', () => {
+    expect(validateBooks(
+      [{ id: 'disabled', label: 'Disabled', capital_scope: 'simulated', enabled: false, hitl_required: false, allocations: [{ connection_id: 'canary', enabled: false, weight: 0 }] }],
+      [{ id: 'canary', label: 'Canary', adapter_id: 'bybit', environment: 'testnet', enabled: true, canary_only: true, leverage: 1, margin_mode: 'cross', parameters: {} }],
+    )).toContainEqual({ code: 'invalidSimulated' });
+  });
+
   const configWithBook = (label = 'Server book') => {
     const base = runtimeConfigFixture();
     return runtimeConfigFixture({ document: {

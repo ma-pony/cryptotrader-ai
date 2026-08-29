@@ -73,7 +73,7 @@ class BybitVenueSession(CcxtVenueBase):
 
     async def _order_params(self, intent: OrderIntent) -> dict[str, Any]:
         if intent.pair.market_type == "spot":
-            return {}
+            return {"orderLinkId": intent.client_order_id} if intent.client_order_id is not None else {}
         params: dict[str, Any] = {
             "positionIdx": await self._position_index(
                 intent.pair,

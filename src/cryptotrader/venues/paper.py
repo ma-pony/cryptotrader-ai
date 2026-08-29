@@ -197,6 +197,11 @@ class PaperVenueSession:
             self._account.protection_pairs[protection_id] = spec.pair
             return protection
 
+    async def normalize_protection(self, spec: ProtectionSpec) -> ProtectionSpec:
+        self._require_open()
+        self._require_supported_pair(spec.pair)
+        return spec
+
     async def cancel_protection(self, protection_ids: tuple[str, ...]) -> None:
         self._require_open()
         pairs = {
