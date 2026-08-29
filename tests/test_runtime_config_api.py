@@ -21,6 +21,7 @@ from cryptotrader.portfolio.aggregator import PortfolioAggregator
 from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
 from cryptotrader.runtime_config.models import (
     ExecutionConfig,
+    InfrastructureConfig,
     RuntimeConfigDocument,
     SignalComponentConfig,
     SystemConfig,
@@ -88,6 +89,7 @@ def active_document() -> RuntimeConfigDocument:
         market_data=market_config(),
         signals=signal_config(components=(SignalComponentConfig(component_id="kronos", enabled=True, weight=1.0),)),
         execution=ExecutionConfig(connections=connections, books=books),
+        infrastructure=InfrastructureConfig(redis_url="redis://runtime-test:6379/0"),
     )
 
 
