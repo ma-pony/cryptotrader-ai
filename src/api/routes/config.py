@@ -562,4 +562,5 @@ async def put_config(body: PutRuntimeConfigIn, request: Request) -> RuntimeConfi
     ensure_expected_revision(current, body.expected_revision)
     document = document_from_input(body.document, current.document)
     snapshot = await replace_document(runtime, current, body.expected_revision, document)
+    await runtime.reload_for_cycle()
     return await config_out(runtime.repository, snapshot)

@@ -7,6 +7,7 @@ import json
 from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -216,6 +217,7 @@ async def api_harness(tmp_path):
         signal_registry=SimpleNamespace(installed_ids=lambda: frozenset({"kronos", "llm_committee"})),
         market_registry=SimpleNamespace(installed_ids=lambda: frozenset({"default"})),
         venue_registry=VenueAdapterRegistry(tuple(adapters.values())),
+        reload_for_cycle=AsyncMock(),
     )
     previous = getattr(app.state, "runtime", None)
     app.state.runtime = runtime
@@ -267,6 +269,19 @@ async def test_put_config_requires_expected_revision(api_harness):
     )
     assert stale.status_code == 409
     assert stale.json() == {"detail": "Runtime configuration changed; reload and retry"}
+
+
+async def test_put_config_publishes_the_saved_revision_to_the_running_runtime(api_harness):
+    api_harness.runtime.reload_for_cycle = AsyncMock()
+    current = await api_harness.client.get("/api/config")
+
+    saved = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": active_payload()},
+    )
+
+    assert saved.status_code == 200
+    api_harness.runtime.reload_for_cycle.assert_awaited_once()
 
 
 async def test_stale_put_config_conflicts_before_connection_domain_construction(api_harness):
