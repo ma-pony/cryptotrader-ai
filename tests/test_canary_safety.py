@@ -208,3 +208,22 @@ def test_signal_canary_forces_each_real_model_call_to_fail_without_fallback(monk
     factory(model="model-a")
 
     assert calls == [{"model": "model-a", "with_fallback": False}]
+
+
+@pytest.mark.asyncio
+async def test_subprocess_audit_rejects_nonzero_exit_noise_and_attention(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+
+    class Completed:
+        returncode = 1
+        stdout = (
+            '{"status":"completed","requires_attention":false,'
+            '"residual":{"position_nonzero":false,"open_orders":false,"protections":false}}'
+        )
+
+    monkeypatch.setattr(venue_canary.subprocess, "run", lambda *_args, **_kwargs: Completed())
+
+    result = await venue_canary.audit_in_subprocess("paper", "BTC/USDT")
+
+    assert result["audit_status"] == "failed"
+    assert result["requires_attention"] is True

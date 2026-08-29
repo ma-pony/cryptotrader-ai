@@ -70,6 +70,10 @@ def _component_summary(signal, model_ids: dict[str, str]) -> dict[str, Any]:
         if details.get("debate_skipped") or not turns:
             raise RuntimeError("signal canary requires an observed internal committee debate")
         summary.update({"agent_ids": sorted(analyses), "debate_turn_count": len(turns), "model_ids": model_ids})
+    if signal.component_id == "kronos":
+        if signal.details.get("predictor_executed") is not True:
+            raise RuntimeError("signal canary requires observed Kronos predictor execution")
+        summary["predictor_executed"] = True
     return summary
 
 

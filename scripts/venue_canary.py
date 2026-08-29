@@ -211,9 +211,20 @@ async def audit_in_subprocess(connection_id: str, pair: str) -> dict[str, Any]:
         capture_output=True,
         text=True,
     )
+    if completed.returncode != 0:
+        return {"audit_status": "failed", "requires_attention": True}
     try:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError:
+        return {"audit_status": "failed", "requires_attention": True}
+    residual = payload.get("residual")
+    if (
+        not isinstance(payload, dict)
+        or payload.get("status") != "completed"
+        or payload.get("requires_attention") is not False
+        or not isinstance(residual, dict)
+        or any(residual.get(key) is not False for key in ("position_nonzero", "open_orders", "protections"))
+    ):
         return {"audit_status": "failed", "requires_attention": True}
     return {"audit_status": payload.get("status"), "audit": payload}
 

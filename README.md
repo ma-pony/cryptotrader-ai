@@ -40,7 +40,7 @@ pnpm dev
 
 ## 容器启动
 
-Compose 同样只向 API 和调度器传入两个运行时变量：
+Compose 只向唯一的 API 运行时 owner 传入两个运行时变量：
 
 ```bash
 export CONFIG_MASTER_KEY='base64 编码的 32 字节密钥'
@@ -62,7 +62,7 @@ uv run trader journal show <cycle-id>
 
 ## 验收金丝雀
 
-完成网页配置后，可对数据库中已启用的 Paper、Demo 或 Testnet 连接运行一次最小仓位闭环。脚本不会接收或输出平台凭据；它会先确认目标交易对没有仓位、挂单或保护单，随后执行最小开仓、平台保护、`reduce-only` 平仓、清理，并在独立新进程重新连接审计零残留。任何失败都会清理并输出 `requires_attention`。
+完成网页配置后，可对数据库中已启用的 Paper、Demo 或 Testnet 连接运行一次最小仓位闭环。脚本不会接收或输出平台凭据；它只取消带有本次 canary 标记的订单，并在独立新进程重新连接审计零残留。任何无法确认订单归属、实际成交量或清理结果的失败都会返回非零和 `requires_attention`，不会猜测性修改账户状态。
 
 ```bash
 uv run python scripts/venue_canary.py --connection bybit-testnet --pair BTC/USDT:USDT

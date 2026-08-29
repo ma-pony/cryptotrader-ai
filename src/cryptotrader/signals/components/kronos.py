@@ -198,6 +198,7 @@ class KronosComponent:
             "gate_proba": gate_proba,
             "h10_20": h10_20,
             "h30_50": h30_50,
+            "predictor_executed": True,
         }
         if raw_signal == 0.0 or (raw_signal < 0.0 and abs(raw_signal) < self.config.step2_short_threshold):
             return self._neutral("Kronos weak short filtered by Step 2", **details)
