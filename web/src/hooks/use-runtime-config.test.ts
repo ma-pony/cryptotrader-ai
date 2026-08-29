@@ -36,7 +36,7 @@ describe('runtime config response decoder', () => {
     ['Set', { nested: new Set([1]) }],
     ['custom prototype', { nested: Object.create({ inherited: true }) }],
     ['symbol own key', (() => { const value = { nested: 1 }; Object.defineProperty(value, Symbol('secret'), { value: 2 }); return value; })()],
-    ['sparse array', { nested: [, 1] }],
+    ['sparse array', (() => { const value = Array(2); value[1] = 1; return { nested: value }; })()],
     ['array symbol property', (() => { const value = [1]; Object.defineProperty(value, Symbol('x'), { value: 2 }); return value; })()],
     ['array extra property', Object.assign([1], { extra: 2 })],
     ['array accessor', (() => { const value: unknown[] = []; Object.defineProperty(value, '0', { get: () => 1, enumerable: true }); value.length = 1; return value; })()],

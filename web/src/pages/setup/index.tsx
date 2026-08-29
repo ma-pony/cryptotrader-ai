@@ -47,11 +47,15 @@ export const validateRiskSection = (value: unknown): RuntimeDocument['risk'] | u
 export const validateLlmAdvanced = (value: unknown): Pick<RuntimeDocument['llm'], 'streaming_models' | 'retry' | 'model_costs'> & { timeout_seconds: number } | undefined => {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).length !== 4 || !Array.isArray(record.streaming_models) || !record.streaming_models.every((item) => typeof item === 'string') || !Number.isInteger(record.timeout_seconds)) return undefined;
+  const timeoutSeconds: unknown = record.timeout_seconds;
+  if (Object.keys(record).length !== 4 || !Array.isArray(record.streaming_models) || !record.streaming_models.every((item) => typeof item === 'string') || typeof timeoutSeconds !== 'number' || !Number.isInteger(timeoutSeconds)) return undefined;
   const retry = record.retry;
-  if (typeof retry !== 'object' || retry === null || Array.isArray(retry) || Object.keys(retry).length !== 4 || !Number.isInteger((retry as Record<string, unknown>).max_attempts) || !['retry_base_delay_s', 'retry_backoff_factor'].every((key) => typeof (retry as Record<string, unknown>)[key] === 'number' && Number.isFinite((retry as Record<string, number>)[key])) || typeof (retry as Record<string, unknown>).retry_jitter !== 'boolean') return undefined;
-  const costs = record.model_costs;
-  if (!Array.isArray(costs) || !costs.every((cost) => typeof cost === 'object' && cost !== null && !Array.isArray(cost) && Object.keys(cost).length === 3 && typeof (cost as Record<string, unknown>).name === 'string' && typeof (cost as Record<string, unknown>).input_usd_per_mtok === 'number' && Number.isFinite((cost as Record<string, number>).input_usd_per_mtok) && typeof (cost as Record<string, unknown>).output_usd_per_mtok === 'number' && Number.isFinite((cost as Record<string, number>).output_usd_per_mtok))) return undefined;
+  if (typeof retry !== 'object' || retry === null || Array.isArray(retry)) return undefined;
+  const retryRecord: Record<string, unknown> = retry;
+  const maxAttempts: unknown = retryRecord.max_attempts;
+  if (Object.keys(retry).length !== 4 || typeof maxAttempts !== 'number' || !Number.isInteger(maxAttempts) || !['retry_base_delay_s', 'retry_backoff_factor'].every((key) => { const candidate: unknown = retryRecord[key]; return typeof candidate === 'number' && Number.isFinite(candidate); }) || typeof retryRecord.retry_jitter !== 'boolean') return undefined;
+  const costs: unknown = record.model_costs;
+  if (!Array.isArray(costs) || !costs.every((cost: unknown) => { if (typeof cost !== 'object' || cost === null || Array.isArray(cost)) return false; const costRecord: Record<string, unknown> = cost; const input: unknown = costRecord.input_usd_per_mtok; const output: unknown = costRecord.output_usd_per_mtok; return Object.keys(cost).length === 3 && typeof costRecord.name === 'string' && typeof input === 'number' && Number.isFinite(input) && typeof output === 'number' && Number.isFinite(output); })) return undefined;
   return value as Pick<RuntimeDocument['llm'], 'streaming_models' | 'retry' | 'model_costs'> & { timeout_seconds: number };
 };
 
