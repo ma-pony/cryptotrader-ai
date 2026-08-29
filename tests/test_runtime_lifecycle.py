@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -802,6 +803,69 @@ async def test_mark_applied_failure_after_runtime_activation_returns_to_failed_o
     assert runtime.snapshot.applied_revision == 7
     assert runtime.sessions == {}
     assert runtime.cycle is None
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_failure(tmp_path, monkeypatch):
+    """A real persisted failed revision is fail-closed and the next desired revision recovers without restart."""
+    from api.routes.config import publish_pending_snapshot
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.runtime_config.secrets import CredentialVault
+
+    initial = _document(_connection("paper-a", parameters={"initial_equity": "10000"}))
+    repository = RuntimeConfigRepository(
+        f"sqlite+aiosqlite:///{tmp_path / 'runtime-lifecycle.db'}",
+        CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode()),
+        default_factory=lambda: initial,
+    )
+    first = await repository.get_or_create()
+    adapter = _Adapter()
+    runtime, _, _, _ = await _build(initial, repository=repository, adapter=adapter, snapshot=first)
+    failed_document = _document(_connection("paper-a", parameters={"initial_equity": "20000"}))
+    original_mark_applied = repository.mark_applied
+    mark_attempts = 0
+
+    async def fail_final_commit_once(revision):
+        nonlocal mark_attempts
+        mark_attempts += 1
+        if mark_attempts == 1:
+            raise RuntimeError("private final write failure")
+        return await original_mark_applied(revision)
+
+    monkeypatch.setattr(repository, "mark_applied", fail_final_commit_once)
+    async with runtime.application_barrier():
+        pending = await repository.replace(first.revision, failed_document)
+        candidate = await runtime.prepare_candidate(pending)
+        candidate_session = candidate.sessions["paper-a"]
+        with pytest.raises(Exception, match="Runtime configuration cannot be applied"):
+            await publish_pending_snapshot(runtime, pending, None, candidate)
+
+    failed = await repository.get_or_create()
+    assert (failed.revision, failed.apply_status, failed.applied_revision, failed.apply_error) == (
+        2,
+        "failed",
+        1,
+        "runtime application failed",
+    )
+    assert runtime.sessions == {}
+    assert runtime.cycle is None
+    assert candidate_session.close_calls == 1
+    async with runtime.application_barrier():
+        assert runtime.application_in_progress is True
+
+    recovered_document = _document(_connection("paper-a", parameters={"initial_equity": "30000"}))
+    async with runtime.application_barrier():
+        pending = await repository.replace(failed.revision, recovered_document)
+        candidate = await runtime.prepare_candidate(pending)
+        applied = await publish_pending_snapshot(runtime, pending, None, candidate)
+
+    stored = await repository.get_or_create()
+    assert (applied.revision, stored.apply_status, stored.applied_revision) == (3, "applied", 3)
+    assert runtime.cycle is not None
+    assert set(runtime.sessions) == {"paper-a"}
+    async with runtime.cycle_lease() as cycle:
+        assert cycle.snapshot.revision == 3
     await runtime.close()
 
 
