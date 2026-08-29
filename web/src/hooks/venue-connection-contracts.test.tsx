@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { useVenueConnections } from './use-venue-connections';
 import { VenueForm } from '@/pages/settings/venues/venue-form';
 import '@/lib/i18n';
+import i18n from '@/lib/i18n';
 
 describe('venue connection write recovery', () => {
   it('keeps a successful create as saved when the follow-up config refresh fails', async () => {
@@ -55,5 +56,23 @@ describe('venue connection write recovery', () => {
     expect(create).toBeDisabled();
     fireEvent.click(create);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('serializes isolated custom adapter parameters as ordinary JSON and blocks invalid parameter text', async () => {
+    await i18n.changeLanguage('en-US');
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'custom-1', label: 'Custom', adapter_id: 'custom', environment: 'demo', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'isolated', parameters: [] } }), { status: 201 })).mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, updated_at: 'x', setup_required: false, document: {} }), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><VenueForm revision={1} /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText('Connection ID'), { target: { value: 'custom-1' } });
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Custom' } });
+    fireEvent.change(screen.getByLabelText('Adapter ID'), { target: { value: 'custom' } });
+    fireEvent.change(screen.getByLabelText('Environment'), { target: { value: 'demo' } });
+    fireEvent.change(screen.getByLabelText('Margin mode'), { target: { value: 'isolated' } });
+    fireEvent.change(screen.getByLabelText('Connection parameters JSON'), { target: { value: '{"region":"sg"}' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Create connection' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    const body = JSON.parse((fetchMock.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body).toMatchObject({ margin_mode: 'isolated', parameters: { region: 'sg' } });
   });
 });

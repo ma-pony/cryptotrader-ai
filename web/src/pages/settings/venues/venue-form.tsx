@@ -44,6 +44,8 @@ export const VenueForm = ({
   const [apiKey, setApiKey] = useState('');
   const [secret, setSecret] = useState('');
   const [passphrase, setPassphrase] = useState('');
+  const [parametersText, setParametersText] = useState(() => JSON.stringify(connection?.parameters ?? {}));
+  const [parametersError, setParametersError] = useState(false);
   const [credentialSaving, setCredentialSaving] = useState(false);
   const [error, setError] = useState('');
   const [savedNeedsReload, setSavedNeedsReload] = useState(false);
@@ -55,6 +57,8 @@ export const VenueForm = ({
     setApiKey('');
     setSecret('');
     setPassphrase('');
+    setParametersText(JSON.stringify(connection?.parameters ?? {}));
+    setParametersError(false);
   }, [connection]);
   const existing = Boolean(connection);
   const isPaper = connection?.environment === 'paper';
@@ -62,6 +66,7 @@ export const VenueForm = ({
     try {
       setError('');
       if (!draft.id.trim() || !draft.label.trim() || !draft.adapter_id.trim()) return;
+      if (parametersError) return;
       const saved = existing
         ? await venues.update.mutateAsync({ id: draft.id, body: { ...draft, expected_revision: revision } })
         : await venues.create.mutateAsync({ ...draft, expected_revision: revision });
@@ -168,6 +173,13 @@ export const VenueForm = ({
             className="mt-1 h-10 w-full rounded border bg-background px-3"
           />
         </label>
+        <label className="text-xs text-muted-foreground">
+          {t('connection.marginMode')}
+          <select aria-label={t('connection.marginMode')} value={draft.margin_mode} onChange={(event) => setDraft({ ...draft, margin_mode: event.target.value })} className="mt-1 h-10 w-full rounded border bg-background px-3">
+            <option value="cross">cross</option>
+            <option value="isolated">isolated</option>
+          </select>
+        </label>
         <label className="flex items-center gap-2 pt-5 text-sm">
           <input
             type="checkbox"
@@ -177,6 +189,25 @@ export const VenueForm = ({
           {t('connection.enabled')}
         </label>
       </div>
+      <label className="text-xs text-muted-foreground">
+        {t('connection.parameters')}
+        <textarea
+          aria-label={t('connection.parameters')}
+          value={parametersText}
+          onChange={(event) => {
+            const text = event.target.value;
+            setParametersText(text);
+            try {
+              const parameters = JSON.parse(text) as RuntimeJsonObject;
+              if (!parameters || Array.isArray(parameters) || typeof parameters !== 'object') throw new Error();
+              setDraft((current) => ({ ...current, parameters }));
+              setParametersError(false);
+            } catch { setParametersError(true); }
+          }}
+          className="mt-1 min-h-20 w-full rounded border bg-background p-2 font-mono text-xs"
+        />
+      </label>
+      {parametersError ? <p role="alert" className="text-sm text-trade-short">{t('connection.parametersInvalid')}</p> : null}
       {existing && !isPaper ? (
         <div className="grid gap-3 border-t border-border pt-3 md:grid-cols-3">
           <label className="text-xs text-muted-foreground">
@@ -215,7 +246,7 @@ export const VenueForm = ({
             <Button
               type="button"
               variant="outline"
-              disabled={!apiKey || !secret || credentialSaving}
+              disabled={!apiKey || !secret || credentialSaving || venues.create.isPending || venues.update.isPending || savedNeedsReload}
               onClick={() => void saveCredentials()}
             >
               <Save className="h-4 w-4" />
@@ -243,7 +274,7 @@ export const VenueForm = ({
         </p>
       ) : null}
       {savedNeedsReload ? <p role="status" className="text-sm text-amber-500">{t('connection.savedNeedsReload')}</p> : null}
-      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload}>
+      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload || parametersError}>
         <Save className="h-4 w-4" />
         {existing ? t('connection.save') : t('connection.create')}
       </Button>

@@ -44,6 +44,17 @@ export const validateRiskSection = (value: unknown): RuntimeDocument['risk'] | u
   return value as RuntimeDocument['risk'];
 };
 
+export const validateLlmAdvanced = (value: unknown): Pick<RuntimeDocument['llm'], 'streaming_models' | 'retry' | 'model_costs'> & { timeout_seconds: number } | undefined => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length !== 4 || !Array.isArray(record.streaming_models) || !record.streaming_models.every((item) => typeof item === 'string') || !Number.isInteger(record.timeout_seconds)) return undefined;
+  const retry = record.retry;
+  if (typeof retry !== 'object' || retry === null || Array.isArray(retry) || Object.keys(retry).length !== 4 || !['max_attempts', 'retry_base_delay_s', 'retry_backoff_factor'].every((key) => typeof (retry as Record<string, unknown>)[key] === 'number' && Number.isFinite((retry as Record<string, number>)[key])) || typeof (retry as Record<string, unknown>).retry_jitter !== 'boolean') return undefined;
+  const costs = record.model_costs;
+  if (!Array.isArray(costs) || !costs.every((cost) => typeof cost === 'object' && cost !== null && !Array.isArray(cost) && Object.keys(cost).length === 3 && typeof (cost as Record<string, unknown>).name === 'string' && typeof (cost as Record<string, unknown>).input_usd_per_mtok === 'number' && Number.isFinite((cost as Record<string, number>).input_usd_per_mtok) && typeof (cost as Record<string, unknown>).output_usd_per_mtok === 'number' && Number.isFinite((cost as Record<string, number>).output_usd_per_mtok))) return undefined;
+  return value as Pick<RuntimeDocument['llm'], 'streaming_models' | 'retry' | 'model_costs'> & { timeout_seconds: number };
+};
+
 export const testFingerprint = (connection: DraftConnection, credentialUpdatedAt?: string | null) =>
   JSON.stringify({
     id: connection.id,
@@ -119,7 +130,8 @@ const SetupEditor = ({
     !marketError &&
     !riskDirty &&
     !riskError &&
-    !Object.values(componentParameterErrors).some(Boolean);
+    !Object.values(componentParameterErrors).some(Boolean) &&
+    !runtime.conflict;
 
   const applyMarketParameters = () => {
     try {
@@ -190,7 +202,7 @@ const SetupEditor = ({
           <label>{t('wizard.timeout')}<input aria-label={t('wizard.timeout')} type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
           <label className="md:col-span-2">{t('wizard.advanced')}<textarea aria-label={t('wizard.advanced')} value={llmAdvanced} onChange={(event) => setLlmAdvanced(event.target.value)} className="mt-1 min-h-32 w-full rounded border bg-background p-3 font-mono text-xs" /></label>
-          <Button type="button" variant="outline" onClick={() => { try { const value = JSON.parse(llmAdvanced) as { streaming_models: string[]; retry: RuntimeDocument['llm']['retry']; model_costs: RuntimeDocument['llm']['model_costs']; timeout_seconds: number }; if (!Array.isArray(value.streaming_models) || !value.retry || !Array.isArray(value.model_costs) || !Number.isInteger(value.timeout_seconds)) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); } catch { setLlmError(t('wizard.advancedInvalid')); } }}>{t('wizard.applyAdvanced')}</Button>
+          <Button type="button" variant="outline" onClick={() => { try { const value = validateLlmAdvanced(JSON.parse(llmAdvanced)); if (!value) throw new Error(); setDraft((current) => ({ ...current, llm: { ...current.llm, streaming_models: value.streaming_models, retry: value.retry, model_costs: value.model_costs, models: { ...current.llm.models, timeout_seconds: value.timeout_seconds } } })); setLlmError(''); } catch { setLlmError(t('wizard.advancedInvalid')); } }}>{t('wizard.applyAdvanced')}</Button>
           {llmError ? <p role="alert" className="text-sm text-trade-short">{llmError}</p> : null}
         </div>
       );

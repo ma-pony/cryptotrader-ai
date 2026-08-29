@@ -26,7 +26,7 @@
   "configured": "凭据已配置",
   "addConnection": "新增连接",
   "addVenue": "新增平台连接",
-  "connection": {"id":"连接 ID","name":"名称","adapter":"Adapter ID","environment":"环境","leverage":"杠杆","enabled":"启用连接","apiAccessId":"访问 ID","apiSigningPhrase":"签名短语","accessPhrase":"访问短语（可选）","saveAccess":"保存访问资料","test":"测试连接","paperNoAccess":"Paper 连接无需访问资料。","save":"保存连接","create":"创建连接","saveFailed":"保存连接失败，请重新加载后重试。","accessSaveFailed":"保存访问资料失败，请重新加载后重试。","testFailed":"连接测试失败。","savedNeedsReload":"连接已保存，但配置刷新失败；请重新加载后继续。"},
+  "connection": {"id":"连接 ID","name":"名称","adapter":"Adapter ID","environment":"环境","leverage":"杠杆","marginMode":"保证金模式","enabled":"启用连接","parameters":"连接参数 JSON","parametersInvalid":"连接参数必须是 JSON 对象。","apiAccessId":"访问 ID","apiSigningPhrase":"签名短语","accessPhrase":"访问短语（可选）","saveAccess":"保存访问资料","test":"测试连接","paperNoAccess":"Paper 连接无需访问资料。","save":"保存连接","create":"创建连接","saveFailed":"保存连接失败，请重新加载后重试。","accessSaveFailed":"保存访问资料失败，请重新加载后重试。","testFailed":"连接测试失败。","savedNeedsReload":"连接已保存，但配置刷新失败；请重新加载后继续。"},
   "simulatedBooks": "模拟资金池",
   "realBooks": "实盘资金池",
   "simulatedDescription": "paper / demo / testnet 连接；每个连接只能归属于一个启用资金池。",

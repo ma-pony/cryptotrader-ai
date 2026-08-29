@@ -127,7 +127,7 @@ const ExecutionBooksPage = () => {
           ))}
           {runtime.conflict ? <div className="flex gap-2"><p role="alert" className="text-sm text-trade-short">{t('conflict')}</p><Button variant="outline" onClick={() => void reload()}>{t('reload')}</Button></div> : null}
           {saveError ? <p role="alert" className="text-sm text-trade-short">{saveError}</p> : null}
-          <Button disabled={runtime.isSaving || errors.length > 0} onClick={() => void save()}>
+          <Button disabled={runtime.isSaving || runtime.conflict || errors.length > 0} onClick={() => void save()}>
             <Save className="h-4 w-4" />
             {t('save')}
           </Button>

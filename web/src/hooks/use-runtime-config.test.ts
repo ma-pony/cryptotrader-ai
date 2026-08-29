@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JsonValueSchema, RuntimeConfigSchema } from '@/types/api.schema';
+import { JsonValueSchema, RuntimeBookSchema, RuntimeConfigSchema, RuntimeConnectionSchema } from '@/types/api.schema';
 import { assertRuntimeJsonDocument, decodeJsonValue, toRuntimeDocument } from './use-runtime-config';
 
 describe('runtime config response decoder', () => {
@@ -31,6 +31,12 @@ describe('runtime config response decoder', () => {
     ['NaN', { nested: Number.NaN }],
     ['infinity', { nested: Infinity }],
     ['nested invalid value', { nested: [{ still: Number.NEGATIVE_INFINITY }] }],
+    ['Date', { nested: new Date() }],
+    ['Map', { nested: new Map([['x', 1]]) }],
+    ['Set', { nested: new Set([1]) }],
+    ['custom prototype', { nested: Object.create({ inherited: true }) }],
+    ['symbol own key', (() => { const value = { nested: 1 }; Object.defineProperty(value, Symbol('secret'), { value: 2 }); return value; })()],
+    ['sparse array', { nested: [, 1] }],
   ])('rejects runtime JSON containing %s before it can be serialized', (_name, value) => {
     expect(() => assertRuntimeJsonDocument(value)).toThrow('Invalid runtime JSON');
   });
@@ -38,5 +44,16 @@ describe('runtime config response decoder', () => {
   it('accepts recursive ordinary JSON without rewriting it', () => {
     const value = { object: { array: [null, true, 1.25, 'ok', { deeper: ['yes'] }] } };
     expect(assertRuntimeJsonDocument(value)).toBe(value);
+  });
+
+  it('uses the strict exported connection and book schemas everywhere', () => {
+    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] };
+    const book = { id: 'sim', label: 'Sim', capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [] };
+    expect(RuntimeConnectionSchema.safeParse({ ...connection, margin_mode: 'bad' }).success).toBe(false);
+    expect(RuntimeConnectionSchema.safeParse({ ...connection, leverage: 1.5 }).success).toBe(false);
+    const { parameters: _parameters, ...connectionWithoutParameters } = connection;
+    const { allocations: _allocations, ...bookWithoutAllocations } = book;
+    expect(RuntimeConnectionSchema.safeParse(connectionWithoutParameters).success).toBe(false);
+    expect(RuntimeBookSchema.safeParse(bookWithoutAllocations).success).toBe(false);
   });
 });

@@ -218,7 +218,7 @@ const StrategyPage = () => {
             <Button variant="outline" onClick={() => void reload()}>
               {t('configuration:reload')}
             </Button>
-            <Button size="lg" disabled={!valid || runtime.isSaving} onClick={() => void save()}>
+            <Button size="lg" disabled={!valid || runtime.isSaving || runtime.conflict} onClick={() => void save()}>
               <Save className="h-4 w-4" />
               {runtime.isSaving ? t('strategy:save.saving') : t('configuration:save')}
             </Button>

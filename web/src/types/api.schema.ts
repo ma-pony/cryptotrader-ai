@@ -422,9 +422,9 @@ export const RuntimeConnectionSchema = z
     enabled: z.boolean(),
     credential_configured: z.boolean(),
     credential_updated_at: z.string().nullable(),
-    leverage: z.number(),
-    margin_mode: z.string(),
-    parameters: z.array(JsonEntrySchema).default([]),
+    leverage: z.number().int(),
+    margin_mode: z.enum(['cross', 'isolated']),
+    parameters: z.array(JsonEntrySchema),
   })
   .strict();
 export const RuntimeBookSchema = z
@@ -434,27 +434,9 @@ export const RuntimeBookSchema = z
     capital_scope: z.enum(['simulated', 'real']),
     enabled: z.boolean(),
     hitl_required: z.boolean(),
-    allocations: z
-      .array(z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() }).strict())
-      .default([]),
+    allocations: z.array(z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() }).strict()),
   })
   .strict();
-const StrictJsonEntrySchema = JsonEntrySchema;
-const StrictConnectionSchema = z
-  .object({
-    id: z.string(),
-    label: z.string(),
-    adapter_id: z.string(),
-    environment: z.enum(['paper', 'demo', 'testnet', 'live']),
-    enabled: z.boolean(),
-    credential_configured: z.boolean(),
-    credential_updated_at: z.string().nullable(),
-    leverage: z.number().int(),
-    margin_mode: z.enum(['cross', 'isolated']),
-    parameters: z.array(StrictJsonEntrySchema),
-  })
-  .strict();
-const allocationSchema = z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() }).strict();
 const strictRecord = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const LlmModelsSchema = strictRecord({
   analysis: z.string(),
@@ -469,7 +451,7 @@ const LlmModelsSchema = strictRecord({
 });
 const RuntimeDocumentSchema = strictRecord({
   system: strictRecord({ active: z.boolean() }),
-  market_data: strictRecord({ source_id: z.string(), parameters: z.array(StrictJsonEntrySchema) }),
+  market_data: strictRecord({ source_id: z.string(), parameters: z.array(JsonEntrySchema) }),
   llm: strictRecord({
     base_url: z.string(),
     streaming_models: z.array(z.string()),
@@ -493,7 +475,7 @@ const RuntimeDocumentSchema = strictRecord({
         component_id: z.string(),
         enabled: z.boolean(),
         weight: z.number(),
-        parameters: z.array(StrictJsonEntrySchema),
+        parameters: z.array(JsonEntrySchema),
       }),
     ),
     neutral_threshold: z.number(),
@@ -527,17 +509,8 @@ const RuntimeDocumentSchema = strictRecord({
     rate_limit: strictRecord({ max_trades_per_hour: z.number().int(), max_trades_per_day: z.number().int() }),
   }),
   execution: strictRecord({
-    connections: z.array(StrictConnectionSchema),
-    books: z.array(
-      strictRecord({
-        id: z.string(),
-        label: z.string(),
-        capital_scope: z.enum(['simulated', 'real']),
-        enabled: z.boolean(),
-        hitl_required: z.boolean(),
-        allocations: z.array(allocationSchema),
-      }),
-    ),
+    connections: z.array(RuntimeConnectionSchema),
+    books: z.array(RuntimeBookSchema),
     allocation_policy: z.string(),
   }),
   hitl: strictRecord({ approval_ttl_minutes: z.number().int() }),
@@ -568,7 +541,7 @@ export const RuntimeConfigSchema = strictRecord({
   setup_required: z.boolean(),
   document: RuntimeDocumentSchema,
 });
-export const VenueMutationSchema = strictRecord({ revision: z.number().int(), connection: StrictConnectionSchema });
+export const VenueMutationSchema = strictRecord({ revision: z.number().int(), connection: RuntimeConnectionSchema });
 export const CredentialMutationSchema = strictRecord({
   revision: z.number().int(),
   credential: strictRecord({ configured: z.boolean(), updated_at: z.string().nullable() }),

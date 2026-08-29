@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/lib/i18n';
 import { App } from '@/App';
-import SetupPage, { testFingerprint, validateRiskSection } from './index';
+import SetupPage, { testFingerprint, validateLlmAdvanced, validateRiskSection } from './index';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 
 describe('SetupPage', () => {
@@ -13,6 +13,14 @@ describe('SetupPage', () => {
     expect(validateRiskSection({})).toBeUndefined();
     expect(validateRiskSection({ ...runtimeConfigFixture().document.risk, unexpected: true })).toBeUndefined();
     expect(validateRiskSection(runtimeConfigFixture().document.risk)).toEqual(runtimeConfigFixture().document.risk);
+  });
+  it('accepts only the exact finite LLM advanced configuration shape', () => {
+    const llm = runtimeConfigFixture().document.llm;
+    const valid = { streaming_models: ['analysis'], retry: llm.retry, model_costs: [{ name: 'analysis', input_usd_per_mtok: 1, output_usd_per_mtok: 2 }], timeout_seconds: 30 };
+    expect(validateLlmAdvanced(valid)).toEqual(valid);
+    expect(validateLlmAdvanced({ ...valid, extra: true })).toBeUndefined();
+    expect(validateLlmAdvanced({ ...valid, retry: { ...valid.retry, retry_jitter: 'yes' } })).toBeUndefined();
+    expect(validateLlmAdvanced({ ...valid, model_costs: [{ ...valid.model_costs[0], input_usd_per_mtok: Infinity }] })).toBeUndefined();
   });
 
   it('routes setup_required users into the ordered setup flow', async () => {

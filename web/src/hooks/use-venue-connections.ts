@@ -34,11 +34,18 @@ export const useVenueConnections = () => {
       document: { ...current.document, execution: { ...current.document.execution, connections: current.document.execution.connections.some((item) => item.id === mutation.connection.id) ? current.document.execution.connections.map((item) => item.id === mutation.connection.id ? mutation.connection : item) : [...current.document.execution.connections, mutation.connection] } },
     } : current);
   };
+  const applyCredentialMutation = (id: string, mutation: { revision: number; credential: { configured: boolean; updated_at: string | null } }) => {
+    client.setQueryData<RuntimeConfig>(RUNTIME_CONFIG_QUERY_KEY, (current) => current ? {
+      ...current,
+      revision: mutation.revision,
+      document: { ...current.document, execution: { ...current.document.execution, connections: current.document.execution.connections.map((connection) => connection.id === id ? { ...connection, credential_configured: mutation.credential.configured, credential_updated_at: mutation.credential.updated_at } : connection) } },
+    } : current);
+  };
   const writeThenRefresh = async (write: () => Promise<{ revision: number; connection: RuntimeConfig['document']['execution']['connections'][number] }>) => {
     const mutation = await write();
     applyMutation(mutation);
     try { await refreshConfig(); return { ...mutation, savedNeedsReload: false }; }
-    catch { return { ...mutation, savedNeedsReload: true }; }
+    catch { setRuntimeConfigConflict(client); return { ...mutation, savedNeedsReload: true }; }
   };
   const conflict = (error: unknown) => {
     if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
@@ -72,12 +79,14 @@ export const useVenueConnections = () => {
       conflict(error);
       throw error;
     }
+    applyCredentialMutation(id, result);
     // The credential write has already committed. A failed best-effort refresh
     // must not make callers retain credential material and retry it blindly.
     try {
       await refreshConfig();
       return { ...result, savedNeedsReload: false };
     } catch {
+      setRuntimeConfigConflict(client);
       return { ...result, savedNeedsReload: true };
     }
   };

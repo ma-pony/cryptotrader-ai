@@ -26,6 +26,7 @@ export const assertRuntimeJsonDocument = <T>(value: T): T => {
     }
     if (Array.isArray(candidate)) {
       if (seen.has(candidate)) throw new Error('Invalid runtime JSON: cyclic value');
+      if (Object.keys(candidate).length !== candidate.length) throw new Error('Invalid runtime JSON: arrays must be dense');
       seen.add(candidate);
       candidate.forEach((item) => visit(item, seen));
       seen.delete(candidate);
@@ -33,6 +34,9 @@ export const assertRuntimeJsonDocument = <T>(value: T): T => {
     }
     if (typeof candidate === 'object') {
       if (seen.has(candidate)) throw new Error('Invalid runtime JSON: cyclic value');
+      const prototype = Object.getPrototypeOf(candidate);
+      if (prototype !== Object.prototype && prototype !== null) throw new Error('Invalid runtime JSON: objects must be plain');
+      if (Object.getOwnPropertySymbols(candidate).length > 0) throw new Error('Invalid runtime JSON: symbol keys are not supported');
       seen.add(candidate);
       Object.values(candidate as Record<string, unknown>).forEach((item) => visit(item, seen));
       seen.delete(candidate);
