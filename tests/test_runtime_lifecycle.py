@@ -822,6 +822,7 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
     first = await repository.get_or_create()
     adapter = _Adapter()
     runtime, _, _, _ = await _build(initial, repository=repository, adapter=adapter, snapshot=first)
+    initial_session = runtime.sessions["paper-a"]
     failed_document = _document(_connection("paper-a", parameters={"initial_equity": "20000"}))
     original_mark_applied = repository.mark_applied
     mark_attempts = 0
@@ -830,6 +831,15 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
         nonlocal mark_attempts
         mark_attempts += 1
         if mark_attempts == 1:
+            assert revision == 2
+            assert (runtime.snapshot.revision, runtime.snapshot.apply_status, runtime.snapshot.applied_revision) == (
+                2,
+                "applied",
+                2,
+            )
+            assert runtime.cycle is candidate_cycle
+            assert runtime.sessions == {"paper-a": candidate_session}
+            assert initial_session.close_calls == 1
             raise RuntimeError("private final write failure")
         return await original_mark_applied(revision)
 
@@ -838,6 +848,7 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
         pending = await repository.replace(first.revision, failed_document)
         candidate = await runtime.prepare_candidate(pending)
         candidate_session = candidate.sessions["paper-a"]
+        candidate_cycle = candidate.cycle
         with pytest.raises(Exception, match="Runtime configuration cannot be applied"):
             await publish_pending_snapshot(runtime, pending, None, candidate)
 
@@ -850,6 +861,7 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
     )
     assert runtime.sessions == {}
     assert runtime.cycle is None
+    assert initial_session.close_calls == 1
     assert candidate_session.close_calls == 1
     async with runtime.application_barrier():
         assert runtime.application_in_progress is True
@@ -864,9 +876,12 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
     assert (applied.revision, stored.apply_status, stored.applied_revision) == (3, "applied", 3)
     assert runtime.cycle is not None
     assert set(runtime.sessions) == {"paper-a"}
+    recovered_session = runtime.sessions["paper-a"]
+    assert recovered_session.close_calls == 0
     async with runtime.cycle_lease() as cycle:
         assert cycle.snapshot.revision == 3
     await runtime.close()
+    assert recovered_session.close_calls == 1
 
 
 @pytest.mark.asyncio
