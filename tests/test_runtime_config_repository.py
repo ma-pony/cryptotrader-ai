@@ -114,25 +114,38 @@ async def test_document_revision_is_pending_until_the_runtime_application_is_mar
     assert (applied.apply_status, applied.applied_revision, applied.apply_error) == ("applied", pending.revision, None)
 
 
-async def test_failed_transition_keeps_the_last_activated_revision_when_mark_applied_already_wrote_current_row(
+async def test_consecutive_failed_pending_mutations_preserve_the_last_activated_revision(repository):
+    """Only the repository knows the last activated revision across multiple failed desired revisions."""
+    first = await repository.get_or_create()
+    pending_second = await repository.replace(first.revision, active_document())
+    failed_second = await repository.mark_failed(pending_second.revision, "runtime application failed")
+    pending_third = await repository.replace(failed_second.revision, runtime_document())
+    failed_third = await repository.mark_failed(pending_third.revision, "runtime application failed")
+
+    assert (failed_second.applied_revision, pending_third.applied_revision, failed_third.applied_revision) == (
+        first.revision,
+        first.revision,
+        first.revision,
+    )
+
+
+async def test_failed_transition_accepts_only_a_pending_revision_and_never_accepts_a_caller_owned_applied_revision(
     repository,
 ):
-    """The DB row cannot infer the last live graph after the applied write races activation."""
+    from cryptotrader.runtime_config.repository import InvalidApplyTransition
+
     first = await repository.get_or_create()
     pending = await repository.replace(first.revision, active_document())
-
     await repository.mark_applied(pending.revision)
-    failed = await repository.mark_failed(
-        pending.revision,
-        "runtime application failed",
-        last_activated_revision=pending.applied_revision,
-    )
 
-    assert (failed.apply_status, failed.applied_revision, failed.apply_error) == (
-        "failed",
-        first.revision,
-        "runtime application failed",
-    )
+    with pytest.raises(InvalidApplyTransition, match="pending"):
+        await repository.mark_failed(pending.revision, "runtime application failed")
+    with pytest.raises(TypeError):
+        await repository.mark_failed(
+            pending.revision,
+            "runtime application failed",
+            last_activated_revision=999,
+        )
 
 
 async def test_get_existing_never_creates_schema_or_default_row(tmp_path):

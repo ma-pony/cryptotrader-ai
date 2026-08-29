@@ -23,6 +23,7 @@ from cryptotrader.runtime_config.models import (
     ObservabilityConfig,
     RiskConfig,
     RuntimeConfigDocument,
+    RuntimeConfigSnapshot,
     SchedulerConfig,
     SecurityConfig,
     SignalConfig,
@@ -617,7 +618,7 @@ async def apply_document(
         document,
         datetime.now().astimezone(),
         apply_status="applied",
-        applied_revision=expected_revision + 1,
+        applied_revision=snapshot.applied_revision,
     )
     try:
         candidate = await runtime.prepare_candidate(candidate_snapshot)
@@ -652,9 +653,15 @@ async def publish_pending_snapshot(runtime, pending, refresh_owners, candidate=N
         await runtime.publish_candidate(prepared, pending)
         if refresh_owners is not None:
             await refresh_owners(pending)
-        applied = await runtime.repository.mark_applied(pending.revision)
-        await runtime.activate_applied(applied)
-        return applied
+        local_applied = RuntimeConfigSnapshot(
+            pending.revision,
+            pending.document,
+            pending.updated_at,
+            apply_status="applied",
+            applied_revision=pending.revision,
+        )
+        await runtime.activate_applied(local_applied)
+        return await runtime.repository.mark_applied(pending.revision)
     except BaseException as error:
         cleanup_error: BaseException | None = None
         try:
@@ -687,11 +694,7 @@ async def _fail_pending_application(runtime, pending, candidate, clear_owners) -
     if cleanup_incomplete:
         error = "runtime application failed: cleanup incomplete"
     try:
-        failed = await runtime.repository.mark_failed(
-            pending.revision,
-            error,
-            last_activated_revision=pending.applied_revision,
-        )
+        failed = await runtime.repository.mark_failed(pending.revision, error)
     except BaseException:
         from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
 

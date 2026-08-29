@@ -60,12 +60,11 @@ class _Repository:
         )
         return self.snapshot
 
-    async def mark_failed(self, revision, error, *, last_activated_revision):
+    async def mark_failed(self, revision, error):
         assert self.snapshot.revision == revision
         self.snapshot = replace(
             self.snapshot,
             apply_status="failed",
-            applied_revision=last_activated_revision,
             apply_error=error,
         )
         return self.snapshot
@@ -654,6 +653,7 @@ async def test_application_protocol_starts_real_owner_factories_for_pending_grap
     started: list[tuple[str, int]] = []
     stopped: list[str] = []
     rejected: list[str] = []
+    transitions: list[str] = []
 
     class _Trigger:
         async def stop(self):
@@ -683,6 +683,19 @@ async def test_application_protocol_starts_real_owner_factories_for_pending_grap
     monkeypatch.setattr(api_main, "_shutdown_scheduler", shutdown_scheduler)
     monkeypatch.setattr(api_main, "_init_trigger_engine", init_trigger)
     monkeypatch.setattr(api_main, "_init_scheduler", init_scheduler)
+    original_activate = runtime.activate_applied
+    original_mark_applied = repository.mark_applied
+
+    async def activate_then_record(snapshot):
+        transitions.append("activate")
+        await original_activate(snapshot)
+
+    async def mark_then_record(revision):
+        transitions.append("mark_applied")
+        return await original_mark_applied(revision)
+
+    monkeypatch.setattr(runtime, "activate_applied", activate_then_record)
+    monkeypatch.setattr(repository, "mark_applied", mark_then_record)
 
     async with runtime.application_barrier():
         applied = await publish_pending_snapshot(
@@ -695,8 +708,9 @@ async def test_application_protocol_starts_real_owner_factories_for_pending_grap
     assert started == [("trigger", 8), ("scheduler", 8)]
     assert rejected == ["cycle-and-reload"]
     assert stopped == ["old-scheduler", "old-trigger"]
+    assert transitions == ["activate", "mark_applied"]
     assert applied.apply_status == "applied"
-    assert runtime.snapshot is applied
+    assert runtime.snapshot == applied
     assert runtime.cycle is not None
     assert runtime.cycle.snapshot.revision == 8
     await runtime.close()
@@ -749,6 +763,43 @@ async def test_application_protocol_owner_start_failure_stops_partial_owner_and_
 
     assert stopped == ["partial-trigger"]
     assert runtime.snapshot.apply_status == "failed"
+    assert runtime.sessions == {}
+    assert runtime.cycle is None
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_mark_applied_failure_after_runtime_activation_returns_to_failed_old_applied_revision_and_empty_graph(
+    monkeypatch,
+):
+    """The final repository commit may fail after local activation, but must leave no executable desired graph."""
+    from api.routes.config import publish_pending_snapshot
+
+    runtime, repository, _, _ = await _build(_document(_connection("paper-a")))
+    pending = RuntimeConfigSnapshot(
+        8,
+        _document(_connection("paper-a", parameters={"initial_equity": "20000"})),
+        NOW + timedelta(seconds=1),
+        "pending",
+        7,
+    )
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+
+    async def reject_final_commit(revision):
+        assert revision == pending.revision
+        assert runtime.snapshot.apply_status == "applied"
+        raise RuntimeError("final repository commit unavailable")
+
+    monkeypatch.setattr(repository, "mark_applied", reject_final_commit)
+    async with runtime.application_barrier():
+        with pytest.raises(Exception, match="Runtime configuration cannot be applied"):
+            await publish_pending_snapshot(runtime, pending, None, candidate)
+
+    assert repository.snapshot.apply_status == "failed"
+    assert repository.snapshot.applied_revision == 7
+    assert runtime.snapshot.apply_status == "failed"
+    assert runtime.snapshot.applied_revision == 7
     assert runtime.sessions == {}
     assert runtime.cycle is None
     await runtime.close()
@@ -825,8 +876,8 @@ async def test_application_cancellation_after_cas_fails_closed_and_rethrows_orig
         original_mark_applied = repository.mark_applied
 
         async def mark_then_cancel(*args, **kwargs):
-            await original_mark_applied(*args, **kwargs)
             await cancel_here()
+            return await original_mark_applied(*args, **kwargs)
 
         monkeypatch.setattr(repository, "mark_applied", mark_then_cancel)
         refresh = None

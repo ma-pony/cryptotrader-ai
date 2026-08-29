@@ -32,6 +32,10 @@ class RevisionConflict(RuntimeError):  # noqa: N818 - public contract uses this 
         super().__init__(f"runtime config revision conflict: expected {expected}, actual {actual}")
 
 
+class InvalidApplyTransition(RuntimeError):  # noqa: N818 - public contract uses this exact name.
+    """A revision can transition only once from pending into its terminal state."""
+
+
 class CredentialNotConfigured(LookupError):  # noqa: N818 - public contract uses this exact name.
     def __init__(self, credential_ref: str) -> None:
         super().__init__(f"credentials are not configured for {credential_ref}")
@@ -194,14 +198,12 @@ class RuntimeConfigRepository:
                 actual = await self._actual_revision(session)
                 await session.rollback()
                 raise RevisionConflict(expected_revision, actual)
+            row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+            if row is None:
+                await session.rollback()
+                raise RuntimeError("runtime config row disappeared")
             await session.commit()
-            return RuntimeConfigSnapshot(
-                expected_revision + 1,
-                document,
-                updated_at,
-                apply_status="pending",
-                applied_revision=expected_revision,
-            )
+            return _snapshot(row)
         finally:
             await session.close()
 
@@ -313,33 +315,46 @@ class RuntimeConfigRepository:
             await session.close()
 
     async def mark_applied(self, revision: int) -> RuntimeConfigSnapshot:
-        return await self._set_apply_state(revision, "applied", applied_revision=revision, apply_error=None)
-
-    async def mark_failed(
-        self, revision: int, error: str, *, last_activated_revision: int | None
-    ) -> RuntimeConfigSnapshot:
-        return await self._set_apply_state(
+        return await self._transition_pending(
             revision,
-            "failed",
-            applied_revision=last_activated_revision,
+            apply_status="applied",
+            applied_revision=revision,
+            apply_error=None,
+        )
+
+    async def mark_failed(self, revision: int, error: str) -> RuntimeConfigSnapshot:
+        return await self._transition_pending(
+            revision,
+            apply_status="failed",
+            applied_revision=None,
             apply_error=error[:256],
         )
 
-    async def _set_apply_state(
-        self, revision: int, status: str, *, applied_revision: int | None, apply_error: str | None
+    async def _transition_pending(
+        self, revision: int, apply_status: str, *, applied_revision: int | None, apply_error: str | None
     ) -> RuntimeConfigSnapshot:
         await self.ensure_tables()
         session = await get_async_session(self.database_url)
         try:
+            values: dict[str, object] = {"apply_status": apply_status, "apply_error": apply_error}
+            if applied_revision is not None:
+                values["applied_revision"] = applied_revision
             result = await session.execute(
                 update(_RuntimeConfigRow)
-                .where(_RuntimeConfigRow.id == _GLOBAL_ID, _RuntimeConfigRow.revision == revision)
-                .values(apply_status=status, applied_revision=applied_revision, apply_error=apply_error)
+                .where(
+                    _RuntimeConfigRow.id == _GLOBAL_ID,
+                    _RuntimeConfigRow.revision == revision,
+                    _RuntimeConfigRow.apply_status == "pending",
+                )
+                .values(**values)
             )
             if result.rowcount != 1:
-                actual = await self._actual_revision(session)
+                row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+                actual = 0 if row is None else row.revision
                 await session.rollback()
-                raise RevisionConflict(revision, actual)
+                if row is None or actual != revision:
+                    raise RevisionConflict(revision, actual)
+                raise InvalidApplyTransition("runtime config revision is not pending")
             row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
             await session.commit()
             if row is None:
