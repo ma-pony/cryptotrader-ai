@@ -43,5 +43,21 @@
     "next_run": "Next run",
     "idle": "Scheduler is currently idle",
     "error": "Scheduler status unavailable"
+  },
+  "activity": {
+    "title": "Today’s activity",
+    "subtitle": "Decisions · Risk",
+    "loading": "Loading activity…",
+    "error": "Activity is unavailable.",
+    "empty": "No decisions today",
+    "empty_hint": "Decisions and blocks will appear here after the scheduler runs.",
+    "status": "Status",
+    "direction": {
+      "long": "Long",
+      "short": "Short",
+      "flat": "Flat",
+      "hold": "Hold",
+      "unknown": "Direction: {{direction}}"
+    }
   }
 }

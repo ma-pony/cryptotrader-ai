@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useMultiVenueCycles } from '@/hooks/use-multi-venue-cycles';
 import { useRiskStatus } from '@/hooks/use-risk-status';
 import { cn } from '@/lib/cn';
+import { formatCycleStatus } from '@/lib/cycle-status';
 import { formatDateTime } from '@/lib/format';
 
 interface FeedItem {
@@ -33,12 +34,13 @@ const ActionBadge = ({
 }: {
   action: string;
 }) => {
+  const { t } = useTranslation('dashboard');
   const lower = action.toLowerCase();
   if (lower === 'long' || lower === 'buy') {
     return (
       <span className="inline-flex items-center gap-1 font-mono text-trade-long">
         <TrendingUp className="h-3 w-3" />
-        LONG
+        {t('activity.direction.long')}
       </span>
     );
   }
@@ -46,7 +48,7 @@ const ActionBadge = ({
     return (
       <span className="inline-flex items-center gap-1 font-mono text-trade-short">
         <TrendingDown className="h-3 w-3" />
-        SHORT
+        {t('activity.direction.short')}
       </span>
     );
   }
@@ -54,11 +56,18 @@ const ActionBadge = ({
     return (
       <span className="inline-flex items-center gap-1 font-mono text-amber-500">
         <MinusCircle className="h-3 w-3" />
-        FLAT
+        {t('activity.direction.flat')}
       </span>
     );
   }
-  return <span className="font-mono text-muted-foreground">HOLD</span>;
+  if (lower === 'hold' || lower === 'neutral')
+    return <span className="font-mono text-muted-foreground">{t('activity.direction.hold')}</span>;
+  return <span className="font-mono text-muted-foreground">{t('activity.direction.unknown', { direction: action })}</span>;
+};
+
+const ActivityStatus = ({ status }: { status: string }) => {
+  const { t } = useTranslation('dashboard');
+  return <>{t('activity.status')}: {formatCycleStatus(t, status)}</>;
 };
 
 /**
@@ -92,7 +101,7 @@ export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
             <span className="font-mono text-foreground">{d.books.map((book) => book.pair).join(', ')}</span>
           </span>
         ),
-        secondary: d.execution_status,
+        secondary: <ActivityStatus status={d.execution_status} />,
         onClick: () => void navigate(`/cycles/${d.cycle_id}`),
       });
     }
@@ -117,31 +126,33 @@ export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
   }, [decisions.data, risk.data, limit, navigate]);
 
   const isLoading = decisions.isLoading || risk.isLoading;
+  const isError = decisions.isError || risk.isError;
 
   return (
     <Card>
       <CardHeader className="flex flex-row items-center justify-between p-4 pb-2">
         <CardTitle className="text-sm">
-          {t('activity.title', { defaultValue: '今日动向' })}
+          {t('activity.title')}
         </CardTitle>
         <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
-          {t('activity.subtitle', { defaultValue: '决策 · 风控' })}
+          {t('activity.subtitle')}
         </span>
       </CardHeader>
       <CardContent className="p-2 pt-0">
         {isLoading ? (
           <div className="space-y-2 px-2 py-2">
+            <span className="sr-only">{t('activity.loading')}</span>
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-7 w-full" />
             ))}
           </div>
+        ) : isError ? (
+          <p className="px-2 py-3 text-xs text-destructive">{t('activity.error')}</p>
         ) : items.length === 0 ? (
           <EmptyState
             size="compact"
-            title={t('activity.empty', { defaultValue: '今日无决策记录' })}
-            description={t('activity.empty_hint', {
-              defaultValue: '调度器运行后，决策与拦截会在这里实时出现',
-            })}
+            title={t('activity.empty')}
+            description={t('activity.empty_hint')}
           />
         ) : (
           <ul className="divide-y divide-border">

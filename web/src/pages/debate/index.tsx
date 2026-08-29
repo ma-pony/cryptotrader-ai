@@ -56,7 +56,13 @@ const normalizeDir = (raw: string): NormalizedDir => {
 const toScenario = (d: Cycle): DebateScenario | null => {
   const committee = d.shared_signals.components.find((component) => component.component_id === 'llm_committee');
   if (!committee) return null;
-  const parsedDetails = CommitteeDetailsSchema.safeParse(decodeEntries(committee.details));
+  let decodedDetails;
+  try {
+    decodedDetails = decodeEntries(committee.details);
+  } catch {
+    return null;
+  }
+  const parsedDetails = CommitteeDetailsSchema.safeParse(decodedDetails);
   if (!parsedDetails.success) return null;
   const details = parsedDetails.data;
   const turnsApi = details.debate_turns ?? [];

@@ -119,4 +119,47 @@ describe('debate canonical cycle details', () => {
     );
     expect(await screen.findByText('Unable to load debate details for cycle cycle-debate.')).toBeInTheDocument();
   });
+
+  it('contains invalid committee number envelopes inside the unavailable state', async () => {
+    await i18n.changeLanguage('en-US');
+    const malformedNumber = CycleSchema.parse({
+      ...cycle,
+      shared_signals: {
+        ...cycle.shared_signals,
+        components: [
+          {
+            ...cycle.shared_signals.components[0]!,
+            details: [
+              {
+                key: 'analyses',
+                value: jsonObject([
+                  {
+                    key: 'technical',
+                    value: jsonObject([
+                      { key: 'agent_id', value: jsonString('technical') },
+                      { key: 'direction', value: jsonString('bullish') },
+                      { key: 'confidence', value: jsonNumber('NaN') },
+                      { key: 'reasoning', value: jsonString('valid shape, invalid decoded number') },
+                    ]),
+                  },
+                ]),
+              },
+            ],
+          },
+        ],
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (String(url) === '/api/cycles/cycle-debate') return Promise.resolve(response(malformedNumber));
+      if (String(url) === '/api/cycles?page=1&size=20') return Promise.resolve(response({ items: [malformedNumber], total: 1, page: 1, size: 20, has_next: false }));
+      throw new Error(`unexpected request ${String(url)}`);
+    }));
+    render(
+      <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+        <MemoryRouter initialEntries={['/debate/cycle-debate']}><Routes><Route path="/debate/:cycleId" element={<DebatePage />} /></Routes></MemoryRouter>
+      </QueryClientProvider>,
+    );
+    expect(await screen.findByText('Unable to load debate details for cycle cycle-debate.')).toBeInTheDocument();
+    expect(screen.queryByText('Four-agent committee · Post-debate summary')).not.toBeInTheDocument();
+  });
 });

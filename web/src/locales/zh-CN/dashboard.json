@@ -43,5 +43,21 @@
     "next_run": "下次触发",
     "idle": "调度器当前处于空闲状态",
     "error": "调度器状态不可用"
+  },
+  "activity": {
+    "title": "今日动向",
+    "subtitle": "决策 · 风控",
+    "loading": "正在加载动态…",
+    "error": "动态记录不可用。",
+    "empty": "今日无决策记录",
+    "empty_hint": "调度器运行后，决策与拦截会在这里实时出现。",
+    "status": "状态",
+    "direction": {
+      "long": "看多",
+      "short": "看空",
+      "flat": "空仓",
+      "hold": "观望",
+      "unknown": "方向：{{direction}}"
+    }
   }
 }
