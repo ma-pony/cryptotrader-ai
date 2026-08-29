@@ -13,10 +13,12 @@ import uuid
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
+from cryptotrader.execution_ownership import wait_for_owned
+from cryptotrader.pair import Pair
+from cryptotrader.risk.state import RedisStateManager
+
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-
-    from cryptotrader.risk.state import RedisStateManager
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,10 @@ logger = logging.getLogger(__name__)
 # misses (e.g. permission-denied path).  Combined with stale-PID stealing
 # (spec 021 E1) this is now belt-and-suspenders.
 DEFAULT_CYCLE_LOCK_TTL = 360
+
+
+class ExecutionLeaseUnavailableError(RuntimeError):
+    """Redis pair admission was unavailable or already owned."""
 
 
 @asynccontextmanager
@@ -62,16 +68,15 @@ async def cycle_lock(
 
 @asynccontextmanager
 async def execution_pair_lease(redis_url: str, pair: str) -> AsyncIterator[None]:
-    """Acquire the sole strict Redis lease for one already-canonical pair."""
-    from cryptotrader.risk.state import RedisStateManager
-
+    """Acquire the sole strict Redis lease for a canonicalized pair."""
     if not redis_url.strip():
-        raise RuntimeError("Redis is required for production execution lease")
+        raise ExecutionLeaseUnavailableError("Redis is required for production execution lease")
+    canonical_pair = Pair.parse(pair).canonical()
     redis_state = RedisStateManager(redis_url)
     try:
-        async with cycle_lock(redis_state, pair) as acquired:
+        async with cycle_lock(redis_state, canonical_pair) as acquired:
             if not acquired:
-                raise RuntimeError(f"execution lease held for {pair}")
+                raise ExecutionLeaseUnavailableError(f"execution lease held for {canonical_pair}")
             yield
     finally:
-        await redis_state.aclose()
+        await wait_for_owned(redis_state.aclose())

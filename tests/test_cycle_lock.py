@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from cryptotrader.cycle_lock import cycle_lock
+from cryptotrader.cycle_lock import ExecutionLeaseUnavailableError, cycle_lock, execution_pair_lease
 from cryptotrader.risk.state import RedisStateManager
 
 
@@ -98,3 +98,44 @@ async def test_stale_execution_lease_release_cannot_delete_a_reassigned_redis_ke
 
     assert released is False
     assert state._redis.values["cycle_lock:BTC/USDT"] == "new-owner"
+
+
+@pytest.mark.asyncio
+async def test_execution_pair_lease_canonicalizes_pair_and_does_not_translate_body_errors(monkeypatch):
+    seen: list[str] = []
+
+    class State:
+        async def aclose(self):
+            return None
+
+    async def acquire(_state, pair):
+        seen.append(pair)
+        yield True
+
+    from contextlib import asynccontextmanager
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
+    monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", asynccontextmanager(acquire))
+
+    with pytest.raises(RuntimeError, match="body failure"):
+        async with execution_pair_lease("redis://localhost/0", "BTC/USDT:USDT"):
+            raise RuntimeError("body failure")
+    assert seen == ["BTC/USDT:USDT"]
+
+
+@pytest.mark.asyncio
+async def test_execution_pair_lease_uses_dedicated_contention_error(monkeypatch):
+    class State:
+        async def aclose(self):
+            return None
+
+    from contextlib import asynccontextmanager
+
+    async def unavailable(_state, _pair):
+        yield False
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
+    monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", asynccontextmanager(unavailable))
+    with pytest.raises(ExecutionLeaseUnavailableError):
+        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+            pass

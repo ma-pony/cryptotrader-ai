@@ -147,7 +147,7 @@ class Runtime:
         Unlike the graph lease this is a strict distributed ownership lease:
         an absent or unhealthy Redis is an execution refusal.
         """
-        from cryptotrader.cycle_lock import execution_pair_lease
+        from cryptotrader.cycle_lock import ExecutionLeaseUnavailableError, execution_pair_lease
         from cryptotrader.pair import Pair
 
         canonical_pair = Pair.parse(pair).canonical()
@@ -158,7 +158,7 @@ class Runtime:
             try:
                 async with execution_pair_lease(redis_url, canonical_pair):
                     yield cycle
-            except RuntimeError as error:
+            except ExecutionLeaseUnavailableError as error:
                 raise RuntimeLeaseUnavailableError(str(error)) from error
 
     async def _release_cycle_lease(self) -> None:
