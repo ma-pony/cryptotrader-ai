@@ -27,7 +27,8 @@ from cryptotrader.venues.models import (
 )
 from cryptotrader.venues.protocol import VenueOperationError
 from tests.factories.runtime_config import connection
-from tests.factories.signal_fusion import context, position
+from tests.factories.signal_fusion import execution_context as context
+from tests.factories.signal_fusion import position
 
 
 class _Exchange:

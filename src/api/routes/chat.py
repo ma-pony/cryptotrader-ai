@@ -93,29 +93,28 @@ async def _handle_new_analysis(
 ) -> StreamingResponse:
     from cryptotrader.chat.analysis_runner import run_analysis_and_buffer
     from cryptotrader.chat.event_buffer import EventBuffer
-    from cryptotrader.chat.event_bus import EventBus, EventBusCycleSink
+    from cryptotrader.chat.event_bus import EventBus
     from cryptotrader.chat.task_manager import BackgroundTaskManager, TooManyTasksError
-    from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
 
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None or runtime.cycle is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not active")
+    config = runtime.snapshot.document
     pair = (
         payload.message.strip().upper()
         if "/" in payload.message
-        else (config.scheduler.pairs[0].canonical() if config.scheduler.pairs else "BTC/USDT")
+        else (config.scheduler.pairs[0] if config.scheduler.pairs else "BTC/USDT")
     )
     state = RedisStateManager(config.infrastructure.redis_url or None)
     buffer = EventBuffer(
         session_id,
         state,
-        config.chat.event_buffer_ttl_seconds,
-        config.chat.event_buffer_max_size,
+        600,
+        1000,
     )
     bus = EventBus(session_id, buffer)
-    builder = getattr(request.app.state, "trading_cycle_builder", None)
-    if builder is None:
-        raise HTTPException(status_code=503, detail="Trading cycle is not initialized")
-    cycle = builder("paper", EventBusCycleSink(bus))
+    cycle = runtime.cycle
 
     async def run_cycle(interrupt_event: asyncio.Event) -> None:
         await run_analysis_and_buffer(
@@ -129,7 +128,7 @@ async def _handle_new_analysis(
         )
 
     try:
-        BackgroundTaskManager.get_instance(config.chat).create(
+        BackgroundTaskManager.get_instance().create(
             session_id,
             pair,
             run_cycle,

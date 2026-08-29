@@ -19,6 +19,8 @@ import pytest
 # `api.main` import collects this module. pytest itself does not read AUTH_MODE,
 # so it is safe to import pytest first.
 os.environ.setdefault("AUTH_MODE", "disabled")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:////tmp/cryptotrader-test-runtime.db")
+os.environ.setdefault("CONFIG_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
 
 
 @pytest.fixture(autouse=True)

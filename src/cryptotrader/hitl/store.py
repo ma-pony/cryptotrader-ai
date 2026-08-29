@@ -14,8 +14,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from cryptotrader.cycle_serialization import (
-    cycle_request_from_payload,
-    cycle_request_payload,
     signal_context_from_payload,
     signal_context_payload,
     signal_profile_from_payload,
@@ -26,6 +24,7 @@ from cryptotrader.cycle_serialization import (
 from cryptotrader.db import get_async_session, get_engine
 from cryptotrader.execution.codec import book_execution_proposal_from_payload, book_execution_proposal_payload
 from cryptotrader.hitl.models import BookApproval, BookApprovalStatus
+from cryptotrader.pair import Pair
 
 if TYPE_CHECKING:
     from cryptotrader.decision.models import CycleRequest, TradePlan
@@ -112,6 +111,16 @@ def _normalize_datetime(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
+def _cycle_request_payload(request: CycleRequest) -> dict[str, Any]:
+    return {"pair": request.pair.canonical()}
+
+
+def _cycle_request_from_payload(payload: dict[str, Any]) -> CycleRequest:
+    from cryptotrader.decision.models import CycleRequest
+
+    return CycleRequest(Pair.parse(str(payload["pair"])))
+
+
 def _row_to_record(row: _ApprovalRow) -> ApprovalRecord:
     return ApprovalRecord(
         approval_id=row.approval_id,
@@ -119,7 +128,7 @@ def _row_to_record(row: _ApprovalRow) -> ApprovalRecord:
         pair=row.pair,
         profile_revision=row.profile_revision,
         profile=signal_profile_from_payload(row.request_payload["profile"]),
-        cycle_request=cycle_request_from_payload(row.request_payload),
+        cycle_request=_cycle_request_from_payload(row.request_payload),
         signal_context=signal_context_from_payload(row.context_payload),
         plan=trade_plan_from_payload(row.trade_plan_payload),
         status=cast("ApprovalStatus", row.status),
@@ -156,7 +165,7 @@ class ApprovalStore:
     ) -> ApprovalRecord:
         approval_id = approval_id or str(uuid4())
         created_at = created_at or datetime.now(UTC)
-        request_data = cycle_request_payload(cycle_request)
+        request_data = _cycle_request_payload(cycle_request)
         request_data["profile"] = signal_profile_payload(profile)
         context_data = signal_context_payload(signal_context)
         plan_data = trade_plan_payload(plan)
@@ -166,7 +175,7 @@ class ApprovalStore:
             pair=cycle_request.pair.canonical(),
             profile_revision=profile.revision,
             profile=signal_profile_from_payload(request_data["profile"]),
-            cycle_request=cycle_request_from_payload(request_data),
+            cycle_request=_cycle_request_from_payload(request_data),
             signal_context=signal_context_from_payload(context_data),
             plan=trade_plan_from_payload(plan_data),
             status="pending",

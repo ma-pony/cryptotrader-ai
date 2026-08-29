@@ -11,6 +11,7 @@ returning falsy values.
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +25,11 @@ from tests.factories.signal_fusion import cycle_record
 def client() -> TestClient:
     from api.main import app
 
+    app.state.runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(document=SimpleNamespace()),
+        repository=SimpleNamespace(database_url=None),
+        cycle=None,
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 

@@ -8,11 +8,12 @@ from datetime import UTC, datetime
 import pandas as pd
 import pytest
 
-from cryptotrader.decision.models import CycleRequest
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 from cryptotrader.pair import Pair
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
-from tests.factories.signal_fusion import position
+
+PAIR = Pair.parse("BTC/USDT:USDT")
+AS_OF = datetime(2026, 1, 2, tzinfo=UTC)
 
 
 def _market(rows: int = 20, *, start="2026-01-01", price: float = 100.0) -> MarketData:
@@ -59,31 +60,6 @@ class FakeMarketCollector:
         return _market(rows=limit, start="2025-12-01", price=101.0)
 
 
-class FakePortfolioReader:
-    def __init__(self) -> None:
-        self.total_value = 10_000.0
-        self.current_position = position()
-        self.latest_price = None
-
-    async def read(self, request, current_price, *, refresh_price=False):
-        current = self.current_position
-        amount = current.amount if current.side != "short" else -current.amount
-        return {
-            "total_value": self.total_value,
-            "current_price": self.latest_price if refresh_price and self.latest_price else current_price,
-            "positions": {
-                request.pair.canonical(): {
-                    "amount": amount,
-                    "side": current.side,
-                    "avg_price": current.avg_price,
-                    "unrealized_pnl": current.unrealized_pnl,
-                }
-            }
-            if current.side != "flat"
-            else {},
-        }
-
-
 def _requirements() -> DataRequirements:
     return DataRequirements(
         candles=(CandleRequirement("1h", 20), CandleRequirement("4h", 30)),
@@ -100,12 +76,9 @@ async def test_live_provider_materializes_each_required_timeframe_once():
 
     aggregator = FakeSnapshotAggregator()
     market = FakeMarketCollector()
-    provider = LiveSignalContextProvider(aggregator, market, FakePortfolioReader(), default_timeframe="1h")
+    provider = LiveSignalContextProvider(aggregator, market, exchange_id="okx", default_timeframe="1h")
 
-    context = await provider.collect(
-        CycleRequest(Pair.parse("BTC/USDT:USDT"), "paper", "okx"),
-        _requirements(),
-    )
+    context = await provider.collect(PAIR, AS_OF, _requirements())
 
     assert set(context.snapshots) == {"1h", "4h"}
     assert {snapshot.timestamp for snapshot in context.snapshots.values()} == {context.as_of}
@@ -117,82 +90,20 @@ async def test_live_provider_materializes_each_required_timeframe_once():
 
 
 @pytest.mark.asyncio
-async def test_live_provider_normalizes_current_position_to_maximum_position_ratio():
-    from cryptotrader.signals.context import LiveSignalContextProvider
-
-    portfolio = FakePortfolioReader()
-    portfolio.current_position = position("long", amount=2.0, size_ratio=0.0, avg_price=90.0)
-    provider = LiveSignalContextProvider(
-        FakeSnapshotAggregator(),
-        FakeMarketCollector(),
-        portfolio,
-        default_timeframe="1h",
-        max_single_pct=0.1,
-    )
-
-    context = await provider.collect(CycleRequest(Pair.parse("BTC/USDT:USDT"), "paper"), _requirements())
-
-    assert context.current_position.amount == 2.0
-    assert context.current_position.size_ratio == pytest.approx(0.2)
-
-
-@pytest.mark.asyncio
 async def test_historical_provider_never_includes_future_bars():
     from cryptotrader.signals.context import HistoricalSignalContextProvider
 
     as_of = datetime(2025, 1, 2, tzinfo=UTC)
     market = _market(rows=4, start="2025-01-01", price=80.0)
     history = {"4h": replace(_snapshot("4h", timestamp=as_of, market=market))}
-    provider = HistoricalSignalContextProvider(history, default_timeframe="4h", equity=5_000.0)
+    provider = HistoricalSignalContextProvider(history, default_timeframe="4h")
 
     context = await provider.collect(
-        CycleRequest(Pair.parse("BTC/USDT:USDT"), "backtest", as_of=as_of),
+        PAIR,
+        as_of,
         DataRequirements(candles=(CandleRequirement("4h", 10),)),
     )
 
     assert context.as_of == as_of
     assert context.snapshots["4h"].market.ohlcv.index.max().to_pydatetime() <= as_of
     assert context.current_price == 80.0
-
-
-@pytest.mark.asyncio
-async def test_refresh_execution_state_only_updates_live_portfolio_fields():
-    from cryptotrader.signals.context import LiveSignalContextProvider
-
-    portfolio = FakePortfolioReader()
-    provider = LiveSignalContextProvider(
-        FakeSnapshotAggregator(),
-        FakeMarketCollector(),
-        portfolio,
-        default_timeframe="1h",
-    )
-    original = await provider.collect(CycleRequest(Pair.parse("BTC/USDT:USDT"), "paper"), _requirements())
-    portfolio.current_position = position("long", 0.2, 0.2)
-    portfolio.total_value = 12_000.0
-    portfolio.latest_price = 125.0
-
-    refreshed = await provider.refresh_execution_state(original)
-
-    assert refreshed.snapshots is original.snapshots
-    assert refreshed.as_of == original.as_of
-    assert refreshed.atr == original.atr
-    assert refreshed.equity == 12_000.0
-    assert refreshed.current_price == 125.0
-    assert refreshed.current_position.side == "long"
-
-
-@pytest.mark.asyncio
-async def test_historical_refresh_preserves_original_context():
-    from cryptotrader.signals.context import HistoricalSignalContextProvider
-
-    as_of = datetime(2025, 1, 2, tzinfo=UTC)
-    provider = HistoricalSignalContextProvider(
-        {"4h": _snapshot("4h", timestamp=as_of, market=_market(start="2025-01-01"))},
-        default_timeframe="4h",
-    )
-    original = await provider.collect(
-        CycleRequest(Pair.parse("BTC/USDT:USDT"), "backtest", as_of=as_of),
-        DataRequirements(candles=(CandleRequirement("4h", 10),)),
-    )
-
-    assert await provider.refresh_execution_state(original) is original

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import math
 from dataclasses import replace
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -15,31 +15,34 @@ from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import _TF_MS, fetch_historical
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.decision.models import CycleRequest
+from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.execution.service import ExecutionOrderResult, ExecutionResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 from cryptotrader.pair import Pair
 from cryptotrader.signals.models import CandleRequirement, DataRequirements, PositionSnapshot
+from cryptotrader.venues.models import VenueConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
     from cryptotrader.decision.models import CycleOutcome, ExecutionPlan
-    from cryptotrader.journal.models import TradingCycleRecord
-    from cryptotrader.profiles.models import SignalProfile
-    from cryptotrader.signals.component import SignalComponent
-    from cryptotrader.signals.context import HistoricalSignalContextProvider
+    from cryptotrader.journal.models import MultiVenueCycleRecord
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+    from cryptotrader.signals.registry import SignalComponentRegistry
 
 logger = logging.getLogger(__name__)
 
 
-class FrozenProfileRepository:
-    """A point-in-time profile view owned by one backtest run."""
+class _FrozenRuntimeRepository:
+    """Backtest-local repository that cannot reveal or switch venue configuration."""
 
-    def __init__(self, profile: SignalProfile) -> None:
-        self.profile = replace(profile, hitl_required=False)
+    database_url = None
 
-    async def get(self) -> SignalProfile:
-        return self.profile
+    def __init__(self, snapshot) -> None:
+        self.snapshot = snapshot
+
+    async def get_or_create(self):
+        return self.snapshot
 
 
 class BacktestExecutor:
@@ -202,37 +205,27 @@ class BacktestEngine:
         lookback: int | None = None,
         progress_callback: Callable[[float], None] | None = None,
         *,
-        profile_repository=None,
-        cycle_factory: Callable | None = None,
-        custom_components: tuple[SignalComponent, ...] | None = None,
+        repository=None,
+        snapshot: RuntimeConfigSnapshot | None = None,
+        signal_registry: SignalComponentRegistry | None = None,
         journal_store=None,
-        config=None,
     ) -> None:
-        from cryptotrader.bootstrap import SeededProfileRepository
-        from cryptotrader.config import load_config
-
-        self.config = config or load_config()
-        backtest = self.config.backtest
         self.pair = Pair.parse(pair)
         self.start = start
         self.end = end
         self.start_ms = int(datetime.fromisoformat(start).replace(tzinfo=UTC).timestamp() * 1000)
         self.end_ms = int(datetime.fromisoformat(end).replace(tzinfo=UTC).timestamp() * 1000)
         self.interval = interval
-        self.capital = initial_capital if initial_capital is not None else backtest.initial_capital
-        self.slippage_bps = slippage_bps if slippage_bps is not None else backtest.slippage_base * 10_000
-        self.fee_bps = fee_bps if fee_bps is not None else backtest.fee_bps
-        self.lookback = lookback if lookback is not None else backtest.lookback
+        self.capital = initial_capital if initial_capital is not None else 10_000.0
+        self.slippage_bps = slippage_bps if slippage_bps is not None else 10.0
+        self.fee_bps = fee_bps if fee_bps is not None else 10.0
+        self.lookback = lookback if lookback is not None else 512
         self.progress_callback = progress_callback
-        self.cycle_factory = cycle_factory
-        self.custom_components = custom_components
+        self.repository = repository
+        self.snapshot = snapshot
+        self.signal_registry = signal_registry
         self.journal_store = journal_store
-        database_url = self.config.infrastructure.database_url or None
-        self.profile_repository = profile_repository or SeededProfileRepository(
-            database_url,
-            self.config.signal_profile_defaults.to_profile(),
-        )
-        self.first_bar_processed = asyncio.Event()
+        self._as_of: datetime | None = None
         self._candles_by_timeframe: dict[str, list[list]] = {}
         self._candles: list[list] = []
         self._fng: dict[str, int] = {}
@@ -251,179 +244,132 @@ class BacktestEngine:
         self._ls_ratio: dict[str, dict] = {}
 
     async def run(self) -> BacktestResult:
-        selected = await self.profile_repository.get()
-        if selected is None:
-            raise RuntimeError("global signal profile is not initialized")
-        frozen_profiles = FrozenProfileRepository(selected)
-        registry, requirements = self._dependencies(frozen_profiles.profile)
+        from cryptotrader.cycle_events import NullCycleEventSink
+        from cryptotrader.journal.store import MultiVenueCycleStore
+        from cryptotrader.market_sources.registry import MarketSourceRegistry
+        from cryptotrader.runtime import _repository_from_bootstrap_environment, build_runtime
+        from cryptotrader.runtime_config.models import (
+            ExecutionConfig,
+            MarketDataConfig,
+            RuntimeConfigSnapshot,
+            SystemConfig,
+        )
+        from cryptotrader.signals.context import HistoricalSignalContextProvider
+        from cryptotrader.signals.registry import SignalComponentRegistry
+        from cryptotrader.venues.paper import PaperVenueAdapter
+        from cryptotrader.venues.registry import VenueAdapterRegistry
+
+        source_repository = self.repository or _repository_from_bootstrap_environment()
+        source_snapshot = self.snapshot or await source_repository.get_or_create()
+        events = NullCycleEventSink()
+        registry = self.signal_registry or SignalComponentRegistry.discover(source_snapshot.document, events)
+        default_timeframe = str(source_snapshot.document.market_data.parameters.get("timeframe", self.interval))
+        limit = int(source_snapshot.document.market_data.parameters.get("limit", self.lookback))
+        profile = source_snapshot.document.signals.to_profile(source_snapshot.revision)
+        components = registry.enabled(profile)
+        requirements = DataRequirements.merge(
+            *(component.requirements() for component in components),
+            DataRequirements(candles=(CandleRequirement(default_timeframe, max(20, limit)),)),
+            DataRequirements(candles=(CandleRequirement(self.interval, self.lookback),)),
+        )
         await self._fetch_historical_data(requirements)
         if not self._candles:
             return BacktestResult()
-
-        from cryptotrader.journal.store import CycleJournalStore
-        from cryptotrader.signals.context import HistoricalSignalContextProvider
-
-        executor = BacktestExecutor(
-            initial_capital=self.capital,
-            slippage_bps=self.slippage_bps,
-            fee_bps=self.fee_bps,
-        )
-        contexts = HistoricalSignalContextProvider(
+        historical = HistoricalSignalContextProvider(
             self._snapshot_at,
-            default_timeframe=self.config.data.default_timeframe,
-            equity=self.capital,
-            max_single_pct=self.config.risk.position.max_single_pct,
+            default_timeframe=default_timeframe,
         )
-        journal = self.journal_store if self.journal_store is not None else CycleJournalStore()
-        if self.cycle_factory is not None:
-            cycle = self.cycle_factory(frozen_profiles, contexts, executor, journal)
-        else:
-            cycle = self._build_cycle(frozen_profiles, contexts, executor, journal, registry)
-        return await self._run_bars(cycle, contexts, executor, journal)
-
-    def _dependencies(self, profile: SignalProfile):
-        if self.cycle_factory is not None:
-            requirements = DataRequirements(
-                candles=(CandleRequirement(self.interval, max(20, self.lookback)),),
-            )
-            return None, requirements
-
-        from cryptotrader.bootstrap import build_signal_registry
-        from cryptotrader.cycle_events import NullCycleEventSink
-        from cryptotrader.profiles.models import validate_signal_profile
-
-        registry = build_signal_registry(
-            self.config,
-            NullCycleEventSink(),
-            custom_components=self.custom_components,
+        connection = VenueConnection(
+            id="backtest-paper",
+            label="Backtest Paper",
+            adapter_id="paper",
+            environment="paper",
+            enabled=True,
+            credential_ref=None,
+            leverage=1,
+            margin_mode="isolated",
+            parameters={"initial_equity": str(self.capital)},
         )
-        validate_signal_profile(profile, registry.ids())
-        components = registry.enabled(profile)
-        exit_requirement = DataRequirements(
-            candles=(
-                CandleRequirement(
-                    self.config.data.default_timeframe,
-                    max(20, self.config.data.ohlcv_limit),
+        book = ExecutionBook(
+            id="backtest",
+            label="Backtest Paper",
+            capital_scope="simulated",
+            enabled=True,
+            hitl_required=False,
+            allocations=(ConnectionAllocation("backtest-paper", True, 1.0),),
+        )
+        document = source_snapshot.document.model_copy(
+            update={
+                "system": SystemConfig(active=True),
+                "market_data": MarketDataConfig(
+                    source_id="historical",
+                    parameters={"timeframe": default_timeframe, "limit": limit},
                 ),
-            ),
+                "execution": ExecutionConfig(connections=(connection,), books=(book,)),
+            }
         )
-        requirements = DataRequirements.merge(
-            *(component.requirements() for component in components),
-            exit_requirement,
-            DataRequirements(candles=(CandleRequirement(self.interval, self.lookback),)),
-        )
-        return registry, requirements
-
-    def _build_cycle(
-        self,
-        profiles: FrozenProfileRepository,
-        contexts: HistoricalSignalContextProvider,
-        executor: BacktestExecutor,
-        journal,
-        registry,
-    ):
-        from cryptotrader.cycle_events import NullCycleEventSink
-        from cryptotrader.decision.engine import DecisionEngine
-        from cryptotrader.decision.exit_policy import AtrExitPolicy
-        from cryptotrader.execution.planner import ExecutionPlanner
-        from cryptotrader.hitl.store import ApprovalStore
-        from cryptotrader.risk.gate import RiskGate
-        from cryptotrader.risk.state import RedisStateManager
-        from cryptotrader.signals.fusion import WeightedSignalFusion
-        from cryptotrader.signals.runner import ComponentRunner
-        from cryptotrader.trading_cycle import TradingCycle
-
-        events = NullCycleEventSink()
-        credentials = self.config.exchanges.get(self.config.scheduler.exchange_id or self.config.exchange_id)
-        leverage = credentials.leverage if credentials is not None else 1
-        return TradingCycle(
-            mode="backtest",
-            profiles=profiles,
-            registry=registry,
-            contexts=contexts,
-            runner=ComponentRunner(events),
-            fusion=WeightedSignalFusion(),
-            decisions=DecisionEngine(),
-            exits=AtrExitPolicy(),
-            approvals=ApprovalStore(),
-            risk=RiskGate(self.config.risk, RedisStateManager(None), leverage=leverage),
-            execution_planner=ExecutionPlanner(self.config.risk.position.max_single_pct),
-            executor=executor,
-            journal=journal,
+        frozen = RuntimeConfigSnapshot(source_snapshot.revision, document, source_snapshot.updated_at)
+        frozen_repository = _FrozenRuntimeRepository(frozen)
+        runtime = await build_runtime(
+            repository=frozen_repository,
+            snapshot=frozen,
+            signal_registry=registry,
+            venue_registry=VenueAdapterRegistry((PaperVenueAdapter(),)),
+            market_registry=MarketSourceRegistry((historical,)),
             events=events,
-            exit_requirement=DataRequirements(
-                candles=(
-                    CandleRequirement(
-                        self.config.data.default_timeframe,
-                        max(20, self.config.data.ohlcv_limit),
-                    ),
-                ),
-            ),
         )
+        if runtime.cycle is None:
+            raise RuntimeError("backtest Paper runtime did not create a cycle")
+        runtime.cycle.clock = self._clock
+        runtime.cycle.journal = self.journal_store or MultiVenueCycleStore()
+        try:
+            return await self._run_bars(runtime)
+        finally:
+            await runtime.close()
 
-    async def _run_bars(self, cycle, contexts, executor, journal) -> BacktestResult:
+    async def _run_bars(self, runtime) -> BacktestResult:
         interval_ms = _TF_MS.get(self.interval)
         if interval_ms is None:
             raise ValueError(f"unsupported backtest timeframe {self.interval!r}")
         indexes = [
             index for index, candle in enumerate(self._candles) if self.start_ms <= int(candle[0]) <= self.end_ms
         ]
-        if len(indexes) < 2:
+        if not indexes:
             return BacktestResult(equity_curve=[self.capital])
 
         outcomes: list[CycleOutcome] = []
         curve = [self.capital]
-        peak = self.capital
-        for step, index in enumerate(indexes[:-1]):
+        session = runtime.sessions["backtest-paper"]
+        for step, index in enumerate(indexes):
             candle = self._candles[index]
-            as_of = datetime.fromtimestamp((int(candle[0]) + interval_ms) / 1000, UTC)
-            outcome = await cycle.run(
-                CycleRequest(
-                    pair=self.pair,
-                    mode="backtest",
-                    exchange_id=self.config.scheduler.exchange_id or self.config.exchange_id,
-                    as_of=as_of,
-                )
-            )
+            self._as_of = datetime.fromtimestamp((int(candle[0]) + interval_ms) / 1000, UTC)
+            await session.set_quote(self.pair, Decimal(str(candle[4])))
+            outcome = await runtime.cycle.run(CycleRequest(self.pair))
             outcomes.append(outcome)
-            if step == 0:
-                self.first_bar_processed.set()
-
-            next_bar = self._candles[indexes[step + 1]]
-            executor.execute_pending_at(next_bar)
-            executor.process_protection(next_bar)
-            close = float(next_bar[4])
-            equity = executor.equity_at(close)
-            peak = max(peak, equity)
-            drawdown = (peak - equity) / peak if peak > 0.0 else 0.0
-            contexts.set_execution_state(
-                equity=equity,
-                cash=executor.cash,
-                current_position=executor.position_at(close),
-                daily_pnl=equity - self.capital,
-                drawdown=drawdown,
-            )
-            curve.append(equity)
+            portfolio = await session.fetch_portfolio(self.pair)
+            curve.append(float(portfolio.equity))
             if self.progress_callback is not None:
-                self.progress_callback((step + 1) / len(indexes[:-1]))
+                self.progress_callback((step + 1) / len(indexes))
 
-        last = self._candles[indexes[-1]]
-        executor.close_at(float(last[4]), int(last[0]))
-        final_equity = executor.equity_at(float(last[4]))
-        curve[-1] = final_equity
+        final_equity = curve[-1]
         records = []
         for outcome in outcomes:
-            record = await journal.get(outcome.cycle_id)
+            record = await runtime.cycle.journal.get(outcome.cycle_id)
             if record is None:
                 raise RuntimeError(f"backtest cycle {outcome.cycle_id!r} is missing from the journal")
             records.append(record)
         return self._compute_result(
             final_equity,
             curve,
-            executor.trades,
+            [],
             records=records,
             outcomes=outcomes,
         )
+
+    def _clock(self) -> datetime:
+        if self._as_of is None:
+            raise RuntimeError("backtest cycle clock is not initialized")
+        return self._as_of
 
     async def _fetch_historical_data(self, requirements: DataRequirements) -> None:
         limits = {item.timeframe: item.limit for item in requirements.candles}
@@ -584,7 +530,7 @@ class BacktestEngine:
         curve: list[float],
         trades: list[dict],
         *,
-        records: list[TradingCycleRecord] | None = None,
+        records: list[MultiVenueCycleRecord] | None = None,
         outcomes: list[CycleOutcome] | None = None,
     ) -> BacktestResult:
         returns = [
@@ -614,7 +560,7 @@ class BacktestEngine:
                 {
                     "cycle_id": outcome.cycle_id,
                     "status": outcome.status,
-                    "profile_revision": outcome.profile_revision,
+                    "config_revision": outcome.config_revision,
                 }
                 for outcome in outcomes
             ]
@@ -628,20 +574,18 @@ class BacktestEngine:
             decisions=decisions,
             cycle_records=records,
             cycle_ids=[outcome.cycle_id for outcome in outcomes],
-            profile_revisions=[outcome.profile_revision for outcome in outcomes],
+            config_revisions=[outcome.config_revision for outcome in outcomes],
         )
 
     @staticmethod
-    def _decision_payload(record: TradingCycleRecord) -> dict[str, Any]:
+    def _decision_payload(record: MultiVenueCycleRecord) -> dict[str, Any]:
         return {
             "cycle_id": record.cycle_id,
-            "ts": record.context_summary.get("as_of"),
-            "price": record.context_summary.get("current_price"),
-            "status": record.status,
-            "profile_revision": record.profile_revision,
+            "ts": record.created_at.isoformat(),
+            "status": record.cycle_status,
+            "config_revision": record.config_revision,
             "components": list(record.component_signals),
             "fusion": record.fused_signal,
             "target_position": record.target_position,
-            "risk_result": record.risk_result,
-            "execution_result": record.execution_result,
+            "books": list(record.book_results),
         }

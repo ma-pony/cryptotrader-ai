@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from dataclasses import fields
 
 import pytest
 
@@ -88,14 +88,11 @@ def test_position_snapshot_exposes_signed_amount_and_ratio():
     assert short.signed_ratio == -0.3
 
 
-def test_cycle_request_keeps_pair_mode_and_as_of():
+def test_cycle_request_contains_only_pair():
     from cryptotrader.decision.models import CycleRequest
     from cryptotrader.pair import Pair
 
-    as_of = datetime(2026, 1, 1, tzinfo=UTC)
-    request = CycleRequest(Pair.parse("BTC/USDT:USDT"), "backtest", "okx", as_of)
+    request = CycleRequest(Pair.parse("BTC/USDT:USDT"))
 
     assert request.pair.canonical() == "BTC/USDT:USDT"
-    assert request.mode == "backtest"
-    assert request.exchange_id == "okx"
-    assert request.as_of == as_of
+    assert [field.name for field in fields(request)] == ["pair"]

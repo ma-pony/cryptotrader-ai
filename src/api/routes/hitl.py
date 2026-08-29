@@ -1,14 +1,17 @@
-"""冻结 TradePlan 的人工审批查询与周期恢复 API。"""
+"""资金池完整 proposal 的审批与同周期执行 API。"""
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
-from cryptotrader.cycle_serialization import trade_plan_payload
-from cryptotrader.hitl.store import ApprovalRecord, ApprovalStateError, ApprovalStatus
+from cryptotrader.execution.codec import book_execution_proposal_payload
+from cryptotrader.hitl.store import ApprovalStateError
+
+if TYPE_CHECKING:
+    from cryptotrader.hitl.models import BookApproval
 
 router = APIRouter(prefix="/api/hitl", tags=["hitl"])
 
@@ -16,11 +19,11 @@ router = APIRouter(prefix="/api/hitl", tags=["hitl"])
 class ApprovalRequestOut(BaseModel):
     approval_id: str
     cycle_id: str
+    book_id: str
     pair: str
-    profile_revision: int
-    trade_plan: dict
-    status: ApprovalStatus
-    decision_by: str | None
+    config_revision: int
+    proposal: dict
+    status: Literal["pending", "approved", "rejected", "invalidated", "executed"]
     created_at: str
     decided_at: str | None
 
@@ -37,39 +40,21 @@ class HitlRespondOut(BaseModel):
 
 
 def _cycle(request: Request):
-    cycle = getattr(request.app.state, "trading_cycle", None)
-    if cycle is None:
-        raise HTTPException(status_code=503, detail="Trading cycle is not initialized")
-    return cycle
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None or runtime.cycle is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not active")
+    return runtime.cycle
 
 
-def _cycle_for_mode(request: Request, mode: str):
-    state = request.app.state
-    cycles = getattr(state, "trading_cycles", None)
-    if cycles is None:
-        primary = _cycle(request)
-        cycles = {getattr(primary, "mode", mode): primary}
-        state.trading_cycles = cycles
-    selected = cycles.get(mode)
-    if selected is not None:
-        return selected
-    builder = getattr(state, "trading_cycle_builder", None)
-    if builder is None:
-        raise HTTPException(status_code=503, detail=f"Trading cycle for mode {mode!r} is not initialized")
-    selected = builder(mode)
-    cycles[mode] = selected
-    return selected
-
-
-def _response(record: ApprovalRecord) -> ApprovalRequestOut:
+def _response(record: BookApproval) -> ApprovalRequestOut:
     return ApprovalRequestOut(
         approval_id=record.approval_id,
         cycle_id=record.cycle_id,
-        pair=record.pair,
-        profile_revision=record.profile_revision,
-        trade_plan=trade_plan_payload(record.plan),
+        book_id=record.book_id,
+        pair=record.proposal.pair.canonical(),
+        config_revision=record.config_revision,
+        proposal=book_execution_proposal_payload(record.proposal),
         status=record.status,
-        decision_by=record.decision_by,
         created_at=record.created_at.isoformat(),
         decided_at=record.decided_at.isoformat() if record.decided_at is not None else None,
     )
@@ -90,22 +75,15 @@ async def get_approval(approval_id: str, request: Request) -> ApprovalRequestOut
 
 
 @router.post("/{approval_id}/respond")
-async def respond_approval(
-    approval_id: str,
-    body: HitlRespondIn,
-    request: Request,
-) -> HitlRespondOut:
-    primary_cycle = _cycle(request)
-    approval = await primary_cycle.approvals.get(approval_id)
-    if approval is None:
-        raise HTTPException(status_code=404, detail="Approval request not found")
-    cycle = _cycle_for_mode(request, approval.cycle_request.mode)
+async def respond_approval(approval_id: str, body: HitlRespondIn, request: Request) -> HitlRespondOut:
+    cycle = _cycle(request)
     try:
         if body.decision == "approve":
-            outcome = await cycle.resume_approved(approval_id, decision_by="web")
-            approval_status = "approved"
+            await cycle.approvals.approve(approval_id)
+            outcome = await cycle.execute_approved(approval_id)
+            approval_status = "executed"
         else:
-            outcome = await cycle.reject_approval(approval_id, decision_by="web")
+            outcome = await cycle.reject_approval(approval_id)
             approval_status = "rejected"
     except ApprovalStateError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

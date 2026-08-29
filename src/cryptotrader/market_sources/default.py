@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from cryptotrader.agents._indicators import atr
 from cryptotrader.data.market import clip_ohlcv_at
 from cryptotrader.data.snapshot import SnapshotAggregator
-from cryptotrader.signals.models import DataRequirements, PositionSnapshot, SignalContext
+from cryptotrader.signals.models import DataRequirements, SignalContext
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -101,16 +101,11 @@ class DefaultMarketDataSource:
         return SignalContext(
             pair=pair,
             as_of=as_of,
-            mode="paper",
-            exchange_id="",
             market_data_source_id=self.id,
             market_type=pair.market_type,
-            equity=0.0,
             current_price=_price(primary_snapshot),
             atr=_atr(primary_snapshot),
-            current_position=PositionSnapshot("flat", 0.0, 0.0),
             snapshots=snapshots,
-            portfolio={},
         )
 
 

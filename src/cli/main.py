@@ -37,79 +37,53 @@ def _setup():
 @app.command()
 def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
-    mode: Annotated[str, typer.Option("--mode", "-m", help="paper or live")] = "paper",
-    exchange: Annotated[str, typer.Option("--exchange", "-e", help="Exchange (default: from config)")] = "",
 ):
     """Run one analysis cycle for each pair sequentially."""
-    if pair is None:
-        from cryptotrader.config import load_config
-
-        cfg_pairs = load_config().scheduler.pairs
-        # cfg_pairs is list[Pair] post spec 013; project canonical str expected by _run
-        pair = [p.canonical() for p in cfg_pairs] if cfg_pairs else ["BTC/USDT"]
-    asyncio.run(_run(pair, mode, exchange))
+    asyncio.run(_run(pair))
 
 
-async def _run(pairs: list[str], mode: str, exchange_id: str):
-    from cryptotrader.bootstrap import build_trading_cycle, initialize_trading_cycle
-    from cryptotrader.config import load_config
+async def _run(pairs: list[str] | None):
+    from cryptotrader.runtime import build_runtime
 
-    config = load_config()
-    if not exchange_id:
-        exchange_id = config.exchange_id
-
-    # Live mode pre-flight checks
-    if mode == "live":
-        creds = config.exchanges.get(exchange_id)
-        if creds is None or not creds.api_key or not creds.secret:
-            console.print(
-                f"[red]ERROR: No credentials configured for exchange '{exchange_id}'.[/red]\n"
-                f"Set api_key/secret in config/local.toml under [exchanges.{exchange_id}]"
-            )
-            raise typer.Exit(1)
-        if creds.sandbox:
-            console.print("[yellow]WARNING: Running in SANDBOX mode (sandbox=true in config)[/yellow]")
-
-    cycle = build_trading_cycle(config, mode)
+    runtime = await build_runtime()
+    if runtime.cycle is None:
+        console.print("[red]Runtime setup is incomplete.[/red]")
+        raise typer.Exit(1)
+    selected = pairs or list(runtime.snapshot.document.scheduler.pairs) or ["BTC/USDT"]
     try:
-        await initialize_trading_cycle(cycle)
-        await _run_pairs_loop(pairs, mode, exchange_id, cycle, config)
+        await _run_pairs_loop(selected, runtime)
     finally:
-        await cycle.executor.exchange.close()
+        await runtime.close()
 
 
-async def _run_pairs_loop(pairs, mode, exchange_id, cycle, config):
+async def _run_pairs_loop(pairs, runtime):
     from cryptotrader.cycle_lock import cycle_lock
     from cryptotrader.risk.state import RedisStateManager
 
-    redis_state = RedisStateManager(config.infrastructure.redis_url)
+    redis_state = RedisStateManager(runtime.snapshot.document.infrastructure.redis_url or None)
 
     for pair in pairs:
         async with cycle_lock(redis_state, pair) as acquired:
             if not acquired:
                 console.print(f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]")
                 continue
-            await _run_one_pair(pair, mode, exchange_id, cycle)
+            await _run_one_pair(pair, runtime.cycle)
 
 
-async def _run_one_pair(pair: str, mode: str, exchange_id: str, cycle) -> None:
+async def _run_one_pair(pair: str, cycle) -> None:
     from cryptotrader.decision.models import CycleRequest
     from cryptotrader.pair import Pair
     from cryptotrader.tracing import set_trace_id
 
     trace_id = set_trace_id()
-    console.print(
-        f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] mode=[green]{mode}[/green] trace=[dim]{trace_id}[/dim]"
-    )
+    console.print(f"\n[bold]Arena[/bold] analyzing [cyan]{pair}[/cyan] trace=[dim]{trace_id}[/dim]")
 
     try:
-        outcome = await cycle.run(CycleRequest(Pair.parse(pair), mode, exchange_id))
+        outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
     except Exception as exc:
-        if mode == "live":
-            console.print(f"[red]ERROR: {exc}[/red]")
-            console.print("[yellow]Check logs — a partial trade may have been placed.[/yellow]")
-            raise typer.Exit(1) from None
-        raise
+        console.print(f"[red]ERROR: {exc}[/red]")
+        console.print("[yellow]Check the per-book Journal before retrying.[/yellow]")
+        raise typer.Exit(1) from None
 
     _print_result(pair, outcome)
 
@@ -124,16 +98,10 @@ def _print_result(pair: str, outcome):
     table.add_row("Pair", pair)
     table.add_row("Cycle", outcome.cycle_id)
     table.add_row("Status", outcome.status)
-    if outcome.trade_plan is not None:
-        table.add_row("Target", f"{outcome.trade_plan.target.side} {outcome.trade_plan.target.size_ratio:.2%}")
-        table.add_row("Fused Score", f"{outcome.trade_plan.fused_signal.score:+.4f}")
-    if outcome.risk_result is not None:
-        table.add_row(
-            "Risk Gate",
-            "PASS" if outcome.risk_result.passed else f"REJECT: {outcome.risk_result.reason}",
-        )
-    if outcome.execution_result is not None:
-        table.add_row("Execution", "PASS" if outcome.execution_result.succeeded else outcome.execution_result.error)
+    if outcome.target_position is not None:
+        table.add_row("Target", f"{outcome.target_position.side} {outcome.target_position.size_ratio:.2%}")
+    table.add_row("Execution", outcome.execution_status)
+    table.add_row("Books", str(len(outcome.books)))
     console.print(table)
 
 
@@ -150,26 +118,34 @@ def journal_log(limit: int = typer.Option(10, "--limit", "-n")):
 
 
 async def _journal_log(limit: int):
-    from cryptotrader.config import load_config
-    from cryptotrader.journal.store import CycleJournalStore
+    from cryptotrader.journal.store import MultiVenueCycleStore
+    from cryptotrader.runtime import build_runtime
 
-    config = load_config()
-    cycles = await CycleJournalStore(config.infrastructure.database_url).list(limit=limit)
+    runtime = await build_runtime()
+    store = (
+        runtime.cycle.journal if runtime.cycle is not None else MultiVenueCycleStore(runtime.repository.database_url)
+    )
+    cycles = await store.list(limit=limit)
+    await runtime.close()
     if not cycles:
         console.print("[dim]No trading cycles recorded yet.[/dim]")
         return
     table = Table(title="Trading Cycle Journal")
     table.add_column("Cycle", style="cyan")
     table.add_column("Time")
-    table.add_column("Pair")
+    table.add_column("Source")
     table.add_column("Status")
     table.add_column("Target")
     for cycle in cycles:
-        target = cycle.target_position or {}
-        target_text = str(target.get("side", "—"))
-        if target.get("size_ratio") is not None:
-            target_text += f" {float(target['size_ratio']):.2%}"
-        table.add_row(cycle.cycle_id, str(cycle.created_at), cycle.pair, cycle.status, target_text)
+        target = cycle.target_position
+        target_text = "—" if target is None else f"{target.side} {target.size_ratio:.2%}"
+        table.add_row(
+            cycle.cycle_id,
+            str(cycle.created_at),
+            cycle.market_data_source_id,
+            cycle.cycle_status,
+            target_text,
+        )
     console.print(table)
 
 
@@ -180,28 +156,31 @@ def journal_show(cycle_id: str = typer.Argument(...)):
 
 
 async def _journal_show(cycle_id: str):
-    from cryptotrader.config import load_config
-    from cryptotrader.journal.store import CycleJournalStore
+    from cryptotrader.journal.store import MultiVenueCycleStore
+    from cryptotrader.runtime import build_runtime
 
-    config = load_config()
-    cycle = await CycleJournalStore(config.infrastructure.database_url).get(cycle_id)
+    runtime = await build_runtime()
+    store = (
+        runtime.cycle.journal if runtime.cycle is not None else MultiVenueCycleStore(runtime.repository.database_url)
+    )
+    cycle = await store.get(cycle_id)
+    await runtime.close()
     if not cycle:
         console.print(f"[red]Cycle {cycle_id} not found[/red]")
         return
     console.print_json(
         data={
             "cycle_id": cycle.cycle_id,
-            "pair": cycle.pair,
             "created_at": cycle.created_at.isoformat(),
-            "status": cycle.status,
-            "profile_revision": cycle.profile_revision,
+            "status": cycle.cycle_status,
+            "config_revision": cycle.config_revision,
+            "market_data_source_id": cycle.market_data_source_id,
             "component_signals": list(cycle.component_signals),
             "fusion": cycle.fused_signal,
             "target_position": cycle.target_position,
-            "trade_plan": cycle.trade_plan,
-            "hitl_result": cycle.hitl_result,
-            "risk_result": cycle.risk_result,
-            "execution_result": cycle.execution_result,
+            "execution_status": cycle.execution_status,
+            "requires_attention": cycle.requires_attention,
+            "books": list(cycle.book_results),
         }
     )
 
@@ -248,11 +227,11 @@ def scheduler_start():
 
 
 async def _scheduler_start():
-    from cryptotrader.bootstrap import build_trading_cycle
-    from cryptotrader.config import load_config
+    from cryptotrader.runtime import build_runtime
     from cryptotrader.scheduler import Scheduler
 
-    config = load_config()
+    runtime = await build_runtime()
+    config = runtime.snapshot.document
     if not config.scheduler.enabled:
         console.print("[red]Scheduler is disabled in config (scheduler.enabled=false)[/red]")
         raise typer.Exit(1)
@@ -262,14 +241,11 @@ async def _scheduler_start():
     console.print(
         f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m (daily summary at {summary_hour}:00 UTC)"
     )
-    cycle = build_trading_cycle(config, config.engine)
     s = Scheduler(
         pairs,
         interval,
         daily_summary_hour=summary_hour,
-        cycle=cycle,
-        exchange_id=config.scheduler.exchange_id or config.exchange_id,
-        mode=config.engine,
+        runtime=runtime,
     )
     await s.start()
 

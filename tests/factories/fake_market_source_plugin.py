@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from cryptotrader.signals.models import DataRequirements, PositionSnapshot, SignalContext
+from cryptotrader.signals.models import DataRequirements, SignalContext
 
 
 class FixtureMarketSource:
@@ -19,16 +19,11 @@ class FixtureMarketSource:
         return SignalContext(
             pair=pair,
             as_of=as_of,
-            mode="paper",
-            exchange_id="",
             market_data_source_id=self.id,
             market_type=pair.market_type,
-            equity=0.0,
             current_price=100.0,
             atr=5.0,
-            current_position=PositionSnapshot("flat", 0.0, 0.0),
             snapshots={},
-            portfolio={},
         )
 
 

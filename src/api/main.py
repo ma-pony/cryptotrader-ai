@@ -61,7 +61,7 @@ async def lifespan(_app: FastAPI):
 
     setup_otel()
 
-    await _init_signal_profile(_app)
+    await _init_runtime(_app)
 
     # Initialize trigger engine if enabled
     await _init_trigger_engine(_app)
@@ -79,74 +79,33 @@ async def lifespan(_app: FastAPI):
     if trigger_engine is not None:
         await trigger_engine.stop()
 
-    cycles = getattr(_app.state, "trading_cycles", None)
-    if cycles is None:
-        primary = getattr(_app.state, "trading_cycle", None)
-        cycles = {} if primary is None else {getattr(primary, "mode", "primary"): primary}
-    closed: set[int] = set()
-    for cycle in cycles.values():
-        exchange = getattr(getattr(cycle, "executor", None), "exchange", None)
-        if exchange is not None and id(exchange) not in closed:
-            await exchange.close()
-            closed.add(id(exchange))
+    runtime = getattr(_app.state, "runtime", None)
+    if runtime is not None:
+        await runtime.close()
     logger.info("Shutting down")
 
 
-async def _init_signal_profile(app_instance: FastAPI) -> None:
-    from cryptotrader.bootstrap import SeededProfileRepository, build_trading_cycle, initialize_trading_cycle
-    from cryptotrader.config import load_config
-    from cryptotrader.hitl.store import ApprovalStore
-    from cryptotrader.journal.store import CycleJournalStore
+async def _init_runtime(app_instance: FastAPI) -> None:
+    from cryptotrader.runtime import build_runtime
 
-    config = load_config()
-    database_url = config.infrastructure.database_url or None
-    profiles = SeededProfileRepository(database_url, config.signal_profile_defaults.to_profile())
-    approvals = ApprovalStore(database_url)
-    journal = CycleJournalStore(database_url)
-    cycle = build_trading_cycle(
-        config,
-        config.engine,
-        profile_repository=profiles,
-        approval_store=approvals,
-        journal_store=journal,
-    )
-    await initialize_trading_cycle(cycle)
-    custom_components = tuple(
-        component for component in cycle.registry.components() if component.id not in {"kronos", "llm_committee"}
-    )
-    app_instance.state.trading_cycle = cycle
-    app_instance.state.trading_cycles = {config.engine: cycle}
-    app_instance.state.trading_cycle_builder = partial(
-        build_trading_cycle,
-        config,
-        profile_repository=profiles,
-        approval_store=approvals,
-        journal_store=journal,
-        custom_components=custom_components,
-    )
-    app_instance.state.signal_registry = cycle.registry
-    app_instance.state.signal_profile_repository = profiles
-    app_instance.state.signal_custom_components = custom_components
-    app_instance.state.cycle_journal_store = journal
+    app_instance.state.runtime = await build_runtime()
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:
     """Initialize PriceTriggerEngine and attach to app.state if triggers enabled."""
-    from functools import partial
-
-    from cryptotrader.config import load_config
     from cryptotrader.db import get_async_session
     from cryptotrader.risk.state import RedisStateManager
     from cryptotrader.triggers.engine import PriceTriggerEngine
     from cryptotrader.triggers.store import TriggerRuleStore
 
-    config = load_config()
+    runtime = app_instance.state.runtime
+    config = runtime.snapshot.document
     if not config.triggers.enabled:
         app_instance.state.trigger_engine = None
         app_instance.state.trigger_store = None
         return
 
-    db_url = config.infrastructure.database_url
+    db_url = getattr(runtime.repository, "database_url", None)
     if not db_url:
         logger.warning("Triggers enabled but no database_url configured; skipping")
         app_instance.state.trigger_engine = None
@@ -162,6 +121,12 @@ async def _init_trigger_engine(app_instance: FastAPI) -> None:
 
     async def _trigger_callback(pair: str, meta: dict) -> None:
         logger.info("Trigger fired for %s: %s", pair, meta)
+        if runtime.cycle is None:
+            return
+        from cryptotrader.decision.models import CycleRequest
+        from cryptotrader.pair import Pair
+
+        await runtime.cycle.run(CycleRequest(Pair.parse(pair)))
 
     engine = PriceTriggerEngine(store, redis_state, _trigger_callback, config.triggers)
     await engine.start()
@@ -181,10 +146,10 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
     """
     import asyncio
 
-    from cryptotrader.config import load_config
     from cryptotrader.scheduler import Scheduler
 
-    config = load_config()
+    runtime = app_instance.state.runtime
+    config = runtime.snapshot.document
     if not config.scheduler.enabled:
         app_instance.state.scheduler = None
         app_instance.state.scheduler_task = None
@@ -195,9 +160,7 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
         pairs=config.scheduler.pairs,
         interval_minutes=config.scheduler.interval_minutes,
         daily_summary_hour=config.scheduler.daily_summary_hour,
-        cycle=app_instance.state.trading_cycle,
-        exchange_id=config.scheduler.exchange_id or config.exchange_id,
-        mode=config.engine,
+        runtime=runtime,
     )
     # Scheduler.start() is blocking (awaits a stop_event), so run as a task.
     task = asyncio.create_task(scheduler.start(), name="trading-scheduler")
@@ -343,7 +306,8 @@ def _get_redis_for_rate_limit() -> Any:
     global _redis_client
     if _redis_client is not None:
         return _redis_client
-    url = os.environ.get("CRYPTOTRADER_INFRASTRUCTURE__REDIS_URL", "")
+    runtime = getattr(app.state, "runtime", None)
+    url = runtime.snapshot.document.infrastructure.redis_url if runtime is not None else ""
     if not url or url == "DISABLED":
         return None
     try:

@@ -71,7 +71,6 @@ class ComponentRunner:
                     {
                         "component_id": component.id,
                         "error_type": type(error).__name__,
-                        "error": str(error),
                     },
                 )
             )

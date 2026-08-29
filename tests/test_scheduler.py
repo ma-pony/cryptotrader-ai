@@ -1,491 +1,68 @@
-"""Scheduler tests — APScheduler integration."""
+"""Scheduler 只通过 Runtime 和新 CycleRequest 驱动周期。"""
 
-import asyncio
-import logging
+from __future__ import annotations
+
+from dataclasses import fields
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
+from cryptotrader.decision.models import CycleOutcome, CycleRequest, TargetPosition
+from cryptotrader.pair import Pair
 from cryptotrader.scheduler import Scheduler
+from tests.factories.runtime_config import active_document
 
 
 class _Cycle:
-    def __init__(self):
+    def __init__(self) -> None:
         self.requests = []
-        self._startup_validated = True
 
     async def run(self, request):
-        from cryptotrader.decision.models import CycleOutcome
-
         self.requests.append(request)
-        return CycleOutcome("cycle-1", "no_change", 1)
+        return CycleOutcome("cycle-1", 4, TargetPosition("long", 0.5), (), "completed", "completed", False)
 
 
-async def test_scheduler_routes_pair_through_injected_trading_cycle():
+class _Runtime:
+    def __init__(self, cycle=None) -> None:
+        self.cycle = cycle
+        self.snapshot = SimpleNamespace(document=active_document())
+        self.repository = SimpleNamespace(database_url=None)
+        self.closed = 0
+
+    async def close(self):
+        self.closed += 1
+
+
+def test_scheduler_normalizes_pairs_without_execution_identity_fields():
+    scheduler = Scheduler(["BTC/USDT:USDT"], runtime=_Runtime(_Cycle()))
+    assert scheduler.pairs == [Pair.parse("BTC/USDT:USDT")]
+    assert not hasattr(scheduler, "mode")
+    assert not hasattr(scheduler, "exchange_id")
+
+
+@pytest.mark.asyncio
+async def test_scheduler_passes_only_pair_to_shared_runtime_cycle():
     cycle = _Cycle()
-    scheduler = Scheduler(["BTC/USDT:USDT"], cycle=cycle, exchange_id="okx")
+    scheduler = Scheduler(["BTC/USDT:USDT"], runtime=_Runtime(cycle))
 
     await scheduler._run_pair_locked("BTC/USDT:USDT")
 
     assert len(cycle.requests) == 1
-    assert cycle.requests[0].pair.canonical() == "BTC/USDT:USDT"
-    assert cycle.requests[0].mode == "paper"
-    assert cycle.requests[0].exchange_id == "okx"
-    assert scheduler.status["BTC/USDT:USDT"]["last_status"] == "no_change"
-
-
-async def test_scheduler_start_rejects_invalid_active_profile_before_registering_jobs():
-    from cryptotrader.profiles.models import ComponentWeight
-    from cryptotrader.signals.registry import SignalComponentRegistry
-    from tests.factories.custom_signal_component import FakeSignalComponent
-    from tests.factories.signal_fusion import profile
-
-    class Profiles:
-        async def get(self):
-            return profile(ComponentWeight("missing_component", True, 1.0))
-
-    cycle = SimpleNamespace(
-        profiles=Profiles(),
-        registry=SignalComponentRegistry((FakeSignalComponent(),)),
-    )
-    scheduler = Scheduler(["BTC/USDT"], cycle=cycle)
-    loop = asyncio.get_running_loop()
-
-    with patch.object(loop, "add_signal_handler"):
-        task = asyncio.create_task(scheduler.start())
-        for _ in range(20):
-            if task.done() or scheduler._stop_event is not None:
-                break
-            await asyncio.sleep(0)
-        if not task.done():
-            scheduler.stop()
-            await task
-
-    with pytest.raises(ValueError, match="missing_component"):
-        task.result()
-    assert scheduler._scheduler.get_jobs() == []
-
-
-async def test_scheduler_start_builds_and_validates_standalone_paper_cycle_before_jobs():
-    """A lazy paper scheduler must reject an active profile absent from its registry."""
-    from cryptotrader.profiles.models import ComponentWeight
-    from cryptotrader.signals.registry import SignalComponentRegistry
-    from tests.factories.custom_signal_component import FakeSignalComponent
-    from tests.factories.signal_fusion import profile
-
-    class Profiles:
-        async def get(self):
-            return profile(ComponentWeight("missing_component", True, 1.0))
-
-    cycle = SimpleNamespace(
-        profiles=Profiles(),
-        registry=SignalComponentRegistry((FakeSignalComponent(),)),
-    )
-    config = SimpleNamespace(
-        engine="paper",
-        exchange_id="binance",
-        scheduler=SimpleNamespace(exchange_id="binance"),
-    )
-    scheduler = Scheduler(["BTC/USDT"])
-
-    with (
-        patch("cryptotrader.config.load_config", return_value=config),
-        patch("cryptotrader.bootstrap.build_trading_cycle", return_value=cycle),
-        patch.object(
-            scheduler._scheduler,
-            "add_job",
-            side_effect=AssertionError("job registered before active profile validation"),
-        ),
-        pytest.raises(ValueError, match="missing_component"),
-    ):
-        await scheduler.start()
-
-    assert scheduler.cycle is cycle
-    assert scheduler._scheduler.get_jobs() == []
-
-
-async def test_scheduler_start_does_not_swallow_live_cycle_validation_before_jobs():
-    """Live reconciliation cannot turn an invalid cycle into a running scheduler."""
-    from cryptotrader.profiles.models import ComponentWeight
-    from cryptotrader.signals.registry import SignalComponentRegistry
-    from tests.factories.custom_signal_component import FakeSignalComponent
-    from tests.factories.signal_fusion import profile
-
-    class Profiles:
-        async def get(self):
-            return profile(ComponentWeight("missing_component", True, 1.0))
-
-    cycle = SimpleNamespace(
-        profiles=Profiles(),
-        registry=SignalComponentRegistry((FakeSignalComponent(),)),
-    )
-    config = SimpleNamespace(
-        engine="live",
-        exchange_id="binance",
-        scheduler=SimpleNamespace(exchange_id="binance"),
-    )
-    scheduler = Scheduler(["BTC/USDT"], mode="live")
-
-    with (
-        patch("cryptotrader.config.load_config", return_value=config),
-        patch("cryptotrader.bootstrap.build_trading_cycle", return_value=cycle),
-        patch.object(
-            scheduler._scheduler,
-            "add_job",
-            side_effect=AssertionError("job registered after live validation failure"),
-        ),
-        pytest.raises(ValueError, match="missing_component"),
-    ):
-        await scheduler.start()
-
-    assert scheduler.cycle is cycle
-    assert scheduler._scheduler.get_jobs() == []
-
-
-def test_scheduler_init():
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-    # Per spec 013: Scheduler stores list[Pair]; legacy list[str] callers
-    # are auto-promoted in __init__. Compare canonicals.
-    assert [p.canonical() for p in s.pairs] == ["BTC/USDT"]
-    assert s.interval_minutes == 60
-    assert s.daily_summary_hour == 0
-
-
-def test_scheduler_init_custom_summary_hour():
-    s = Scheduler(["BTC/USDT"], interval_minutes=60, daily_summary_hour=8)
-    assert s.daily_summary_hour == 8
-
-
-def test_scheduler_status():
-    s = Scheduler(["BTC/USDT", "ETH/USDT"])
-    assert "BTC/USDT" in s.status
-    assert "ETH/USDT" in s.status
-
-
-def test_scheduler_registers_jobs():
-    """Verify start() registers trading_cycle and daily_summary jobs."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    # Start the internal APScheduler (but don't await start() which blocks)
-    s._scheduler.add_job(
-        s._run_cycle,
-        "interval",
-        minutes=60,
-        id="trading_cycle",
-        name="Trading cycle",
-    )
-    s._scheduler.add_job(
-        s._emit_daily_summary,
-        "cron",
-        hour=0,
-        minute=0,
-        id="daily_summary",
-        name="Daily summary",
-    )
-
-    job_ids = [j.id for j in s._scheduler.get_jobs()]
-    assert "trading_cycle" in job_ids
-    assert "daily_summary" in job_ids
-
-
-async def test_candle_aligned_job_is_scheduled_not_paused():
-    """Cron-aligned cycles must receive a real next run time on startup."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=240)
-    s._startup_reconcile = AsyncMock()
-    s._close_live_exchanges = AsyncMock()
-    loop = asyncio.get_running_loop()
-
-    with (
-        patch.object(loop, "add_signal_handler"),
-        patch.object(s, "_scheduler_heartbeat", new_callable=AsyncMock),
-    ):
-        task = asyncio.create_task(s.start())
-        for _ in range(20):
-            if s._stop_event is not None:
-                break
-            await asyncio.sleep(0)
-
-        job = s._scheduler.get_job("trading_cycle")
-        assert isinstance(job.trigger, CronTrigger)
-        assert job.next_run_time is not None
-
-        s.stop()
-        await task
-
-
-async def test_scheduler_jobs_property():
-    """Verify .jobs returns structured job info."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=120)
-    s._scheduler.start(paused=True)
-    s._scheduler.add_job(
-        s._run_cycle,
-        "interval",
-        minutes=120,
-        id="trading_cycle",
-        name="Trading cycle",
-    )
-    jobs = s.jobs
-    assert len(jobs) == 1
-    assert jobs[0]["id"] == "trading_cycle"
-    assert jobs[0]["name"] == "Trading cycle"
-    s._scheduler.shutdown(wait=False)
-
-
-def test_stop_sets_event():
-    s = Scheduler(["BTC/USDT"])
-    s._stop_event = asyncio.Event()
-    s.stop()
-    assert s._stop_event.is_set()
-
-
-def test_stop_without_event():
-    """stop() before start() should not raise."""
-    s = Scheduler(["BTC/USDT"])
-    s.stop()  # No error
-
-
-async def test_run_cycle_increments_count():
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-    assert s._cycle_count == 0
-
-    # _write_cycle_snapshot hits real exchange/DB in live mode — must be
-    # mocked so unit tests don't depend on network/OKX availability.
-    with (
-        patch.object(s, "_run_pair", new_callable=AsyncMock) as mock_run,
-        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
-    ):
-        await s._run_cycle()
-        assert s._cycle_count == 1
-        mock_run.assert_called_once_with("BTC/USDT")
-
-        await s._run_cycle()
-        assert s._cycle_count == 2
-
-
-async def test_run_cycle_gathers_all_pairs():
-    s = Scheduler(["BTC/USDT", "ETH/USDT", "SOL/USDT"], interval_minutes=60)
-
-    with (
-        patch.object(s, "_run_pair", new_callable=AsyncMock) as mock_run,
-        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
-    ):
-        await s._run_cycle()
-        assert mock_run.call_count == 3
-        called_pairs = {call.args[0] for call in mock_run.call_args_list}
-        assert called_pairs == {"BTC/USDT", "ETH/USDT", "SOL/USDT"}
-
-
-async def test_scheduler_respects_enabled_flag():
-    """CLI should check config.scheduler.enabled before starting."""
-    from cryptotrader.config import AppConfig, SchedulerConfig
-
-    config = AppConfig(scheduler=SchedulerConfig(enabled=False))
-    assert not config.scheduler.enabled
-
-    config_enabled = AppConfig(scheduler=SchedulerConfig(enabled=True))
-    assert config_enabled.scheduler.enabled
-
-
-async def test_run_cycle_updates_status():
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    with (
-        patch.object(s, "_run_pair", new_callable=AsyncMock),
-        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
-    ):
-        await s._run_cycle()
-        assert "next_run" in s._status["BTC/USDT"]
-
-
-# Task 2.3: scheduler single-cycle exception isolation tests
-
-
-async def test_run_cycle_exception_does_not_propagate():
-    """_run_cycle() pair failure must not propagate; scheduler continues."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    # _run_pair raises, but gather(return_exceptions=True) absorbs it
-    async def fail(_pair: str) -> None:
-        raise RuntimeError("pair failure")
-
-    with (
-        patch.object(s, "_run_pair", side_effect=fail),
-        patch.object(s, "_write_cycle_snapshot", new_callable=AsyncMock),
-    ):
-        # Must not raise
-        await s._run_cycle()
-    # cycle_count incremented means _run_cycle completed normally
-    assert s._cycle_count == 1
-
-
-async def test_run_cycle_top_level_exception_caught(caplog):
-    """_run_cycle() top-level try/except catches unexpected errors and logs warning."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    async def raise_after_closing(*coroutines, **_kwargs):
-        for coroutine in coroutines:
-            coroutine.close()
-        raise RuntimeError("gather failure")
-
-    # Force asyncio.gather itself to raise
-    with (
-        patch("asyncio.gather", side_effect=raise_after_closing),
-        caplog.at_level(logging.WARNING, logger="cryptotrader.scheduler"),
-    ):
-        await s._run_cycle()
-
-    # Scheduler did not crash; warning was logged
-    assert any("gather failure" in r.message or "gather failure" in str(r.exc_info) for r in caplog.records)
-
-
-async def test_run_pair_logs_warning_on_exception(caplog):
-    """_run_pair() must use logger.warning(exc_info=True) on exception."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    # set_trace_id and load_config are lazy-imported; patch at their source module
-    with (
-        patch("cryptotrader.tracing.set_trace_id", return_value="trace-abc"),
-        patch("cryptotrader.config.load_config", side_effect=RuntimeError("cfg error")),
-        caplog.at_level(logging.WARNING, logger="cryptotrader.scheduler"),
-    ):
-        await s._run_pair("BTC/USDT")
-
-    # exc_info=True means record.exc_info is not None
-    warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert warning_records, "Expected at least one WARNING log record"
-    assert any(r.exc_info is not None for r in warning_records), "Expected exc_info=True stack trace"
-
-
-def test_add_job_trading_cycle_has_max_instances_and_misfire():
-    """trading_cycle and daily_summary jobs must have max_instances=1 and misfire_grace_time=1.
-
-    Captures add_job kwargs directly to avoid running the full blocking start() coroutine.
-    APScheduler rejects misfire_grace_time=0; value 1 (minimum positive int) achieves
-    near-immediate discard of missed triggers.
-    """
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-    captured_kwargs: dict[str, dict] = {}
-
-    original_add_job = s._scheduler.add_job
-
-    def capturing_add_job(func, trigger=None, **kwargs):
-        job_id = kwargs.get("id", "unknown")
-        captured_kwargs[job_id] = kwargs
-        return original_add_job(func, trigger, **kwargs)
-
-    with patch.object(s._scheduler, "add_job", side_effect=capturing_add_job):
-        # Replicate the exact add_job calls used in start() to verify parameters
-        from datetime import datetime
-
-        from cryptotrader._compat import UTC
-
-        s._scheduler.add_job(
-            s._run_cycle,
-            IntervalTrigger(minutes=s.interval_minutes),
-            id="trading_cycle",
-            name="Trading cycle",
-            next_run_time=datetime.now(UTC),
-            max_instances=1,
-            misfire_grace_time=1,
-        )
-        s._scheduler.add_job(
-            s._emit_daily_summary,
-            CronTrigger(hour=s.daily_summary_hour, minute=0, timezone="UTC"),
-            id="daily_summary",
-            name="Daily summary",
-            max_instances=1,
-            misfire_grace_time=1,
-        )
-
-    assert "trading_cycle" in captured_kwargs, "trading_cycle job not registered"
-    assert "daily_summary" in captured_kwargs, "daily_summary job not registered"
-
-    tc = captured_kwargs["trading_cycle"]
-    ds = captured_kwargs["daily_summary"]
-
-    assert tc["max_instances"] == 1, "trading_cycle must have max_instances=1"
-    assert ds["max_instances"] == 1, "daily_summary must have max_instances=1"
-    assert tc["misfire_grace_time"] == 1, "trading_cycle must have misfire_grace_time=1"
-    assert ds["misfire_grace_time"] == 1, "daily_summary must have misfire_grace_time=1"
-
-
-# ---------------------------------------------------------------------------
-# Cycle-end portfolio snapshot write
-# ---------------------------------------------------------------------------
-
-
-def test_write_cycle_snapshot_falls_back_to_portfolio_manager():
-    """Without a cycle portfolio reader, persist the DB-known portfolio."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    pm_mock = AsyncMock()
-    pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 12345.67, "cash": 1000.0})
-    pm_mock.snapshot = AsyncMock()
-
-    cfg_mock = MagicMock()
-    cfg_mock.engine = "paper"
-    cfg_mock.infrastructure.database_url = "postgresql+asyncpg://x"
-    cfg_mock.scheduler.exchange_id = "binance"
-
-    with (
-        patch("cryptotrader.config.load_config", return_value=cfg_mock),
-        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
-    ):
-        asyncio.run(s._write_cycle_snapshot())
-
-    pm_mock.snapshot.assert_awaited_once_with("default", 12345.67, 1000.0)
-
-
-def test_write_cycle_snapshot_uses_trading_cycle_portfolio_reader():
-    """The snapshot reads through the portfolio component owned by TradingCycle."""
-    read_mock = AsyncMock(return_value={"total_value": 9876.5, "cash": 4321.0, "positions": {}})
-    cycle = SimpleNamespace(contexts=SimpleNamespace(portfolio=SimpleNamespace(read=read_mock)))
-    s = Scheduler(["BTC/USDT"], interval_minutes=60, cycle=cycle, mode="live", exchange_id="okx")
-
-    pm_mock = AsyncMock()
-    pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 0.0, "cash": 0.0})
-    pm_mock.snapshot = AsyncMock()
-
-    cfg_mock = MagicMock()
-    cfg_mock.engine = "live"
-    cfg_mock.infrastructure.database_url = "postgresql+asyncpg://x"
-    cfg_mock.scheduler.exchange_id = "okx"
-
-    with (
-        patch("cryptotrader.config.load_config", return_value=cfg_mock),
-        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
-    ):
-        asyncio.run(s._write_cycle_snapshot())
-
-    request, price = read_mock.await_args.args
-    assert request.pair.canonical() == "BTC/USDT"
-    assert request.mode == "live"
-    assert request.exchange_id == "okx"
-    assert price == 0.0
-    pm_mock.get_portfolio.assert_not_awaited()
-    pm_mock.snapshot.assert_awaited_once_with("default", 9876.5, 4321.0)
-
-
-def test_write_cycle_snapshot_zero_total_skips_write():
-    """If both exchange and PM report total_value=0, no row is written."""
-    s = Scheduler(["BTC/USDT"], interval_minutes=60)
-
-    pm_mock = AsyncMock()
-    pm_mock.get_portfolio = AsyncMock(return_value={"total_value": 0.0, "cash": 0.0})
-    pm_mock.snapshot = AsyncMock()
-
-    cfg_mock = MagicMock()
-    cfg_mock.engine = "paper"
-    cfg_mock.infrastructure.database_url = "postgresql+asyncpg://x"
-    cfg_mock.scheduler.exchange_id = "binance"
-
-    with (
-        patch("cryptotrader.config.load_config", return_value=cfg_mock),
-        patch("cryptotrader.portfolio.manager.PortfolioManager", return_value=pm_mock),
-    ):
-        asyncio.run(s._write_cycle_snapshot())
-
-    pm_mock.snapshot.assert_not_awaited()
+    assert isinstance(cycle.requests[0], CycleRequest)
+    assert [field.name for field in fields(cycle.requests[0])] == ["pair"]
+    assert scheduler.status["BTC/USDT:USDT"]["last_action"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_requires_an_active_runtime_cycle():
+    scheduler = Scheduler(["BTC/USDT"], runtime=_Runtime(None))
+    with pytest.raises(RuntimeError, match="not active"):
+        await scheduler._ensure_trading_cycle()
+
+
+@pytest.mark.asyncio
+async def test_scheduler_shutdown_closes_runtime_once_per_call_boundary():
+    runtime = _Runtime(_Cycle())
+    scheduler = Scheduler(["BTC/USDT"], runtime=runtime)
+    await scheduler._close_live_exchanges()
+    assert runtime.closed == 1

@@ -18,6 +18,7 @@ These tests pin down:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
@@ -25,10 +26,9 @@ import pytest
 
 
 def _request(pair: str = "ETH/USDT"):
-    from cryptotrader.decision.models import CycleRequest
     from cryptotrader.pair import Pair
 
-    return CycleRequest(pair=Pair.parse(pair), mode="live", exchange_id="okx")
+    return SimpleNamespace(pair=Pair.parse(pair), exchange_id="okx")
 
 
 def _make_exchange(

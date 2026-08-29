@@ -18,6 +18,7 @@ React Dashboard:
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -39,6 +40,10 @@ def _mock_config(scheduler_enabled: bool = True, pairs: list[str] | None = None)
     cfg.scheduler.interval_minutes = 240
     cfg.infrastructure.redis_url = "redis://localhost:6379"
     return cfg
+
+
+def _use_runtime(config) -> None:
+    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(document=config))
 
 
 class TestSchedulerStatusV2:
@@ -63,11 +68,9 @@ class TestSchedulerStatusV2:
 
         # Pre-stash the scheduler on app.state so the endpoint can read it
         app.state.scheduler = mock_sched
+        _use_runtime(_mock_config())
         try:
-            with (
-                patch("cryptotrader.config.load_config", return_value=_mock_config()),
-                patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
-            ):
+            with patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm):
                 resp = client.get("/api/scheduler/status")
         finally:
             del app.state.scheduler
@@ -81,13 +84,8 @@ class TestSchedulerStatusV2:
         assert data["redis_available"] is True
 
     def test_disabled_when_config_disabled(self, client: TestClient) -> None:
-        with (
-            patch(
-                "cryptotrader.config.load_config",
-                return_value=_mock_config(scheduler_enabled=False),
-            ),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)),
-        ):
+        _use_runtime(_mock_config(scheduler_enabled=False))
+        with patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)):
             resp = client.get("/api/scheduler/status")
 
         assert resp.status_code == 200
@@ -100,10 +98,8 @@ class TestSchedulerStatusV2:
     def test_redis_unavailable_reports_false(self, client: TestClient) -> None:
         mock_rsm = MagicMock()
         mock_rsm.available = False
-        with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm),
-        ):
+        _use_runtime(_mock_config())
+        with patch("cryptotrader.risk.state.RedisStateManager", return_value=mock_rsm):
             resp = client.get("/api/scheduler/status")
 
         assert resp.status_code == 200
@@ -126,11 +122,9 @@ class TestSchedulerStatusV2:
         mock_sched.jobs = [{"id": "trading_cycle", "name": "Trading cycle", "next_run_time": next_run.isoformat()}]
 
         app.state.scheduler = mock_sched
+        _use_runtime(_mock_config())
         try:
-            with (
-                patch("cryptotrader.config.load_config", return_value=_mock_config()),
-                patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)),
-            ):
+            with patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)):
                 resp = client.get("/api/scheduler/status")
         finally:
             del app.state.scheduler
@@ -146,10 +140,8 @@ class TestSchedulerStatusV2:
         if hasattr(app.state, "scheduler"):
             del app.state.scheduler
 
-        with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)),
-        ):
+        _use_runtime(_mock_config())
+        with patch("cryptotrader.risk.state.RedisStateManager", return_value=MagicMock(available=True)):
             resp = client.get("/api/scheduler/status")
 
         assert resp.status_code == 200

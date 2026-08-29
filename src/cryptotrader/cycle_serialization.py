@@ -7,11 +7,11 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, cast
 
-from cryptotrader.decision.models import CycleRequest, TargetPosition, TradePlan
+from cryptotrader.decision.models import TargetPosition, TradePlan
 from cryptotrader.pair import Pair
 from cryptotrader.profiles.models import ComponentWeight, SignalProfile
 from cryptotrader.signals.fusion import ComponentContribution, FusedSignal
-from cryptotrader.signals.models import ComponentSignal, PositionSnapshot, SignalContext
+from cryptotrader.signals.models import ComponentSignal, SignalContext
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -131,79 +131,25 @@ def trade_plan_from_payload(payload: Mapping[str, Any]) -> TradePlan:
     )
 
 
-def cycle_request_payload(request: CycleRequest) -> dict[str, Any]:
-    return {
-        "pair": request.pair.canonical(),
-        "mode": request.mode,
-        "exchange_id": request.exchange_id,
-        "as_of": request.as_of.isoformat() if request.as_of is not None else None,
-    }
-
-
-def cycle_request_from_payload(payload: Mapping[str, Any]) -> CycleRequest:
-    raw_as_of = payload.get("as_of")
-    return CycleRequest(
-        pair=Pair.parse(str(payload["pair"])),
-        mode=cast("Any", payload["mode"]),
-        exchange_id=str(payload.get("exchange_id") or ""),
-        as_of=datetime.fromisoformat(str(raw_as_of)) if raw_as_of else None,
-    )
-
-
-def position_payload(position: PositionSnapshot) -> dict[str, Any]:
-    return {
-        "side": position.side,
-        "amount": position.amount,
-        "size_ratio": position.size_ratio,
-        "avg_price": position.avg_price,
-        "unrealized_pnl": position.unrealized_pnl,
-    }
-
-
 def signal_context_payload(context: SignalContext) -> dict[str, Any]:
     return {
         "available": True,
         "pair": context.pair.canonical(),
         "as_of": context.as_of.isoformat(),
-        "mode": context.mode,
-        "exchange_id": context.exchange_id,
+        "market_data_source_id": context.market_data_source_id,
         "market_type": context.market_type,
-        "equity": context.equity,
         "current_price": context.current_price,
         "atr": context.atr,
-        "current_position": position_payload(context.current_position),
-        "portfolio": json_value(context.portfolio),
-    }
-
-
-def unavailable_signal_context_payload(request: CycleRequest) -> dict[str, Any]:
-    return {
-        "available": False,
-        "pair": request.pair.canonical(),
-        "as_of": request.as_of.isoformat() if request.as_of is not None else None,
-        "mode": request.mode,
-        "exchange_id": request.exchange_id,
     }
 
 
 def signal_context_from_payload(payload: Mapping[str, Any]) -> SignalContext:
-    raw_position = payload["current_position"]
     return SignalContext(
         pair=Pair.parse(str(payload["pair"])),
         as_of=datetime.fromisoformat(str(payload["as_of"])),
-        mode=cast("Any", payload["mode"]),
-        exchange_id=str(payload.get("exchange_id") or ""),
+        market_data_source_id=str(payload["market_data_source_id"]),
         market_type=cast("Any", payload["market_type"]),
-        equity=float(payload["equity"]),
         current_price=float(payload["current_price"]),
         atr=float(payload["atr"]),
-        current_position=PositionSnapshot(
-            side=cast("Any", raw_position["side"]),
-            amount=float(raw_position["amount"]),
-            size_ratio=float(raw_position["size_ratio"]),
-            avg_price=(float(raw_position["avg_price"]) if raw_position.get("avg_price") is not None else None),
-            unrealized_pnl=float(raw_position.get("unrealized_pnl") or 0.0),
-        ),
         snapshots={},
-        portfolio=cast("Mapping[str, Any]", payload.get("portfolio") or {}),
     )

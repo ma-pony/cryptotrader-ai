@@ -6,7 +6,9 @@ Mocks TriggerRuleStore, RedisStateManager, and load_config.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -24,6 +26,7 @@ from cryptotrader._compat import UTC
 def _make_app() -> FastAPI:
     app = FastAPI()
     app.include_router(api_router)
+    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(document=_mock_config()))
     return app
 
 
@@ -119,9 +122,10 @@ def store(app_and_store):
 
 
 def _config_and_redis_patch(max_rules: int = 50, in_cooldown: bool = False):
-    """Return a tuple of patchers for load_config and RedisStateManager."""
+    """Return Runtime-era Redis patch contexts."""
+    del max_rules
     return (
-        patch("cryptotrader.config.load_config", return_value=_mock_config(max_rules=max_rules)),
+        nullcontext(),
         patch("cryptotrader.risk.state.RedisStateManager", return_value=_mock_redis(in_cooldown)),
     )
 
@@ -196,8 +200,7 @@ class TestCreateRule:
             "parameters": {"threshold_pct": 0.1},
             "cooldown_minutes": 30,
         }
-        with patch("cryptotrader.config.load_config", return_value=_mock_config(max_rules=50)):
-            resp = client.post("/api/scheduler/rules", json=body)
+        resp = client.post("/api/scheduler/rules", json=body)
 
         assert resp.status_code == 422
 
@@ -244,10 +247,7 @@ class TestGetRule:
         store.get_rule = AsyncMock(return_value=rule)
         store.get_last_triggered_at = AsyncMock(return_value=None)
 
-        with (
-            patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("cryptotrader.risk.state.RedisStateManager", return_value=_mock_redis(in_cooldown=True)),
-        ):
+        with patch("cryptotrader.risk.state.RedisStateManager", return_value=_mock_redis(in_cooldown=True)):
             resp = client.get("/api/scheduler/rules/rule-abc-123")
 
         assert resp.status_code == 200

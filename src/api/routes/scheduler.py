@@ -212,10 +212,12 @@ def _next_trading_run(scheduler: Scheduler | None) -> tuple[str | None, datetime
 @api_router.get("/status", response_model=SchedulerContractStatus)
 async def scheduler_status_v2(request: Request) -> SchedulerContractStatus:
     """Return scheduler status in the data-model contract shape (FR-802)."""
-    from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
 
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    config = runtime.snapshot.document
     rsm = RedisStateManager(config.infrastructure.redis_url)
 
     scheduler = _get_scheduler(request)
@@ -305,10 +307,12 @@ async def _enrich_rule(rule: Any, request: Request) -> ScheduleRuleOut:
     last_triggered = await store.get_last_triggered_at(rule.id)
     cooldown_key = f"trigger:cooldown:{rule.id}"
 
-    from cryptotrader.config import load_config
     from cryptotrader.risk.state import RedisStateManager
 
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    config = runtime.snapshot.document
     rsm = RedisStateManager(config.infrastructure.redis_url)
     in_cooldown = (await rsm.get(cooldown_key)) is not None
 
@@ -349,9 +353,10 @@ async def list_rules(
 async def create_rule(request: Request, body: ScheduleRuleIn) -> ScheduleRuleOut:
     store = _get_trigger_store(request)
 
-    from cryptotrader.config import load_config
-
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    config = runtime.snapshot.document
     count = await store.count_rules()
     if count >= config.triggers.max_rules:
         raise HTTPException(status_code=422, detail=f"Maximum {config.triggers.max_rules} rules reached")

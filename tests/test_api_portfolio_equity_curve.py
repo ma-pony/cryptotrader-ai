@@ -9,6 +9,7 @@ Backed by PortfolioManager.load_snapshots → equity-curve transformation.
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +22,11 @@ from cryptotrader._compat import UTC
 def client() -> TestClient:
     from api.main import app
 
+    app.state.runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(document=SimpleNamespace()),
+        repository=SimpleNamespace(database_url=None),
+        cycle=None,
+    )
     return TestClient(app, raise_server_exceptions=False)
 
 

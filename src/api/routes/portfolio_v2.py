@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import time
 from datetime import datetime, timedelta
@@ -134,24 +133,41 @@ def _compute_pnl_pct(equity: float, pnl_24h: float) -> float:
 def _configured_pair(config, pair: str | None = None) -> str:
     if pair is None:
         configured = list(getattr(config.scheduler, "pairs", []) or [])
-        pair = configured[0].canonical() if configured else "BTC/USDT"
+        pair = str(configured[0]) if configured else "BTC/USDT"
     return pair
 
 
 async def _read_live_portfolio(request: Request, config, pair: str | None = None) -> dict | None:
-    """Read through the portfolio component owned by the running cycle."""
-    cycle = getattr(request.app.state, "trading_cycle", None)
-    contexts = getattr(cycle, "contexts", None)
-    reader = getattr(contexts, "portfolio", None)
-    if reader is None:
+    """Read one configured execution book through the shared Runtime."""
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None or runtime.cycle is None:
         return None
 
-    from cryptotrader.decision.models import CycleRequest
     from cryptotrader.pair import Pair
 
-    exchange_id = config.scheduler.exchange_id or config.exchange_id
-    cycle_request = CycleRequest(Pair.parse(_configured_pair(config, pair)), "live", exchange_id)
-    return await reader.read(cycle_request, 0.0)
+    book = next((item for item in runtime.snapshot.document.execution.books if item.enabled), None)
+    if book is None:
+        return None
+    snapshot = await runtime.cycle.portfolios.read(
+        book,
+        runtime.sessions,
+        Pair.parse(_configured_pair(config, pair)),
+    )
+    positions = {
+        item.position.pair.canonical(): {
+            "amount": float(item.position.signed_amount),
+            "side": "long" if item.position.signed_amount > 0 else "short",
+            "avg_price": float(item.position.entry_price or 0),
+            "unrealized_pnl": 0.0,
+        }
+        for item in snapshot.connections
+        if item.position.signed_amount != 0
+    }
+    return {
+        "total_value": float(snapshot.total_equity),
+        "cash": float(sum((sum(item.balances.values()) for item in snapshot.connections), 0)),
+        "positions": positions,
+    }
 
 
 def _daily_last_equity(snaps: list[dict], cutoff: datetime) -> dict[str, float]:
@@ -317,9 +333,6 @@ async def _compute_extras(
     streak. Realized-only is conservative — open-position MTM is exposed
     separately via ``unrealized_pnl`` per position in the snapshot.
     """
-    from cryptotrader.config import load_config
-
-    cfg = load_config()
     now = datetime.now(UTC)
     snaps = await _load_snapshots(database_url)
     sharpe = _sharpe_from_daily(_daily_last_equity(snaps, now - timedelta(days=90)))
@@ -335,9 +348,7 @@ async def _compute_extras(
     # the snapshot.positions[].unrealized_pnl field for transparency).
     total_return = realized_cumulative
 
-    # Pct denominator: baseline equity. Preference: explicit config > first snapshot.
-    configured = float(cfg.portfolio.initial_capital or 0.0)
-    baseline: float | None = configured if configured > 0 else _inception_equity(snaps)
+    baseline = _inception_equity(snaps)
     total_return_pct = total_return / baseline if baseline is not None and baseline > 0 else 0.0
 
     return {
@@ -432,58 +443,8 @@ async def _fetch_fees_window(ex: Any, since_ms: int, window: str) -> float:
 
 
 async def _fetch_exchange_history(now: datetime) -> dict | None:
-    """Return ``{(window, kind): float}`` of funding/fee totals per window, or
-    None if the live exchange is unreachable or running in paper mode.
-
-    Keys: ``("24h", "funding")``, ``("7d", "funding")``, ``("30d", "funding")``,
-    ditto ``"fees"``. Fees are returned as negative (cost).
-    """
-    cache_key = "okx"
-    now_mono = time.monotonic()
-    cached = _ex_history_cache.get(cache_key)
-    if cached and now_mono - cached[0] < _EX_HISTORY_TTL_SEC:
-        return cached[1]
-
-    from cryptotrader.config import load_config
-
-    cfg = load_config()
-    okx_cfg = cfg.exchanges.get("okx") if hasattr(cfg.exchanges, "get") else None
-    if not okx_cfg or not okx_cfg.api_key:
-        return None
-    if getattr(cfg, "engine", "paper") != "live":
-        return None  # paper mode has no real exchange history
-
-    try:
-        import ccxt.async_support as ccxt
-    except ImportError:
-        return None
-
-    ex = ccxt.okx(
-        {
-            "apiKey": okx_cfg.api_key,
-            "secret": okx_cfg.secret,
-            "password": okx_cfg.passphrase,
-            "options": {"defaultType": "swap"},
-        }
-    )
-    if okx_cfg.sandbox:
-        ex.set_sandbox_mode(True)
-
-    result: dict[tuple[str, str], float] = {}
-    try:
-        for window, days in (("24h", 1), ("7d", 7), ("30d", 30)):
-            since_ms = int((now - timedelta(days=days)).timestamp() * 1000)
-            result[(window, "funding")] = await _fetch_funding_window(ex, since_ms, window)
-            result[(window, "fees")] = await _fetch_fees_window(ex, since_ms, window)
-    except Exception:
-        logger.warning("Exchange history fetch failed", exc_info=True)
-        return None
-    finally:
-        with contextlib.suppress(Exception):
-            await ex.close()
-
-    _ex_history_cache[cache_key] = (now_mono, {"_available": True, **{f"{w}:{k}": v for (w, k), v in result.items()}})
-    return _ex_history_cache[cache_key][1]
+    """Platform history attribution moves to the book API in Task 17."""
+    return None
 
 
 def _norm_ts(t: Any) -> datetime | None:
@@ -568,12 +529,15 @@ async def _compute_pnl_breakdowns(
 @router.get("/snapshot", response_model=PortfolioSnapshotOut)
 async def get_portfolio_snapshot(request: Request) -> PortfolioSnapshotOut:
     """Return current portfolio snapshot. Prefer live exchange over DB."""
-    from cryptotrader.config import load_config
     from cryptotrader.portfolio.manager import PortfolioManager
 
-    config = load_config()
-    journal = getattr(request.app.state, "cycle_journal_store", None)
-    pm = PortfolioManager(config.infrastructure.database_url)
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    config = runtime.snapshot.document
+    database_url = getattr(runtime.repository, "database_url", None)
+    journal = runtime.cycle.journal if runtime.cycle is not None else None
+    pm = PortfolioManager(database_url)
 
     # 3s budget for live exchange read + 60s cooldown after a failure. Original
     # 15s with no cooldown was acceptable when OKX was reachable, but on networks
@@ -622,13 +586,13 @@ async def get_portfolio_snapshot(request: Request) -> PortfolioSnapshotOut:
         raise HTTPException(status_code=503, detail="Portfolio data unavailable") from exc
 
     extras = await _compute_extras(
-        config.infrastructure.database_url,
+        database_url,
         current_equity=equity,
         raw_positions=raw_positions,
         journal_store=journal,
     )
     pnl_breakdowns = await _compute_pnl_breakdowns(
-        config.infrastructure.database_url,
+        database_url,
         current_equity=equity,
         journal_store=journal,
     )
@@ -657,13 +621,15 @@ _RANGE_HOURS = {"24h": 24, "7d": 24 * 7, "30d": 24 * 30}
 
 @router.get("/equity-curve", response_model=EquityCurveOut)
 async def get_equity_curve(
+    request: Request,
     range: Literal["24h", "7d", "30d", "all"] = Query(...),
 ) -> EquityCurveOut:
-    from cryptotrader.config import load_config
     from cryptotrader.portfolio.manager import PortfolioManager
 
-    config = load_config()
-    pm = PortfolioManager(config.infrastructure.database_url)
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    pm = PortfolioManager(getattr(runtime.repository, "database_url", None))
     snaps = await pm.load_snapshots("default")
 
     # Window filter

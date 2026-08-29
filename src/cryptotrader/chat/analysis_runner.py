@@ -57,7 +57,7 @@ async def run_analysis_and_buffer(
             return
 
         await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
-        outcome = await cycle.run(CycleRequest(Pair.parse(pair), "paper"))
+        outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
         await event_bus.publish(
             "stream_done",
             {"session_id": session_id, "cycle_id": outcome.cycle_id, "status": outcome.status},

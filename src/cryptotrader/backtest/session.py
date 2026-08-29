@@ -13,7 +13,7 @@ from cryptotrader._compat import UTC
 
 if TYPE_CHECKING:
     from cryptotrader.backtest.result import BacktestResult
-    from cryptotrader.journal.models import TradingCycleRecord
+    from cryptotrader.journal.models import MultiVenueCycleRecord
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +34,8 @@ def get_session_dir(session_id: str) -> Path:
     return path
 
 
-def save_cycles(session_id: str, records: list[TradingCycleRecord]) -> Path:
-    """Serialize immutable TradingCycle records to a session JSONL file."""
+def save_cycles(session_id: str, records: list[MultiVenueCycleRecord]) -> Path:
+    """Serialize immutable multi-venue cycle records to a session JSONL file."""
     session_dir = get_session_dir(session_id)
     path = session_dir / "cycles.jsonl"
     with open(path, "w") as f:
@@ -80,7 +80,7 @@ def list_sessions() -> list[str]:
     return sorted(d.name for d in _SESSIONS_DIR.iterdir() if d.is_dir())
 
 
-def _serialize_cycle(cycle: TradingCycleRecord) -> dict:
+def _serialize_cycle(cycle: MultiVenueCycleRecord) -> dict:
     data = asdict(cycle)
     if hasattr(data["created_at"], "isoformat"):
         data["created_at"] = data["created_at"].isoformat()

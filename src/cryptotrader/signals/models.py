@@ -81,16 +81,11 @@ class SignalContext:
 
     pair: Pair
     as_of: datetime
-    mode: TradingMode
-    exchange_id: str
+    market_data_source_id: str
     market_type: MarketType
-    equity: float
     current_price: float
     atr: float
-    current_position: PositionSnapshot
     snapshots: Mapping[str, DataSnapshot]
-    portfolio: Mapping[str, Any]
-    market_data_source_id: str = "default"
 
 
 @dataclass(frozen=True)

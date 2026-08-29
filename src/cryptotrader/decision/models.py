@@ -6,13 +6,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
-    from cryptotrader.execution.service import ExecutionResult
+    from cryptotrader.journal.models import BookCycleResult
     from cryptotrader.pair import Pair
-    from cryptotrader.risk.models import RiskDecision
     from cryptotrader.signals.fusion import FusedSignal
-    from cryptotrader.signals.models import ComponentSignal, TradingMode
+    from cryptotrader.signals.models import ComponentSignal
 
 CycleStatus = Literal[
     "completed",
@@ -78,22 +75,22 @@ class CycleRequest:
     """启动一次决策周期所需的输入。"""
 
     pair: Pair
-    mode: TradingMode
-    exchange_id: str = ""
-    as_of: datetime | None = None
 
 
 @dataclass(frozen=True)
 class CycleOutcome:
-    """所有决策周期共用的终止结果。"""
+    """一次平台无关信号周期的严格 Journal 投影。"""
 
     cycle_id: str
-    status: CycleStatus
-    profile_revision: int
-    component_signals: tuple[ComponentSignal, ...] = ()
-    fused_signal: FusedSignal | None = None
-    trade_plan: TradePlan | None = None
-    risk_result: RiskDecision | None = None
-    execution_result: ExecutionResult | None = None
-    approval_id: str | None = None
-    error: str | None = None
+    config_revision: int
+    target_position: TargetPosition | None
+    books: tuple[BookCycleResult, ...]
+    status: str
+    execution_status: str
+    requires_attention: bool
+
+    def book(self, book_id: str) -> BookCycleResult:
+        matches = tuple(item for item in self.books if item.book_id == book_id)
+        if len(matches) != 1:
+            raise LookupError(f"book {book_id!r} does not exist in cycle {self.cycle_id}")
+        return matches[0]

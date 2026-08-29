@@ -27,9 +27,7 @@ class Scheduler:
         daily_summary_hour: int = 0,
         trigger_engine: Any | None = None,
         *,
-        cycle=None,
-        exchange_id: str = "",
-        mode: str = "paper",
+        runtime=None,
     ):
         # Per spec 013-pair-value-object: scheduler holds list[Pair]; legacy
         # callers passing list[str] are auto-promoted to spot Pair instances
@@ -52,9 +50,7 @@ class Scheduler:
         self._scheduler = AsyncIOScheduler()
         self._stop_event: asyncio.Event | None = None
         self._trigger_engine = trigger_engine
-        self.cycle = cycle
-        self.exchange_id = exchange_id
-        self.mode = mode
+        self.runtime = runtime
         # Watchdog state — tracks last successful cycle completion so the
         # heartbeat task can detect IntervalTrigger silent-miss bug (observed
         # 5/18 18:57 + 19:57 + 5/19 18:36; APScheduler's next_fire_time gets
@@ -134,12 +130,9 @@ class Scheduler:
         # Start price trigger engine if configured
         if self._trigger_engine is not None:
             await self._trigger_engine.start()
-            from cryptotrader.config import load_config as _lc
-
-            _cfg = _lc()
             self._scheduler.add_job(
                 self._trigger_engine.poll_funding_rates,
-                IntervalTrigger(minutes=_cfg.triggers.funding_rate_poll_interval_minutes),
+                IntervalTrigger(minutes=self.runtime.snapshot.document.triggers.funding_rate_poll_interval_minutes),
                 id="funding_rate_poll",
                 name="Funding rate poll",
                 max_instances=1,
@@ -333,101 +326,28 @@ class Scheduler:
             logger.info("Failed to write scheduler heartbeat", exc_info=True)
 
     async def _write_cycle_snapshot(self) -> None:
-        """Write a fresh portfolio_snapshots row for the cycle.
-
-        Pull current equity through the portfolio component owned by TradingCycle.
-        Paper / fallback: read whatever PortfolioManager already knows from DB.
-        Either way, swallow errors — a missed snapshot is far less harmful than
-        crashing the cycle.
-        """
-        from cryptotrader.config import load_config
-        from cryptotrader.portfolio.manager import PortfolioManager
-
-        config = load_config()
-        db_url = config.infrastructure.database_url
-        pm = PortfolioManager(db_url)
-
-        total = 0.0
-        cash = 0.0
-        try:
-            reader = getattr(getattr(self.cycle, "contexts", None), "portfolio", None)
-            if reader is not None and self.pairs:
-                from cryptotrader.decision.models import CycleRequest
-
-                request = CycleRequest(self.pairs[0], self.mode, self.exchange_id)
-                ex_portfolio = await reader.read(request, 0.0)
-                if ex_portfolio:
-                    total = float(ex_portfolio.get("total_value", 0.0) or 0.0)
-                    cash = float(ex_portfolio.get("cash", 0.0) or 0.0)
-            if total <= 0:
-                # Fallback to DB-known portfolio (paper mode, or live read failed)
-                pm_portfolio = await pm.get_portfolio()
-                total = float(pm_portfolio.get("total_value", 0.0) or 0.0)
-                cash = float(pm_portfolio.get("cash", 0.0) or 0.0)
-        except Exception:
-            logger.info("cycle snapshot: portfolio read failed", exc_info=True)
-            return
-
-        if total <= 0:
-            logger.debug("cycle snapshot: total_value=0, skipping write")
-            return
-
-        try:
-            await pm.snapshot("default", total, cash)
-            logger.info("cycle snapshot written: total=%.2f cash=%.2f", total, cash)
-        except Exception:
-            logger.info("cycle snapshot: write failed", exc_info=True)
+        """MultiVenueCycleRecord already closes over every book portfolio read."""
 
     async def _close_live_exchanges(self) -> None:
-        exchange = getattr(getattr(self.cycle, "executor", None), "exchange", None)
-        if exchange is None:
+        if self.runtime is None:
             return
         try:
-            await exchange.close()
+            await self.runtime.close()
         except Exception:
-            logger.info("Failed to close scheduler exchange", exc_info=True)
+            logger.info("Failed to close scheduler runtime", exc_info=True)
 
     async def _ensure_trading_cycle(self) -> Any:
-        """Build and validate the configured cycle before it can run work."""
-        from cryptotrader.bootstrap import build_trading_cycle, initialize_trading_cycle
-        from cryptotrader.config import load_config
+        """Build the database runtime once and require an active cycle."""
+        if self.runtime is None:
+            from cryptotrader.runtime import build_runtime
 
-        config = load_config()
-        if self.cycle is None:
-            self.mode = config.engine
-            self.exchange_id = self.exchange_id or config.scheduler.exchange_id or config.exchange_id
-            self.cycle = build_trading_cycle(config, self.mode)
-        await initialize_trading_cycle(self.cycle)
-        return config
+            self.runtime = await build_runtime()
+        if self.runtime.cycle is None:
+            raise RuntimeError("runtime configuration is not active")
+        return self.runtime.snapshot.document
 
     async def _startup_reconcile(self) -> None:
-        """Run startup reconciliation to detect orphaned orders (live mode only)."""
-        from cryptotrader.config import load_config
-
-        config = load_config()
-        if self.mode != "live" and config.engine != "live":
-            return
-
-        if self.cycle is None:
-            await self._ensure_trading_cycle()
-
-        try:
-            from cryptotrader.execution.reconcile import Reconciler
-
-            exchange = self.cycle.executor.exchange
-            reconciler = Reconciler(exchange)
-            orphans = await reconciler.detect_orphans(set())
-            if orphans:
-                logger.warning("Startup reconciliation found %d orphaned orders", len(orphans))
-                notifier = self._get_notifier(config)
-                await notifier.notify(
-                    "reconcile_mismatch",
-                    {"orphan_count": len(orphans), "orphan_ids": [o.get("id") for o in orphans]},
-                )
-            else:
-                logger.info("Startup reconciliation: no orphaned orders")
-        except Exception:
-            logger.warning("Startup reconciliation failed", exc_info=True)
+        """Each venue service re-reads and reconciles exact state before execution."""
 
     @staticmethod
     def _get_notifier(config):
@@ -442,7 +362,6 @@ class Scheduler:
         )
 
     async def _run_pair(self, pair: str, trigger_meta: dict[str, Any] | None = None) -> None:
-        from cryptotrader.config import load_config
         from cryptotrader.cycle_lock import cycle_lock
         from cryptotrader.risk.state import RedisStateManager
 
@@ -451,7 +370,8 @@ class Scheduler:
         # holder writes its uuid; release is owner-checked so a TTL-expired
         # holder cannot wipe a fresh holder's key.
         try:
-            redis_state = RedisStateManager(load_config().infrastructure.redis_url)
+            await self._ensure_trading_cycle()
+            redis_state = RedisStateManager(self.runtime.snapshot.document.infrastructure.redis_url or None)
             async with cycle_lock(redis_state, pair) as acquired:
                 if not acquired:
                     logger.warning("cycle_lock held for %s — skipping this scheduler tick", pair)
@@ -475,21 +395,15 @@ class Scheduler:
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:
-            config = await self._ensure_trading_cycle()
+            await self._ensure_trading_cycle()
 
             from cryptotrader.decision.models import CycleRequest
             from cryptotrader.pair import Pair
 
-            cycle_timeout = config.execution.cycle_timeout_s
+            cycle_timeout = 300
             try:
                 outcome = await asyncio.wait_for(
-                    self.cycle.run(
-                        CycleRequest(
-                            Pair.parse(pair),
-                            self.mode,
-                            self.exchange_id or config.scheduler.exchange_id or config.exchange_id,
-                        )
-                    ),
+                    self.runtime.cycle.run(CycleRequest(Pair.parse(pair))),
                     timeout=cycle_timeout,
                 )
             except TimeoutError:
@@ -497,8 +411,8 @@ class Scheduler:
                 self._status[pair]["last_error"] = f"timeout after {cycle_timeout}s"
                 return
             self._status[pair]["last_error"] = None
-            action = outcome.trade_plan.target.side if outcome.trade_plan is not None else "flat"
-            risk_passed = outcome.risk_result.passed if outcome.risk_result is not None else None
+            action = outcome.target_position.side if outcome.target_position is not None else "flat"
+            risk_passed = outcome.status != "risk_rejected"
             self._status[pair]["last_action"] = action
             self._status[pair]["risk_passed"] = risk_passed
             self._status[pair]["last_status"] = outcome.status
@@ -519,18 +433,18 @@ class Scheduler:
     async def _emit_daily_summary(self) -> None:
         """Send daily summary notification with portfolio and trading stats."""
         try:
-            from cryptotrader.config import load_config
             from cryptotrader.notifications import Notifier
             from cryptotrader.portfolio.manager import PortfolioManager
 
-            config = load_config()
+            await self._ensure_trading_cycle()
+            config = self.runtime.snapshot.document
             notifier = Notifier(
                 webhook_url=config.notifications.webhook_url,
                 events=config.notifications.events,
                 webhook_timeout=config.notifications.webhook_timeout,
                 telegram_config=config.notifications.telegram,
             )
-            pm = PortfolioManager(config.infrastructure.database_url)
+            pm = PortfolioManager(getattr(self.runtime.repository, "database_url", None))
             portfolio = await pm.get_portfolio()
             # get_daily_pnl returns None when no snapshot exists in today's UTC window
             daily_pnl_raw = await pm.get_daily_pnl()

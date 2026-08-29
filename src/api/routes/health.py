@@ -16,10 +16,8 @@ import logging
 import time
 
 import httpx
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-
-from cryptotrader.config import load_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -97,14 +95,20 @@ async def _check_llm(base_url: str, api_key: str) -> str:
 
 
 @router.get("/health")
-async def health():
+async def health(request: Request):  # noqa: C901 - each dependency is an independent probe
     """Return detailed health status for all configured components.
 
     Designed for Docker HEALTHCHECK and orchestrator liveness/readiness probes.
     Returns HTTP 503 when any configured component is unavailable so that the
     orchestrator can decide to restart or reroute traffic.
     """
-    config = load_config()
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "checks": {"api": "ok", "runtime": "unavailable"}},
+        )
+    config = runtime.snapshot.document
     checks: dict[str, str] = {"api": "ok"}
 
     # --- Redis check (cached client) ---
@@ -126,7 +130,7 @@ async def health():
         checks["redis"] = "not_configured"
 
     # --- DB check (cached engine) ---
-    db_url = config.infrastructure.database_url
+    db_url = getattr(runtime.repository, "database_url", None)
     if db_url and create_async_engine is not None:
         try:
             engine = _db_engines.get(db_url)
@@ -150,10 +154,8 @@ async def health():
         checks["db"] = "not_configured"
 
     # --- LLM API check ---
-    llm_api_key = config.llm.api_key
-    if llm_api_key:
-        llm_base_url = config.llm.base_url
-        checks["llm"] = await _check_llm(llm_base_url, llm_api_key)
+    if config.llm.base_url:
+        checks["llm"] = await _check_llm(config.llm.base_url, "")
     else:
         checks["llm"] = "not_configured"
 

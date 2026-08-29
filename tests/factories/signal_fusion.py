@@ -2,13 +2,30 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from cryptotrader.decision.models import CycleRequest, TargetPosition, TradePlan
+from cryptotrader.decision.models import TargetPosition, TradePlan
 from cryptotrader.pair import Pair
 from cryptotrader.profiles.models import ComponentWeight, SignalProfile
 from cryptotrader.signals.models import ComponentSignal, PositionSnapshot, SignalContext
+
+
+@dataclass(frozen=True)
+class ExecutionContextFixture:
+    """Test-only input for Task 18-owned legacy risk and executor units."""
+
+    pair: Pair
+    as_of: datetime
+    market_data_source_id: str
+    market_type: str
+    current_price: float
+    atr: float
+    snapshots: dict
+    equity: float
+    current_position: PositionSnapshot
+    portfolio: dict
 
 
 def position(side="flat", amount=0.0, size_ratio=0.0, **overrides) -> PositionSnapshot:
@@ -18,8 +35,6 @@ def position(side="flat", amount=0.0, size_ratio=0.0, **overrides) -> PositionSn
 
 def context(
     price=100.0,
-    equity=10_000.0,
-    position=None,
     atr=5.0,
     market_type="swap",
     **overrides,
@@ -27,14 +42,29 @@ def context(
     values = {
         "pair": Pair.parse("BTC/USDT:USDT" if market_type == "swap" else "BTC/USDT"),
         "as_of": datetime(2026, 1, 1, tzinfo=UTC),
-        "mode": "paper",
-        "exchange_id": "okx",
+        "market_data_source_id": "default",
         "market_type": market_type,
-        "equity": equity,
         "current_price": price,
         "atr": atr,
-        "current_position": position or PositionSnapshot("flat", 0.0, 0.0),
         "snapshots": {},
+    }
+    values.update(overrides)
+    return SignalContext(**values)
+
+
+def execution_context(
+    price=100.0,
+    equity=10_000.0,
+    position=None,
+    atr=5.0,
+    market_type="swap",
+    **overrides,
+) -> ExecutionContextFixture:
+    market = context(price=price, atr=atr, market_type=market_type)
+    values = {
+        **market.__dict__,
+        "equity": equity,
+        "current_position": position or PositionSnapshot("flat", 0.0, 0.0),
         "portfolio": {
             "total_value": equity,
             "cash": equity,
@@ -42,7 +72,8 @@ def context(
             "positions": {},
         },
     }
-    return SignalContext(**(values | overrides))
+    values.update(overrides)
+    return ExecutionContextFixture(**values)
 
 
 def profile(
@@ -94,15 +125,11 @@ def trade_plan(target: TargetPosition, **overrides) -> TradePlan:
     return TradePlan(**(values | overrides))
 
 
-def request(pair="BTC/USDT:USDT", mode="paper", exchange_id="okx", as_of=None) -> CycleRequest:
-    return CycleRequest(Pair.parse(pair), mode, exchange_id, as_of)
-
-
 def risk_request(current=None, target=None, **context_overrides):
     from cryptotrader.risk.models import RiskRequest
 
     target = target or TargetPosition("long", 0.5)
-    signal_context = context(position=current or position(), **context_overrides)
+    signal_context = execution_context(position=current or position(), **context_overrides)
     return RiskRequest(context=signal_context, plan=trade_plan(target))
 
 
