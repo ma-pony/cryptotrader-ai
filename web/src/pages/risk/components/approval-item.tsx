@@ -11,9 +11,10 @@ import type { ApprovalRequest } from '@/types/api';
 
 interface Props {
   approval: ApprovalRequest;
+  onOutcome?: (outcome: { approval_id: string; cycle_id: string; approval_status: string; cycle_status: string; execution_status: string; requires_attention: boolean }) => void;
 }
 
-export const ApprovalItem = ({ approval }: Props) => {
+export const ApprovalItem = ({ approval, onOutcome }: Props) => {
   const { t } = useTranslation('risk');
   const respond = useHitlRespond();
   const [confirmAction, setConfirmAction] = useState<'approve' | 'reject' | null>(null);
@@ -59,7 +60,7 @@ export const ApprovalItem = ({ approval }: Props) => {
         body={t('hitl.confirm_approve_body')}
         confirmLabel={t('hitl.confirm_approve_action')}
         destructive={false}
-        onConfirm={async () => { await respond.mutateAsync({ approvalId: approval.approval_id, decision: 'approve' }); }}
+        onConfirm={async () => { onOutcome?.(await respond.mutateAsync({ approvalId: approval.approval_id, decision: 'approve' })); }}
       />
       <ConfirmDialog
         open={confirmAction === 'reject'}
@@ -68,7 +69,7 @@ export const ApprovalItem = ({ approval }: Props) => {
         body={t('hitl.confirm_reject_body')}
         confirmLabel={t('hitl.confirm_reject_action')}
         destructive
-        onConfirm={async () => { await respond.mutateAsync({ approvalId: approval.approval_id, decision: 'reject' }); }}
+        onConfirm={async () => { onOutcome?.(await respond.mutateAsync({ approvalId: approval.approval_id, decision: 'reject' })); }}
       />
     </>
   );
