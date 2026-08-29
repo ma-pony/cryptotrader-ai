@@ -400,6 +400,24 @@ async def test_async_order_ack_is_reconciled_before_using_owned_fill():
 
 
 @dataclass
+class _ClientLookupAcknowledgementSession(_AsyncAcknowledgementSession):
+    async def find_order(self, _pair, *, order_id=None, client_order_id=None):
+        if order_id:
+            raise RuntimeError("order id not indexed yet")
+        return await super().find_order(_pair, order_id=order_id, client_order_id=client_order_id)
+
+
+@pytest.mark.asyncio
+async def test_order_ack_falls_back_to_client_id_when_exchange_has_not_indexed_order_id():
+    venue_canary = _script("venue_canary.py")
+    session = _ClientLookupAcknowledgementSession(Pair.parse("BTC/USDT:USDT"))
+
+    await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.queried >= 1
+
+
+@dataclass
 class _FullyFilledTimeoutSession(_AmbiguousCreateSession):
     async def find_order(self, _pair, *, order_id=None, client_order_id=None):
         if client_order_id and client_order_id.endswith("O"):
