@@ -208,7 +208,7 @@ async def run_simulated_canary(session, pair: Pair, *, close_session: bool = Tru
         if initial["requires_attention"]:
             raise CanarySafetyError("canary requires initial zero position, orders, and protections")
         result["steps"].append("read_health_balance_open_state")
-        minimum_amount = await session.minimum_amount(pair, quote.last)
+        minimum_amount = await session.minimum_amount(pair, quote.last, _CANARY_QUOTE_NOTIONAL)
         amount = await session.normalize_amount(pair, max(minimum_amount, _CANARY_QUOTE_NOTIONAL / quote.last))
         if amount <= 0:
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")

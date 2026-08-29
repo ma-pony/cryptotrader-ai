@@ -143,9 +143,15 @@ class CcxtVenueBase:
             raise VenueOperationError(f"{self.connection_id}: unsafe amount normalization for {pair}")
         return normalized
 
-    async def minimum_amount(self, pair: Pair, reference_price: Decimal) -> Decimal:
+    async def minimum_amount(self, pair: Pair, reference_price: Decimal, minimum_quote_notional: Decimal) -> Decimal:
         if not isinstance(reference_price, Decimal) or not reference_price.is_finite() or reference_price <= 0:
             raise VenueOperationError(f"{self.connection_id}: reference price must be positive")
+        if (
+            not isinstance(minimum_quote_notional, Decimal)
+            or not minimum_quote_notional.is_finite()
+            or minimum_quote_notional <= 0
+        ):
+            raise VenueOperationError(f"{self.connection_id}: minimum quote notional must be positive")
         market = await self._market(pair)
         limits = market.get("limits") if isinstance(market.get("limits"), dict) else {}
         amount_limits = limits.get("amount") if isinstance(limits.get("amount"), dict) else {}
@@ -154,8 +160,14 @@ class CcxtVenueBase:
         cost_min = self._decimal(cost_limits.get("min"), "minimum cost", default=Decimal("0"))
         contract_size = await self._contract_size(pair)
         base_min = amount_min * contract_size
-        candidate = max(base_min, cost_min / reference_price, Decimal("0.00000001"))
-        return await self.normalize_amount(pair, candidate * Decimal("1.01"))
+        quote_min = max(cost_min, minimum_quote_notional)
+        candidate = max(base_min, quote_min / reference_price, Decimal("0.00000001"))
+        for _ in range(4):
+            normalized = await self.normalize_amount(pair, candidate * Decimal("1.01"))
+            if normalized >= base_min and normalized * reference_price >= quote_min:
+                return normalized
+            candidate *= Decimal("2")
+        raise VenueOperationError(f"{self.connection_id}: cannot precision-normalize a safe minimum amount for {pair}")
 
     async def _price_to_venue(self, pair: Pair, price: Decimal) -> Decimal:
         await self._market(pair)

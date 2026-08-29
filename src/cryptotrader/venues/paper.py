@@ -102,12 +102,14 @@ class PaperVenueSession:
             raise ValueError("Paper base amount must be a positive finite Decimal")
         return base_amount
 
-    async def minimum_amount(self, pair: Pair, reference_price: Decimal) -> Decimal:
+    async def minimum_amount(self, pair: Pair, reference_price: Decimal, minimum_quote_notional: Decimal) -> Decimal:
         self._require_open()
         self._require_supported_pair(pair)
         if not isinstance(reference_price, Decimal) or reference_price <= 0:
             raise ValueError("Paper reference price must be positive")
-        return Decimal("0.00000001")
+        if not isinstance(minimum_quote_notional, Decimal) or minimum_quote_notional <= 0:
+            raise ValueError("Paper minimum quote notional must be positive")
+        return minimum_quote_notional / reference_price
 
     async def place_order(self, intent: OrderIntent) -> NormalizedOrder:
         self._require_open()

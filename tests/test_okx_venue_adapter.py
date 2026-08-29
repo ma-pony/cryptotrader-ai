@@ -174,7 +174,7 @@ async def test_minimum_amount_never_rounds_below_platform_amount_or_cost_limit()
     }
     client.markets["BTC/USDT:USDT"]["precision"]["amount"] = "0.01"
 
-    amount = await session.minimum_amount(Pair.parse("BTC/USDT:USDT"), Decimal("1"))
+    amount = await session.minimum_amount(Pair.parse("BTC/USDT:USDT"), Decimal("1"), Decimal("0.1004"))
 
     assert amount >= Decimal("0.1004")
     assert amount * Decimal("1") >= Decimal("0.1004")

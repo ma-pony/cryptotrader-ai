@@ -90,7 +90,7 @@ class _Session:
     async def normalize_amount(self, _pair, amount):
         return amount
 
-    async def minimum_amount(self, _pair, _price):
+    async def minimum_amount(self, _pair, _price, _minimum_quote_notional):
         return Decimal("0.1")
 
     async def place_order(self, intent):
