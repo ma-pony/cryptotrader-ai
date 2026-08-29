@@ -12,6 +12,37 @@ import {
 
 export const RUNTIME_CONFIG_QUERY_KEY = ['runtime-config'] as const;
 
+/**
+ * JSON.stringify silently drops undefined/functions and turns non-finite
+ * numbers into null. Configuration writes must preserve the user's document
+ * exactly, so reject those values before the request boundary.
+ */
+export const assertRuntimeJsonDocument = <T>(value: T): T => {
+  const visit = (candidate: unknown, seen: Set<object>): void => {
+    if (candidate === null || typeof candidate === 'string' || typeof candidate === 'boolean') return;
+    if (typeof candidate === 'number') {
+      if (Number.isFinite(candidate)) return;
+      throw new Error('Invalid runtime JSON: numbers must be finite');
+    }
+    if (Array.isArray(candidate)) {
+      if (seen.has(candidate)) throw new Error('Invalid runtime JSON: cyclic value');
+      seen.add(candidate);
+      candidate.forEach((item) => visit(item, seen));
+      seen.delete(candidate);
+      return;
+    }
+    if (typeof candidate === 'object') {
+      if (seen.has(candidate)) throw new Error('Invalid runtime JSON: cyclic value');
+      seen.add(candidate);
+      Object.values(candidate as Record<string, unknown>).forEach((item) => visit(item, seen));
+      seen.delete(candidate);
+      return;
+    }
+    throw new Error('Invalid runtime JSON: values must be JSON primitives, arrays, or objects');
+  };
+  visit(value, new Set());
+  return value;
+};
 
 export const decodeJsonValue = (value: JsonValueOut): RuntimeJsonValue => {
   switch (value.kind) {
@@ -78,7 +109,7 @@ export const useRuntimeConfig = () => {
     mutationFn: (document: RuntimeDocument) => {
       if (query.data?.revision === undefined)
         return Promise.reject(new Error('Runtime config revision is unavailable'));
-      return apiClient.put('/api/config', { expected_revision: query.data.revision, document }, RuntimeConfigSchema);
+      return apiClient.put('/api/config', { expected_revision: query.data.revision, document: assertRuntimeJsonDocument(document) }, RuntimeConfigSchema);
     },
     onSuccess: (saved) => {
       client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, saved);

@@ -44,7 +44,7 @@ export const validateRiskSection = (value: unknown): RuntimeDocument['risk'] | u
   return value as RuntimeDocument['risk'];
 };
 
-const testFingerprint = (connection: DraftConnection, credentialUpdatedAt?: string | null) =>
+export const testFingerprint = (connection: DraftConnection, credentialUpdatedAt?: string | null) =>
   JSON.stringify({
     id: connection.id,
     label: connection.label,

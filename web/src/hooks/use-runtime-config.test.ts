@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { JsonValueSchema, RuntimeConfigSchema } from '@/types/api.schema';
-import { decodeJsonValue, toRuntimeDocument } from './use-runtime-config';
+import { assertRuntimeJsonDocument, decodeJsonValue, toRuntimeDocument } from './use-runtime-config';
 
 describe('runtime config response decoder', () => {
   it('rejects every semantically impossible JsonValue envelope field', () => {
@@ -23,5 +23,20 @@ describe('runtime config response decoder', () => {
   });
   it('fails closed when a strict runtime response has an unknown field', () => {
     expect(RuntimeConfigSchema.safeParse({ revision: 1, updated_at: '2026-08-28T00:00:00Z', setup_required: true, document: { system: { active: false, injected: true }, market_data: { source_id: 'market', parameters: [] }, llm: { models: {} }, signals: { components: [] }, risk: {}, execution: { connections: [], books: [], allocation_policy: 'weighted' }, hitl: {}, scheduler: {}, triggers: {}, notifications: {}, infrastructure: {} } }).success).toBe(false);
+  });
+
+  it.each([
+    ['undefined', { nested: undefined }],
+    ['function', { nested: () => 'lost' }],
+    ['NaN', { nested: Number.NaN }],
+    ['infinity', { nested: Infinity }],
+    ['nested invalid value', { nested: [{ still: Number.NEGATIVE_INFINITY }] }],
+  ])('rejects runtime JSON containing %s before it can be serialized', (_name, value) => {
+    expect(() => assertRuntimeJsonDocument(value)).toThrow('Invalid runtime JSON');
+  });
+
+  it('accepts recursive ordinary JSON without rewriting it', () => {
+    const value = { object: { array: [null, true, 1.25, 'ok', { deeper: ['yes'] }] } };
+    expect(assertRuntimeJsonDocument(value)).toBe(value);
   });
 });

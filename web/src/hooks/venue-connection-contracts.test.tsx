@@ -1,8 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { renderHook } from '@testing-library/react';
+import { fireEvent, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { useVenueConnections } from './use-venue-connections';
+import { VenueForm } from '@/pages/settings/venues/venue-form';
+import '@/lib/i18n';
 
 describe('venue connection write recovery', () => {
   it('keeps a successful create as saved when the follow-up config refresh fails', async () => {
@@ -14,6 +16,44 @@ describe('venue connection write recovery', () => {
     const hook = renderHook(() => useVenueConnections(), { wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider> });
     const result = await hook.result.current.create.mutateAsync({ expected_revision: 1, id: 'paper-1', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} });
     expect(result.savedNeedsReload).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears successful non-Paper credentials without caching secret variables when refresh fails', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, credential: { configured: true, updated_at: '2026-08-29T00:00:00Z' } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('down', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <VenueForm revision={1} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} }} />
+      </QueryClientProvider>,
+    );
+    fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: 'secret-marker-key' } });
+    fireEvent.change(screen.getByLabelText('签名短语'), { target: { value: 'secret-marker-signing-key' } });
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'secret-marker-passphrase' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存访问资料' }));
+    await waitFor(() => expect(screen.getByLabelText('访问 ID')).toHaveValue(''));
+    expect(screen.getByLabelText('签名短语')).toHaveValue('');
+    expect(screen.getByLabelText('Passphrase')).toHaveValue('');
+    expect(JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables))).not.toContain('secret-marker');
+  });
+
+  it('shows saved reload required and prevents a second create after a refresh failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'paper-2', label: 'Paper Two', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] } }), { status: 201 }))
+      .mockResolvedValueOnce(new Response('down', { status: 503 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><VenueForm revision={1} /></QueryClientProvider>);
+    fireEvent.change(screen.getByLabelText('连接 ID'), { target: { value: 'paper-2' } });
+    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'Paper Two' } });
+    fireEvent.click(screen.getByRole('button', { name: '创建连接' }));
+    expect(await screen.findByRole('status')).toHaveTextContent('连接已保存，但配置刷新失败；请重新加载后继续。');
+    const create = screen.getByRole('button', { name: '创建连接' });
+    expect(create).toBeDisabled();
+    fireEvent.click(create);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

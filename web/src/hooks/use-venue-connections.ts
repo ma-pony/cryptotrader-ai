@@ -72,8 +72,14 @@ export const useVenueConnections = () => {
       conflict(error);
       throw error;
     }
-    await refreshConfig();
-    return result;
+    // The credential write has already committed. A failed best-effort refresh
+    // must not make callers retain credential material and retry it blindly.
+    try {
+      await refreshConfig();
+      return { ...result, savedNeedsReload: false };
+    } catch {
+      return { ...result, savedNeedsReload: true };
+    }
   };
   const test = useMutation({
     mutationFn: (id: string) => apiClient.post(`/api/venue-connections/${id}/test`, {}, ConnectionHealthSchema),
