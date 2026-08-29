@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
+from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING
@@ -34,12 +34,13 @@ from cryptotrader.venues.registry import VenueAdapterRegistry
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from cryptotrader.bootstrap import BootstrapSettings
     from cryptotrader.venues.protocol import VenueSession
 
 
 @dataclass
 class Runtime:
-    """One frozen startup snapshot and the resources assembled from it."""
+    """One atomically published runtime graph and its owned venue sessions."""
 
     snapshot: RuntimeConfigSnapshot
     repository: RuntimeConfigRepository
@@ -49,40 +50,113 @@ class Runtime:
     market_registry: MarketSourceRegistry
     venue_registry: VenueAdapterRegistry
     events: MultiplexedCycleEventSink
+    _session_keys: dict[str, tuple[object, ...]] = field(default_factory=dict, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
+    _started_setup_required: bool = field(default=False, init=False, repr=False)
+    _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._started_setup_required = self.snapshot.setup_required
+
+    async def reload_for_cycle(self) -> TradingCycle | None:
+        """Synchronize one active runtime to the latest validated database graph."""
+
+        async with self._lifecycle_lock:
+            if self._closed:
+                raise RuntimeError("runtime is closed")
+            if self._started_setup_required:
+                return None
+
+            candidate_snapshot = await self.repository.get_or_create()
+            _validate_snapshot(
+                candidate_snapshot,
+                self.signal_registry,
+                self.venue_registry,
+                self.market_registry,
+            )
+            if candidate_snapshot.setup_required:
+                retired = tuple(self.sessions.values())
+                self.snapshot, self.sessions, self.cycle, self._session_keys = (
+                    candidate_snapshot,
+                    {},
+                    None,
+                    {},
+                )
+                await _close_sessions(retired)
+                return None
+
+            candidate_sessions, candidate_keys, opened = await _candidate_sessions(
+                candidate_snapshot,
+                self.repository,
+                self.venue_registry,
+                self.sessions,
+                self._session_keys,
+            )
+            try:
+                candidate_cycle = _assemble_cycle(
+                    candidate_snapshot,
+                    self.repository,
+                    candidate_sessions,
+                    self.signal_registry,
+                    self.market_registry,
+                    self.events,
+                )
+            except BaseException:
+                await _close_candidate_sessions(opened)
+                raise
+
+            retired = tuple(
+                session
+                for session in self.sessions.values()
+                if all(session is not candidate for candidate in candidate_sessions.values())
+            )
+            self.snapshot, self.sessions, self.cycle, self._session_keys = (
+                candidate_snapshot,
+                candidate_sessions,
+                candidate_cycle,
+                candidate_keys,
+            )
+            await _close_sessions(retired)
+            return candidate_cycle
 
     async def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        sessions = tuple(self.sessions.values())
-        if not sessions:
-            return
-        outcomes = await asyncio.gather(*(session.close() for session in sessions), return_exceptions=True)
-        failure = next((item for item in outcomes if isinstance(item, BaseException)), None)
-        if failure is not None:
-            raise RuntimeError("failed to close venue session") from None
+        async with self._lifecycle_lock:
+            if self._closed:
+                return
+            self._closed = True
+            await _close_sessions(tuple(self.sessions.values()))
 
 
 async def build_runtime(
+    settings: BootstrapSettings | None = None,
+    event_sink: CycleEventSink | None = None,
     *,
     repository: RuntimeConfigRepository | None = None,
     snapshot: RuntimeConfigSnapshot | None = None,
     signal_registry: SignalComponentRegistry | None = None,
     venue_registry: VenueAdapterRegistry | None = None,
     market_registry: MarketSourceRegistry | None = None,
-    events: CycleEventSink | None = None,
 ) -> Runtime:
     """Build setup or active runtime from exactly one database snapshot."""
 
-    runtime_repository = repository or _repository_from_bootstrap_environment()
+    if repository is None:
+        if settings is None:
+            from cryptotrader.bootstrap import BootstrapSettings
+
+            settings = BootstrapSettings.from_environment()
+        runtime_repository = RuntimeConfigRepository(
+            settings.database_url,
+            CredentialVault(settings.config_master_key),
+        )
+    else:
+        runtime_repository = repository
     frozen = snapshot or await runtime_repository.get_or_create()
-    event_sink = (
-        events
-        if isinstance(events, MultiplexedCycleEventSink)
-        else MultiplexedCycleEventSink(events or NullCycleEventSink())
+    routed_events = (
+        event_sink
+        if isinstance(event_sink, MultiplexedCycleEventSink)
+        else MultiplexedCycleEventSink(event_sink or NullCycleEventSink())
     )
-    signals = signal_registry or SignalComponentRegistry.discover(frozen.document, event_sink)
+    signals = signal_registry or SignalComponentRegistry.discover(frozen.document, routed_events)
     venues = venue_registry or VenueAdapterRegistry.discover(
         connection.adapter_id for connection in frozen.document.execution.connections
     )
@@ -94,9 +168,45 @@ async def build_runtime(
         set(markets.installed_ids()),
     )
     if frozen.setup_required:
-        return Runtime(frozen, runtime_repository, None, {}, signals, markets, venues, event_sink)
+        return Runtime(frozen, runtime_repository, None, {}, signals, markets, venues, routed_events)
 
-    sessions = await _open_sessions(frozen, runtime_repository, venues)
+    sessions, session_keys, opened = await _candidate_sessions(
+        frozen,
+        runtime_repository,
+        venues,
+        {},
+        {},
+    )
+    try:
+        cycle = _assemble_cycle(frozen, runtime_repository, sessions, signals, markets, routed_events)
+    except BaseException:
+        await _close_candidate_sessions(opened)
+        raise
+    return Runtime(
+        frozen,
+        runtime_repository,
+        cycle,
+        sessions,
+        signals,
+        markets,
+        venues,
+        routed_events,
+        session_keys,
+    )
+
+
+def _validate_snapshot(snapshot, signals, venues, markets) -> None:
+    validate_runtime_document(
+        snapshot.document,
+        set(signals.installed_ids()),
+        set(venues.installed_ids()),
+        set(markets.installed_ids()),
+    )
+
+
+def _assemble_cycle(snapshot, repository, sessions, signals, markets, event_sink) -> TradingCycle:
+    frozen = snapshot
+    runtime_repository = repository
     services = {connection_id: VenueExecutionService(session) for connection_id, session in sessions.items()}
     allocation = WeightedAllocationPolicy()
     risk = frozen.document.risk
@@ -115,7 +225,7 @@ async def build_runtime(
     market_source = markets.require(frozen.document.market_data.source_id)
     timeframe = str(frozen.document.market_data.parameters.get("timeframe", "1h"))
     limit = int(frozen.document.market_data.parameters.get("limit", 100))
-    cycle = TradingCycle(
+    return TradingCycle(
         repository=runtime_repository,
         market_source=market_source,
         registry=signals,
@@ -135,24 +245,27 @@ async def build_runtime(
         events=event_sink,
         exit_requirement=DataRequirements(candles=(CandleRequirement(timeframe, max(20, limit)),)),
     )
-    return Runtime(frozen, runtime_repository, cycle, sessions, signals, markets, venues, event_sink)
 
 
-def _repository_from_bootstrap_environment() -> RuntimeConfigRepository:
-    database_url = os.environ.get("DATABASE_URL", "").strip()
-    master_key = os.environ.get("CONFIG_MASTER_KEY", "").strip()
-    if not database_url:
-        raise RuntimeError("DATABASE_URL is required")
-    if not master_key:
-        raise RuntimeError("CONFIG_MASTER_KEY is required")
-    return RuntimeConfigRepository(database_url, CredentialVault(master_key))
-
-
-async def _open_sessions(snapshot, repository, venue_registry) -> dict[str, VenueSession]:
+async def _candidate_sessions(
+    snapshot,
+    repository,
+    venue_registry,
+    current_sessions,
+    current_keys,
+) -> tuple[dict[str, VenueSession], dict[str, tuple[object, ...]], tuple[VenueSession, ...]]:
     sessions: dict[str, VenueSession] = {}
+    keys: dict[str, tuple[object, ...]] = {}
+    opened: list[VenueSession] = []
     try:
         for connection in snapshot.document.execution.connections:
             if not connection.enabled:
+                continue
+            key = await _session_key(connection, repository)
+            keys[connection.id] = key
+            existing = current_sessions.get(connection.id)
+            if existing is not None and current_keys.get(connection.id) == key:
+                sessions[connection.id] = existing
                 continue
             credentials = (
                 await repository.reveal_credentials(connection.credential_ref)
@@ -160,8 +273,62 @@ async def _open_sessions(snapshot, repository, venue_registry) -> dict[str, Venu
                 else None
             )
             adapter = venue_registry.require(connection.adapter_id)
-            sessions[connection.id] = await adapter.connect(connection, credentials)
-    except BaseException:
-        await asyncio.gather(*(session.close() for session in sessions.values()), return_exceptions=True)
+            session = await adapter.connect(connection, credentials)
+            sessions[connection.id] = session
+            opened.append(session)
+    except BaseException as error:
+        await _close_candidate_sessions(tuple(opened))
+        if isinstance(error, Exception):
+            raise RuntimeError("failed to open venue session") from None
         raise
-    return sessions
+    return sessions, keys, tuple(opened)
+
+
+async def _session_key(connection, repository) -> tuple[object, ...]:
+    credential_updated_at = None
+    if connection.credential_ref is not None:
+        state = await repository.credential_state(connection.credential_ref)
+        credential_updated_at = state.updated_at
+    return (
+        connection.id,
+        connection.adapter_id,
+        connection.environment,
+        connection.leverage,
+        connection.margin_mode,
+        _canonical_value(connection.parameters),
+        connection.credential_ref,
+        credential_updated_at,
+    )
+
+
+def _canonical_value(value):
+    if isinstance(value, MappingABC):
+        return (
+            "mapping",
+            tuple((key, _canonical_value(item)) for key, item in sorted(value.items())),
+        )
+    if isinstance(value, (list, tuple)):
+        return ("sequence", tuple(_canonical_value(item) for item in value))
+    return (type(value).__name__, value)
+
+
+async def _close_candidate_sessions(sessions) -> None:
+    try:
+        await _close_sessions(sessions)
+    except Exception:
+        return
+
+
+async def _close_sessions(sessions) -> None:
+    unique = tuple({id(session): session for session in sessions}.values())
+    if not unique:
+        return
+    outcomes = await asyncio.gather(*(session.close() for session in unique), return_exceptions=True)
+    control_flow = next(
+        (item for item in outcomes if isinstance(item, BaseException) and not isinstance(item, Exception)),
+        None,
+    )
+    if control_flow is not None:
+        raise control_flow
+    if any(isinstance(item, Exception) for item in outcomes):
+        raise RuntimeError("failed to close venue session") from None

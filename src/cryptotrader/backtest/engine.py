@@ -244,22 +244,32 @@ class BacktestEngine:
         self._ls_ratio: dict[str, dict] = {}
 
     async def run(self) -> BacktestResult:
+        from cryptotrader.bootstrap import BootstrapSettings
         from cryptotrader.cycle_events import NullCycleEventSink
         from cryptotrader.journal.store import MultiVenueCycleStore
         from cryptotrader.market_sources.registry import MarketSourceRegistry
-        from cryptotrader.runtime import _repository_from_bootstrap_environment, build_runtime
+        from cryptotrader.runtime import build_runtime
         from cryptotrader.runtime_config.models import (
             ExecutionConfig,
             MarketDataConfig,
             RuntimeConfigSnapshot,
             SystemConfig,
         )
+        from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+        from cryptotrader.runtime_config.secrets import CredentialVault
         from cryptotrader.signals.context import HistoricalSignalContextProvider
         from cryptotrader.signals.registry import SignalComponentRegistry
         from cryptotrader.venues.paper import PaperVenueAdapter
         from cryptotrader.venues.registry import VenueAdapterRegistry
 
-        source_repository = self.repository or _repository_from_bootstrap_environment()
+        if self.repository is None:
+            settings = BootstrapSettings.from_environment()
+            source_repository = RuntimeConfigRepository(
+                settings.database_url,
+                CredentialVault(settings.config_master_key),
+            )
+        else:
+            source_repository = self.repository
         source_snapshot = self.snapshot or await source_repository.get_or_create()
         events = NullCycleEventSink()
         registry = self.signal_registry or SignalComponentRegistry.discover(source_snapshot.document, events)
@@ -316,7 +326,7 @@ class BacktestEngine:
             signal_registry=registry,
             venue_registry=VenueAdapterRegistry((PaperVenueAdapter(),)),
             market_registry=MarketSourceRegistry((historical,)),
-            events=events,
+            event_sink=events,
         )
         if runtime.cycle is None:
             raise RuntimeError("backtest Paper runtime did not create a cycle")

@@ -1,12 +1,15 @@
 """Tests for database-Runtime-backed CLI discovery commands."""
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
 
 from cli.main import app
+from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
 from cryptotrader.signals.registry import ComponentMetadata
+from tests.factories.runtime_config import runtime_document
 
 
 def test_cli_unmounts_legacy_configuration_commands() -> None:
@@ -32,13 +35,7 @@ def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:
         metadata=lambda: (ComponentMetadata("llm_committee", "LLM committee", "Internal debate"),)
     )
     runtime = Runtime(
-        snapshot=SimpleNamespace(
-            document=SimpleNamespace(
-                signals=SimpleNamespace(
-                    components=(SimpleNamespace(component_id="llm_committee", enabled=True),),
-                )
-            )
-        ),
+        snapshot=RuntimeConfigSnapshot(1, runtime_document(), datetime(2026, 8, 29, tzinfo=UTC)),
         repository=object(),
         cycle=None,
         sessions={},

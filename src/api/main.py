@@ -65,33 +65,54 @@ async def lifespan(_app: FastAPI):
     setup_otel()
 
     await _init_runtime(_app)
+    runtime = _app.state.runtime
+    active = not runtime.snapshot.setup_required
 
-    # Initialize trigger engine if enabled
-    await _init_trigger_engine(_app)
+    try:
+        if active:
+            # Initialize trigger engine if enabled
+            await _init_trigger_engine(_app)
 
-    # Initialize trading scheduler if enabled
-    await _init_scheduler(_app)
+            # Initialize trading scheduler if enabled
+            await _init_scheduler(_app)
 
-    yield
-
-    # Shutdown scheduler first (it owns trading-cycle + daily-summary jobs)
-    await _shutdown_scheduler(_app)
-
-    # Shutdown trigger engine
-    trigger_engine = getattr(_app.state, "trigger_engine", None)
-    if trigger_engine is not None:
-        await trigger_engine.stop()
-
-    runtime = getattr(_app.state, "runtime", None)
-    if runtime is not None:
-        await runtime.close()
-    logger.info("Shutting down")
+        yield
+    finally:
+        await _shutdown_runtime_owners(_app, runtime, active=active)
+        logger.info("Shutting down")
 
 
 async def _init_runtime(app_instance: FastAPI) -> None:
     from cryptotrader.runtime import build_runtime
 
     app_instance.state.runtime = await build_runtime()
+
+
+async def _shutdown_runtime_owners(app_instance: FastAPI, runtime, *, active: bool) -> None:
+    failures: list[BaseException] = []
+    if active:
+        try:
+            await _shutdown_scheduler(app_instance)
+        except BaseException as error:
+            failures.append(error)
+
+        trigger_engine = getattr(app_instance.state, "trigger_engine", None)
+        if trigger_engine is not None:
+            try:
+                await trigger_engine.stop()
+            except BaseException as error:
+                failures.append(error)
+
+    try:
+        await runtime.close()
+    except BaseException as error:
+        failures.append(error)
+
+    control_flow = next((error for error in failures if not isinstance(error, Exception)), None)
+    if control_flow is not None:
+        raise control_flow
+    if failures:
+        raise failures[0]
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:

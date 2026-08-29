@@ -1,121 +1,89 @@
-"""Runtime active/setup 两条装配路径。"""
+"""Bootstrap 只接受两个外部参数并保持首次启动安全。"""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from importlib import import_module
 
 import pytest
 
-from cryptotrader.runtime import build_runtime
-from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
-from tests.factories.runtime_config import active_document
+MASTER_KEY = "A" * 43 + "="
 
 
-class _Repository:
-    database_url = None
-
-    def __init__(self, snapshot) -> None:
-        self.snapshot = snapshot
-        self.calls = 0
-
-    async def get_or_create(self):
-        self.calls += 1
-        return self.snapshot
+def _settings_type():
+    return import_module("cryptotrader.bootstrap").BootstrapSettings
 
 
-class _Session:
-    connection_id = "paper-local"
+def test_bootstrap_settings_read_exactly_two_environment_variables(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///test.db")
+    monkeypatch.setenv("CONFIG_MASTER_KEY", MASTER_KEY)
+    monkeypatch.setenv("CRYPTOTRADER_EXCHANGE_ID", "must-be-ignored")
 
-    def __init__(self) -> None:
-        self.closed = 0
+    settings = _settings_type().from_environment()
 
-    async def close(self):
-        self.closed += 1
-
-
-class _Adapter:
-    adapter_id = "paper"
-
-    def __init__(self, session) -> None:
-        self.session = session
-        self.connect_calls = 0
-
-    async def connect(self, connection, credentials):
-        self.connect_calls += 1
-        assert credentials is None
-        return self.session
+    assert settings == _settings_type()("sqlite+aiosqlite:///test.db", MASTER_KEY)
+    assert "must-be-ignored" not in repr(settings)
 
 
-class _VenueRegistry:
-    def __init__(self, adapter) -> None:
-        self.adapter = adapter
+def test_bootstrap_settings_hide_master_key_and_are_frozen():
+    settings = _settings_type()("sqlite+aiosqlite:///test.db", MASTER_KEY)
+
+    assert MASTER_KEY not in repr(settings)
+    with pytest.raises((AttributeError, TypeError)):
+        settings.database_url = "sqlite+aiosqlite:///other.db"
+
+
+@pytest.mark.parametrize(
+    ("missing", "message"),
+    [
+        ("DATABASE_URL", "DATABASE_URL is required"),
+        ("CONFIG_MASTER_KEY", "CONFIG_MASTER_KEY is required"),
+    ],
+)
+def test_bootstrap_settings_missing_values_use_fixed_safe_errors(monkeypatch, missing, message):
+    monkeypatch.setenv("DATABASE_URL", "sqlite+aiosqlite:///test.db")
+    monkeypatch.setenv("CONFIG_MASTER_KEY", MASTER_KEY)
+    monkeypatch.delenv(missing)
+
+    with pytest.raises(RuntimeError, match=f"^{message}$"):
+        _settings_type().from_environment()
+
+
+@pytest.mark.asyncio
+async def test_first_start_seeds_setup_document_without_opening_venue_session(tmp_path):
+    from cryptotrader.cycle_events import NullCycleEventSink
+    from cryptotrader.runtime import build_runtime
+
+    registry = _RecordingVenueRegistry()
+    event_sink = NullCycleEventSink()
+    settings = _settings_type()(f"sqlite+aiosqlite:///{tmp_path / 'runtime.db'}", MASTER_KEY)
+
+    runtime = await build_runtime(
+        settings,
+        event_sink=event_sink,
+        signal_registry=_InstalledRegistry({"kronos", "llm_committee"}),
+        venue_registry=registry,
+        market_registry=_InstalledRegistry({"default"}),
+    )
+
+    assert runtime.snapshot.setup_required is True
+    assert runtime.events.base is event_sink
+    assert registry.connect_calls == []
+    await runtime.close()
+
+
+class _InstalledRegistry:
+    def __init__(self, installed: set[str]) -> None:
+        self._installed = frozenset(installed)
 
     def installed_ids(self):
-        return frozenset({"paper"})
+        return self._installed
+
+
+class _RecordingVenueRegistry(_InstalledRegistry):
+    def __init__(self) -> None:
+        super().__init__({"paper", "okx", "bybit"})
+        self.connect_calls: list[str] = []
 
     def require(self, adapter_id):
-        assert adapter_id == "paper"
-        return self.adapter
-
-
-class _MarketSource:
-    id = "default"
-
-
-class _MarketRegistry:
-    source = _MarketSource()
-
-    def installed_ids(self):
-        return frozenset({"default"})
-
-    def require(self, source_id):
-        assert source_id == "default"
-        return self.source
-
-
-class _SignalRegistry:
-    def installed_ids(self):
-        return frozenset({"kronos", "llm_committee"})
-
-
-@pytest.mark.asyncio
-async def test_active_runtime_opens_enabled_sessions_and_builds_one_cycle():
-    snapshot = RuntimeConfigSnapshot(3, active_document(), datetime.now(UTC))
-    repository = _Repository(snapshot)
-    session = _Session()
-    adapter = _Adapter(session)
-
-    runtime = await build_runtime(
-        repository=repository,
-        signal_registry=_SignalRegistry(),
-        venue_registry=_VenueRegistry(adapter),
-        market_registry=_MarketRegistry(),
-    )
-
-    assert repository.calls == 1
-    assert adapter.connect_calls == 1
-    assert runtime.cycle is not None
-    assert runtime.cycle.repository is repository
-    assert runtime.sessions == {"paper-local": session}
-    await runtime.close()
-    await runtime.close()
-    assert session.closed == 1
-
-
-@pytest.mark.asyncio
-async def test_injected_snapshot_is_not_reloaded_during_setup_runtime_build():
-    document = active_document().model_copy(update={"system": SystemConfig(active=False)})
-    snapshot = RuntimeConfigSnapshot(4, document, datetime.now(UTC))
-    repository = _Repository(snapshot)
-
-    runtime = await build_runtime(
-        repository=repository,
-        snapshot=snapshot,
-        signal_registry=_SignalRegistry(),
-        venue_registry=_VenueRegistry(_Adapter(_Session())),
-        market_registry=_MarketRegistry(),
-    )
-
-    assert repository.calls == 0
-    assert runtime.cycle is None
-    assert runtime.sessions == {}
+        self.connect_calls.append(adapter_id)
+        raise AssertionError("setup runtime must not resolve or connect a venue adapter")

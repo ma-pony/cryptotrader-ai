@@ -1,4 +1,4 @@
-"""Health probes consume the already-built database Runtime."""
+"""Health 和 ASGI lifespan 只消费已装配的数据库 Runtime。"""
 
 from __future__ import annotations
 
@@ -6,10 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def _runtime(*, db_url="", redis_url="", llm_base_url=""):
+def _runtime(*, setup_required=False, db_url="", redis_url="", llm_base_url=""):
     document = SimpleNamespace(
         infrastructure=SimpleNamespace(redis_url=redis_url),
         llm=SimpleNamespace(base_url=llm_base_url),
@@ -17,7 +18,7 @@ def _runtime(*, db_url="", redis_url="", llm_base_url=""):
         scheduler=SimpleNamespace(enabled=False),
     )
     return SimpleNamespace(
-        snapshot=SimpleNamespace(document=document),
+        snapshot=SimpleNamespace(document=document, setup_required=setup_required),
         repository=SimpleNamespace(database_url=db_url),
         cycle=None,
         close=AsyncMock(),
@@ -49,6 +50,109 @@ def _use(client, **values):
     runtime = _runtime(**values)
     client.app.state.runtime = runtime
     return runtime
+
+
+def test_setup_required_health_is_truthful_without_dependency_probes(client):
+    _use(
+        client,
+        setup_required=True,
+        db_url="sqlite+aiosqlite:///must-not-probe.db",
+        redis_url="redis://must-not-probe",
+        llm_base_url="https://must-not-probe.example",
+    )
+    with (
+        patch("api.routes.health.create_async_engine") as db,
+        patch("api.routes.health.aioredis") as redis,
+        patch("api.routes.health._check_llm", new=AsyncMock()) as llm,
+    ):
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "setup_required"
+    assert response.json()["checks"] == {"api": "ok", "runtime": "setup_required"}
+    db.assert_not_called()
+    redis.from_url.assert_not_called()
+    llm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_setup_lifespan_builds_once_skips_scheduler_and_triggers_and_closes_runtime():
+    from api import main
+
+    runtime = _runtime(setup_required=True)
+    application = FastAPI()
+    build = AsyncMock(return_value=runtime)
+    with (
+        patch("cryptotrader.runtime.build_runtime", new=build),
+        patch.object(main, "_init_trigger_engine", new=AsyncMock()) as init_triggers,
+        patch.object(main, "_init_scheduler", new=AsyncMock()) as init_scheduler,
+        patch.object(main, "_shutdown_scheduler", new=AsyncMock()) as shutdown_scheduler,
+    ):
+        async with main.lifespan(application):
+            assert application.state.runtime is runtime
+
+    build.assert_awaited_once_with()
+    init_triggers.assert_not_awaited()
+    init_scheduler.assert_not_awaited()
+    shutdown_scheduler.assert_not_awaited()
+    runtime.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_active_lifespan_starts_and_stops_explicit_owners_once():
+    from api import main
+
+    runtime = _runtime()
+    application = FastAPI()
+    trigger = SimpleNamespace(stop=AsyncMock())
+
+    async def init_trigger(app):
+        app.state.trigger_engine = trigger
+
+    with (
+        patch("cryptotrader.runtime.build_runtime", new=AsyncMock(return_value=runtime)) as build,
+        patch.object(main, "_init_trigger_engine", new=AsyncMock(side_effect=init_trigger)) as init_triggers,
+        patch.object(main, "_init_scheduler", new=AsyncMock()) as init_scheduler,
+        patch.object(main, "_shutdown_scheduler", new=AsyncMock()) as shutdown_scheduler,
+    ):
+        async with main.lifespan(application):
+            assert application.state.runtime is runtime
+
+    build.assert_awaited_once_with()
+    init_triggers.assert_awaited_once_with(application)
+    init_scheduler.assert_awaited_once_with(application)
+    shutdown_scheduler.assert_awaited_once_with(application)
+    trigger.stop.assert_awaited_once_with()
+    runtime.close.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_active_lifespan_attempts_all_owner_shutdowns_when_scheduler_stop_fails():
+    from api import main
+
+    runtime = _runtime()
+    application = FastAPI()
+    trigger = SimpleNamespace(stop=AsyncMock())
+
+    async def init_trigger(app):
+        app.state.trigger_engine = trigger
+
+    with (
+        patch("cryptotrader.runtime.build_runtime", new=AsyncMock(return_value=runtime)),
+        patch.object(main, "_init_trigger_engine", new=AsyncMock(side_effect=init_trigger)),
+        patch.object(main, "_init_scheduler", new=AsyncMock()),
+        patch.object(
+            main,
+            "_shutdown_scheduler",
+            new=AsyncMock(side_effect=RuntimeError("scheduler stop failed")),
+        ),
+        pytest.raises(RuntimeError, match="scheduler stop failed"),
+    ):
+        async with main.lifespan(application):
+            pass
+
+    trigger.stop.assert_awaited_once_with()
+    runtime.close.assert_awaited_once_with()
 
 
 def test_health_uses_runtime_llm_base_url(client):

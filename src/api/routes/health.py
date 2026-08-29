@@ -108,6 +108,15 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
             status_code=503,
             content={"status": "degraded", "checks": {"api": "ok", "runtime": "unavailable"}},
         )
+    if runtime.snapshot.setup_required:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "status": "setup_required",
+                "checks": {"api": "ok", "runtime": "setup_required"},
+                "uptime_seconds": round(time.time() - _start_time),
+            },
+        )
     config = runtime.snapshot.document
     checks: dict[str, str] = {"api": "ok"}
 
