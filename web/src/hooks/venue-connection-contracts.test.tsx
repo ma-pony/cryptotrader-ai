@@ -7,6 +7,7 @@ import { VenueForm } from '@/pages/settings/venues/venue-form';
 import '@/lib/i18n';
 import i18n from '@/lib/i18n';
 import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
+import { RUNTIME_CONFIG_CONFLICT_QUERY_KEY } from './runtime-config-conflict';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 
 describe('venue connection write recovery', () => {
@@ -46,6 +47,41 @@ describe('venue connection write recovery', () => {
     expect(screen.getByRole('status')).toHaveTextContent('连接已保存，但配置刷新失败；请重新加载后继续。');
     expect(screen.getByRole('button', { name: '保存访问资料' })).toBeDisabled();
     expect(JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables))).not.toContain('secret-marker');
+  });
+
+  it('clears venue credentials after a failure or conflict and leaves the conflict recoverable', async () => {
+    const marker = 'venue-rotation-secret-marker';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'FAILED', message: marker }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: marker }), { status: 409 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <VenueForm revision={7} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, leverage: 1, margin_mode: 'cross', parameters: {} }} />
+      </QueryClientProvider>,
+    );
+    const write = async () => {
+      fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: `${marker}-key` } });
+      fireEvent.change(screen.getByLabelText('签名短语'), { target: { value: `${marker}-signing` } });
+      fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: `${marker}-phrase` } });
+      fireEvent.click(screen.getByRole('button', { name: '保存访问资料' }));
+      await waitFor(() => expect(screen.getByLabelText('访问 ID')).toHaveValue(''));
+      expect(screen.getByLabelText('签名短语')).toHaveValue('');
+      expect(screen.getByLabelText('Passphrase')).toHaveValue('');
+      expect(document.body.textContent).not.toContain(marker);
+      expect(JSON.stringify(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)) ?? '').not.toContain(marker);
+      expect(JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables))).not.toContain(marker);
+    };
+    await write();
+    await write();
+    await waitFor(() => expect(client.getQueryData(RUNTIME_CONFIG_CONFLICT_QUERY_KEY)).toBe(true));
+    expect(fetchMock.mock.calls).toHaveLength(2);
+    expect(String(fetchMock.mock.calls[1]![0])).toContain('/api/venue-connections/okx-demo/credentials');
+    expect(JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)).toEqual({
+      expected_revision: 7,
+      credentials: { api_key: `${marker}-key`, secret: `${marker}-signing`, passphrase: `${marker}-phrase` },
+    });
   });
 
   it('shows saved reload required and prevents a second create after a refresh failure', async () => {

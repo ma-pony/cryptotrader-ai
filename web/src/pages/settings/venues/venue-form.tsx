@@ -89,12 +89,14 @@ export const VenueForm = ({
         credentials: { api_key: apiKey, secret, ...(passphrase ? { passphrase } : {}) },
       });
       setSavedNeedsReload(saved.savedNeedsReload);
-      setApiKey('');
-      setSecret('');
-      setPassphrase('');
     } catch {
       setError(t('connection.accessSaveFailed'));
     } finally {
+      // Credentials are one-shot material.  An error or revision conflict is
+      // never a reason to retain them in the rendered component state.
+      setApiKey('');
+      setSecret('');
+      setPassphrase('');
       setCredentialSaving(false);
     }
   };
