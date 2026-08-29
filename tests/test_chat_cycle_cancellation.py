@@ -147,6 +147,7 @@ def _runtime_for(cycle):
         events=events,
         snapshot=SimpleNamespace(revision=1),
         cycle_lease=static_cycle_lease(cycle),
+        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
     )
 
 
@@ -186,6 +187,7 @@ async def test_chat_reloads_once_reports_each_book_and_publishes_strict_terminal
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
         snapshot=SimpleNamespace(revision=11),
         cycle_lease=static_cycle_lease(cycle),
+        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
     )
     bus = _Bus()
 
@@ -347,6 +349,7 @@ async def test_mounted_chat_handler_uses_its_explicit_runtime_cycle():
         ),
     )
     runtime.cycle_lease = static_cycle_lease(runtime.cycle)
+    runtime.execution_lease = lambda _pair: static_cycle_lease(runtime.cycle)()
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
 
     await _handle_new_analysis(
@@ -389,6 +392,7 @@ async def test_mounted_chat_execution_started_interrupt_returns_exact_cycle_outc
             )
         ),
         cycle_lease=static_cycle_lease(cycle),
+        execution_lease=lambda _pair: static_cycle_lease(cycle)(),
     )
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
 
@@ -573,6 +577,7 @@ async def test_real_runtime_cycle_routes_concurrent_component_events_to_the_corr
         events=routed,
     )
     runtime.cycle_lease = static_cycle_lease(cycle)
+    runtime.execution_lease = lambda _pair: static_cycle_lease(cycle)()
     first_state = _EventState()
     second_state = _EventState()
     first_bus = EventBus("first-session", EventBuffer("first-session", first_state))
