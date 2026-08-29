@@ -30,14 +30,20 @@ def generate_session_id(pair: str, interval: str, start: str, end: str) -> str:
 
 
 def get_session_dir(session_name: str) -> Path:
-    """Return a validated session path rooted beneath the backtest directory."""
+    """Return a validated writable session path, creating it if needed."""
+    path = _resolve_session_path(session_name)
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _resolve_session_path(session_name: str) -> Path:
+    """Resolve a validated session name without touching the filesystem."""
     if not _SAFE_SESSION_NAME.fullmatch(session_name):
         raise ValueError("session_name must contain only letters, digits, underscores, and hyphens")
     root = _SESSIONS_DIR.resolve()
     path = (root / session_name).resolve()
     if path.parent != root:
         raise ValueError("session_name must name one direct backtest session")
-    path.mkdir(parents=True, exist_ok=True)
     return path
 
 
@@ -66,7 +72,7 @@ def save_result(session_name: str, result: BacktestResult) -> Path:
 
 def load_session(session_name: str) -> dict[str, Any] | None:
     try:
-        session_dir = get_session_dir(session_name)
+        session_dir = _resolve_session_path(session_name)
     except ValueError:
         return None
     result_path = session_dir / "result.json"
@@ -89,7 +95,7 @@ def load_session(session_name: str) -> dict[str, Any] | None:
 
 def load_cycles(session_name: str) -> list[dict[str, Any]]:
     try:
-        path = get_session_dir(session_name) / "cycles.jsonl"
+        path = _resolve_session_path(session_name) / "cycles.jsonl"
     except ValueError:
         return []
     if not path.exists():

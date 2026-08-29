@@ -91,27 +91,31 @@ class BacktestEngine:
         self._ls_ratio: dict[str, dict] = {}
 
     async def run(self) -> BacktestResult:
-        from cryptotrader.bootstrap import BootstrapSettings
         from cryptotrader.cycle_events import NullCycleEventSink
         from cryptotrader.journal.store import MultiVenueCycleStore
         from cryptotrader.market_sources.registry import MarketSourceRegistry
         from cryptotrader.runtime import build_runtime
-        from cryptotrader.runtime_config.repository import RuntimeConfigRepository
-        from cryptotrader.runtime_config.secrets import CredentialVault
         from cryptotrader.signals.context import HistoricalSignalContextProvider
         from cryptotrader.signals.registry import SignalComponentRegistry
         from cryptotrader.venues.paper import PaperVenueAdapter
         from cryptotrader.venues.registry import VenueAdapterRegistry
 
-        if self.repository is None:
-            settings = BootstrapSettings.from_environment()
-            source_repository = RuntimeConfigRepository(
-                settings.database_url,
-                CredentialVault(settings.config_master_key),
-            )
+        if self.snapshot is not None:
+            source_snapshot = self.snapshot
         else:
-            source_repository = self.repository
-        source_snapshot = self.snapshot or await source_repository.get_or_create()
+            if self.repository is None:
+                from cryptotrader.bootstrap import BootstrapSettings
+                from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+                from cryptotrader.runtime_config.secrets import CredentialVault
+
+                settings = BootstrapSettings.from_environment()
+                source_repository = RuntimeConfigRepository(
+                    settings.database_url,
+                    CredentialVault(settings.config_master_key),
+                )
+            else:
+                source_repository = self.repository
+            source_snapshot = await source_repository.get_or_create()
         events = NullCycleEventSink()
         registry = self.signal_registry or SignalComponentRegistry.discover(source_snapshot.document, events)
         default_timeframe = str(source_snapshot.document.market_data.parameters.get("timeframe", self.interval))

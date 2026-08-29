@@ -108,6 +108,28 @@ class TestSaveAndLoadCycles:
 
         result = load_cycles("nonexistent_session")
         assert result == []
+        assert not (tmp_path / "sessions").exists()
+
+
+class TestReadOnlySessionLookup:
+    def test_load_session_does_not_create_missing_valid_session(self, tmp_path, monkeypatch) -> None:
+        from cryptotrader.backtest import session as session_module
+
+        sessions_dir = tmp_path / "sessions"
+        monkeypatch.setattr(session_module, "_SESSIONS_DIR", sessions_dir)
+
+        assert session_module.load_session("missing_session") is None
+        assert not sessions_dir.exists()
+
+    def test_loads_reject_invalid_names_without_creating_session_root(self, tmp_path, monkeypatch) -> None:
+        from cryptotrader.backtest import session as session_module
+
+        sessions_dir = tmp_path / "sessions"
+        monkeypatch.setattr(session_module, "_SESSIONS_DIR", sessions_dir)
+
+        assert session_module.load_session("../outside") is None
+        assert session_module.load_cycles("../outside") == []
+        assert not sessions_dir.exists()
 
     def test_save_and_load_cycle_roundtrip(self, tmp_path, monkeypatch) -> None:
         from cryptotrader.backtest import session as session_module

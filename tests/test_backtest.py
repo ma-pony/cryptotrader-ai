@@ -155,6 +155,33 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
     assert paper.connect_calls == [("paper", "backtest-paper")]
 
 
+@pytest.mark.asyncio
+async def test_explicit_backtest_snapshot_never_reads_ambient_bootstrap_or_repository(monkeypatch):
+    from cryptotrader.bootstrap import BootstrapSettings
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+    from tests.factories.runtime_config import runtime_document
+
+    snapshot = RuntimeConfigSnapshot(44, runtime_document(), datetime.now(UTC))
+    engine = BacktestEngine(
+        "BTC/USDT:USDT",
+        "2024-01-01",
+        "2024-01-02",
+        snapshot=snapshot,
+        signal_registry=type("EmptyRegistry", (), {"enabled": lambda _self, _profile: ()})(),
+    )
+
+    def fail_ambient_bootstrap():
+        raise AssertionError("explicit snapshot must bypass ambient bootstrap")
+
+    async def no_candles(_requirements):
+        engine._candles = []
+
+    monkeypatch.setattr(BootstrapSettings, "from_environment", fail_ambient_bootstrap)
+    monkeypatch.setattr(engine, "_fetch_historical_data", no_candles)
+
+    assert await engine.run() == BacktestResult()
+
+
 def test_snapshot_uses_previous_completed_day_for_daily_inputs():
     engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-03", interval="1h")
     opened_at = datetime(2024, 1, 2, tzinfo=UTC)
