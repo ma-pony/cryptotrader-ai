@@ -38,6 +38,10 @@ class CredentialNotConfigured(LookupError):  # noqa: N818 - public contract uses
         super().__init__(f"credentials are not configured for {credential_ref}")
 
 
+class RuntimeConfigUnavailable(RuntimeError):  # noqa: N818 - public staging contract uses this exact name.
+    """The read-only staging probe could not find a valid persisted config."""
+
+
 @dataclass(frozen=True)
 class CredentialState:
     credential_ref: str
@@ -118,6 +122,24 @@ class RuntimeConfigRepository:
                     if row is None:
                         raise RuntimeError("runtime config initialization failed") from None
             return _snapshot(row)
+        finally:
+            await session.close()
+
+    async def get_existing(self) -> RuntimeConfigSnapshot:
+        """Read the existing global config without DDL, initialization, or repair."""
+        session = await get_async_session(self.database_url)
+        try:
+            row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+            if row is None:
+                raise RuntimeConfigUnavailable("runtime configuration row is unavailable")
+            snapshot = _snapshot(row)
+            if snapshot.revision < 1:
+                raise RuntimeConfigUnavailable("runtime configuration revision is invalid")
+            return snapshot
+        except RuntimeConfigUnavailable:
+            raise
+        except Exception as error:
+            raise RuntimeConfigUnavailable("runtime configuration schema is unavailable") from error
         finally:
             await session.close()
 

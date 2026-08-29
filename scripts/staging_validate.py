@@ -31,23 +31,39 @@ def run_step(idx: int, name: str, fn: Callable[[], None]) -> StepResult:
 
 
 async def _load_runtime_config():
-    """Create the DB schema if needed and require an active config revision."""
-    from cryptotrader.runtime import build_runtime
+    """Read an existing active snapshot without bootstrap DDL or writes."""
+    from cryptotrader.bootstrap import BootstrapSettings
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.runtime_config.secrets import CredentialVault
 
-    runtime = await build_runtime()
-    if runtime.snapshot.setup_required:
-        await runtime.close()
+    settings = BootstrapSettings.from_environment()
+    repository = RuntimeConfigRepository(settings.database_url, CredentialVault(settings.config_master_key))
+    snapshot = await repository.get_existing()
+    if snapshot.setup_required:
         raise RuntimeError("runtime configuration is not active")
-    if runtime.snapshot.revision < 1:
-        await runtime.close()
-        raise RuntimeError("runtime configuration revision is invalid")
-    return runtime
+    return type("StagingRuntime", (), {"repository": repository, "snapshot": snapshot})()
 
 
 async def _check_runtime_health(runtime) -> None:
-    """Require the database snapshot to assemble the only cycle runtime."""
-    if runtime.cycle is None:
-        raise RuntimeError("runtime cycle is unavailable")
+    """Discover and validate the candidate graph without opening sessions."""
+    from cryptotrader.cycle_events import NullCycleEventSink
+    from cryptotrader.runtime import _discover_registry_graph
+    from cryptotrader.runtime_config.models import validate_runtime_document
+
+    signals, venues, markets = await _discover_registry_graph(
+        runtime.snapshot.document,
+        NullCycleEventSink(),
+        runtime.repository,
+    )
+    validate_runtime_document(
+        runtime.snapshot.document,
+        set(signals.installed_ids()),
+        set(venues.installed_ids()),
+        set(markets.installed_ids()),
+    )
+    runtime.signal_registry = signals
+    runtime.venue_registry = venues
+    runtime.market_registry = markets
 
 
 async def _check_enabled_connections(runtime) -> None:
