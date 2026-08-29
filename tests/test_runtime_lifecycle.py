@@ -290,6 +290,55 @@ async def test_inactive_reload_closes_sessions_and_publishes_no_cycle():
 
 
 @pytest.mark.asyncio
+async def test_active_replacement_close_failure_keeps_published_cycle_and_retries_retired_session(caplog):
+    connection = _connection("paper-a")
+    runtime, repository, adapter, _ = await _build(_document(connection))
+    retired = runtime.sessions[connection.id]
+    retired.close_error = RuntimeError("private-retired-close-error")
+    repository.publish(_document(replace(connection, parameters={"initial_equity": "20000"})))
+
+    cycle = await runtime.reload_for_cycle()
+
+    assert cycle is runtime.cycle
+    assert runtime.snapshot.revision == 8
+    assert runtime.sessions[connection.id] is not retired
+    assert retired.close_calls == 1
+    assert "retired venue session cleanup pending" in caplog.text
+    assert "private-retired-close-error" not in caplog.text
+    retired.close_error = None
+
+    next_cycle = await runtime.reload_for_cycle()
+
+    assert next_cycle is runtime.cycle
+    assert retired.close_calls == 2
+    assert len(adapter.connect_calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_inactive_reload_close_failure_returns_none_and_retries_retired_session():
+    connection = _connection("paper-a")
+    runtime, repository, _, _ = await _build(_document(connection))
+    retired = runtime.sessions[connection.id]
+    retired.close_error = RuntimeError("private-retired-close-error")
+    saved = repository.publish(_document(connection, active=False))
+
+    cycle = await runtime.reload_for_cycle()
+
+    assert cycle is None
+    assert runtime.snapshot is saved
+    assert runtime.sessions == {}
+    assert runtime.cycle is None
+    assert retired.close_calls == 1
+    retired.close_error = None
+
+    await runtime.close()
+
+    assert retired.close_calls == 2
+    with pytest.raises(RuntimeError, match=r"^runtime is closed$"):
+        await runtime.reload_for_cycle()
+
+
+@pytest.mark.asyncio
 async def test_setup_runtime_does_not_hot_activate_after_configuration_write():
     setup = _document(active=False)
     runtime, repository, adapter, _ = await _build(setup)
@@ -366,8 +415,9 @@ async def test_close_attempts_each_unique_session_once_and_uses_safe_error():
     assert "private-close-detail" not in str(error.value)
     assert shared.close_calls == 1
     assert other.close_calls == 1
+    shared.close_error = None
     await runtime.close()
-    assert shared.close_calls == 1
+    assert shared.close_calls == 2
     assert other.close_calls == 1
 
 
@@ -382,6 +432,33 @@ async def test_close_propagates_cancellation_and_still_closes_other_sessions():
         await runtime.close()
 
     assert all(session.close_calls == 1 for session in sessions)
+
+
+@pytest.mark.asyncio
+async def test_external_close_cancellation_waits_for_all_unique_sessions_before_propagating():
+    runtime, _, _, _ = await _build(_document(active=False))
+    first = _BlockingCloseSession("first")
+    second = _BlockingCloseSession("second")
+    runtime.sessions = {"first": first, "first-alias": first, "second": second}
+
+    close_task = asyncio.create_task(runtime.close())
+    await asyncio.gather(first.started.wait(), second.started.wait())
+    close_task.cancel()
+    await asyncio.sleep(0)
+
+    assert close_task.done() is False
+
+    first.release.set()
+    second.release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await close_task
+
+    assert first.close_calls == 1
+    assert second.close_calls == 1
+    assert first.completed is True
+    assert second.completed is True
+    with pytest.raises(RuntimeError, match=r"^runtime is closed$"):
+        await runtime.reload_for_cycle()
 
 
 @pytest.mark.asyncio
@@ -476,3 +553,18 @@ class _Credential:
 
     def __repr__(self) -> str:
         return self.marker
+
+
+class _BlockingCloseSession:
+    def __init__(self, connection_id: str) -> None:
+        self.connection_id = connection_id
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.close_calls = 0
+        self.completed = False
+
+    async def close(self) -> None:
+        self.close_calls += 1
+        self.started.set()
+        await self.release.wait()
+        self.completed = True

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Mapping as MappingABC
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -37,6 +38,19 @@ if TYPE_CHECKING:
     from cryptotrader.bootstrap import BootstrapSettings
     from cryptotrader.venues.protocol import VenueSession
 
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _CloseBatchResult:
+    ordinary_failures: tuple[object, ...]
+    control_failures: tuple[tuple[object, BaseException], ...]
+    external_cancellation: asyncio.CancelledError | None
+
+    @property
+    def failed_sessions(self) -> tuple[object, ...]:
+        return self.ordinary_failures + tuple(session for session, _error in self.control_failures)
+
 
 @dataclass
 class Runtime:
@@ -51,6 +65,7 @@ class Runtime:
     venue_registry: VenueAdapterRegistry
     events: MultiplexedCycleEventSink
     _session_keys: dict[str, tuple[object, ...]] = field(default_factory=dict, repr=False)
+    _pending_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
     _closed: bool = field(default=False, init=False, repr=False)
     _started_setup_required: bool = field(default=False, init=False, repr=False)
     _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
@@ -67,6 +82,7 @@ class Runtime:
             if self._started_setup_required:
                 return None
 
+            await self._cleanup_retired_sessions()
             candidate_snapshot = await self.repository.get_or_create()
             _validate_snapshot(
                 candidate_snapshot,
@@ -82,7 +98,7 @@ class Runtime:
                     None,
                     {},
                 )
-                await _close_sessions(retired)
+                await self._cleanup_retired_sessions(retired, retry_pending=False)
                 return None
 
             candidate_sessions, candidate_keys, opened = await _candidate_sessions(
@@ -116,15 +132,37 @@ class Runtime:
                 candidate_cycle,
                 candidate_keys,
             )
-            await _close_sessions(retired)
+            await self._cleanup_retired_sessions(retired, retry_pending=False)
             return candidate_cycle
 
     async def close(self) -> None:
         async with self._lifecycle_lock:
-            if self._closed:
+            first_close = not self._closed
+            if not first_close and not self._pending_retired:
                 return
             self._closed = True
-            await _close_sessions(tuple(self.sessions.values()))
+            targets = tuple(self._pending_retired.values())
+            if first_close:
+                targets += tuple(self.sessions.values())
+            result = await _close_session_batch(targets)
+            self._pending_retired = {id(session): session for session in result.failed_sessions}
+            _raise_close_control(result)
+            if result.ordinary_failures:
+                raise RuntimeError("failed to close venue session") from None
+
+    async def _cleanup_retired_sessions(self, sessions=(), *, retry_pending: bool = True) -> None:
+        carried = {} if retry_pending else dict(self._pending_retired)
+        targets = tuple(self._pending_retired.values()) if retry_pending else ()
+        targets += tuple(sessions)
+        result = await _close_session_batch(targets)
+        carried.update((id(session), session) for session in result.failed_sessions)
+        self._pending_retired = carried
+        if result.ordinary_failures:
+            logger.warning(
+                "retired venue session cleanup pending",
+                extra={"pending_count": len(self._pending_retired)},
+            )
+        _raise_close_control(result)
 
 
 async def build_runtime(
@@ -313,22 +351,42 @@ def _canonical_value(value):
 
 
 async def _close_candidate_sessions(sessions) -> None:
-    try:
-        await _close_sessions(sessions)
-    except Exception:
-        return
+    result = await _close_session_batch(sessions)
+    _raise_close_control(result)
 
 
-async def _close_sessions(sessions) -> None:
+async def _close_session_batch(sessions) -> _CloseBatchResult:
     unique = tuple({id(session): session for session in sessions}.values())
     if not unique:
-        return
-    outcomes = await asyncio.gather(*(session.close() for session in unique), return_exceptions=True)
-    control_flow = next(
-        (item for item in outcomes if isinstance(item, BaseException) and not isinstance(item, Exception)),
-        None,
+        return _CloseBatchResult((), (), None)
+
+    tasks = tuple(asyncio.create_task(session.close()) for session in unique)
+    completion = asyncio.gather(*tasks, return_exceptions=True)
+    external_cancellation = None
+    while True:
+        try:
+            outcomes = await asyncio.shield(completion)
+            break
+        except asyncio.CancelledError as error:
+            if external_cancellation is None:
+                external_cancellation = error
+            if completion.done():
+                outcomes = completion.result()
+                break
+
+    ordinary_failures = tuple(
+        session for session, outcome in zip(unique, outcomes, strict=True) if isinstance(outcome, Exception)
     )
-    if control_flow is not None:
-        raise control_flow
-    if any(isinstance(item, Exception) for item in outcomes):
-        raise RuntimeError("failed to close venue session") from None
+    control_failures = tuple(
+        (session, outcome)
+        for session, outcome in zip(unique, outcomes, strict=True)
+        if isinstance(outcome, BaseException) and not isinstance(outcome, Exception)
+    )
+    return _CloseBatchResult(ordinary_failures, control_failures, external_cancellation)
+
+
+def _raise_close_control(result: _CloseBatchResult) -> None:
+    if result.control_failures:
+        raise result.control_failures[0][1]
+    if result.external_cancellation is not None:
+        raise result.external_cancellation

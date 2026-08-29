@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib import import_module
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -71,6 +72,57 @@ async def test_first_start_seeds_setup_document_without_opening_venue_session(tm
     await runtime.close()
 
 
+@pytest.mark.asyncio
+async def test_setup_discovers_all_metadata_without_resolving_or_opening_runtime_resources(monkeypatch, tmp_path):
+    from cryptotrader.market_sources.registry import MarketSourceRegistry
+    from cryptotrader.runtime import build_runtime
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+
+    discovery_calls: list[str] = []
+    signals = _MetadataRegistry({"kronos", "llm_committee"})
+    venues = _MetadataRegistry({"paper", "okx", "bybit"})
+    markets = _MetadataRegistry({"default"})
+
+    def discover_signals(_cls, _document, _event_sink):
+        discovery_calls.append("signals")
+        return signals
+
+    def discover_venues(_cls, configured_adapter_ids):
+        assert tuple(configured_adapter_ids) == ()
+        discovery_calls.append("venues")
+        return venues
+
+    def discover_markets(_cls, _market_data):
+        discovery_calls.append("markets")
+        return markets
+
+    monkeypatch.setattr(SignalComponentRegistry, "discover", classmethod(discover_signals))
+    monkeypatch.setattr(VenueAdapterRegistry, "discover", classmethod(discover_venues))
+    monkeypatch.setattr(MarketSourceRegistry, "discover", classmethod(discover_markets))
+    reveal = AsyncMock(side_effect=AssertionError("setup must not reveal sensitive material"))
+    monkeypatch.setattr(RuntimeConfigRepository, "reveal_credentials", reveal)
+    settings = _settings_type()(f"sqlite+aiosqlite:///{tmp_path / 'setup.db'}", MASTER_KEY)
+
+    runtime = await build_runtime(settings)
+
+    assert discovery_calls == ["signals", "venues", "markets"]
+    assert signals.installed_calls == 1
+    assert venues.installed_calls == 1
+    assert markets.installed_calls == 1
+    assert runtime.signal_registry is signals
+    assert runtime.venue_registry is venues
+    assert runtime.market_registry is markets
+    assert signals.require_calls == []
+    assert venues.require_calls == []
+    assert markets.require_calls == []
+    reveal.assert_not_awaited()
+    assert runtime.sessions == {}
+    assert runtime.cycle is None
+    await runtime.close()
+
+
 class _InstalledRegistry:
     def __init__(self, installed: set[str]) -> None:
         self._installed = frozenset(installed)
@@ -87,3 +139,18 @@ class _RecordingVenueRegistry(_InstalledRegistry):
     def require(self, adapter_id):
         self.connect_calls.append(adapter_id)
         raise AssertionError("setup runtime must not resolve or connect a venue adapter")
+
+
+class _MetadataRegistry(_InstalledRegistry):
+    def __init__(self, installed: set[str]) -> None:
+        super().__init__(installed)
+        self.installed_calls = 0
+        self.require_calls: list[str] = []
+
+    def installed_ids(self):
+        self.installed_calls += 1
+        return super().installed_ids()
+
+    def require(self, resource_id):
+        self.require_calls.append(resource_id)
+        raise AssertionError("setup runtime must not resolve executable resources")
