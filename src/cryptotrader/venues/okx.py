@@ -53,6 +53,8 @@ class OkxVenueSession(CcxtVenueBase):
         }
         if intent.reduce_only and not hedged:
             params["reduceOnly"] = True
+        if intent.client_order_id is not None:
+            params["clOrdId"] = intent.client_order_id
         return params
 
     async def _configure_market(self, pair: Pair, market: dict[str, Any]) -> None:

@@ -143,6 +143,20 @@ class CcxtVenueBase:
             raise VenueOperationError(f"{self.connection_id}: unsafe amount normalization for {pair}")
         return normalized
 
+    async def minimum_amount(self, pair: Pair, reference_price: Decimal) -> Decimal:
+        if not isinstance(reference_price, Decimal) or not reference_price.is_finite() or reference_price <= 0:
+            raise VenueOperationError(f"{self.connection_id}: reference price must be positive")
+        market = await self._market(pair)
+        limits = market.get("limits") if isinstance(market.get("limits"), dict) else {}
+        amount_limits = limits.get("amount") if isinstance(limits.get("amount"), dict) else {}
+        cost_limits = limits.get("cost") if isinstance(limits.get("cost"), dict) else {}
+        amount_min = self._decimal(amount_limits.get("min"), "minimum amount", default=Decimal("0"))
+        cost_min = self._decimal(cost_limits.get("min"), "minimum cost", default=Decimal("0"))
+        contract_size = await self._contract_size(pair)
+        base_min = amount_min * contract_size
+        candidate = max(base_min, cost_min / reference_price, Decimal("0.00000001"))
+        return await self.normalize_amount(pair, candidate * Decimal("1.01"))
+
     async def _price_to_venue(self, pair: Pair, price: Decimal) -> Decimal:
         await self._market(pair)
         precise = self._sync(
@@ -286,6 +300,11 @@ class CcxtVenueBase:
         )
         return await self._normalize_order(raw, intent.pair, fallback_reduce_only=intent.reduce_only)
 
+    async def cancel_order(self, order_id: str, pair: Pair) -> None:
+        if not isinstance(order_id, str) or not order_id:
+            raise VenueOperationError(f"{self.connection_id}: order id is required")
+        await self._call("cancel order", self._client.cancel_order, order_id, pair.to_ccxt())
+
     async def _normalize_order(
         self,
         raw: dict[str, Any],
@@ -303,6 +322,7 @@ class CcxtVenueBase:
             average = self._decimal(average_raw, "average price") if average_raw not in (None, "") else None
             info = raw.get("info") if isinstance(raw.get("info"), dict) else {}
             reduce_only = fallback_reduce_only or self._boolean(raw.get("reduceOnly", info.get("reduceOnly", False)))
+            client_order_id = raw.get("clientOrderId") or info.get("clOrdId") or info.get("orderLinkId")
             return NormalizedOrder(
                 str(raw.get("id") or ""),
                 pair,
@@ -313,6 +333,7 @@ class CcxtVenueBase:
                 average,
                 str(raw.get("status") or "unknown"),
                 reduce_only,
+                str(client_order_id) if client_order_id else None,
             )
         except VenueOperationError:
             raise

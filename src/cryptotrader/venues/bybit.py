@@ -83,6 +83,8 @@ class BybitVenueSession(CcxtVenueBase):
         }
         if intent.reduce_only:
             params["reduceOnly"] = True
+        if intent.client_order_id is not None:
+            params["orderLinkId"] = intent.client_order_id
         return params
 
     async def _configure_market(self, pair: Pair, market: dict[str, Any]) -> None:

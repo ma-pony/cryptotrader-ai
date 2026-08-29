@@ -10,7 +10,13 @@ from pathlib import Path
 import pytest
 
 from cryptotrader.pair import Pair
-from cryptotrader.venues.models import ConnectionPosition, OpenVenueState, VenueCapabilities, VenueQuote
+from cryptotrader.venues.models import (
+    ConnectionPosition,
+    NormalizedOrder,
+    OpenVenueState,
+    VenueCapabilities,
+    VenueQuote,
+)
 
 
 def _script(name: str):
@@ -45,6 +51,14 @@ def test_cli_does_not_accept_secret_arguments():
         venue_canary.parse_venue_canary_args(["--connection", "paper", "--pair", "BTC/USDT", "--secret", "x"])
 
 
+def test_canary_orders_have_an_exchange_visible_client_identifier_contract():
+    from cryptotrader.venues.models import OrderIntent
+
+    intent = OrderIntent(Pair.parse("BTC/USDT"), "buy", Decimal("1"), "market", None, False, "canary-abc")
+
+    assert intent.client_order_id == "canary-abc"
+
+
 @dataclass
 class _Session:
     pair: Pair
@@ -53,6 +67,7 @@ class _Session:
     cleaned: bool = False
     order_calls: int = 0
     order_amounts: list[Decimal] = field(default_factory=list)
+    protected: bool = False
 
     connection_id: str = "paper"
     capabilities: VenueCapabilities = field(
@@ -68,22 +83,50 @@ class _Session:
     async def normalize_amount(self, _pair, amount):
         return amount
 
+    async def minimum_amount(self, _pair, _price):
+        return Decimal("0.1")
+
     async def place_order(self, intent):
         self.order_calls += 1
         self.order_amounts.append(intent.amount)
         if self.fail_open and not intent.reduce_only:
             raise RuntimeError("open failed")
         self.signed_amount += intent.amount if intent.side == "buy" else -intent.amount
-        return object()
+        return NormalizedOrder(
+            f"order-{self.order_calls}",
+            intent.pair,
+            intent.side,
+            intent.order_type,
+            intent.amount,
+            intent.amount,
+            Decimal("100"),
+            "filled",
+            intent.reduce_only,
+            intent.client_order_id,
+        )
+
+    async def cancel_order(self, _order_id, _pair):
+        self.cleaned = True
 
     async def replace_protection(self, _spec):
+        self.protected = True
         return type("Protection", (), {"protection_ids": ("canary",)})()
 
     async def cancel_protection(self, _ids):
         self.cleaned = True
+        self.protected = False
 
     async def list_open_state(self, _pair):
-        return OpenVenueState(ConnectionPosition(self.pair, self.signed_amount, Decimal("0"), None), (), ())
+        protections = ()
+        if self.protected:
+            from cryptotrader.venues.models import ProtectionState
+
+            protections = (
+                ProtectionState(
+                    ("canary",), self.pair, "long", self.signed_amount, Decimal("90"), Decimal("110"), True, False
+                ),
+            )
+        return OpenVenueState(ConnectionPosition(self.pair, self.signed_amount, Decimal("0"), None), (), protections)
 
     async def close(self):
         self.cleaned = True

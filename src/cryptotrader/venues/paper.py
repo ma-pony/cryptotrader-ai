@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 
@@ -102,6 +102,13 @@ class PaperVenueSession:
             raise ValueError("Paper base amount must be a positive finite Decimal")
         return base_amount
 
+    async def minimum_amount(self, pair: Pair, reference_price: Decimal) -> Decimal:
+        self._require_open()
+        self._require_supported_pair(pair)
+        if not isinstance(reference_price, Decimal) or reference_price <= 0:
+            raise ValueError("Paper reference price must be positive")
+        return Decimal("0.00000001")
+
     async def place_order(self, intent: OrderIntent) -> NormalizedOrder:
         self._require_open()
         self._require_supported_pair(intent.pair)
@@ -115,6 +122,16 @@ class PaperVenueSession:
             else:
                 raise VenueOperationError(f"{self.connection_id}: unsupported Paper order type")
             return self._place_order_locked(intent, fill_price)
+
+    async def cancel_order(self, order_id: str, pair: Pair) -> None:
+        self._require_open()
+        self._require_supported_pair(pair)
+        async with self._account.lock_for(pair):
+            order = self._account.orders.get(order_id)
+            if order is None or order.pair != pair:
+                return
+            if order.status == "open":
+                self._account.orders[order_id] = replace(order, status="canceled")
 
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
         self._require_open()
@@ -220,6 +237,7 @@ class PaperVenueSession:
             fill_price if accepted else None,
             "filled" if accepted else "rejected",
             intent.reduce_only,
+            intent.client_order_id,
         )
         self._account.orders[order_id] = order
         return order

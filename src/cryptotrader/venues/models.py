@@ -221,6 +221,7 @@ class OrderIntent:
     order_type: str
     price: Decimal | None
     reduce_only: bool
+    client_order_id: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.pair, Pair):
@@ -233,6 +234,13 @@ class OrderIntent:
         _require_optional_decimal(self.price, "price", positive=True)
         if type(self.reduce_only) is not bool:
             raise ValueError("reduce_only must be a boolean")
+        if self.client_order_id is not None and (
+            type(self.client_order_id) is not str
+            or not self.client_order_id
+            or len(self.client_order_id) > 36
+            or not self.client_order_id.replace("-", "").replace("_", "").isalnum()
+        ):
+            raise ValueError("client_order_id must be a safe non-empty identifier")
 
 
 @dataclass(frozen=True)
@@ -248,6 +256,7 @@ class NormalizedOrder:
     average_price: Decimal | None
     status: str
     reduce_only: bool
+    client_order_id: str | None = None
 
     def __post_init__(self) -> None:
         if type(self.id) is not str or not self.id.strip():
@@ -267,6 +276,10 @@ class NormalizedOrder:
             raise ValueError("order status must be a non-empty string")
         if type(self.reduce_only) is not bool:
             raise ValueError("reduce_only must be a boolean")
+        if self.client_order_id is not None and (
+            type(self.client_order_id) is not str or not self.client_order_id.strip()
+        ):
+            raise ValueError("client_order_id must be a non-empty string or None")
 
 
 @dataclass(frozen=True)
