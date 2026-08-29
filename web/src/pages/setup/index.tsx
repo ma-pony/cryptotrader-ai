@@ -228,8 +228,8 @@ const SetupEditor = ({
             </label>
           ))}
           <label>Base URL<input aria-label="LLM base URL" value={draft.llm.base_url} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, base_url: event.target.value } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
-          <label>LLM gateway key<input aria-label="LLM gateway key" type="password" value={gatewayToken} onChange={(event) => setGatewayToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
-          <Button type="button" variant="outline" disabled={!gatewayToken || runtime.conflict} onClick={() => void saveGatewayToken()}>{runtime.secretStates.llmGateway.configured ? 'Rotate gateway key' : 'Save gateway key'}</Button>
+          <label>{t('runtimeSecrets.llm')}<input aria-label={t('runtimeSecrets.llm')} type="password" value={gatewayToken} onChange={(event) => setGatewayToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
+          <Button type="button" variant="outline" disabled={!gatewayToken || runtime.conflict} onClick={() => void saveGatewayToken()}>{runtime.secretStates.llmGateway.configured ? t('runtimeSecrets.rotateGateway') : t('runtimeSecrets.saveGateway')}</Button>
           <label>{t('wizard.defaultTemperature')}<input aria-label={t('wizard.defaultTemperature')} type="number" value={draft.llm.default_temperature} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, default_temperature: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label>{t('wizard.timeout')}<input aria-label={t('wizard.timeout')} type="number" value={draft.llm.timeout} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, timeout: Number(event.target.value) } }))} className="mt-1 h-10 w-full rounded border bg-background px-3" /></label>
           <label className="flex items-center gap-2"><input aria-label="LLM prompt caching" type="checkbox" checked={draft.llm.prompt_caching} onChange={(event) => setDraft((current) => ({ ...current, llm: { ...current.llm, prompt_caching: event.target.checked } }))} />Prompt caching</label>
@@ -510,11 +510,11 @@ const SetupEditor = ({
           <CheckCircle2 className="h-4 w-4" />
           {t('activate')}
         </Button>
-        <label className="block text-sm">API access key
-          <input aria-label="API access key" type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" />
+        <label className="block text-sm">{t('runtimeSecrets.api')}
+          <input aria-label={t('runtimeSecrets.api')} type="password" value={accessToken} onChange={(event) => setAccessToken(event.target.value)} className="mt-1 h-10 w-full rounded border bg-background px-3" />
         </label>
-        <label className="flex items-center gap-2"><input aria-label="Enable API access security" type="checkbox" checked={draft.security.enabled} onChange={(event) => setDraft((current) => ({ ...current, security: { enabled: event.target.checked } }))} />Enable API access security</label>
-        <Button type="button" variant="outline" disabled={!accessToken || runtime.conflict} onClick={() => void saveAccessToken()}>{runtime.secretStates.apiAccess.configured ? 'Rotate API access key' : 'Save API access key'}</Button>
+        <label className="flex items-center gap-2"><input aria-label={t('runtimeSecrets.enable')} type="checkbox" checked={draft.security.enabled} onChange={(event) => setDraft((current) => ({ ...current, security: { enabled: event.target.checked } }))} />{t('runtimeSecrets.enable')}</label>
+        <Button type="button" variant="outline" disabled={!accessToken || runtime.conflict} onClick={() => void saveAccessToken()}>{runtime.secretStates.apiAccess.configured ? t('runtimeSecrets.rotateApi') : t('runtimeSecrets.saveApi')}</Button>
         {activationError ? (
           <p role="alert" className="text-sm text-trade-short">
             {activationError}
