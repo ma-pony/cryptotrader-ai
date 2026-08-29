@@ -284,6 +284,25 @@ async def test_put_config_publishes_the_saved_revision_to_the_running_runtime(ap
     api_harness.runtime.reload_for_cycle.assert_awaited_once()
 
 
+async def test_put_config_refreshes_application_runtime_owners_after_publication(api_harness):
+    from api.main import app
+
+    refresh = AsyncMock()
+    previous = getattr(app.state, "refresh_runtime_owners", None)
+    app.state.refresh_runtime_owners = refresh
+    try:
+        current = await api_harness.client.get("/api/config")
+        saved = await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": current.json()["revision"], "document": active_payload()},
+        )
+    finally:
+        app.state.refresh_runtime_owners = previous
+
+    assert saved.status_code == 200
+    refresh.assert_awaited_once()
+
+
 async def test_stale_put_config_conflicts_before_connection_domain_construction(api_harness):
     current = await api_harness.client.get("/api/config")
     revision = current.json()["revision"]

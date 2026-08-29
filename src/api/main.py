@@ -51,6 +51,7 @@ async def lifespan(_app: FastAPI):
     from cryptotrader.log_config import setup_logging
 
     await _init_runtime(_app)
+    _app.state.refresh_runtime_owners = lambda: _refresh_runtime_owners(_app)
     runtime = _app.state.runtime
     setup_logging(runtime.snapshot.document)
 
@@ -110,6 +111,21 @@ async def _shutdown_runtime_owners(app_instance: FastAPI, runtime, *, active: bo
         raise control_flow
     if failures:
         raise failures[0]
+
+
+async def _refresh_runtime_owners(app_instance) -> None:
+    """Replace app-owned scheduler and trigger resources for the published graph."""
+    await _shutdown_scheduler(app_instance)
+    trigger_engine = getattr(app_instance.state, "trigger_engine", None)
+    if trigger_engine is not None:
+        await trigger_engine.stop()
+    app_instance.state.trigger_engine = None
+    app_instance.state.trigger_store = None
+    runtime = app_instance.state.runtime
+    if runtime.snapshot.setup_required:
+        return
+    await _init_trigger_engine(app_instance)
+    await _init_scheduler(app_instance)
 
 
 async def _init_trigger_engine(app_instance: FastAPI) -> None:

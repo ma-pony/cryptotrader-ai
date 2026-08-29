@@ -563,4 +563,7 @@ async def put_config(body: PutRuntimeConfigIn, request: Request) -> RuntimeConfi
     document = document_from_input(body.document, current.document)
     snapshot = await replace_document(runtime, current, body.expected_revision, document)
     await runtime.reload_for_cycle()
+    refresh_owners = getattr(request.app.state, "refresh_runtime_owners", None)
+    if refresh_owners is not None:
+        await refresh_owners()
     return await config_out(runtime.repository, snapshot)
