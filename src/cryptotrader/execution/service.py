@@ -55,7 +55,7 @@ class VenueExecutionService:
             raise ValueError("plan connection_id must match the bound venue session")
         connection = getattr(self.session, "connection", None)
         if getattr(connection, "environment", None) == "live" and not self.live_order_execution_enabled:
-            return self._failed(plan, "live_order_execution_disabled", trace=("execution_gate",))
+            return self._failed(plan, "execution_gate", trace=("execution_gate",))
         if self.session.capabilities != plan.capabilities:
             raise ValueError("session capabilities changed after proposal creation")
 

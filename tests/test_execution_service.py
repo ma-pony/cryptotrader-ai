@@ -672,3 +672,31 @@ async def test_runtime_precision_that_cannot_reach_target_band_fails_before_muta
     assert session.orders == []
     assert session.signed_amount == Decimal("1")
     assert result.requires_attention is False
+
+
+@pytest.mark.asyncio
+async def test_live_execution_gate_refuses_before_any_venue_read_or_write():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("0")
+    session.connection = connection("live-a", environment="live")
+
+    result = await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
+
+    assert result.error_operation == "execution_gate"
+    assert result.trace == ("execution_gate",)
+    assert session.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["paper", "demo", "testnet"])
+async def test_non_live_environment_is_not_blocked_by_live_execution_gate(environment):
+    from cryptotrader.execution.service import VenueExecutionService
+
+    session = _VenueSession("0")
+    session.connection = connection(f"{environment}-a", environment=environment)
+
+    result = await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
+
+    assert result.status == "completed"
+    assert session.calls[0] == "list_open_state"
