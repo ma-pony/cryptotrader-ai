@@ -22,6 +22,12 @@ FORBIDDEN_RUNTIME_PATTERNS = (
     r"\bexchange_id\b",
     r"\bLiveExchange\b",
     r"\bsupports_protection_orders\b",
+    r"\bApprovalStore\b",
+    r"\btrade_plan_approvals\b",
+    r"\bExecutionService\b",
+    r"\bcryptotrader\.decision\.models import (?:ExecutionPlan|OrderIntent)\b",
+    r"\bmax_single_pct\s*=\s*max_single_pct\b",
+    r"\btrader scheduler (?:start|status|healthcheck)\b",
 )
 
 SCAN_PATHS = ("src", "tests", "scripts", "config", "web/src", "Dockerfile", "docker-compose.yml", "pyproject.toml")
@@ -58,6 +64,8 @@ def test_config_directory_contains_no_runtime_toml():
 
 
 def test_removed_legacy_production_modules_do_not_exist():
+    from cryptotrader import decision
+
     for path in (
         "src/cryptotrader/config.py",
         "src/cryptotrader/execution/exchange.py",
@@ -70,6 +78,8 @@ def test_removed_legacy_production_modules_do_not_exist():
         "web/src/hooks/use-signal-profile.ts",
     ):
         assert not Path(path).exists()
+    assert not hasattr(decision, "ExecutionPlan")
+    assert not hasattr(decision, "OrderIntent")
 
 
 def test_container_runtime_bootstrap_is_exactly_database_and_master_key():

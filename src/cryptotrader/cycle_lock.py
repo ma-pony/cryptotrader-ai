@@ -1,19 +1,8 @@
-"""Per-pair cycle lock to prevent concurrent runs on the same trading pair.
+"""Pair-scoped cycle admission using the caller-provided Redis state manager.
 
-Production observation (2026-05-02): a manual ``trader run`` started while
-the launchd scheduler was processing a freshly-restarted cycle produced two
-ETH/USDT close decisions 426 ms apart, with the same pair entering the OKX
-order pipeline twice. Only one filled (the second saw flat balance), but a
-``long`` verdict in the same race would have doubled exposure — a single
-restart-plus-manual-run window can't be assumed safe.
-
-The lock is keyed by pair (``cycle_lock:<pair>``) with a TTL slightly longer
-than the longest expected cycle. If Redis is unreachable, ``RedisStateManager``
-falls back to in-process memory — single-process safety only, but the
-launchd scheduler is single-process and ``trader run`` shares its memory
-neither, so the practical guarantee in that mode degrades gracefully:
-contending callers in the same process serialize, cross-process callers
-do not (matches existing risk/state.py degraded-mode behavior).
+Production order-bearing work enters this primitive only through
+``Runtime.execution_lease``. Its strict Redis primitives have no in-memory
+fallback, so degraded cross-process execution is never admitted.
 """
 
 from __future__ import annotations

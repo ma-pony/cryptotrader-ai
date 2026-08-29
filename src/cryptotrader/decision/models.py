@@ -56,21 +56,6 @@ class TradePlan:
 
 
 @dataclass(frozen=True)
-class OrderIntent:
-    pair: str
-    side: Literal["buy", "sell"]
-    amount: float
-    reduce_only: bool
-
-
-@dataclass(frozen=True)
-class ExecutionPlan:
-    intents: tuple[OrderIntent, ...]
-    stop_loss: float | None
-    take_profit: float | None
-
-
-@dataclass(frozen=True)
 class CycleRequest:
     """启动一次决策周期所需的输入。"""
 

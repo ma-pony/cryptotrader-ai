@@ -1,4 +1,4 @@
-"""Legacy single-position planning and new execution-book proposal planning."""
+"""基于执行资金池和标准化 venue 的预检提案。"""
 
 from __future__ import annotations
 
@@ -8,8 +8,6 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
-from cryptotrader.decision.models import ExecutionPlan
-from cryptotrader.decision.models import OrderIntent as LegacyOrderIntent
 from cryptotrader.execution.models import BookExecutionProposal, ConnectionExecutionPlan
 from cryptotrader.risk.models import ConnectionRiskDecision, ConnectionRiskRequest
 from cryptotrader.venues.models import OpenVenueState, ProtectionSpec, VenueCapabilities, VenueQuote
@@ -18,12 +16,10 @@ from cryptotrader.venues.protocol import VenueOperationError
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from cryptotrader.decision.models import TradePlan
     from cryptotrader.pair import Pair
     from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
     from cryptotrader.risk.gate import BookRiskGate, ConnectionRiskGate
     from cryptotrader.risk.models import BookRiskDecision, BookRiskRequest
-    from cryptotrader.signals.models import SignalContext
     from cryptotrader.venues.protocol import VenueSession
 
 
@@ -54,67 +50,12 @@ class ExecutionPlanner:
 
     def __init__(
         self,
-        max_single_pct: float | None = None,
         *,
         book_risk_gate: BookRiskGate | None = None,
         connection_risk_gate: ConnectionRiskGate | None = None,
     ) -> None:
-        self.max_single_pct = max_single_pct
         self._book_risk_gate = book_risk_gate
         self._connection_risk_gate = connection_risk_gate
-
-    def plan(self, context: SignalContext, trade_plan: TradePlan) -> ExecutionPlan:
-        """Staged legacy entry retained only for callers migrated atomically in Task 11."""
-        if self.max_single_pct is None:
-            raise ExecutionPlanningError("legacy planning requires max_single_pct")
-        target = trade_plan.target
-        if context.market_type == "spot" and target.side == "short":
-            raise ExecutionPlanningError("spot markets do not support short target positions")
-
-        target_amount = context.equity * self.max_single_pct * target.size_ratio / context.current_price
-        current_signed = context.current_position.signed_amount
-        target_signed = {
-            "long": target_amount,
-            "short": -target_amount,
-            "flat": 0.0,
-        }[target.side]
-
-        if current_signed * target_signed < 0.0:
-            close_intent = LegacyOrderIntent(
-                pair=context.pair.canonical(),
-                side="sell" if current_signed > 0.0 else "buy",
-                amount=abs(current_signed),
-                reduce_only=True,
-            )
-            enter_intent = LegacyOrderIntent(
-                pair=context.pair.canonical(),
-                side="buy" if target_signed > 0.0 else "sell",
-                amount=abs(target_signed),
-                reduce_only=False,
-            )
-            return ExecutionPlan(
-                intents=(close_intent, enter_intent),
-                stop_loss=trade_plan.stop_loss,
-                take_profit=trade_plan.take_profit,
-            )
-
-        delta = target_signed - current_signed
-        if abs(delta) < 1e-12:
-            intents: tuple[LegacyOrderIntent, ...] = ()
-        else:
-            intents = (
-                LegacyOrderIntent(
-                    pair=context.pair.canonical(),
-                    side="buy" if delta > 0.0 else "sell",
-                    amount=abs(delta),
-                    reduce_only=abs(target_signed) < abs(current_signed),
-                ),
-            )
-        return ExecutionPlan(
-            intents=intents,
-            stop_loss=trade_plan.stop_loss,
-            take_profit=trade_plan.take_profit,
-        )
 
     async def propose(
         self,

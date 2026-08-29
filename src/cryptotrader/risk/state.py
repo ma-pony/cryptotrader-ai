@@ -272,12 +272,9 @@ class RedisStateManager:
 
     # ── Lock primitives ──
     #
-    # SETNX-with-TTL + owner-check release. Used by ``cycle_lock`` to keep
-    # ``trader run`` and the launchd scheduler from racing each other on the
-    # same pair (production observation 2026-05-02: a manual ``trader run``
-    # while the scheduler restarted produced two concurrent ETH close orders
-    # 426 ms apart — only one filled, but a second BUY would have doubled
-    # exposure).
+    # SETNX-with-TTL + owner-check release. Strict execution admission uses
+    # the Redis-only methods below; ordinary state storage may still use the
+    # independent fallback behavior above.
 
     async def try_acquire_lock(self, key: str, owner_id: str, ttl: int) -> bool:
         """Atomic SET NX EX. Returns True if we now own the lock.
