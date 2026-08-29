@@ -7,6 +7,7 @@ import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 import VenuesPage from './venues';
 import ExecutionBooksPage from './execution-books';
 import { VenueForm } from './venues/venue-form';
+import { setRuntimeConfigConflict } from '@/hooks/runtime-config-conflict';
 
 describe('configuration draft lifecycle', () => {
   const venueConfig = (label: string) => {
@@ -69,5 +70,19 @@ describe('configuration draft lifecycle', () => {
     fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'Unsaved' } });
     fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
     await waitFor(() => expect(screen.getByLabelText('名称')).toHaveValue('Reloaded'));
+  });
+
+  it('unblocks venue writes only after the page explicit reload receives a fresh snapshot', async () => {
+    const base = venueConfig('Paper');
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(runtimeConfigFixture({ revision: 2, document: base.document })), { status: 200 })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
+    await screen.findByLabelText('名称');
+    setRuntimeConfigConflict(client);
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存连接' })).toBeDisabled());
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: '保存连接' })).toBeEnabled());
   });
 });

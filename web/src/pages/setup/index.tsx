@@ -335,6 +335,7 @@ const SetupEditor = ({
               revision={runtime.revision ?? 0}
               connection={connection}
               onSaved={replaceConnection}
+              writeBlocked={runtime.conflict}
               tested={(id) => {
                 const current = draft.execution.connections.find((item) => item.id === id);
                 if (current)
@@ -345,7 +346,7 @@ const SetupEditor = ({
               }}
             />
           ))}
-          <VenueForm revision={runtime.revision ?? 0} onSaved={replaceConnection} />
+          <VenueForm revision={runtime.revision ?? 0} onSaved={replaceConnection} writeBlocked={runtime.conflict} />
         </div>
       );
     if (step === 4)

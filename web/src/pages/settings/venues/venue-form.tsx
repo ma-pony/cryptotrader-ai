@@ -32,11 +32,13 @@ export const VenueForm = ({
   connection,
   onSaved,
   tested,
+  writeBlocked = false,
 }: {
   revision: number;
   connection?: RuntimeDocument['execution']['connections'][number];
   onSaved?: ((connection: RuntimeConfig['document']['execution']['connections'][number]) => void) | undefined;
   tested?: ((id: string) => void) | undefined;
+  writeBlocked?: boolean;
 }) => {
   const { t } = useTranslation('configuration');
   const venues = useVenueConnections();
@@ -247,7 +249,7 @@ export const VenueForm = ({
             <Button
               type="button"
               variant="outline"
-              disabled={!apiKey || !secret || credentialSaving || venues.create.isPending || venues.update.isPending || savedNeedsReload}
+              disabled={!apiKey || !secret || credentialSaving || venues.create.isPending || venues.update.isPending || savedNeedsReload || writeBlocked}
               onClick={() => void saveCredentials()}
             >
               <Save className="h-4 w-4" />
@@ -275,7 +277,7 @@ export const VenueForm = ({
         </p>
       ) : null}
       {savedNeedsReload ? <p role="status" className="text-sm text-amber-500">{t('connection.savedNeedsReload')}</p> : null}
-      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload || parametersError}>
+      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload || writeBlocked || parametersError}>
         <Save className="h-4 w-4" />
         {existing ? t('connection.save') : t('connection.create')}
       </Button>

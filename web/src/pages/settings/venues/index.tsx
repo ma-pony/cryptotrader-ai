@@ -59,6 +59,7 @@ const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
                   revision={runtime.revision ?? 0}
                   connection={connection}
                   onSaved={() => void runtime.reload()}
+                  writeBlocked={runtime.conflict}
                   {...(onTested ? { tested: onTested } : {})}
                 />
               </section>
@@ -74,6 +75,7 @@ const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
                   setAdding(false);
                   void runtime.reload();
                 }}
+                writeBlocked={runtime.conflict}
                 {...(onTested ? { tested: onTested } : {})}
               />
             </section>
