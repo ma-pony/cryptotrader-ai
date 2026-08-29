@@ -18,9 +18,11 @@ from cryptotrader.runtime_config.models import RuntimeConfigDocument, RuntimeCon
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from cryptotrader.runtime_config.secrets import CredentialPayload, CredentialVault
+    from cryptotrader.runtime_config.secrets import CredentialPayload, CredentialVault, TokenPayload
 
 _GLOBAL_ID = "global"
+LLM_GATEWAY_CREDENTIAL_REF = "llm-gateway"
+API_ACCESS_CREDENTIAL_REF = "api-access"
 _ready: set[str] = set()
 
 
@@ -56,8 +58,8 @@ class _RuntimeConfigRow(_Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class _VenueCredentialRow(_Base):
-    __tablename__ = "venue_credentials"
+class _RuntimeCredentialRow(_Base):
+    __tablename__ = "runtime_credentials"
 
     credential_ref: Mapped[str] = mapped_column(String(255), primary_key=True)
     encrypted_payload: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
@@ -150,15 +152,15 @@ class RuntimeConfigRepository:
         finally:
             await session.close()
 
-    async def put_credentials(
+    async def _put_encrypted_payload(
         self,
         expected_revision: int,
         credential_ref: str,
-        payload: CredentialPayload,
+        encrypted_payload: bytes,
     ) -> RuntimeConfigSnapshot:
+        """Atomically replace one encrypted runtime credential and the config revision."""
         await self.ensure_tables()
         updated_at = datetime.now(UTC)
-        encrypted_payload = self._vault.seal(credential_ref, payload)
         session = await get_async_session(self.database_url)
         try:
             result = await session.execute(
@@ -177,10 +179,10 @@ class RuntimeConfigRepository:
                 await session.rollback()
                 raise RevisionConflict(expected_revision, actual)
 
-            credential = await session.get(_VenueCredentialRow, credential_ref)
+            credential = await session.get(_RuntimeCredentialRow, credential_ref)
             if credential is None:
                 session.add(
-                    _VenueCredentialRow(
+                    _RuntimeCredentialRow(
                         credential_ref=credential_ref,
                         encrypted_payload=encrypted_payload,
                         updated_at=updated_at,
@@ -199,11 +201,20 @@ class RuntimeConfigRepository:
         finally:
             await session.close()
 
+    async def put_credentials(
+        self,
+        expected_revision: int,
+        credential_ref: str,
+        payload: CredentialPayload,
+    ) -> RuntimeConfigSnapshot:
+        encrypted_payload = self._vault.seal(credential_ref, payload)
+        return await self._put_encrypted_payload(expected_revision, credential_ref, encrypted_payload)
+
     async def credential_state(self, credential_ref: str) -> CredentialState:
         await self.ensure_tables()
         session = await get_async_session(self.database_url)
         try:
-            row = await session.get(_VenueCredentialRow, credential_ref)
+            row = await session.get(_RuntimeCredentialRow, credential_ref)
             return CredentialState(
                 credential_ref=credential_ref,
                 configured=row is not None,
@@ -216,10 +227,33 @@ class RuntimeConfigRepository:
         await self.ensure_tables()
         session = await get_async_session(self.database_url)
         try:
-            row = await session.get(_VenueCredentialRow, credential_ref)
+            row = await session.get(_RuntimeCredentialRow, credential_ref)
             if row is None:
                 raise CredentialNotConfigured(credential_ref)
             return self._vault.open(credential_ref, row.encrypted_payload)
+        finally:
+            await session.close()
+
+    async def put_token(
+        self,
+        expected_revision: int,
+        credential_ref: str,
+        payload: TokenPayload,
+    ) -> RuntimeConfigSnapshot:
+        encrypted_payload = self._vault.seal_token(credential_ref, payload)
+        return await self._put_encrypted_payload(expected_revision, credential_ref, encrypted_payload)
+
+    async def token_state(self, credential_ref: str) -> CredentialState:
+        return await self.credential_state(credential_ref)
+
+    async def reveal_token(self, credential_ref: str) -> TokenPayload:
+        await self.ensure_tables()
+        session = await get_async_session(self.database_url)
+        try:
+            row = await session.get(_RuntimeCredentialRow, credential_ref)
+            if row is None:
+                raise CredentialNotConfigured(credential_ref)
+            return self._vault.open_token(credential_ref, row.encrypted_payload)
         finally:
             await session.close()
 

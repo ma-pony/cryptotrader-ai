@@ -10,6 +10,8 @@ import pytest
 from cryptography.exceptions import InvalidTag
 from pydantic import ValidationError
 
+from cryptotrader.runtime_config.secrets import CredentialPayload, CredentialVault
+
 VALID_MASTER_KEY = base64.urlsafe_b64encode(b"k" * 32).decode()
 STANDARD_MASTER_KEY = base64.b64encode(b"\xfb" * 32).decode()
 STANDARD_PLUS_KEY = STANDARD_MASTER_KEY.replace("/", "_")
@@ -20,8 +22,6 @@ NON_CANONICAL_MASTER_KEY = VALID_MASTER_KEY[:-2] + _URLSAFE_ALPHABET[_LAST_DATA_
 
 
 def test_vault_round_trip_uses_unique_nonce_and_reference_as_aad():
-    from cryptotrader.runtime_config.secrets import CredentialPayload, CredentialVault
-
     vault = CredentialVault(VALID_MASTER_KEY)
     payload = CredentialPayload(api_key="key", secret="secret", passphrase="phrase")
 
@@ -33,6 +33,15 @@ def test_vault_round_trip_uses_unique_nonce_and_reference_as_aad():
     assert vault.open("okx-demo", first) == payload
     with pytest.raises(InvalidTag):
         vault.open("other-ref", first)
+
+
+def test_token_payload_is_redacted_and_cannot_be_used_as_venue_credentials():
+    from cryptotrader.runtime_config.secrets import TokenPayload
+
+    token = TokenPayload(token="gateway-test-token")
+
+    assert "gateway-test-token" not in repr(token)
+    assert token.token == "gateway-test-token"
 
 
 @pytest.mark.parametrize(

@@ -49,6 +49,20 @@ class CredentialPayload(BaseModel):
         return self.__repr__()
 
 
+class TokenPayload(BaseModel):
+    """One opaque runtime secret, kept distinct from venue credentials."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True, strict=True)
+
+    token: str
+
+    def __repr__(self) -> str:
+        return "TokenPayload(**redacted**)"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+
 class CredentialVault:
     """Seal credential payloads in a versioned AES-GCM envelope."""
 
@@ -93,3 +107,23 @@ class CredentialVault:
             return CredentialPayload.model_validate_json(plaintext)
         except (ValidationError, ValueError):
             raise ValueError("invalid credential payload") from None
+
+    def seal_token(self, credential_ref: str, payload: TokenPayload) -> bytes:
+        nonce = os.urandom(self._NONCE_BYTES)
+        plaintext = payload.model_dump_json().encode()
+        ciphertext = self._cipher.encrypt(nonce, plaintext, credential_ref.encode())
+        return self.VERSION + nonce + ciphertext
+
+    def open_token(self, credential_ref: str, envelope: bytes) -> TokenPayload:
+        envelope = bytes(envelope)
+        if envelope[:1] != self.VERSION or len(envelope) < self._MIN_ENVELOPE_BYTES:
+            raise ValueError("unsupported credential envelope")
+        plaintext = self._cipher.decrypt(
+            envelope[1 : 1 + self._NONCE_BYTES],
+            envelope[1 + self._NONCE_BYTES :],
+            credential_ref.encode(),
+        )
+        try:
+            return TokenPayload.model_validate_json(plaintext)
+        except (ValidationError, ValueError):
+            raise ValueError("invalid token payload") from None

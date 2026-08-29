@@ -68,7 +68,9 @@ def test_runtime_llm_factory_owns_timeout_and_fallback_without_global_config(mon
 
     captured = []
 
-    def factory(config):
+    def factory(config, *, api_key):
+        assert api_key == ""
+
         def build(**kwargs):
             captured.append((config, kwargs))
             return object()

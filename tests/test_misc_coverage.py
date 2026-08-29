@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -10,6 +11,33 @@ import pytest
 
 
 class TestVerifyApiKey:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("method", "path", "allowed"),
+        [
+            ("PUT", "/api/config/credentials/llm-gateway", True),
+            ("POST", "/api/venue-connections/demo", False),
+            ("POST", "/api/venue-connections/demo/test", True),
+            ("GET", "/api/config-evil", False),
+        ],
+    )
+    async def test_setup_allows_only_exact_commissioning_routes(self, method, path, allowed):
+        from fastapi import HTTPException
+
+        from api.dependencies import verify_api_key
+
+        req = MagicMock()
+        req.method = method
+        req.url.path = path
+        req.app.state.runtime.snapshot.setup_required = True
+        req.app.state.runtime.snapshot.document.security.enabled = False
+        if allowed:
+            await verify_api_key(req)
+        else:
+            with pytest.raises(HTTPException) as exc_info:
+                await verify_api_key(req)
+            assert exc_info.value.status_code == 503
+
     @pytest.mark.asyncio
     async def test_missing_runtime_fails_closed_as_service_unavailable(self):
         from fastapi import HTTPException
@@ -37,7 +65,9 @@ class TestVerifyApiKey:
         req = MagicMock()
         req.headers.get.return_value = "runtime-test-key"
         req.app.state.runtime.snapshot.document.security.enabled = True
-        req.app.state.runtime.snapshot.document.security.api_key = "runtime-test-key"  # pragma: allowlist secret
+        req.app.state.runtime.repository.reveal_token = AsyncMock(
+            return_value=SimpleNamespace(token="runtime-test-key")
+        )
         await verify_api_key(req)
 
     @pytest.mark.asyncio
@@ -49,9 +79,7 @@ class TestVerifyApiKey:
         req = MagicMock()
         req.headers.get.return_value = "wrong"
         req.app.state.runtime.snapshot.document.security.enabled = True
-        req.app.state.runtime.snapshot.document.security.api_key = (
-            "invalid-runtime-test-key"  # pragma: allowlist secret
-        )
+        req.app.state.runtime.repository.reveal_token = AsyncMock(return_value=SimpleNamespace(token="expected"))
         with pytest.raises(HTTPException) as exc_info:
             await verify_api_key(req)
         assert exc_info.value.status_code == 401

@@ -57,7 +57,6 @@ class SystemConfig(_FrozenConfigModel):
 
 class SecurityConfig(_FrozenConfigModel):
     enabled: bool = False
-    api_key: str = ""
 
 
 class MarketDataConfig(_ParameterConfigModel):

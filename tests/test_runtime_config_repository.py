@@ -69,6 +69,31 @@ async def test_credential_update_and_revision_change_are_one_transaction(reposit
     assert await repository.reveal_credentials("okx-demo") == expected
 
 
+async def test_token_update_is_cas_protected_and_never_uses_venue_payloads(repository):
+    from cryptotrader.runtime_config.repository import (
+        LLM_GATEWAY_CREDENTIAL_REF,
+        RevisionConflict,
+    )
+    from cryptotrader.runtime_config.secrets import TokenPayload
+
+    before = await repository.get_or_create()
+    saved = await repository.put_token(
+        before.revision,
+        LLM_GATEWAY_CREDENTIAL_REF,
+        TokenPayload(token="gateway-only-token"),
+    )
+
+    assert saved.revision == before.revision + 1
+    assert (await repository.token_state(LLM_GATEWAY_CREDENTIAL_REF)).configured is True
+    assert (await repository.reveal_token(LLM_GATEWAY_CREDENTIAL_REF)).token == "gateway-only-token"
+    with pytest.raises(RevisionConflict):
+        await repository.put_token(
+            before.revision,
+            LLM_GATEWAY_CREDENTIAL_REF,
+            TokenPayload(token="replacement-token"),
+        )
+
+
 async def test_stale_credential_insert_rolls_back(repository):
     from cryptotrader.runtime_config.repository import CredentialNotConfigured, RevisionConflict
 

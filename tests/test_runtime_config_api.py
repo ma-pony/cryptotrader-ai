@@ -91,10 +91,6 @@ def active_document() -> RuntimeConfigDocument:
 
 def active_payload() -> dict:
     payload = active_document().model_dump(mode="json")
-    # The public config write contract excludes server-owned security and
-    # observability settings.  Credentials use their dedicated endpoint.
-    payload.pop("security")
-    payload.pop("observability")
     for connection in payload["execution"]["connections"]:
         connection.pop("credential_ref")
     return payload
@@ -253,6 +249,29 @@ async def test_get_config_exposes_latest_snapshot_and_credential_state(api_harne
     assert body["document"]["execution"]["connections"][0]["credential_configured"] is False
     assert body["document"]["execution"]["connections"][0]["credential_updated_at"] is None
     assert "credential_ref" not in json.dumps(body)
+
+
+async def test_runtime_secret_endpoints_are_cas_protected_and_never_echo_tokens(api_harness):
+    current = await api_harness.client.get("/api/config")
+    revision = current.json()["revision"]
+
+    saved = await api_harness.client.put(
+        "/api/config/credentials/llm-gateway",
+        json={"expected_revision": revision, "token": "gateway-secret-value"},
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["revision"] == revision + 1
+    assert saved.json()["configured"] is True
+    assert "gateway-secret-value" not in saved.text
+    stale = await api_harness.client.put(
+        "/api/config/credentials/llm-gateway",
+        json={"expected_revision": revision, "token": "another-gateway-secret"},
+    )
+    assert stale.status_code == 409
+    visible = await api_harness.client.get("/api/config")
+    assert visible.json()["document"]["llm"]["gateway_credential_configured"] is True
+    assert "gateway-secret-value" not in visible.text
 
 
 async def test_put_config_requires_expected_revision(api_harness):

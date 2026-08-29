@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from collections.abc import Mapping as MappingABC
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -26,7 +26,11 @@ from cryptotrader.portfolio.aggregator import PortfolioAggregator
 from cryptotrader.risk.gate import BookRiskGate, ConnectionRiskGate
 from cryptotrader.risk.models import BookRiskLimits, ConnectionRiskLimits
 from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, validate_runtime_document
-from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+from cryptotrader.runtime_config.repository import (
+    LLM_GATEWAY_CREDENTIAL_REF,
+    CredentialNotConfigured,
+    RuntimeConfigRepository,
+)
 from cryptotrader.runtime_config.secrets import CredentialVault
 from cryptotrader.signals.fusion import WeightedSignalFusion
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
@@ -73,7 +77,7 @@ class Runtime:
     events: MultiplexedCycleEventSink
     _session_keys: dict[str, tuple[object, ...]] = field(default_factory=dict, repr=False)
     _registry_discoverer: (
-        Callable[[object], tuple[SignalComponentRegistry, VenueAdapterRegistry, MarketSourceRegistry]] | None
+        Callable[[object], Awaitable[tuple[SignalComponentRegistry, VenueAdapterRegistry, MarketSourceRegistry]]] | None
     ) = field(default=None, repr=False)
     _pending_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
     _deferred_retired: dict[int, VenueSession] = field(default_factory=dict, init=False, repr=False)
@@ -149,12 +153,13 @@ class Runtime:
             candidate_venues = self.venue_registry
             candidate_markets = self.market_registry
         elif self._registry_discoverer is None:
-            candidate_signals, candidate_venues, candidate_markets = _discover_registry_graph(
+            candidate_signals, candidate_venues, candidate_markets = await _discover_registry_graph(
                 candidate_snapshot.document,
                 self.events,
+                self.repository,
             )
         else:
-            candidate_signals, candidate_venues, candidate_markets = self._registry_discoverer(
+            candidate_signals, candidate_venues, candidate_markets = await self._registry_discoverer(
                 candidate_snapshot.document
             )
         _validate_snapshot(candidate_snapshot, candidate_signals, candidate_venues, candidate_markets)
@@ -290,10 +295,10 @@ async def build_runtime(
     )
     if signal_registry is None and venue_registry is None and market_registry is None:
 
-        def registry_discoverer(document):
-            return _discover_registry_graph(document, routed_events)
+        async def registry_discoverer(document):
+            return await _discover_registry_graph(document, routed_events, runtime_repository)
 
-        signals, venues, markets = registry_discoverer(frozen.document)
+        signals, venues, markets = await registry_discoverer(frozen.document)
     else:
         signals = signal_registry or SignalComponentRegistry.discover(frozen.document, routed_events)
         venues = venue_registry or VenueAdapterRegistry.discover(
@@ -301,7 +306,7 @@ async def build_runtime(
         )
         markets = market_registry or MarketSourceRegistry.discover(frozen.document.market_data)
 
-        def registry_discoverer(_document):
+        async def registry_discoverer(_document):
             return signals, venues, markets
 
     validate_runtime_document(
@@ -349,9 +354,13 @@ async def build_runtime(
     )
 
 
-def _discover_registry_graph(document, events):
+async def _discover_registry_graph(document, events, repository):
+    try:
+        llm_gateway_key = (await repository.reveal_token(LLM_GATEWAY_CREDENTIAL_REF)).token
+    except CredentialNotConfigured:
+        llm_gateway_key = ""
     return (
-        SignalComponentRegistry.discover(document, events),
+        SignalComponentRegistry.discover(document, events, llm_gateway_key=llm_gateway_key),
         VenueAdapterRegistry.discover(connection.adapter_id for connection in document.execution.connections),
         MarketSourceRegistry.discover(document.market_data),
     )

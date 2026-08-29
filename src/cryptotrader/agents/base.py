@@ -164,9 +164,10 @@ def create_llm(
     with_fallback: bool = True,
     role: str = "",
     track_tokens: bool = True,
+    api_key: str = "",
 ) -> ChatOpenAI:
     """Build an LLM from an explicit database-owned runtime configuration."""
-    return create_runtime_llm_factory(config)(
+    return create_runtime_llm_factory(config, api_key=api_key)(
         model=model,
         temperature=temperature,
         timeout=timeout,
@@ -177,7 +178,7 @@ def create_llm(
     )
 
 
-def create_runtime_llm_factory(config: RuntimeLlmConfig) -> Callable[..., ChatOpenAI]:
+def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Callable[..., ChatOpenAI]:
     """Bind the database LLM document to a factory that never reads legacy config."""
     from cryptotrader.llm.token_tracker import TokenTrackerCallback
 
@@ -214,7 +215,7 @@ def create_runtime_llm_factory(config: RuntimeLlmConfig) -> Callable[..., ChatOp
                 "model": model_name,
                 "temperature": selected_temperature,
                 "timeout": selected_timeout,
-                "api_key": "",
+                "api_key": api_key,
             }
             if config.base_url:
                 kwargs["base_url"] = config.base_url

@@ -36,7 +36,6 @@ def client() -> TestClient:
 def _mock_config(scheduler_enabled: bool = True, pairs: list[str] | None = None):
     cfg = MagicMock()
     cfg.security.enabled = False
-    cfg.security.api_key = ""
     cfg.scheduler.enabled = scheduler_enabled
     cfg.scheduler.pairs = pairs if pairs is not None else ["BTC/USDT", "ETH/USDT"]
     cfg.scheduler.interval_minutes = 240
@@ -49,7 +48,7 @@ def _mock_config(scheduler_enabled: bool = True, pairs: list[str] | None = None)
 
 
 def _use_runtime(config) -> None:
-    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(revision=21, document=config))
+    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(revision=21, document=config, setup_required=False))
 
 
 class TestSchedulerStatusV2:

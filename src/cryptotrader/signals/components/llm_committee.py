@@ -420,6 +420,7 @@ def create_component(
     sink: CycleEventSink,
     *,
     llm_factory_builder=None,
+    llm_gateway_key: str = "",
 ) -> LLMCommitteeComponent:
     """Build the committee from database LLM settings without execution state."""
     from cryptotrader.agents.base import create_runtime_llm_factory
@@ -432,7 +433,7 @@ def create_component(
     if parameters:
         unknown = ", ".join(sorted(parameters))
         raise ValueError(f"unsupported llm_committee parameters: {unknown}")
-    builder = llm_factory_builder or create_runtime_llm_factory
+    builder = llm_factory_builder or (lambda config: create_runtime_llm_factory(config, api_key=llm_gateway_key))
     return LLMCommitteeComponent(
         None,
         sink=sink,

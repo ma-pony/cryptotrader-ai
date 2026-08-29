@@ -262,7 +262,7 @@ async def test_changed_revision_rebuilds_registry_graph_before_publishing_cycle(
     discovered_markets = _MarketRegistry()
     discovered: list[object] = []
 
-    def discover(_document):
+    async def discover(_document):
         discovered.append(_document)
         return _InstalledRegistry({"kronos", "llm_committee"}), _VenueRegistry(_Adapter()), discovered_markets
 

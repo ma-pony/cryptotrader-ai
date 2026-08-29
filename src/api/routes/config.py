@@ -18,15 +18,23 @@ from cryptotrader.runtime_config.models import (
     LlmConfig,
     MarketDataConfig,
     NotificationConfig,
+    ObservabilityConfig,
     RiskConfig,
     RuntimeConfigDocument,
     SchedulerConfig,
+    SecurityConfig,
     SignalConfig,
     SystemConfig,
     TriggerConfig,
     validate_runtime_document,
 )
-from cryptotrader.runtime_config.repository import CredentialState, RevisionConflict
+from cryptotrader.runtime_config.repository import (
+    API_ACCESS_CREDENTIAL_REF,
+    LLM_GATEWAY_CREDENTIAL_REF,
+    CredentialState,
+    RevisionConflict,
+)
+from cryptotrader.runtime_config.secrets import TokenPayload
 from cryptotrader.venues.models import (
     ConnectionEnvironment,
     MarginMode,
@@ -113,6 +121,8 @@ class LlmConfigOut(StrictOut):
     retry: LlmRetryConfigOut
     model_costs: list[LlmModelCostConfigOut]
     models: LlmModelsConfigOut
+    gateway_credential_configured: bool
+    gateway_credential_updated_at: datetime | None
 
 
 class SignalComponentConfigOut(StrictOut):
@@ -212,8 +222,19 @@ class InfrastructureConfigOut(StrictOut):
     redis_url: str
 
 
+class SecurityConfigOut(StrictOut):
+    enabled: bool
+    access_credential_configured: bool
+    access_credential_updated_at: datetime | None
+
+
+class ObservabilityConfigOut(StrictOut):
+    otlp_endpoint: str
+
+
 class RuntimeDocumentOut(StrictOut):
     system: SystemConfigOut
+    security: SecurityConfigOut
     market_data: MarketDataConfigOut
     llm: LlmConfigOut
     signals: SignalConfigOut
@@ -224,6 +245,7 @@ class RuntimeDocumentOut(StrictOut):
     triggers: TriggerConfigOut
     notifications: NotificationConfigOut
     infrastructure: InfrastructureConfigOut
+    observability: ObservabilityConfigOut
 
 
 class RuntimeConfigOut(StrictOut):
@@ -238,6 +260,19 @@ class PutRuntimeConfigIn(BaseModel):
 
     expected_revision: int
     document: RuntimeDocumentIn
+
+
+class PutTokenIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True, strict=True)
+
+    expected_revision: int
+    token: str
+
+
+class TokenMutationOut(StrictOut):
+    revision: int
+    configured: bool
+    updated_at: datetime
 
 
 class VenueConnectionDocumentIn(BaseModel):
@@ -265,6 +300,7 @@ class RuntimeDocumentIn(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     system: SystemConfig
+    security: SecurityConfig = SecurityConfig()
     market_data: MarketDataConfig
     llm: LlmConfig = LlmConfig()
     signals: SignalConfig
@@ -275,6 +311,7 @@ class RuntimeDocumentIn(BaseModel):
     triggers: TriggerConfig = TriggerConfig()
     notifications: NotificationConfig = NotificationConfig()
     infrastructure: InfrastructureConfig = InfrastructureConfig()
+    observability: ObservabilityConfig = ObservabilityConfig()
 
 
 def require_runtime(request: Request):
@@ -323,6 +360,7 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
         )
         return RuntimeConfigDocument(
             system=body.system,
+            security=body.security,
             market_data=body.market_data,
             llm=body.llm,
             signals=body.signals,
@@ -337,6 +375,7 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
             triggers=body.triggers,
             notifications=body.notifications,
             infrastructure=body.infrastructure,
+            observability=body.observability,
         )
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=422, detail="Runtime configuration is invalid") from error
@@ -393,6 +432,10 @@ async def connection_out(repository, connection: VenueConnection) -> VenueConnec
 
 async def config_out(repository, snapshot) -> RuntimeConfigOut:
     document = snapshot.document
+    llm_credential, api_credential = await asyncio.gather(
+        repository.token_state(LLM_GATEWAY_CREDENTIAL_REF),
+        repository.token_state(API_ACCESS_CREDENTIAL_REF),
+    )
     connections = await asyncio.gather(
         *(connection_out(repository, connection) for connection in document.execution.connections)
     )
@@ -420,6 +463,11 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
         setup_required=snapshot.setup_required,
         document=RuntimeDocumentOut(
             system=SystemConfigOut(active=document.system.active),
+            security=SecurityConfigOut(
+                enabled=document.security.enabled,
+                access_credential_configured=api_credential.configured,
+                access_credential_updated_at=api_credential.updated_at,
+            ),
             market_data=MarketDataConfigOut(
                 source_id=document.market_data.source_id,
                 parameters=json_entries_out(document.market_data.parameters),
@@ -455,6 +503,8 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                     fallback=document.llm.models.fallback,
                     timeout_seconds=document.llm.models.timeout_seconds,
                 ),
+                gateway_credential_configured=llm_credential.configured,
+                gateway_credential_updated_at=llm_credential.updated_at,
             ),
             signals=SignalConfigOut(
                 components=[
@@ -534,6 +584,7 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                 ),
             ),
             infrastructure=InfrastructureConfigOut(redis_url=document.infrastructure.redis_url),
+            observability=ObservabilityConfigOut(otlp_endpoint=document.observability.otlp_endpoint),
         ),
     )
 
@@ -567,3 +618,32 @@ async def put_config(body: PutRuntimeConfigIn, request: Request) -> RuntimeConfi
     if refresh_owners is not None:
         await refresh_owners()
     return await config_out(runtime.repository, snapshot)
+
+
+async def _put_runtime_token(
+    body: PutTokenIn,
+    request: Request,
+    credential_ref: str,
+) -> TokenMutationOut:
+    runtime = require_runtime(request)
+    current = await runtime.repository.get_or_create()
+    ensure_expected_revision(current, body.expected_revision)
+    try:
+        snapshot = await runtime.repository.put_token(
+            body.expected_revision,
+            credential_ref,
+            TokenPayload(token=body.token),
+        )
+    except RevisionConflict as error:
+        raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+    return TokenMutationOut(revision=snapshot.revision, configured=True, updated_at=snapshot.updated_at)
+
+
+@router.put("/credentials/llm-gateway", response_model=TokenMutationOut)
+async def put_llm_gateway_token(body: PutTokenIn, request: Request) -> TokenMutationOut:
+    return await _put_runtime_token(body, request, LLM_GATEWAY_CREDENTIAL_REF)
+
+
+@router.put("/credentials/api-access", response_model=TokenMutationOut)
+async def put_api_access_token(body: PutTokenIn, request: Request) -> TokenMutationOut:
+    return await _put_runtime_token(body, request, API_ACCESS_CREDENTIAL_REF)

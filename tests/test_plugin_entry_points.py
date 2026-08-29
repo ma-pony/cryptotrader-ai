@@ -134,7 +134,7 @@ def test_signal_registry_treats_database_python_path_as_opaque_parameters(monkey
     assert registry.get("fixture_signal").parameters["python_path"] == "missing.module:create_component"
 
 
-def test_runtime_llm_factory_builds_from_database_settings_without_legacy_config(monkeypatch):
+def test_runtime_llm_factory_uses_only_the_explicit_vault_key(monkeypatch):
     from langchain_core.outputs import ChatGeneration, LLMResult
 
     from cryptotrader.agents.base import create_runtime_llm_factory
@@ -163,7 +163,8 @@ def test_runtime_llm_factory_builds_from_database_settings_without_legacy_config
         models=LlmModelsConfig(analysis="analysis-db", fallback="analysis-db"),
     )
 
-    llm = create_runtime_llm_factory(settings)()
+    monkeypatch.setenv("OPENAI_API_KEY", "environment-decoy")
+    llm = create_runtime_llm_factory(settings, api_key="vault-gateway-key")()  # pragma: allowlist secret
 
     assert isinstance(llm, FakeChatModel)
     assert built == [
@@ -171,7 +172,7 @@ def test_runtime_llm_factory_builds_from_database_settings_without_legacy_config
             "model": "analysis-db",
             "temperature": 0.17,
             "timeout": 47,
-            "api_key": "",
+            "api_key": "vault-gateway-key",  # pragma: allowlist secret
             "base_url": "https://db-gateway.example/v1",
             "streaming": True,
             "callbacks": built[0]["callbacks"],
