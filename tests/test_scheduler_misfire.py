@@ -140,7 +140,7 @@ async def test_overlapping_invocation_is_skipped(caplog):
     # Counter for how many times _run_pair is actually invoked.
     invocation_count = 0
 
-    async def slow_run_pair(_pair: str, _cycle, _redis_url) -> None:
+    async def slow_run_pair(_pair: str) -> None:
         nonlocal invocation_count
         invocation_count += 1
         await gate.wait()
@@ -266,7 +266,7 @@ async def test_direct_cycle_calls_do_not_block_each_other():
     barrier = asyncio.Event()
     count = 0
 
-    async def counting_run_pair(_pair: str, _cycle, _redis_url) -> None:
+    async def counting_run_pair(_pair: str) -> None:
         nonlocal count
         count += 1
         await barrier.wait()
