@@ -125,17 +125,17 @@ async def _respond_owned(runtime, approval_id: str, decision: Literal["approve",
     pending = await current.approvals.get(approval_id)
     if pending is None:
         raise LookupError("approval request does not exist")
+    if decision == "reject":
+        outcome = await current.reject_approval(approval_id)
+        return outcome, await current.approvals.get(approval_id)
     async with runtime.execution_lease(str(pending.proposal.pair)) as cycle:
         approval = await cycle.approvals.get(approval_id)
         if approval is None:
             raise LookupError("approval request does not exist")
-        if decision == "approve":
-            if approval.status == "pending":
-                await cycle.approvals.approve(approval_id)
-            elif approval.status != "approved":
-                raise ApprovalStateError("approval is not executable")
-            outcome = await cycle.execute_approved(approval_id)
-        else:
-            outcome = await cycle.reject_approval(approval_id)
+        if approval.status == "pending":
+            await cycle.approvals.approve(approval_id)
+        elif approval.status != "approved":
+            raise ApprovalStateError("approval is not executable")
+        outcome = await cycle.execute_approved(approval_id)
         final_approval = await cycle.approvals.get(approval_id)
         return outcome, final_approval

@@ -56,6 +56,7 @@ async def _seed(cycle: _Cycle, approval_id: str = "approval-1"):
 def _mount_cycle(api_harness, cycle: _Cycle) -> None:
     api_harness.runtime.cycle = cycle
     api_harness.runtime.cycle_lease = static_cycle_lease(cycle)
+    api_harness.runtime.execution_lease = lambda _pair: static_cycle_lease(cycle)()
 
 
 async def test_pending_api_exposes_frozen_book_proposal(api_harness):
@@ -208,6 +209,23 @@ async def test_reject_api_updates_same_cycle_without_execution(api_harness):
     cycle.execute_approved.assert_not_awaited()
     assert response.json()["approval_status"] == "rejected"
     assert response.json()["cycle_status"] == "approval_rejected"
+
+
+async def test_reject_does_not_require_the_redis_execution_lease(api_harness):
+    from api.routes.hitl import _respond_owned
+
+    cycle = _Cycle()
+    _mount_cycle(api_harness, cycle)
+    await _seed(cycle)
+
+    def fail_if_execution_lease_is_requested(_pair):
+        raise AssertionError("reject must not acquire an order execution lease")
+
+    api_harness.runtime.execution_lease = fail_if_execution_lease_is_requested
+    outcome, approval = await _respond_owned(api_harness.runtime, "approval-1", "reject")
+
+    assert outcome.status == "approval_rejected"
+    assert approval.status == "rejected"
 
 
 async def test_already_decided_approval_returns_conflict(api_harness):

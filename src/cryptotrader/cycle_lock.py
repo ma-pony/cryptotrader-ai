@@ -44,9 +44,7 @@ async def cycle_lock(
     own the key — protects against the prior-holder-expired-then-re-acquired
     race.
 
-    spec 021 E1: owner_id is ``"{pid}:{uuid}"`` so ``try_acquire_lock`` can
-    steal stale locks whose process has been SIGKILLed (otherwise we'd
-    wait the full TTL).
+    The owner identifier is unique to this lease and release is owner-checked.
     """
     key = f"cycle_lock:{pair}"
     owner_id = f"{os.getpid()}:{uuid.uuid4().hex}"

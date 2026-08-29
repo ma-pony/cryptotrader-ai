@@ -28,6 +28,9 @@ FORBIDDEN_RUNTIME_PATTERNS = (
     r"\bcryptotrader\.decision\.models import (?:ExecutionPlan|OrderIntent)\b",
     r"\bmax_single_pct\s*=\s*max_single_pct\b",
     r"\btrader scheduler (?:start|status|healthcheck)\b",
+    r"\btry_acquire_lock\b",
+    r"\brelease_lock\b",
+    r"\b_is_owner_dead\b",
 )
 
 SCAN_PATHS = ("src", "tests", "scripts", "config", "web/src", "Dockerfile", "docker-compose.yml", "pyproject.toml")
