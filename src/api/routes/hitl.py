@@ -119,7 +119,13 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
 
 
 async def _respond_owned(runtime, approval_id: str, decision: Literal["approve", "reject"]):
-    async with runtime.cycle_lease() as cycle:
+    current = runtime.cycle
+    if current is None:
+        raise RuntimeLeaseUnavailableError("Trading runtime is not active")
+    pending = await current.approvals.get(approval_id)
+    if pending is None:
+        raise LookupError("approval request does not exist")
+    async with runtime.execution_lease(str(pending.proposal.pair)) as cycle:
         approval = await cycle.approvals.get(approval_id)
         if approval is None:
             raise LookupError("approval request does not exist")

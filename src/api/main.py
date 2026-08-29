@@ -184,7 +184,7 @@ async def _init_trigger_engine(app_instance: FastAPI, *, snapshot=None) -> None:
         from cryptotrader.decision.models import CycleRequest
         from cryptotrader.pair import Pair
 
-        async with runtime.cycle_lease() as cycle:
+        async with runtime.execution_lease(pair) as cycle:
             await cycle.run(CycleRequest(Pair.parse(pair)))
 
     engine = PriceTriggerEngine(store, redis_state, _trigger_callback, config.triggers)

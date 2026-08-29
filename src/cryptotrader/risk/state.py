@@ -320,6 +320,32 @@ class RedisStateManager:
         self._mem.set(key, owner_id, ex=ttl)
         return True
 
+    async def try_acquire_strict_lock(self, key: str, owner_id: str, ttl: int) -> bool:
+        """Acquire an execution lease only through a reachable Redis server.
+
+        Risk/cache state may degrade to memory; order admission cannot.  A
+        Redis outage is therefore an explicit refusal, not an in-process lock.
+        """
+        if self._redis is None:
+            raise RuntimeError("Redis is required for production execution lease")
+        try:
+            return bool(await self._redis.set(key, owner_id, nx=True, ex=ttl))
+        except RedisError as error:
+            raise RuntimeError("Redis is unavailable for production execution lease") from error
+
+    async def release_strict_lock(self, key: str, owner_id: str) -> bool:
+        if self._redis is None:
+            raise RuntimeError("Redis is required for production execution lease")
+        try:
+            current = await self._redis.get(key)
+            if isinstance(current, bytes):
+                current = current.decode()
+            if current != owner_id:
+                return False
+            return bool(await self._redis.delete(key))
+        except RedisError as error:
+            raise RuntimeError("Redis is unavailable for production execution lease") from error
+
     async def release_lock(self, key: str, owner_id: str) -> bool:
         """Delete only if we still own the key. Returns True on actual delete.
 

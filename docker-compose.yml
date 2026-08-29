@@ -40,6 +40,7 @@ services:
       CONFIG_MASTER_KEY: ${CONFIG_MASTER_KEY:?CONFIG_MASTER_KEY is required}
     volumes:
       - ctdata:/home/appuser/.cryptotrader
+      - hf_cache:/home/appuser/.cache/huggingface
     depends_on:
       postgres:
         condition: service_healthy
@@ -59,8 +60,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 512m
-          cpus: "1.0"
+          memory: 2g
+          cpus: "2.0"
 
   web:
     build:
@@ -77,35 +78,6 @@ services:
         limits:
           memory: 128m
           cpus: "0.5"
-
-  scheduler:
-    build: .
-    command: trader scheduler start
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-cryptotrader}:${POSTGRES_PASSWORD:-cryptotrader-local-dev}@postgres:5432/cryptotrader
-      CONFIG_MASTER_KEY: ${CONFIG_MASTER_KEY:?CONFIG_MASTER_KEY is required}
-    volumes:
-      - ctdata:/home/appuser/.cryptotrader
-      - hf_cache:/home/appuser/.cache/huggingface
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    # Heartbeat-based liveness: scheduler writes scheduler.heartbeat after each
-    # cycle; check fails if file age > 2× interval (default ≥120s).
-    healthcheck:
-      test: ["CMD", "trader", "scheduler", "healthcheck"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
-      start_period: 120s
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-          cpus: "2.0"
 
   # Reverse proxy with automatic Let's Encrypt — only used in VPS
   # deployment (see docs/DEPLOYMENT.md). Local-dev runs ``api`` and

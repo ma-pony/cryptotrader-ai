@@ -181,6 +181,9 @@ class ExecutionConfig(_FrozenConfigModel):
     connections: tuple[VenueConnection, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
     allocation_policy: str = "weighted"
+    # This is deliberately a runtime-document switch rather than an adapter
+    # setting: a live credential must never be enough to make writes possible.
+    live_order_execution_enabled: bool = False
 
     @model_validator(mode="before")
     @classmethod
@@ -385,6 +388,12 @@ def _validate_active_document(document: RuntimeConfigDocument, installed_market_
         raise ValueError("active document requires an enabled signal component")
     if not any(book.enabled for book in document.execution.books):
         raise ValueError("active document requires an enabled execution book")
+    if (
+        any(book.enabled for book in document.execution.books)
+        or document.scheduler.enabled
+        or document.triggers.enabled
+    ) and not document.infrastructure.redis_url.strip():
+        raise ValueError("active execution, scheduler, or triggers require infrastructure.redis_url")
     for connection in document.execution.connections:
         if connection.enabled and connection.environment != "paper" and not connection.credential_ref:
             raise ValueError(f"enabled {connection.environment} connection {connection.id} requires credential_ref")

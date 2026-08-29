@@ -40,7 +40,7 @@ Paper, OKX, Bybit, and future adapters may run at the same time. Paper, demo, an
 
 ## Containers
 
-Compose passes only the same two runtime variables to API and scheduler:
+Compose passes the two runtime variables to the API owner:
 
 ```bash
 export CONFIG_MASTER_KEY='base64-encoded 32-byte key'
@@ -56,7 +56,6 @@ uv run trader run --pair BTC/USDT
 uv run trader backtest --pair BTC/USDT --start 2025-01-01 --end 2025-03-01
 uv run trader journal log
 uv run trader journal show <cycle-id>
-uv run trader scheduler start
 ```
 
 Backtests use an isolated temporary Paper book and never connect demo, testnet, or live venues. Validate live models with simulated connections after web setup; live-money connections are read-only checks and must not receive automated real-money orders.

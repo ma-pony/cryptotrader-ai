@@ -121,7 +121,7 @@ async def run_analysis_and_buffer(
         await state_mgr.set(f"analysis:status:{session_id}", "running", ex=600)
         from cryptotrader.chat.event_bus import EventBusCycleSink
 
-        async with runtime.cycle_lease() as cycle:
+        async with runtime.execution_lease(pair) as cycle:
             with runtime.events.route(EventBusCycleSink(event_bus)):
                 outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
     except asyncio.CancelledError:

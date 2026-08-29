@@ -79,6 +79,7 @@ class ExecutionConfigOut(StrictOut):
     connections: list[VenueConnectionOut]
     books: list[ExecutionBookOut]
     allocation_policy: str
+    live_order_execution_enabled: bool
 
 
 class SystemConfigOut(StrictOut):
@@ -300,6 +301,7 @@ class ExecutionConfigIn(BaseModel):
     connections: tuple[VenueConnectionDocumentIn, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
     allocation_policy: str = "weighted"
+    live_order_execution_enabled: bool = False
 
 
 class RuntimeDocumentIn(BaseModel):
@@ -568,6 +570,7 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                 connections=list(connections),
                 books=books,
                 allocation_policy=document.execution.allocation_policy,
+                live_order_execution_enabled=document.execution.live_order_execution_enabled,
             ),
             hitl=HitlConfigOut(approval_ttl_minutes=document.hitl.approval_ttl_minutes),
             scheduler=SchedulerConfigOut(

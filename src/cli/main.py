@@ -50,19 +50,9 @@ async def _run(pairs: list[str] | None):
 
 
 async def _run_pairs_loop(pairs, runtime):
-    from cryptotrader.cycle_lock import cycle_lock
-    from cryptotrader.risk.state import RedisStateManager
-
     for pair in pairs:
-        async with runtime.cycle_lease() as cycle:
-            redis_state = RedisStateManager(cycle.snapshot.document.infrastructure.redis_url or None)
-            async with cycle_lock(redis_state, pair) as acquired:
-                if not acquired:
-                    console.print(
-                        f"[yellow]Skipping {pair}: cycle_lock held (scheduler likely processing it).[/yellow]"
-                    )
-                    continue
-                await _run_one_pair(pair, cycle)
+        async with runtime.execution_lease(pair) as cycle:
+            await _run_one_pair(pair, cycle)
 
 
 async def _run_one_pair(pair: str, cycle) -> None:
@@ -207,105 +197,6 @@ async def _backtest(pair: str, start: str, end: str, interval: str, capital: flo
     for k, v in result.summary().items():
         table.add_row(k, str(v))
     console.print(table)
-
-
-# ── Scheduler commands ──
-
-scheduler_app = typer.Typer(help="Scheduler commands")
-app.add_typer(scheduler_app, name="scheduler")
-
-
-@scheduler_app.command("start")
-def scheduler_start():
-    """Start the trading scheduler."""
-    asyncio.run(_scheduler_start())
-
-
-async def _scheduler_start():
-    from cryptotrader.runtime import build_runtime
-    from cryptotrader.scheduler import Scheduler
-
-    runtime = await build_runtime()
-    try:
-        config = runtime.snapshot.document
-        if not config.scheduler.enabled:
-            console.print("[red]Scheduler is disabled in config (scheduler.enabled=false)[/red]")
-            raise typer.Exit(1)
-        pairs = config.scheduler.pairs
-        interval = config.scheduler.interval_minutes
-        summary_hour = config.scheduler.daily_summary_hour
-        console.print(
-            f"[bold]Scheduler[/bold] starting: {pairs} every {interval}m (daily summary at {summary_hour}:00 UTC)"
-        )
-        scheduler = Scheduler(config.scheduler, runtime)
-        await scheduler.start()
-    finally:
-        await runtime.close()
-
-
-@scheduler_app.command("healthcheck")
-def scheduler_healthcheck(
-    max_age_seconds: int = typer.Option(
-        0,
-        help="Max heartbeat age in seconds. 0 = derive from the active Runtime snapshot.",
-    ),
-):
-    """Exit 0 if the scheduler heartbeat is fresh, 1 otherwise."""
-    asyncio.run(_scheduler_healthcheck(max_age_seconds))
-
-
-async def _scheduler_healthcheck(max_age_seconds: int) -> None:
-    import time
-    from pathlib import Path
-
-    if max_age_seconds <= 0:
-        from cryptotrader.runtime import build_runtime
-
-        runtime = await build_runtime()
-        try:
-            max_age_seconds = max(
-                120,
-                runtime.snapshot.document.scheduler.interval_minutes * 60 * 2,
-            )
-        finally:
-            await runtime.close()
-    heartbeat = Path.home() / ".cryptotrader" / "scheduler.heartbeat"
-    if not heartbeat.exists():
-        console.print(f"[red]heartbeat missing: {heartbeat}[/red]")
-        raise typer.Exit(1)
-    age = time.time() - heartbeat.stat().st_mtime
-    if age > max_age_seconds:
-        console.print(f"[red]heartbeat stale: {age:.0f}s > {max_age_seconds}s[/red]")
-        raise typer.Exit(1)
-    console.print(f"[green]ok: heartbeat {age:.0f}s ago[/green]")
-
-
-@scheduler_app.command("status")
-def scheduler_status():
-    """Show the database-backed scheduler and execution-book configuration."""
-    asyncio.run(_scheduler_status())
-
-
-async def _scheduler_status() -> None:
-    from cryptotrader.runtime import build_runtime
-
-    runtime = await build_runtime()
-    try:
-        document = runtime.snapshot.document
-        scheduler = document.scheduler
-        books = tuple(book for book in document.execution.books if book.enabled)
-        table = Table(title="Scheduler Runtime Status")
-        table.add_column("Metric", style="cyan")
-        table.add_column("Value", style="green")
-        table.add_row("Config revision", str(runtime.snapshot.revision))
-        table.add_row("Runtime", "setup required" if runtime.cycle is None else "active")
-        table.add_row("Scheduler", "enabled" if scheduler.enabled else "disabled")
-        table.add_row("Pairs", ", ".join(str(pair) for pair in scheduler.pairs) or "(none)")
-        table.add_row("Interval", f"{scheduler.interval_minutes}m")
-        table.add_row("Execution books", ", ".join(book.id for book in books) or "(none)")
-        console.print(table)
-    finally:
-        await runtime.close()
 
 
 @app.command()

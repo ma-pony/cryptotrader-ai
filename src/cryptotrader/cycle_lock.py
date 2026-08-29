@@ -62,12 +62,12 @@ async def cycle_lock(
     key = f"cycle_lock:{pair}"
     owner_id = f"{os.getpid()}:{uuid.uuid4().hex}"
 
-    acquired = await redis_state.try_acquire_lock(key, owner_id, ttl)
+    acquired = await redis_state.try_acquire_strict_lock(key, owner_id, ttl)
     try:
         yield acquired
     finally:
         if acquired:
             try:
-                await redis_state.release_lock(key, owner_id)
+                await redis_state.release_strict_lock(key, owner_id)
             except Exception:
                 logger.info("cycle_lock release failed for %s", key, exc_info=True)

@@ -34,6 +34,8 @@ class RuntimeCycleSource(Protocol):
 
     def cycle_lease(self) -> AbstractAsyncContextManager[TradingCycle]: ...
 
+    def execution_lease(self, pair: str) -> AbstractAsyncContextManager[TradingCycle]: ...
+
 
 class Scheduler:
     def __init__(
@@ -333,12 +335,9 @@ class Scheduler:
 
     async def run_once(self) -> None:
         """Reload once, then run every configured pair against that exact graph."""
-        async with self.runtime.cycle_lease() as cycle:
-            snapshot = cycle.snapshot
-            self.config_revision = snapshot.revision
-            redis_url = snapshot.document.infrastructure.redis_url or None
-            tasks = [self._run_pair(pair.canonical(), cycle, redis_url) for pair in self.pairs]
-            await asyncio.gather(*tasks)
+        cycle = self._require_active_cycle()
+        self.config_revision = cycle.snapshot.revision
+        await asyncio.gather(*(self._run_pair(pair.canonical()) for pair in self.pairs))
         self._cycle_count += 1
         for pair in self.pairs:
             next_run = datetime.now(UTC) + timedelta(minutes=self.interval_minutes)
@@ -363,9 +362,7 @@ class Scheduler:
             raise RuntimeError("runtime configuration is not active")
         return self.runtime.cycle
 
-    async def _run_pair(self, pair: str, cycle: TradingCycle, redis_url: str | None) -> None:
-        from cryptotrader.cycle_lock import cycle_lock
-        from cryptotrader.risk.state import RedisStateManager
+    async def _run_pair(self, pair: str) -> None:
         from cryptotrader.tracing import set_trace_id
 
         # Per-pair mutex prevents concurrent cycles on the same pair (e.g. a
@@ -376,11 +373,7 @@ class Scheduler:
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:
-            redis_state = RedisStateManager(redis_url)
-            async with cycle_lock(redis_state, pair) as acquired:
-                if not acquired:
-                    logger.warning("cycle_lock held for %s — skipping this scheduler tick", pair)
-                    return
+            async with self.runtime.execution_lease(pair) as cycle:
                 await self._run_pair_locked(pair, cycle, trace_id)
         except Exception:
             # Config / Redis init failures must not propagate to gather() — the

@@ -12,6 +12,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from cryptotrader.cycle_events import CycleEventSink, MultiplexedCycleEventSink, NullCycleEventSink
+from cryptotrader.cycle_lock import cycle_lock
 from cryptotrader.decision.engine import DecisionEngine
 from cryptotrader.decision.exit_policy import AtrExitPolicy
 from cryptotrader.execution.allocation import WeightedAllocationPolicy
@@ -139,6 +140,25 @@ class Runtime:
             yield cycle
         finally:
             await wait_for_owned(asyncio.create_task(self._release_cycle_lease()))
+
+    @asynccontextmanager
+    async def execution_lease(self, pair: str):
+        """Admit exactly one production cycle for a canonical pair.
+
+        Unlike the graph lease this is a strict distributed ownership lease:
+        an absent or unhealthy Redis is an execution refusal.
+        """
+        from cryptotrader.risk.state import RedisStateManager
+
+        async with self.cycle_lease() as cycle:
+            redis_url = cycle.snapshot.document.infrastructure.redis_url.strip()
+            if not redis_url:
+                raise RuntimeLeaseUnavailableError("Redis is required for production execution")
+            redis_state = RedisStateManager(redis_url)
+            async with cycle_lock(redis_state, pair) as acquired:
+                if not acquired:
+                    raise RuntimeLeaseUnavailableError(f"execution lease held for {pair}")
+                yield cycle
 
     async def _release_cycle_lease(self) -> None:
         deferred_control: BaseException | None = None
@@ -474,7 +494,13 @@ def _validate_snapshot(snapshot, signals, venues, markets) -> None:
 def _assemble_cycle(snapshot, repository, sessions, signals, markets, event_sink) -> TradingCycle:
     frozen = snapshot
     runtime_repository = repository
-    services = {connection_id: VenueExecutionService(session) for connection_id, session in sessions.items()}
+    services = {
+        connection_id: VenueExecutionService(
+            session,
+            live_order_execution_enabled=frozen.document.execution.live_order_execution_enabled,
+        )
+        for connection_id, session in sessions.items()
+    }
     allocation = WeightedAllocationPolicy()
     risk = frozen.document.risk
     book_risk = BookRiskGate(

@@ -56,7 +56,6 @@ uv run trader run --pair BTC/USDT
 uv run trader backtest --pair BTC/USDT --start 2025-01-01 --end 2025-03-01
 uv run trader journal log
 uv run trader journal show <cycle-id>
-uv run trader scheduler start
 ```
 
 回测只使用临时 Paper 资金池，不连接 Demo、Testnet 或 Live。真实模型与模拟盘验证应在网页完成配置后，使用已启用的测试环境连接；实盘连接只允许只读检查，禁止自动化真实资金订单。
