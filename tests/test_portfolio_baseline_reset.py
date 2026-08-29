@@ -142,26 +142,6 @@ def test_reset_only_affects_target_account(db_url):
     _run(go())
 
 
-def test_drawdown_limit_does_not_trip_circuit_breaker():
-    """Mirror of test_live_readiness assertion — kept here for proximity to design."""
-    from unittest.mock import AsyncMock, MagicMock
-
-    from cryptotrader.risk.checks.loss import DrawdownLimit
-    from cryptotrader.runtime_config.models import LossConfig
-    from tests.factories.signal_fusion import risk_request
-
-    async def go():
-        mock_redis = MagicMock()
-        mock_redis.available = True
-        mock_redis.set_circuit_breaker = AsyncMock()
-        check = DrawdownLimit(LossConfig(max_drawdown_pct=0.10), mock_redis)
-        result = await check.evaluate(risk_request(), {"drawdown": 0.20})
-        assert not result.passed
-        mock_redis.set_circuit_breaker.assert_not_called()
-
-    _run(go())
-
-
 def test_baseline_reset_requires_db():
     """In-memory mode raises explicit RuntimeError (no silent no-op)."""
     from cryptotrader.portfolio.manager import PortfolioManager

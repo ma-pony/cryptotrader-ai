@@ -1,10 +1,10 @@
-"""Tests for Retry-After aware wait strategy in LLM factory."""
+"""Tests for database-runtime LLM retry behavior."""
 
 from __future__ import annotations
 
 from unittest.mock import MagicMock
 
-from cryptotrader.llm.factory import _RetryAfterWait
+from cryptotrader.llm.retry import _RetryAfterWait
 
 
 class TestRetryAfterWait:

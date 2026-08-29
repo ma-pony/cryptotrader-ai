@@ -80,7 +80,7 @@ class CircuitBreakerResetOut(BaseModel):
     message: str
 
 
-# Correlation groups — mirrors RiskGate's CorrelationCheck list (cryptotrader/risk/checks/correlation.py).
+# Correlation groups are reporting-only labels for the operator risk view.
 _CORR_GROUPS: dict[str, list[str]] = {
     "BTC-correlated": ["BTC/USDT", "BTC/USD"],
     "ETH-correlated": ["ETH/USDT", "ETH/USD"],

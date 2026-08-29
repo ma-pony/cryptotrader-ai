@@ -12,12 +12,19 @@ FORBIDDEN_RUNTIME_PATTERNS = (
     r"\bExchangesConfig\b",
     r"\bCRYPTOTRADER_",
     r"config/(default|local)\.toml",
+    r"\bcryptotrader\.config\b",
+    r"config/models\.toml",
+    r"\bmodels\.toml\b",
+    r"\bapi_key_env\b",
+    r"\bcryptotrader\.llm\.registry\b",
+    r"\bcryptotrader\.llm\.factory\b",
+    r"\b_try_manifest_llm\b",
     r"\bexchange_id\b",
     r"\bLiveExchange\b",
     r"\bsupports_protection_orders\b",
 )
 
-SCAN_PATHS = ("src", "tests", "scripts", "web/src", "Dockerfile", "docker-compose.yml", "pyproject.toml")
+SCAN_PATHS = ("src", "tests", "scripts", "config", "web/src", "Dockerfile", "docker-compose.yml", "pyproject.toml")
 
 
 def scan_paths(paths: tuple[str, ...], patterns: tuple[str, ...]) -> list[str]:
@@ -47,6 +54,7 @@ def test_forbidden_symbols_are_absent_from_runtime_tests_docker_and_web():
 def test_config_directory_contains_no_runtime_toml():
     assert not Path("config/default.toml").exists()
     assert not Path("config/local.toml").exists()
+    assert not tuple(Path("config").glob("*.toml"))
 
 
 def test_removed_legacy_production_modules_do_not_exist():

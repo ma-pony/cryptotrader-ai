@@ -25,11 +25,12 @@ def _install_minimal_runtime_for_api_clients():
     try:
         from api.main import app
         from cryptotrader.runtime_config.defaults import minimal_runtime_document
-        from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+        from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
 
         previous = getattr(app.state, "runtime", None)
+        document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
         app.state.runtime = SimpleNamespace(
-            snapshot=RuntimeConfigSnapshot(1, minimal_runtime_document(), datetime.now(UTC)),
+            snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
             repository=SimpleNamespace(database_url=os.environ["DATABASE_URL"]),
             cycle=None,
         )

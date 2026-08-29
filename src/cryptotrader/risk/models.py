@@ -4,47 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
-from typing import TYPE_CHECKING
 
 from cryptotrader.execution.models import ConnectionTarget, ExecutionBook
 from cryptotrader.portfolio.models import BookPortfolioSnapshot, ConnectionPortfolioSnapshot
 from cryptotrader.venues.models import OpenVenueState, VenueCapabilities, VenueQuote
-
-if TYPE_CHECKING:
-    from cryptotrader.decision.models import TargetPosition, TradePlan
-    from cryptotrader.signals.models import SignalContext
-
-
-@dataclass(frozen=True)
-class RiskRequest:
-    context: SignalContext
-    plan: TradePlan
-
-    @property
-    def target(self) -> TargetPosition:
-        return self.plan.target
-
-    @property
-    def reduces_exposure(self) -> bool:
-        current = self.context.current_position.signed_ratio
-        target = self.target.signed_ratio
-        return target == 0.0 or (current * target > 0.0 and abs(target) <= abs(current))
-
-
-@dataclass(frozen=True)
-class RiskCheckResult:
-    passed: bool
-    reason: str = ""
-    size_ratio_cap: float | None = None
-
-
-@dataclass(frozen=True)
-class RiskDecision:
-    passed: bool
-    plan: TradePlan
-    rejected_by: str = ""
-    reason: str = ""
-    cap_source: str = ""
 
 
 def _require_decimal(

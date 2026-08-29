@@ -1,5 +1,7 @@
 """FastAPI endpoint tests."""
 
+from datetime import UTC, datetime
+
 from fastapi.testclient import TestClient
 
 from api.main import app
@@ -8,8 +10,19 @@ client = TestClient(app)
 
 
 def test_health():
-    r = client.get("/health")
-    # The explicit minimal RuntimeConfig is intentionally not activated.
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+
+    runtime = app.state.runtime
+    app.state.runtime = type(runtime)(
+        snapshot=RuntimeConfigSnapshot(1, minimal_runtime_document(), datetime.now(UTC)),
+        repository=runtime.repository,
+        cycle=None,
+    )
+    try:
+        r = client.get("/health")
+    finally:
+        app.state.runtime = runtime
     assert r.status_code == 200
     assert r.json()["status"] == "setup_required"
 

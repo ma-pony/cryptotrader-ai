@@ -107,53 +107,6 @@ def _build_llm_kwargs(
     return kwargs
 
 
-def _try_manifest_llm(
-    role: str,
-    cfg,
-    temperature: float,
-    timeout: int,
-    json_mode: bool,
-    retry_cfg,
-    *,
-    track_tokens: bool = True,
-) -> ChatOpenAI | None:
-    """Attempt to build an LLM via the models.toml manifest for the given role.
-
-    When ``track_tokens`` is True, the resulting runnable is bound with the shared
-    :class:`TokenTrackerCallback` so token accounting works identically to the
-    direct path (see :func:`create_llm`).
-    """
-    from cryptotrader.llm.factory import build_resilient_llm
-    from cryptotrader.llm.registry import load_manifest
-
-    manifest_path = Path(cfg.models.models_path) if cfg.models.models_path else None
-    manifest = load_manifest(manifest_path)
-    if manifest is None:
-        return None
-    role_cfg = manifest.get_role(role)
-    if role_cfg is None:
-        return None
-    resilient = build_resilient_llm(
-        role_cfg,
-        manifest,
-        temperature,
-        timeout,
-        json_mode,
-        retry_cfg,
-        role=role,
-    )
-    if track_tokens and resilient is not None:
-        from cryptotrader.llm.token_tracker import default_callback
-
-        # Runnable.with_config({'callbacks': [...]}) binds the callback for every
-        # ainvoke/invoke on the chain, including the resilient fallback wrapper.
-        try:
-            resilient = resilient.with_config({"callbacks": [default_callback()]})
-        except Exception:
-            logger.info("manifest llm: failed to bind token tracker callback", exc_info=True)
-    return resilient
-
-
 def create_llm(
     config: RuntimeLlmConfig,
     model: str = "",
@@ -199,7 +152,7 @@ def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Cal
         role: str = "",
         track_tokens: bool = True,
     ) -> ChatOpenAI:
-        from cryptotrader.llm.factory import _wrap_with_retry
+        from cryptotrader.llm.retry import wrap_with_retry
         from cryptotrader.metrics import get_metrics_collector
 
         del role
@@ -225,7 +178,7 @@ def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Cal
                 kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
             if track_tokens:
                 kwargs["callbacks"] = [callback]
-            return _wrap_with_retry(ChatOpenAI(**kwargs), config.retry)
+            return wrap_with_retry(ChatOpenAI(**kwargs), config.retry)
 
         llm = build(selected_model)
         fallback_model = config.models.fallback
@@ -455,7 +408,7 @@ class BaseAgent:
             from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model, should_cache
 
             cache_enabled = (
-                should_cache(model=model, role=self.agent_id)
+                should_cache(model=model)
                 if self._prompt_caching is None
                 else self._prompt_caching and is_anthropic_model(model)
             )

@@ -149,7 +149,7 @@ def test_runtime_llm_factory_uses_only_the_explicit_vault_key(monkeypatch):
 
     monkeypatch.setattr("cryptotrader.agents.base.ChatOpenAI", FakeChatModel)
     monkeypatch.setattr(
-        "cryptotrader.llm.factory._wrap_with_retry",
+        "cryptotrader.llm.retry.wrap_with_retry",
         lambda llm, retry: retries.append(retry) or llm,
     )
     settings = LlmConfig(

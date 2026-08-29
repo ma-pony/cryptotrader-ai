@@ -125,14 +125,6 @@ def trade_plan(target: TargetPosition, **overrides) -> TradePlan:
     return TradePlan(**(values | overrides))
 
 
-def risk_request(current=None, target=None, **context_overrides):
-    from cryptotrader.risk.models import RiskRequest
-
-    target = target or TargetPosition("long", 0.5)
-    signal_context = execution_context(position=current or position(), **context_overrides)
-    return RiskRequest(context=signal_context, plan=trade_plan(target))
-
-
 def cycle_record(**overrides):
     from cryptotrader.journal.models import TradingCycleRecord
 

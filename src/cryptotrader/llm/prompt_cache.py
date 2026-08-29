@@ -20,29 +20,11 @@ def is_anthropic_model(model: str) -> bool:
     return "claude" in model.lower()
 
 
-def _is_role_anthropic(role: str) -> bool:
-    try:
-        from cryptotrader.llm.registry import load_manifest
-
-        manifest = load_manifest()
-        if manifest is None:
-            return False
-        role_cfg = manifest.get_role(role)
-        if role_cfg is None or not role_cfg.provider_chain:
-            return False
-        entry = manifest.get_provider(role_cfg.provider_chain[0])
-        return entry is not None and entry.provider_type == "anthropic"
-    except Exception:
-        return False
-
-
-def should_cache(model: str = "", role: str = "", *, enabled: bool = True) -> bool:
+def should_cache(model: str = "", *, enabled: bool = True) -> bool:
     """Return True when the explicit caller enables Anthropic prompt caching."""
     if not enabled:
         return False
-    if model and is_anthropic_model(model):
-        return True
-    return bool(role and _is_role_anthropic(role))
+    return bool(model and is_anthropic_model(model))
 
 
 def apply_cache_control(messages: list[BaseMessage]) -> list[BaseMessage]:

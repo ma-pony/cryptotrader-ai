@@ -18,11 +18,13 @@ from fastapi.testclient import TestClient
 def client() -> TestClient:
     from api.main import app
     from cryptotrader.runtime_config.defaults import minimal_runtime_document
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
 
     previous = getattr(app.state, "runtime", None)
+    document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
     app.state.runtime = SimpleNamespace(
         repository=object(),
-        snapshot=SimpleNamespace(document=minimal_runtime_document()),
+        snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
         signal_registry=object(),
     )
     try:
@@ -51,9 +53,11 @@ class TestBacktestRunHappyPath:
     def test_returns_202_with_run_id(self, client: TestClient, monkeypatch) -> None:
         from api.main import app
         from cryptotrader.runtime_config.defaults import minimal_runtime_document
+        from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
 
         shared_repository = object()
-        shared_snapshot = SimpleNamespace(document=minimal_runtime_document())
+        document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
+        shared_snapshot = RuntimeConfigSnapshot(1, document, datetime.now(UTC))
         shared_signal_registry = object()
         monkeypatch.setattr(
             app.state,

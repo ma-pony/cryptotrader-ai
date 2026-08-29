@@ -22,9 +22,11 @@ from cryptotrader._compat import UTC
 def client() -> TestClient:
     from api.main import app
     from cryptotrader.runtime_config.defaults import minimal_runtime_document
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
 
+    document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
     app.state.runtime = SimpleNamespace(
-        snapshot=SimpleNamespace(document=minimal_runtime_document()),
+        snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
         repository=SimpleNamespace(database_url=None),
         cycle=None,
     )

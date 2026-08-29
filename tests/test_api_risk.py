@@ -6,6 +6,7 @@ confirmation, 409 when already inactive, 503 when Redis unavailable.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -16,10 +17,12 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client() -> TestClient:
     from api.main import app
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
 
     previous = getattr(app.state, "runtime", None)
+    document = _mock_config().model_copy(update={"system": SystemConfig(active=True)})
     app.state.runtime = SimpleNamespace(
-        snapshot=SimpleNamespace(document=_mock_config()),
+        snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
         repository=SimpleNamespace(database_url=None),
         cycle=None,
     )
