@@ -5,6 +5,7 @@ import StrategyPage from './index';
 import '@/lib/i18n';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
+import { useSettingsStore } from '@/stores/use-settings-store';
 
 describe('StrategyPage', () => {
   it('offers an explicit reload control while a strategy draft is open', async () => {
@@ -84,5 +85,36 @@ describe('StrategyPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存完整配置' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('配置已被其他操作更新，请重新加载');
     expect(model).toHaveValue('draft-after-conflict');
+  });
+
+  it('rotates gateway credentials through the page, clears every outcome, and never caches the token', async () => {
+    await import('@/lib/i18n').then(({ default: i18n }) => i18n.changeLanguage('en-US'));
+    const base = runtimeConfigFixture({ document: { ...runtimeConfigFixture().document, signals: { ...runtimeConfigFixture().document.signals, components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }] } } });
+    const token = 'strategy-secret-marker';
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'FAILED', message: token }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: token }), { status: 409 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><StrategyPage/></QueryClientProvider>);
+    const input = await screen.findByLabelText('LLM gateway key');
+    fireEvent.change(input, { target: { value: token } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate gateway key' }));
+    await waitFor(() => expect(input).toHaveValue(''));
+    expect(JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string)).toEqual({ expected_revision: 1, token });
+    expect(String(fetchMock.mock.calls[1]![0])).toContain('/api/config/credentials/llm-gateway');
+    expect(JSON.stringify(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY))).not.toContain(token);
+    expect(document.body.textContent).not.toContain(token);
+    fireEvent.change(input, { target: { value: token } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate gateway key' }));
+    await waitFor(() => expect(input).toHaveValue(''));
+    expect(document.body.textContent).not.toContain(token);
+    fireEvent.change(input, { target: { value: token } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rotate gateway key' }));
+    await waitFor(() => expect(input).toHaveValue(''));
+    expect(JSON.stringify(client.getMutationCache().getAll().map((item) => item.state.variables))).not.toContain(token);
+    useSettingsStore.getState().reset();
   });
 });

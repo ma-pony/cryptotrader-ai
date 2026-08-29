@@ -95,6 +95,8 @@ const StrategyPage = () => {
     try {
       if (kind === 'llm') await secrets.writeLlmGateway(runtime.revision, token);
       else { await secrets.writeApiAccess(runtime.revision, token); setApiKey(token); }
+    } catch {
+      setSaved(false);
     } finally {
       if (kind === 'llm') setGatewayToken(''); else setAccessToken('');
     }

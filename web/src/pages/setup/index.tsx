@@ -178,6 +178,8 @@ const SetupEditor = ({
     if (!gatewayToken || runtime.revision === undefined || runtime.conflict) return;
     try {
       await secrets.writeLlmGateway(runtime.revision, gatewayToken);
+    } catch {
+      setActivationError(t('wizard.activationFailed'));
     } finally {
       setGatewayToken('');
     }
@@ -187,6 +189,8 @@ const SetupEditor = ({
     try {
       await secrets.writeApiAccess(runtime.revision, accessToken);
       setApiKey(accessToken);
+    } catch {
+      setActivationError(t('wizard.activationFailed'));
     } finally {
       setAccessToken('');
     }
