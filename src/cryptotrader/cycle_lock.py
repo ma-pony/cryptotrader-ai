@@ -73,10 +73,17 @@ async def execution_pair_lease(redis_url: str, pair: str) -> AsyncIterator[None]
         raise ExecutionLeaseUnavailableError("Redis is required for production execution lease")
     canonical_pair = Pair.parse(pair).canonical()
     redis_state = RedisStateManager(redis_url)
+    lease = cycle_lock(redis_state, canonical_pair)
     try:
-        async with cycle_lock(redis_state, canonical_pair) as acquired:
-            if not acquired:
-                raise ExecutionLeaseUnavailableError(f"execution lease held for {canonical_pair}")
+        try:
+            acquired = await lease.__aenter__()
+        except RuntimeError as error:
+            raise ExecutionLeaseUnavailableError(str(error)) from error
+        if not acquired:
+            raise ExecutionLeaseUnavailableError(f"execution lease held for {canonical_pair}")
+        try:
             yield
+        finally:
+            await wait_for_owned(lease.__aexit__(None, None, None))
     finally:
         await wait_for_owned(redis_state.aclose())
