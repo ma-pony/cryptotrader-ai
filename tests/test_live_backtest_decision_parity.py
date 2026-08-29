@@ -32,34 +32,42 @@ from tests.factories.runtime_config import connection, runtime_document
 PAIR = Pair.parse("BTC/USDT:USDT")
 
 
-class _DeterministicComponent:
+class _RecordingDeterministicComponent:
     id = "fixture"
     display_name = "Fixture"
     description = "deterministic parity signal"
+
+    def __init__(self) -> None:
+        self.contexts: list[SignalContext] = []
 
     @staticmethod
     def requirements() -> DataRequirements:
         return DataRequirements(candles=(CandleRequirement("1h", 20),))
 
     async def evaluate(self, context: SignalContext) -> ComponentSignal:
-        return ComponentSignal(self.id, "long", 1.0, context.pair.canonical())
+        self.contexts.append(context)
+        confidence = 1.0 if context.current_price > context.atr else 0.5
+        return ComponentSignal(self.id, "long", confidence, context.pair.canonical())
 
 
 class _ProductionMarketSource:
     id = "default"
+
+    def __init__(self, template: SignalContext) -> None:
+        self.template = template
 
     def requirements(self) -> DataRequirements:
         return DataRequirements()
 
     async def collect(self, pair, as_of, requirements) -> SignalContext:
         return SignalContext(
-            pair=pair,
+            pair=self.template.pair,
             as_of=as_of,
             market_data_source_id=self.id,
-            market_type=pair.market_type,
-            current_price=101.0,
-            atr=1.0,
-            snapshots={},
+            market_type=self.template.market_type,
+            current_price=self.template.current_price,
+            atr=self.template.atr,
+            snapshots=self.template.snapshots,
         )
 
 
@@ -105,7 +113,8 @@ def _snapshot() -> RuntimeConfigSnapshot:
 @pytest.mark.asyncio
 async def test_historical_paper_backtest_matches_production_cycle_target_and_one_hundred_percent_target(monkeypatch):
     snapshot = _snapshot()
-    registry = SignalComponentRegistry((_DeterministicComponent(),))
+    historical_component = _RecordingDeterministicComponent()
+    production_component = _RecordingDeterministicComponent()
     engine = BacktestEngine(
         "BTC/USDT:USDT",
         "2024-01-01",
@@ -113,7 +122,7 @@ async def test_historical_paper_backtest_matches_production_cycle_target_and_one
         interval="1h",
         initial_capital=10_000.0,
         snapshot=snapshot,
-        signal_registry=registry,
+        signal_registry=SignalComponentRegistry((historical_component,)),
     )
 
     async def historical_bars(requirements):
@@ -129,25 +138,38 @@ async def test_historical_paper_backtest_matches_production_cycle_target_and_one
     monkeypatch.setattr(engine, "_fetch_historical_data", historical_bars)
     backtest = await engine.run()
     historical_record = backtest.cycle_records[0]
+    historical_context = historical_component.contexts[0]
 
     runtime = await build_runtime(
         repository=_FrozenRepository(snapshot),
         snapshot=snapshot,
-        signal_registry=registry,
+        signal_registry=SignalComponentRegistry((production_component,)),
         venue_registry=VenueAdapterRegistry((PaperVenueAdapter(),)),
-        market_registry=MarketSourceRegistry((_ProductionMarketSource(),)),
+        market_registry=MarketSourceRegistry((_ProductionMarketSource(historical_context),)),
         event_sink=NullCycleEventSink(),
     )
     try:
         async with runtime.cycle_lease() as cycle:
             cycle.journal = MultiVenueCycleStore()
-            await runtime.sessions["production-paper"].set_quote(PAIR, Decimal("101"))
+            await runtime.sessions["production-paper"].set_quote(PAIR, Decimal(str(historical_context.current_price)))
             outcome = await cycle.run(CycleRequest(PAIR))
             production_record = await cycle.journal.get(outcome.cycle_id)
     finally:
         await runtime.close()
 
     assert production_record is not None
+    production_context = production_component.contexts[0]
+    assert historical_context.pair == production_context.pair
+    assert historical_context.market_type == production_context.market_type
+    assert historical_context.current_price == production_context.current_price
+    assert historical_context.atr == production_context.atr
+    assert historical_context.snapshots == production_context.snapshots
+    assert historical_record.component_signals == production_record.component_signals
+    assert historical_record.config_revision == production_record.config_revision == snapshot.revision
+    assert (
+        historical_record.book_results[0].portfolio_before.total_equity
+        == production_record.book_results[0].portfolio_before.total_equity
+    )
     assert historical_record.target_position == production_record.target_position
     proposal = historical_record.book_results[0].proposal
     assert proposal is not None
