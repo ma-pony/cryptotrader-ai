@@ -116,9 +116,13 @@ async def test_api_scheduler_receives_fixed_config_and_runtime_owner() -> None:
     scheduler = SimpleNamespace(start=AsyncMock())
     scheduler_type = patch("cryptotrader.scheduler.Scheduler", return_value=scheduler)
 
+    class PendingTask:
+        def done(self):
+            return False
+
     def discard_task(coroutine, **_kwargs):
         coroutine.close()
-        return object()
+        return PendingTask()
 
     with scheduler_type as constructor, patch("asyncio.create_task", side_effect=discard_task):
         await main._init_scheduler(application)

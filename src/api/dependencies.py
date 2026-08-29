@@ -18,6 +18,15 @@ _SETUP_COMMISSIONING_ROUTES = frozenset(
 )
 
 
+def _is_application_mutation_request(request: Request) -> bool:
+    if (request.method, request.url.path) in _SETUP_COMMISSIONING_ROUTES - {("GET", "/api/config")}:
+        return True
+    if request.url.path == "/api/venue-connections" and request.method == "POST":
+        return True
+    segments = request.url.path.split("/")
+    return len(segments) == 4 and segments[:3] == ["", "api", "venue-connections"] and request.method == "PUT"
+
+
 def _is_setup_commissioning_request(request: Request) -> bool:
     if (request.method, request.url.path) in _SETUP_COMMISSIONING_ROUTES:
         return True
@@ -37,6 +46,8 @@ async def verify_api_key(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None or getattr(runtime, "snapshot", None) is None:
         raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")
+    if getattr(runtime, "application_in_progress", False) is True and not _is_application_mutation_request(request):
+        raise HTTPException(status_code=503, detail="Runtime configuration is being applied")
     security = runtime.snapshot.document.security
     if runtime.snapshot.setup_required is True and not _is_setup_commissioning_request(request):
         raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")

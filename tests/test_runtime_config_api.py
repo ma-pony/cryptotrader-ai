@@ -208,9 +208,16 @@ async def api_harness(tmp_path):
         journal=MultiVenueCycleStore(),
     )
 
+    application_lock = asyncio.Lock()
+
     @asynccontextmanager
     async def application_barrier():
-        yield
+        async with application_lock:
+            runtime.application_in_progress = True
+            try:
+                yield
+            finally:
+                runtime.application_in_progress = False
 
     async def activate_applied(applied):
         runtime.snapshot = applied
@@ -229,6 +236,7 @@ async def api_harness(tmp_path):
         publish_candidate=AsyncMock(),
         activate_applied=AsyncMock(side_effect=activate_applied),
         fail_closed=AsyncMock(),
+        application_in_progress=False,
     )
     previous = getattr(app.state, "runtime", None)
     app.state.runtime = runtime
@@ -415,6 +423,40 @@ async def test_mark_applied_failure_fails_closed_and_exposes_failed_desired_revi
     status = (await api_harness.client.get("/api/config")).json()
     assert (status["apply_status"], status["applied_revision"]) == ("failed", 1)
     api_harness.runtime.fail_closed.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_config_read_is_rejected_while_a_real_asgi_application_request_has_marked_db_applied(
+    api_harness,
+):
+    """The API never leaks repository-applied state before the runtime graph activates it."""
+    current = await api_harness.client.get("/api/config")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block_activation(applied):
+        entered.set()
+        await release.wait()
+        api_harness.runtime.snapshot = applied
+
+    api_harness.runtime.activate_applied = AsyncMock(side_effect=block_activation)
+    applying = asyncio.create_task(
+        api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": current.json()["revision"], "document": active_payload()},
+        )
+    )
+    await entered.wait()
+
+    blocked = await api_harness.client.get("/api/config")
+    assert blocked.status_code == 503
+    assert blocked.json() == {"detail": "Runtime configuration is being applied"}
+    business = await api_harness.client.get("/api/backtest/sessions")
+    assert business.status_code == 503
+    assert business.json() == {"detail": "Runtime configuration is being applied"}
+
+    release.set()
+    assert (await applying).status_code == 200
 
 
 async def test_stale_put_config_conflicts_before_connection_domain_construction(api_harness):

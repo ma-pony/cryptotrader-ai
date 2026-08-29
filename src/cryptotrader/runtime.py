@@ -110,9 +110,15 @@ class Runtime:
                 self._application_owner = owner
             yield
         finally:
-            async with self._lifecycle_lock:
-                if self._application_owner is owner:
-                    self._application_owner = None
+            # A caller may be cancelled again while its context-manager cleanup
+            # is waiting on the lifecycle lock.  The admission lock is ours, so
+            # its release must complete before that control flow is propagated.
+            await wait_for_owned(asyncio.create_task(self._release_application_barrier(owner)))
+
+    async def _release_application_barrier(self, owner: asyncio.Task[object] | None) -> None:
+        async with self._lifecycle_lock:
+            if self._application_owner is owner:
+                self._application_owner = None
             self._application_lock.release()
 
     @asynccontextmanager

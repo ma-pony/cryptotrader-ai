@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from api.routes.response_dto import JsonEntryOut, StrictOut, json_entries_out
 from cryptotrader.execution.models import ExecutionBook  # noqa: TC001
+from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.runtime_config.models import (
     ExecutionConfig,
     HitlConfig,
@@ -654,29 +655,56 @@ async def publish_pending_snapshot(runtime, pending, refresh_owners, candidate=N
         applied = await runtime.repository.mark_applied(pending.revision)
         await runtime.activate_applied(applied)
         return applied
-    except Exception:
-        if clear_owners is not None:
-            with suppress(Exception):
-                await clear_owners()
-        if candidate is not None:
-            with suppress(Exception):
-                await candidate.close()
+    except BaseException as error:
+        cleanup_error: BaseException | None = None
         try:
-            failed = await runtime.repository.mark_failed(pending.revision, "runtime application failed")
-        except Exception:
-            from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
-
-            failed = RuntimeConfigSnapshot(
-                pending.revision,
-                pending.document,
-                pending.updated_at,
-                apply_status="failed",
-                applied_revision=pending.applied_revision,
-                apply_error="runtime application failed",
+            await wait_for_owned(
+                asyncio.create_task(_fail_pending_application(runtime, pending, candidate, clear_owners))
             )
-        with suppress(Exception):
-            await runtime.fail_closed(failed)
+        except BaseException as cleanup_failure:
+            cleanup_error = cleanup_failure
+        if isinstance(error, asyncio.CancelledError):
+            raise error
+        if isinstance(cleanup_error, asyncio.CancelledError):
+            raise cleanup_error from None
         raise HTTPException(status_code=503, detail="Runtime configuration cannot be applied") from None
+
+
+async def _fail_pending_application(runtime, pending, candidate, clear_owners) -> None:
+    """Complete fail-closed cleanup independent of request cancellation."""
+    cleanup_incomplete = False
+    if clear_owners is not None:
+        try:
+            await clear_owners()
+        except BaseException:
+            cleanup_incomplete = True
+    if candidate is not None:
+        try:
+            await candidate.close()
+        except BaseException:
+            cleanup_incomplete = True
+    error = "runtime application failed"
+    if cleanup_incomplete:
+        error = "runtime application failed: cleanup incomplete"
+    try:
+        failed = await runtime.repository.mark_failed(pending.revision, error)
+    except BaseException:
+        from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+
+        failed = RuntimeConfigSnapshot(
+            pending.revision,
+            pending.document,
+            pending.updated_at,
+            apply_status="failed",
+            applied_revision=pending.applied_revision,
+            apply_error=error,
+        )
+    try:
+        await runtime.fail_closed(failed)
+    except BaseException:
+        # Runtime fail-closed owns its own graph.  The desired revision remains
+        # failed even when a session's teardown reports an operational error.
+        return
 
 
 async def validate_activation_prerequisites(repository, document: RuntimeConfigDocument) -> None:

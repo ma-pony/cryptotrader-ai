@@ -754,6 +754,220 @@ async def test_application_protocol_owner_start_failure_stops_partial_owner_and_
 
 
 @pytest.mark.asyncio
+async def test_application_barrier_releases_every_owner_marker_after_repeated_cancellation():
+    """A second cancellation while cleanup waits for the lifecycle lock cannot strand mutation admission."""
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    entered = asyncio.Event()
+
+    async def hold_barrier():
+        async with runtime.application_barrier():
+            entered.set()
+            await asyncio.Event().wait()
+
+    task = asyncio.create_task(hold_barrier())
+    await entered.wait()
+    await runtime._lifecycle_lock.acquire()
+    try:
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+    finally:
+        runtime._lifecycle_lock.release()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert runtime.application_in_progress is False
+    async with runtime.application_barrier():
+        assert runtime.application_in_progress is True
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_after", ["publish", "owners", "mark_applied"])
+async def test_application_cancellation_after_cas_fails_closed_and_rethrows_original_cancellation(
+    monkeypatch, cancel_after
+):
+    """Cancelling any post-CAS application step must persist failed state and retire executable resources."""
+    from api.routes.config import publish_pending_snapshot
+
+    runtime, repository, _, _ = await _build(_document(_connection("paper-a")))
+    pending = RuntimeConfigSnapshot(
+        8,
+        _document(_connection("paper-a", parameters={"initial_equity": "20000"})),
+        NOW + timedelta(seconds=1),
+        "pending",
+        7,
+    )
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+
+    async def cancel_here(*args, **kwargs):
+        asyncio.current_task().cancel()
+        await asyncio.sleep(0)
+
+    if cancel_after == "publish":
+        original = runtime.publish_candidate
+
+        async def publish_then_cancel(*args, **kwargs):
+            await original(*args, **kwargs)
+            await cancel_here()
+
+        monkeypatch.setattr(runtime, "publish_candidate", publish_then_cancel)
+        refresh = None
+    elif cancel_after == "owners":
+
+        async def refresh(_snapshot):
+            await cancel_here()
+
+    else:
+        original_mark_applied = repository.mark_applied
+
+        async def mark_then_cancel(*args, **kwargs):
+            await original_mark_applied(*args, **kwargs)
+            await cancel_here()
+
+        monkeypatch.setattr(repository, "mark_applied", mark_then_cancel)
+        refresh = None
+
+    async with runtime.application_barrier():
+        with pytest.raises(asyncio.CancelledError):
+            await publish_pending_snapshot(runtime, pending, refresh, candidate)
+
+    assert repository.snapshot.apply_status == "failed"
+    assert runtime.snapshot.apply_status == "failed"
+    assert runtime.cycle is None
+    assert runtime.sessions == {}
+    assert runtime.application_in_progress is False
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_clear_runtime_owners_stops_trigger_and_clears_references_after_scheduler_shutdown_failure(monkeypatch):
+    """A scheduler teardown error cannot leave a live trigger behind on a failed revision."""
+    from api import main as api_main
+
+    stopped: list[str] = []
+
+    class _Trigger:
+        async def stop(self):
+            stopped.append("trigger")
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            scheduler=object(), scheduler_task=object(), trigger_engine=_Trigger(), trigger_store=object()
+        )
+    )
+
+    async def fail_scheduler(_app):
+        raise RuntimeError("scheduler stop failed")
+
+    monkeypatch.setattr(api_main, "_shutdown_scheduler", fail_scheduler)
+
+    with pytest.raises(RuntimeError, match="cleanup incomplete"):
+        await api_main._clear_runtime_owners(app)
+
+    assert stopped == ["trigger"]
+    assert app.state.scheduler is None
+    assert app.state.scheduler_task is None
+    assert app.state.trigger_engine is None
+    assert app.state.trigger_store is None
+
+
+@pytest.mark.asyncio
+async def test_failed_application_records_sanitized_cleanup_state_after_scheduler_shutdown_failure(monkeypatch):
+    """A partial owner cleanup makes the desired revision failed, never silently applied."""
+    from api import main as api_main
+    from api.routes.config import publish_pending_snapshot
+
+    runtime, repository, _, _ = await _build(_document(_connection("paper-a")))
+    pending = RuntimeConfigSnapshot(
+        8,
+        _document(_connection("paper-a", parameters={"initial_equity": "20000"})),
+        NOW + timedelta(seconds=1),
+        "pending",
+        7,
+    )
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+    stopped: list[str] = []
+
+    class _Trigger:
+        async def stop(self):
+            stopped.append("trigger")
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(
+            runtime=runtime,
+            scheduler=object(),
+            scheduler_task=object(),
+            trigger_engine=_Trigger(),
+            trigger_store=object(),
+        )
+    )
+
+    async def fail_scheduler(_app):
+        raise RuntimeError("private scheduler failure")
+
+    async def fail_owner_start(_snapshot):
+        raise RuntimeError("private owner failure")
+
+    monkeypatch.setattr(api_main, "_shutdown_scheduler", fail_scheduler)
+    async with runtime.application_barrier():
+        with pytest.raises(Exception, match="Runtime configuration cannot be applied"):
+            await publish_pending_snapshot(
+                runtime,
+                pending,
+                fail_owner_start,
+                candidate,
+                clear_owners=lambda: api_main._clear_runtime_owners(app),
+            )
+
+    assert stopped == ["trigger"]
+    assert repository.snapshot.apply_status == "failed"
+    assert repository.snapshot.apply_error == "runtime application failed: cleanup incomplete"
+    assert runtime.sessions == {}
+    assert runtime.cycle is None
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_application_rethrows_original_cancellation_when_failed_state_write_also_fails(monkeypatch):
+    """A failed-state persistence error cannot replace the request's original cancellation or retain the barrier."""
+    from api.routes.config import publish_pending_snapshot
+
+    runtime, repository, _, _ = await _build(_document(_connection("paper-a")))
+    pending = RuntimeConfigSnapshot(
+        8,
+        _document(_connection("paper-a", parameters={"initial_equity": "20000"})),
+        NOW + timedelta(seconds=1),
+        "pending",
+        7,
+    )
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+
+    async def cancel_owner_start(_snapshot):
+        asyncio.current_task().cancel()
+        await asyncio.sleep(0)
+
+    async def reject_failed_state(*_args):
+        raise RuntimeError("private persistence failure")
+
+    monkeypatch.setattr(repository, "mark_failed", reject_failed_state)
+    async with runtime.application_barrier():
+        with pytest.raises(asyncio.CancelledError):
+            await publish_pending_snapshot(runtime, pending, cancel_owner_start, candidate)
+
+    assert runtime.snapshot.apply_status == "failed"
+    assert runtime.cycle is None
+    assert runtime.sessions == {}
+    async with runtime.application_barrier():
+        assert runtime.application_in_progress is True
+    await runtime.close()
+
+
+@pytest.mark.asyncio
 async def test_active_replacement_close_failure_keeps_published_cycle_and_retries_retired_session(caplog):
     connection = _connection("paper-a")
     runtime, repository, adapter, _ = await _build(_document(connection))

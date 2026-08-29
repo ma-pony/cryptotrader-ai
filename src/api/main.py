@@ -116,14 +116,28 @@ async def _shutdown_runtime_owners(app_instance: FastAPI, runtime, *, active: bo
 
 async def _clear_runtime_owners(app_instance) -> None:
     """Stop app-owned execution resources without closing the runtime graph."""
-    await _shutdown_scheduler(app_instance)
-    app_instance.state.scheduler = None
-    app_instance.state.scheduler_task = None
+    failures: list[BaseException] = []
+    try:
+        await _shutdown_scheduler(app_instance)
+    except BaseException as error:
+        failures.append(error)
+    finally:
+        app_instance.state.scheduler = None
+        app_instance.state.scheduler_task = None
     trigger_engine = getattr(app_instance.state, "trigger_engine", None)
-    if trigger_engine is not None:
-        await trigger_engine.stop()
-    app_instance.state.trigger_engine = None
-    app_instance.state.trigger_store = None
+    try:
+        if trigger_engine is not None:
+            await trigger_engine.stop()
+    except BaseException as error:
+        failures.append(error)
+    finally:
+        app_instance.state.trigger_engine = None
+        app_instance.state.trigger_store = None
+    if failures:
+        control_flow = next((error for error in failures if not isinstance(error, Exception)), None)
+        if control_flow is not None:
+            raise control_flow
+        raise RuntimeError("runtime owner cleanup incomplete") from failures[0]
 
 
 async def _refresh_runtime_owners(app_instance, *, snapshot=None) -> None:
@@ -206,6 +220,12 @@ async def _init_scheduler(app_instance: FastAPI, *, snapshot=None) -> None:
     task = asyncio.create_task(scheduler.start(), name="trading-scheduler")
     app_instance.state.scheduler = scheduler
     app_instance.state.scheduler_task = task
+    # The graph has already been published while the application barrier is
+    # held.  Let the task enter ``start`` now, so an immediate admission failure
+    # turns this revision into a failed application instead of a dead owner.
+    await asyncio.sleep(0)
+    if task.done():
+        await task
     logger.info(
         "Scheduler autostarted: pairs=%s interval=%dm daily_summary_hour=%d",
         list(config.scheduler.pairs),
