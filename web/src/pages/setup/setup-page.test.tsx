@@ -140,7 +140,7 @@ describe('SetupPage', () => {
       ...base.document,
       system: { active: false }, security: { enabled: true, access_credential_configured: false, access_credential_updated_at: null },
       signals: { ...base.document.signals, components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }] },
-      execution: { ...base.document.execution, connections: [{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }], books: [{ id: 'sim', label: 'Sim', capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [{ connection_id: 'paper', enabled: true, weight: 1 }] }] },
+      execution: { ...base.document.execution, connections: [{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }], books: [{ id: 'sim', label: 'Sim', capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [{ connection_id: 'paper', enabled: true, weight: 1 }] }] },
     };
     const initial = runtimeConfigFixture({ setup_required: true, document });
     const saved = runtimeConfigFixture({ revision: 3, setup_required: false, document: { ...document, system: { active: true }, security: { enabled: true, access_credential_configured: true, access_credential_updated_at: '2026-08-30T00:00:00Z' }, execution: { ...document.execution, live_order_execution_enabled: true } } });

@@ -23,7 +23,7 @@ describe('ExecutionBooksPage', () => {
       ...base.document,
       execution: {
         ...base.document.execution,
-        connections: [{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }],
+        connections: [{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }],
         books: [{ id: 'sim', label, capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [{ connection_id: 'paper', enabled: true, weight: 1 }] }],
       },
     } });

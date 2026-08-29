@@ -30,7 +30,7 @@ describe('venue connection write recovery', () => {
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     const base = runtimeConfigFixture();
-    client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, runtimeConfigFixture({ document: { ...base.document, execution: { ...base.document.execution, connections: [{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }] } } }));
+    client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, runtimeConfigFixture({ document: { ...base.document, execution: { ...base.document.execution, connections: [{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }] } } }));
     render(
       <QueryClientProvider client={client}>
         <VenueForm revision={1} connection={{ id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} }} />
