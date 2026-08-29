@@ -61,7 +61,7 @@ async def cycle_lock(
     finally:
         if acquired:
             try:
-                await redis_state.release_strict_lock(key, owner_id)
+                await wait_for_owned(redis_state.release_strict_lock(key, owner_id))
             except Exception:
                 logger.info("cycle_lock release failed for %s", key, exc_info=True)
 

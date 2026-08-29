@@ -62,7 +62,7 @@ uv run trader journal show <cycle-id>
 
 ## 验收金丝雀
 
-完成网页配置后，可对数据库中已启用的 Paper、Demo 或 Testnet 连接运行一次最小仓位闭环。脚本不会接收或输出平台凭据；它只取消带有本次 canary 标记的订单，并在独立新进程重新连接审计零残留。任何无法确认订单归属、实际成交量或清理结果的失败都会返回非零和 `requires_attention`，不会猜测性修改账户状态。
+完成网页配置后，先在平台连接网页将一个专用模拟账户标为“仅用于金丝雀验证”（`canary_only`）；它不能加入执行资金池，且凭据不得被人工或其他系统共用。只有这类已启用的 Paper、Demo 或 Testnet 连接可运行一次最小仓位闭环。脚本不会接收或输出平台凭据；它在严格的交易对 Redis 锁内只取消本次精确标记的订单，并在独立新进程重新连接审计零残留。主流程失败后仍会完成清理和审计；任何无法确认订单归属、实际成交量或清理结果的失败都会返回非零和 `requires_attention`，不会猜测性修改账户状态。
 
 ```bash
 uv run python scripts/venue_canary.py --connection bybit-testnet --pair BTC/USDT:USDT
