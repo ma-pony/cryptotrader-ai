@@ -77,9 +77,11 @@ async def execution_pair_lease(redis_url: str, pair: str) -> AsyncIterator[None]
     entered = False
 
     async def finalize() -> None:
-        if entered:
-            await lease.__aexit__(None, None, None)
-        await redis_state.aclose()
+        try:
+            if entered:
+                await lease.__aexit__(None, None, None)
+        finally:
+            await redis_state.aclose()
 
     try:
         try:

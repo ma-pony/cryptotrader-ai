@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -703,3 +705,168 @@ async def test_ambiguous_protection_still_cancels_owned_open_order_and_closes_le
     assert session.signed_amount == Decimal("0")
     assert session.cancelled_protections == []
     assert result["requires_attention"] is True
+
+
+@pytest.mark.asyncio
+async def test_main_repeated_external_cancellation_waits_for_lease_exit_and_audit(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    lease_exited = False
+    run_started = asyncio.Event()
+    run_finalized = asyncio.Event()
+    audit_started = asyncio.Event()
+    audit_completed = asyncio.Event()
+    audit_gate = asyncio.Event()
+    session = object()
+    connection = SimpleNamespace(id="canary", environment="testnet", canary_only=True)
+    snapshot = SimpleNamespace(
+        revision=9, document=SimpleNamespace(infrastructure=SimpleNamespace(redis_url="redis://test"))
+    )
+
+    @asynccontextmanager
+    async def lease(_url, _pair):
+        nonlocal lease_exited
+        try:
+            yield
+        finally:
+            lease_exited = True
+
+    async def audit(_connection_id, _pair):
+        audit_started.set()
+        await audit_gate.wait()
+        audit_completed.set()
+        return {"audit_status": "completed", "audit": {"status": "completed", "requires_attention": False}}
+
+    async def simulated(_session, _pair):
+        run_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            run_finalized.set()
+
+    monkeypatch.setattr(venue_canary, "_load_target", _async_value((snapshot, connection, object())))
+    monkeypatch.setattr(venue_canary, "execution_pair_lease", lease)
+    monkeypatch.setattr(venue_canary, "_open_connection", _async_value(session))
+    monkeypatch.setattr(venue_canary, "run_simulated_canary", simulated)
+    monkeypatch.setattr(venue_canary, "audit_in_subprocess", audit)
+    task = asyncio.create_task(
+        venue_canary._main(
+            SimpleNamespace(connection="canary", pair="BTC/USDT:USDT", audit=False, live_read_only=False)
+        )
+    )
+    await asyncio.wait_for(run_started.wait(), timeout=1)
+    task.cancel()
+    await asyncio.wait_for(run_finalized.wait(), timeout=1)
+    for _ in range(20):
+        if lease_exited:
+            break
+        await asyncio.sleep(0)
+    assert lease_exited is True
+    await asyncio.wait_for(audit_started.wait(), timeout=1)
+    task.cancel()
+    task.cancel()
+    audit_gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=1)
+    assert lease_exited is True
+    assert audit_completed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_run_canary_repeated_external_cancellation_owns_cleanup_and_session_close(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    cleanup_started = asyncio.Event()
+    cleanup_gate = asyncio.Event()
+    close_started = asyncio.Event()
+    close_gate = asyncio.Event()
+    cleaned = False
+
+    class FailingSession(_Session):
+        async def replace_protection(self, _spec):
+            raise RuntimeError("force finalizer")
+
+        async def close(self):
+            close_started.set()
+            await close_gate.wait()
+            self.cleaned = True
+
+    async def cleanup(*_args, **_kwargs):
+        nonlocal cleaned
+        cleanup_started.set()
+        await cleanup_gate.wait()
+        cleaned = True
+        return {
+            "residual": {"position_nonzero": False, "open_orders": False, "protections": False},
+            "cleanup_errors": [],
+            "requires_attention": False,
+        }
+
+    monkeypatch.setattr(venue_canary, "_cleanup_owned", cleanup)
+    session = FailingSession(Pair.parse("BTC/USDT:USDT"))
+    task = asyncio.create_task(venue_canary.run_simulated_canary(session, session.pair))
+    await asyncio.wait_for(cleanup_started.wait(), timeout=2)
+    task.cancel()
+    cleanup_gate.set()
+    await asyncio.wait_for(close_started.wait(), timeout=2)
+    task.cancel()
+    close_gate.set()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    assert cleaned is True
+    assert session.cleaned is True
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_during_close_confirmation_still_runs_the_owned_finalizer(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    close_confirmation_started = asyncio.Event()
+    original_confirmed = venue_canary._confirmed_order
+
+    async def confirmed(session, pair, order, client_order_id):
+        if client_order_id.endswith("C"):
+            close_confirmation_started.set()
+            await asyncio.Event().wait()
+        return await original_confirmed(session, pair, order, client_order_id)
+
+    monkeypatch.setattr(venue_canary, "_confirmed_order", confirmed)
+    session = _Session(Pair.parse("BTC/USDT:USDT"))
+    task = asyncio.create_task(venue_canary.run_simulated_canary(session, session.pair))
+    await asyncio.wait_for(close_confirmation_started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    assert session.cleaned is True
+
+
+@pytest.mark.asyncio
+async def test_external_cancellation_during_reduce_only_close_uses_owned_cleanup_and_closes_session():
+    venue_canary = _script("venue_canary.py")
+    close_started = asyncio.Event()
+
+    @dataclass
+    class BlockingCloseSession(_Session):
+        client_ids: list[str] = field(default_factory=list)
+
+        async def place_order(self, intent):
+            self.client_ids.append(intent.client_order_id or "")
+            if intent.reduce_only and intent.client_order_id and intent.client_order_id.endswith("C"):
+                close_started.set()
+                await asyncio.Event().wait()
+            return await super().place_order(intent)
+
+    session = BlockingCloseSession(Pair.parse("BTC/USDT:USDT"))
+    task = asyncio.create_task(venue_canary.run_simulated_canary(session, session.pair))
+    await asyncio.wait_for(close_started.wait(), timeout=2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, timeout=2)
+    assert any(client_id.endswith("X") for client_id in session.client_ids)
+    assert session.protected is False
+    assert session.signed_amount == Decimal("0")
+    assert session.cleaned is True
+
+
+def _async_value(value):
+    async def value_for(*_args, **_kwargs):
+        return value
+
+    return value_for

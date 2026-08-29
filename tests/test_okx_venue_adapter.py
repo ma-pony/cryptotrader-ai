@@ -70,6 +70,23 @@ async def test_okx_protection_is_returned_only_after_pending_algo_query_confirms
 
 
 @pytest.mark.asyncio
+async def test_okx_normalized_protection_spec_matches_the_subsequent_readback_exactly():
+    _, session, _factory = await _connect()
+    pair = Pair.parse("BTC/USDT:USDT")
+    raw = ProtectionSpec(pair, "long", Decimal("0.029"), Decimal("48000.09"), Decimal("55000.09"))
+
+    normalized = await session.normalize_protection(raw)
+    protection = await session.replace_protection(normalized)
+
+    assert normalized.amount == Decimal("0.02")
+    assert normalized.stop_loss == Decimal("48000.0")
+    assert normalized.take_profit == Decimal("55000.0")
+    assert protection.amount == normalized.amount
+    assert protection.stop_loss == normalized.stop_loss
+    assert protection.take_profit == normalized.take_profit
+
+
+@pytest.mark.asyncio
 async def test_okx_rejects_unconfirmed_protection():
     from cryptotrader.venues.ccxt_base import VenueOperationError
 

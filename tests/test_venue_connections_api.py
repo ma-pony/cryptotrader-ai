@@ -204,14 +204,21 @@ async def test_connection_test_requires_configured_credentials(api_harness):
     assert "bybit-testnet-credentials" not in response.text
 
 
-async def test_connection_test_uses_adapter_and_returns_normalized_health(api_harness):
-    assert (await put_fixture_credentials(api_harness, "bybit-testnet")).status_code == 200
+async def test_explicit_canary_only_connection_test_still_reveals_connects_reads_and_closes(api_harness):
+    _, revision = await _connection_and_revision(api_harness, "bybit-testnet")
+    created = await api_harness.client.post(
+        "/api/venue-connections",
+        json=create_payload(revision, connection_id="bybit-canary", environment="testnet")
+        | {"adapter_id": "bybit", "canary_only": True},
+    )
+    assert created.status_code == 201
+    assert (await put_fixture_credentials(api_harness, "bybit-canary")).status_code == 200
 
-    response = await api_harness.client.post("/api/venue-connections/bybit-testnet/test")
+    response = await api_harness.client.post("/api/venue-connections/bybit-canary/test")
 
     assert response.status_code == 200
     assert response.json() == {
-        "connection_id": "bybit-testnet",
+        "connection_id": "bybit-canary",
         "healthy": True,
         "environment": "testnet",
         "capabilities": {

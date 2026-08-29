@@ -206,3 +206,27 @@ async def test_execution_pair_lease_cancellation_owns_release_and_redis_close(mo
     assert release_started.is_set()
     assert released is True
     assert redis_closed is True
+
+
+@pytest.mark.asyncio
+async def test_execution_pair_lease_closes_redis_when_lease_exit_fails(monkeypatch):
+    redis_closed = False
+
+    class State:
+        async def aclose(self):
+            nonlocal redis_closed
+            redis_closed = True
+
+    class Lease:
+        async def __aenter__(self):
+            return True
+
+        async def __aexit__(self, *_args):
+            raise RuntimeError("release failed")
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
+    monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", lambda *_args: Lease())
+    with pytest.raises(RuntimeError, match="release failed"):
+        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+            pass
+    assert redis_closed is True
