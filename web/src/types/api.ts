@@ -42,6 +42,12 @@ import type {
   ScheduleRuleSchema,
   SchedulerStatusSchema,
   SignalProfileSchema,
+  RuntimeConfigSchema,
+  RuntimeConnectionSchema,
+  RuntimeBookSchema,
+  VenueMutationSchema,
+  CredentialMutationSchema,
+  ConnectionHealthSchema,
   TargetPositionSchema,
   TradePlanSchema,
   TriggerEventSchema,
@@ -84,6 +90,18 @@ export type BacktestSessionDetail = z.output<typeof BacktestSessionDetailSchema>
 // Signal strategy profile
 export type SignalProfile = z.output<typeof SignalProfileSchema>;
 export type SignalProfileUpdate = Omit<SignalProfile, 'installed_components' | 'revision' | 'updated_at'>;
+export type RuntimeConfig = z.output<typeof RuntimeConfigSchema>;
+export type RuntimeConnection = z.output<typeof RuntimeConnectionSchema>;
+export type RuntimeBook = z.output<typeof RuntimeBookSchema>;
+type RuntimeResponseDocument = RuntimeConfig['document'];
+export type RuntimeDocument = Omit<RuntimeResponseDocument, 'market_data' | 'signals' | 'execution'> & {
+  market_data: Omit<RuntimeResponseDocument['market_data'], 'parameters'> & { parameters: Record<string, unknown> };
+  signals: Omit<RuntimeResponseDocument['signals'], 'components'> & { components: Array<Omit<RuntimeResponseDocument['signals']['components'][number], 'parameters'> & { parameters: Record<string, unknown> }> };
+  execution: Omit<RuntimeResponseDocument['execution'], 'connections'> & { connections: Array<Omit<RuntimeResponseDocument['execution']['connections'][number], 'credential_configured' | 'credential_updated_at' | 'parameters'> & { parameters: Record<string, unknown> }> };
+};
+export type VenueMutation = z.output<typeof VenueMutationSchema>;
+export type CredentialMutation = z.output<typeof CredentialMutationSchema>;
+export type ConnectionHealth = z.output<typeof ConnectionHealthSchema>;
 
 // §5 Risk
 export type CircuitBreakerStatus = z.output<typeof CircuitBreakerStatusSchema>;

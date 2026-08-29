@@ -1,0 +1,6 @@
+{
+  "setup": "Commission trading system",
+  "venues": "Venue connections",
+  "books": "Execution books",
+  "revision": "Configuration revision"
+}

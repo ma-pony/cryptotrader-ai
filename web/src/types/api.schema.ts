@@ -358,6 +358,47 @@ export const SignalProfileSchema = z.object({
   installed_components: z.array(InstalledSignalComponentSchema),
 });
 
+// Runtime configuration response DTOs deliberately model JsonEntry values separately
+// from the writable document shape.  Secrets are represented only by a configured bit.
+export type JsonValueOut =
+  | { kind: 'null' }
+  | { kind: 'boolean'; boolean_value: boolean }
+  | { kind: 'number'; number_value: string }
+  | { kind: 'string'; string_value: string }
+  | { kind: 'datetime'; datetime_value: string }
+  | { kind: 'pair'; pair_value: string }
+  | { kind: 'array'; items: JsonValueOut[] }
+  | { kind: 'object'; entries: { key: string; value: JsonValueOut }[] };
+export const JsonValueSchema: z.ZodType<JsonValueOut> = z.lazy(() => z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('null'), boolean_value: z.null().optional(), number_value: z.null().optional(), string_value: z.null().optional(), datetime_value: z.null().optional(), pair_value: z.null().optional(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('boolean'), boolean_value: z.boolean(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('number'), number_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('string'), string_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('datetime'), datetime_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('pair'), pair_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('array'), items: z.array(JsonValueSchema), entries: z.array(JsonEntrySchema).default([]) }),
+  z.object({ kind: z.literal('object'), entries: z.array(JsonEntrySchema), items: z.array(JsonValueSchema).default([]) }),
+]));
+export const JsonEntrySchema: z.ZodType<{ key: string; value: JsonValueOut }> = z.lazy(() => z.object({ key: z.string(), value: JsonValueSchema }));
+export const RuntimeConnectionSchema = z.object({
+  id: z.string(), label: z.string(), adapter_id: z.string(), environment: z.enum(['paper', 'demo', 'testnet', 'live']), enabled: z.boolean(),
+  credential_configured: z.boolean(), credential_updated_at: z.string().nullable(), leverage: z.number(), margin_mode: z.string(), parameters: z.array(JsonEntrySchema).default([]),
+});
+export const RuntimeBookSchema = z.object({ id: z.string(), label: z.string(), capital_scope: z.enum(['simulated', 'real']), enabled: z.boolean(), hitl_required: z.boolean(), allocations: z.array(z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() })).default([]) });
+export const RuntimeConfigSchema = z.object({
+  revision: z.number().int(), updated_at: z.string(), setup_required: z.boolean(),
+  document: z.object({
+    system: z.object({ active: z.boolean() }), market_data: z.object({ source_id: z.string(), parameters: z.array(JsonEntrySchema).default([]) }),
+    llm: z.object({ models: z.object({ analysis: z.string(), debate: z.string(), committee_summary: z.string(), tech_agent: z.string(), chain_agent: z.string(), news_agent: z.string(), macro_agent: z.string(), fallback: z.string(), timeout_seconds: z.number() }).partial().default({}) }).passthrough().default({}),
+    signals: z.object({ components: z.array(z.object({ component_id: z.string(), enabled: z.boolean(), weight: z.number(), parameters: z.array(JsonEntrySchema).default([]) })).default([]), neutral_threshold: z.number().default(0.2), max_target_ratio: z.number().default(1), atr_stop_multiplier: z.number().default(2), reward_ratio: z.number().default(2), hitl_required: z.boolean().default(false) }),
+    risk: z.record(z.unknown()).default({}), execution: z.object({ connections: z.array(RuntimeConnectionSchema).default([]), books: z.array(RuntimeBookSchema).default([]), allocation_policy: z.string().default('weighted') }),
+    hitl: z.record(z.unknown()).default({}), scheduler: z.record(z.unknown()).default({}), triggers: z.record(z.unknown()).default({}), notifications: z.record(z.unknown()).default({}), infrastructure: z.record(z.unknown()).default({}),
+  }),
+});
+export const VenueMutationSchema = z.object({ revision: z.number(), connection: RuntimeConnectionSchema });
+export const CredentialMutationSchema = z.object({ revision: z.number(), credential: z.object({ configured: z.boolean(), updated_at: z.string().nullable() }) });
+export const ConnectionHealthSchema = z.object({ connection_id: z.string(), healthy: z.boolean(), environment: z.string(), credential_configured: z.boolean(), capabilities: z.object({ market_types: z.array(z.string()), native_protection: z.boolean(), hedge_mode: z.boolean(), reduce_only: z.boolean(), supported_order_types: z.array(z.string()) }) });
+
 export const BacktestRunResponseSchema = z.object({
   run_id: z.string(),
 });

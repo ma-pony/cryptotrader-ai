@@ -1,240 +1,25 @@
-import { AlertTriangle, CheckCircle2, Save, SlidersHorizontal } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { useTranslation } from 'react-i18next';
-
+import { AlertTriangle, CheckCircle2, Plus, Save, SlidersHorizontal } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
-import { useSaveSignalProfile, useSignalProfile } from '@/hooks/use-signal-profile';
-import { formatDateTime } from '@/lib/format';
-import type { SignalProfile, SignalProfileUpdate } from '@/types/api';
+import { useRuntimeConfig } from '@/hooks/use-runtime-config';
+import type { RuntimeDocument } from '@/types/api';
+import { ComponentWeightCard, type ComponentWeightDraft } from './components/component-weight-card';
+import { DecisionSettingsCard, type DecisionSettingsDraft } from './components/decision-settings-card';
 
-import {
-  ComponentWeightCard,
-  type ComponentWeightDraft,
-} from './components/component-weight-card';
-import {
-  DecisionSettingsCard,
-  type DecisionSettingsDraft,
-} from './components/decision-settings-card';
-
-const COMPONENT_ACCENTS = ['#f59e0b', '#38bdf8', '#a78bfa', '#34d399', '#fb7185'];
-
-interface StrategyDraft extends DecisionSettingsDraft {
-  components: ComponentWeightDraft[];
-}
-
-const draftFromProfile = (profile: SignalProfile): StrategyDraft => {
-  const configured = new Map(profile.components.map((component) => [component.component_id, component]));
-  return {
-    components: profile.installed_components.map((metadata) =>
-      configured.get(metadata.component_id) ?? {
-        component_id: metadata.component_id,
-        enabled: false,
-        weight: 0,
-      },
-    ),
-    neutral_threshold: profile.neutral_threshold,
-    max_target_ratio: profile.max_target_ratio,
-    atr_stop_multiplier: profile.atr_stop_multiplier,
-    reward_ratio: profile.reward_ratio,
-    hitl_required: profile.hitl_required,
-  };
-};
-
-const StrategyEditor = ({ profile }: { profile: SignalProfile }) => {
-  const { t } = useTranslation('strategy');
-  const saveProfile = useSaveSignalProfile();
-  const [draft, setDraft] = useState<StrategyDraft>(() => draftFromProfile(profile));
-  const [savedRevision, setSavedRevision] = useState(profile.revision);
-  const enabledComponents = draft.components.filter((component) => component.enabled);
-  const totalWeight = enabledComponents.reduce((total, component) => total + component.weight, 0);
-  const validWeight = enabledComponents.length > 0 && Math.abs(totalWeight - 1) <= 1e-9;
-  const validSettings =
-    draft.neutral_threshold >= 0 &&
-    draft.neutral_threshold < 1 &&
-    draft.max_target_ratio > 0 &&
-    draft.max_target_ratio <= 1 &&
-    draft.atr_stop_multiplier > 0 &&
-    draft.reward_ratio > 0;
-  const canSave = validWeight && validSettings && !saveProfile.isPending;
-  const metadataById = useMemo(
-    () => new Map(profile.installed_components.map((component) => [component.component_id, component])),
-    [profile.installed_components],
-  );
-
-  const updateComponent = (next: ComponentWeightDraft) => {
-    setDraft((current) => ({
-      ...current,
-      components: current.components.map((component) =>
-        component.component_id === next.component_id ? next : component,
-      ),
-    }));
-  };
-
-  const submit = () => {
-    const payload: SignalProfileUpdate = {
-      components: draft.components.map((component) => ({
-        ...component,
-        weight: component.enabled ? component.weight : 0,
-      })),
-      neutral_threshold: draft.neutral_threshold,
-      max_target_ratio: draft.max_target_ratio,
-      atr_stop_multiplier: draft.atr_stop_multiplier,
-      reward_ratio: draft.reward_ratio,
-      hitl_required: draft.hitl_required,
-    };
-    saveProfile.mutate(payload, {
-      onSuccess: (saved) => {
-        setSavedRevision(saved.revision);
-        setDraft(draftFromProfile(saved));
-      },
-    });
-  };
-
-  return (
-    <div className="space-y-6">
-      <PageHeader
-        eyebrow={t('eyebrow')}
-        title={t('title')}
-        subtitle={t('subtitle')}
-        actions={
-          <div className="flex flex-col items-start gap-1 sm:items-end">
-            <div className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs font-semibold text-amber-500">
-              Revision {savedRevision}
-            </div>
-            {profile.updated_at ? (
-              <time dateTime={profile.updated_at} className="text-[11px] text-muted-foreground">
-                {t('save.updated_at', { time: formatDateTime(profile.updated_at) })}
-              </time>
-            ) : null}
-          </div>
-        }
-      />
-
-      <section
-        className="relative overflow-hidden rounded-2xl border border-border bg-card p-6"
-        style={{
-          backgroundImage:
-            'radial-gradient(circle at 8% 20%, color-mix(in oklch, var(--amber-500) 13%, transparent), transparent 35%), linear-gradient(135deg, transparent, color-mix(in oklch, hsl(var(--card)) 88%, black))',
-        }}
-      >
-        <div className="relative flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
-          <div className="max-w-2xl">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.18em] text-amber-500">
-              <SlidersHorizontal className="h-4 w-4" aria-hidden="true" />
-              {t('mixer.label')}
-            </div>
-            <p className="mt-3 text-sm leading-6 text-muted-foreground">{t('mixer.description')}</p>
-          </div>
-          <div className="shrink-0 text-left lg:text-right">
-            <div className="font-mono text-4xl font-semibold tabular-nums text-foreground">
-              {Math.round(totalWeight * 100)}%
-            </div>
-            <div className={validWeight ? 'text-xs text-trade-long' : 'text-xs text-amber-500'}>
-              {t('mixer.total', { value: Math.round(totalWeight * 100) })}
-            </div>
-          </div>
-        </div>
-        <div className="relative mt-6 flex h-3 overflow-hidden rounded-full border border-border bg-muted/70">
-          {enabledComponents.map((component, index) => (
-            <span
-              key={component.component_id}
-              className="h-full transition-[width] duration-300"
-              style={{
-                width: `${component.weight * 100}%`,
-                backgroundColor: COMPONENT_ACCENTS[index % COMPONENT_ACCENTS.length],
-              }}
-              title={`${component.component_id} ${Math.round(component.weight * 100)}%`}
-            />
-          ))}
-        </div>
-        {!validWeight ? (
-          <div className="relative mt-3 flex items-center gap-2 text-xs text-amber-500" role="alert">
-            <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-            {enabledComponents.length === 0 ? t('mixer.enable_one') : t('mixer.must_total')}
-          </div>
-        ) : null}
-      </section>
-
-      <section>
-        <div className="mb-3 flex items-end justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-foreground">{t('components.title')}</h2>
-            <p className="mt-1 text-xs text-muted-foreground">{t('components.description')}</p>
-          </div>
-          <span className="font-mono text-[11px] text-muted-foreground">
-            {enabledComponents.length}/{draft.components.length} {t('components.active')}
-          </span>
-        </div>
-        {draft.components.length > 0 ? (
-          <div className="grid gap-4 xl:grid-cols-2">
-            {draft.components.map((component, index) => {
-              const metadata = metadataById.get(component.component_id);
-              return (
-                <ComponentWeightCard
-                  key={component.component_id}
-                  component={component}
-                  displayName={metadata?.display_name ?? component.component_id}
-                  description={metadata?.description ?? t('components.custom_description')}
-                  accent={COMPONENT_ACCENTS[index % COMPONENT_ACCENTS.length] ?? '#f59e0b'}
-                  onChange={updateComponent}
-                />
-              );
-            })}
-          </div>
-        ) : (
-          <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
-            {t('components.empty')}
-          </div>
-        )}
-      </section>
-
-      <DecisionSettingsCard
-        settings={draft}
-        onChange={(settings) => setDraft((current) => ({ ...current, ...settings }))}
-      />
-
-      <div className="sticky bottom-4 z-10 flex flex-col gap-3 rounded-xl border border-border bg-card/95 p-4 shadow-xl backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-        <div className="min-h-5 text-xs">
-          {saveProfile.isSuccess ? (
-            <span className="flex items-center gap-2 text-trade-long" role="status">
-              <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-              {t('save.success')}
-            </span>
-          ) : saveProfile.isError ? (
-            <span className="flex items-center gap-2 text-trade-short" role="alert">
-              <AlertTriangle className="h-4 w-4" aria-hidden="true" />
-              {t('save.error')}
-            </span>
-          ) : (
-            <span className="text-muted-foreground">{t('save.next_cycle')}</span>
-          )}
-        </div>
-        <Button size="lg" onClick={submit} disabled={!canSave} className="shadow-glow-amber">
-          <Save className="h-4 w-4" aria-hidden="true" />
-          {saveProfile.isPending ? t('save.saving') : t('save.button')}
-        </Button>
-      </div>
-    </div>
-  );
-};
+const ACCENTS = ['#f59e0b', '#38bdf8', '#a78bfa', '#34d399', '#fb7185'];
+type Draft = DecisionSettingsDraft & { components: Array<ComponentWeightDraft & { parameters: Record<string, unknown> }>; models: Record<string, string> };
+const fromDocument = (document: RuntimeDocument): Draft => ({ ...document.signals, components: document.signals.components.map((component) => ({ ...component })), models: { ...(document.llm.models as Record<string, string>) } });
 
 const StrategyPage = () => {
-  const { t } = useTranslation('strategy');
-  const profile = useSignalProfile();
-
-  return (
-    <PageBoundary
-      loading={profile.isLoading}
-      isError={profile.isError}
-      onRetry={() => void profile.refetch()}
-      errorTitle={t('load.error_title')}
-      errorDescription={t('load.error_description')}
-    >
-      {profile.data ? <StrategyEditor profile={profile.data} /> : null}
-    </PageBoundary>
-  );
+  const runtime = useRuntimeConfig(); const [draft, setDraft] = useState<Draft>(); const [customId, setCustomId] = useState('');
+  useEffect(() => { if (runtime.document) setDraft(fromDocument(runtime.document)); }, [runtime.document]);
+  const enabled = draft?.components.filter((component) => component.enabled) ?? []; const total = enabled.reduce((sum, component) => sum + component.weight, 0);
+  const valid = enabled.length > 0 && Math.abs(total - 1) < 1e-9 && Boolean(draft && draft.neutral_threshold >= 0 && draft.neutral_threshold < 1 && draft.max_target_ratio > 0 && draft.max_target_ratio <= 1 && draft.atr_stop_multiplier > 0 && draft.reward_ratio > 0);
+  const updateComponent = (next: ComponentWeightDraft) => setDraft((current) => current && ({ ...current, components: current.components.map((component) => component.component_id === next.component_id ? { ...component, ...next } : component) }));
+  const save = () => { if (!runtime.document || !draft) return; void runtime.replace({ ...runtime.document, signals: { ...runtime.document.signals, components: draft.components, neutral_threshold: draft.neutral_threshold, max_target_ratio: draft.max_target_ratio, atr_stop_multiplier: draft.atr_stop_multiplier, reward_ratio: draft.reward_ratio, hitl_required: draft.hitl_required }, llm: { ...runtime.document.llm, models: { ...runtime.document.llm.models, ...draft.models } } }); };
+  const labels = useMemo(() => ({ kronos: ['Kronos', '时序预测与市场结构信号'], llm_committee: ['LLM 四智能体委员会', '技术、链上、新闻、宏观内部辩论'] }), []);
+  return <PageBoundary loading={runtime.isLoading} isError={runtime.isError} onRetry={() => void runtime.reload()} errorTitle="无法读取运行时配置" errorDescription="请检查配置服务后重试。">{runtime.document && draft ? <div className="space-y-6"><PageHeader eyebrow="SIGNAL FUSION" title="信号策略" subtitle="Kronos、LLM 四智能体委员会和自定义组件统一输出目标仓位。" actions={<span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs text-amber-500">Revision {runtime.revision}</span>}/><section className="relative overflow-hidden rounded-2xl border border-border bg-card p-6"><div className="flex items-end justify-between gap-4"><div><div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[.18em] text-amber-500"><SlidersHorizontal className="h-4 w-4"/>信任混合器</div><p className="mt-3 text-sm text-muted-foreground">启用组件权重必须合计 100%，每个周期只融合一次。</p></div><div className="font-mono text-4xl font-semibold">{Math.round(total * 100)}%</div></div><div className="mt-5 flex h-3 overflow-hidden rounded-full border border-border bg-muted">{enabled.map((component, index) => <span key={component.component_id} style={{ width: `${component.weight * 100}%`, backgroundColor: ACCENTS[index % ACCENTS.length] }} />)}</div>{!valid ? <p role="alert" className="mt-3 flex gap-2 text-xs text-amber-500"><AlertTriangle className="h-4 w-4"/>至少启用一个组件，且权重必须合计 100%。</p> : null}</section><section><h2 className="mb-3 font-semibold">组件信任权重</h2><div className="grid gap-4 xl:grid-cols-2">{draft.components.map((component, index) => { const label = labels[component.component_id as keyof typeof labels]; return <ComponentWeightCard key={component.component_id} component={component} displayName={label?.[0] ?? component.component_id} description={label?.[1] ?? '自定义运行时信号组件'} accent={ACCENTS[index % ACCENTS.length] ?? '#f59e0b'} onChange={updateComponent}/>; })}</div><div className="mt-4 flex gap-2"><input aria-label="自定义 component ID" value={customId} onChange={(event) => setCustomId(event.target.value)} placeholder="自定义 component ID" className="h-10 flex-1 rounded border bg-background px-3"/><Button variant="outline" onClick={() => { const id = customId.trim(); if (id && !draft.components.some((component) => component.component_id === id)) { setDraft({ ...draft, components: [...draft.components, { component_id: id, enabled: false, weight: 0, parameters: {} }] }); setCustomId(''); } }}><Plus className="h-4 w-4"/>添加</Button></div></section><DecisionSettingsCard settings={draft} onChange={(settings) => setDraft({ ...draft, ...settings })}/><section className="rounded-2xl border border-border bg-card p-5"><h2 className="font-semibold">内部辩论模型</h2><p className="mt-1 text-sm text-muted-foreground">四位委员会成员、辩论和汇总模型均在数据库配置。</p><div className="mt-4 grid gap-3 md:grid-cols-3">{['tech_agent', 'chain_agent', 'news_agent', 'macro_agent', 'debate', 'committee_summary'].map((key) => <label key={key} className="text-xs text-muted-foreground">{key}<input aria-label={key} value={draft.models[key] ?? ''} onChange={(event) => setDraft({ ...draft, models: { ...draft.models, [key]: event.target.value } })} className="mt-1 h-10 w-full rounded border bg-background px-3 font-mono"/></label>)}</div></section>{runtime.conflict ? <p role="alert" className="text-sm text-trade-short">配置已被其他操作更新，请重新加载</p> : null}<div className="sticky bottom-4 flex justify-end rounded-xl border border-border bg-card/95 p-3"><Button size="lg" disabled={!valid || runtime.isSaving} onClick={save}><Save className="h-4 w-4"/>{runtime.isSaving ? '保存中' : '保存完整配置'}</Button></div>{!runtime.isSaving && !runtime.conflict ? <p className="flex items-center gap-2 text-xs text-muted-foreground"><CheckCircle2 className="h-4 w-4"/>编辑保留在草稿中，点击保存后才会写入。</p> : null}</div> : null}</PageBoundary>;
 };
-
 export default StrategyPage;

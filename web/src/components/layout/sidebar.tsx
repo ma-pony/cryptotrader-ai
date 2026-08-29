@@ -8,6 +8,7 @@ import {
   MessageSquare,
   ScrollText,
   ShieldCheck,
+  Settings2,
   SlidersHorizontal,
   TrendingUp,
   type LucideIcon,
@@ -32,7 +33,9 @@ type NavLabelKey =
   | 'nav.metrics'
   | 'nav.chat'
   | 'nav.market'
-  | 'nav.scheduler';
+  | 'nav.scheduler'
+  | 'nav.venues'
+  | 'nav.execution_books';
 
 interface NavItem {
   to: string;
@@ -79,6 +82,14 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/memory', labelKey: 'nav.memory', icon: Brain },
       { to: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
       { to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
+    ],
+  },
+  {
+    titleKey: 'nav.section.operations',
+    defaultTitle: '配置',
+    items: [
+      { to: '/settings/venues', labelKey: 'nav.venues', icon: Settings2 },
+      { to: '/settings/execution-books', labelKey: 'nav.execution_books', icon: Briefcase },
     ],
   },
 ];
