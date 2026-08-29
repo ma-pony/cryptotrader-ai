@@ -717,23 +717,40 @@ export const PaginatedTriggerEventsSchema = z.object({
 
 // ── §8 HITL Approvals ──
 
-export const ApprovalRequestSchema = z.object({
-  approval_id: z.string(),
-  cycle_id: z.string(),
-  pair: z.string(),
-  profile_revision: z.number(),
-  trade_plan: TradePlanSchema,
-  status: z.enum(['pending', 'approved', 'rejected']),
-  decision_by: z.string().nullable(),
-  created_at: z.string(),
-  decided_at: z.string().nullable(),
-});
+const PairSymbolSchema = z.object({ symbol: z.string() }).strict();
+const ConnectionPlanSchema = z.object({
+  book_id: z.string(), connection_id: z.string(), pair: PairSymbolSchema,
+  current_signed_notional: z.string(), target_signed_notional: z.string(), delta_signed_notional: z.string(),
+  current_signed_amount: z.string(), target_signed_amount: z.string(), delta_signed_amount: z.string(),
+  post_fill_signed_amount: z.string(), quote: z.object({ pair: PairSymbolSchema, bid: z.string(), ask: z.string(), last: z.string() }).strict(),
+  execution_price: z.string(), amount: z.string(), side: z.string(), reduce_only: z.boolean(), market_type: z.string(),
+  stop_loss: z.string().nullable(), take_profit: z.string().nullable(), old_protection_ids: z.array(z.string()),
+  capabilities: z.object({ market_types: z.array(z.string()), native_protection: z.boolean(), hedge_mode: z.boolean(), reduce_only: z.boolean(), supported_order_types: z.array(z.string()) }).strict(),
+}).strict();
+const BookProposalSchema = z.object({
+  version: z.literal(1), book_id: z.string(), capital_scope: z.enum(['simulated', 'real']), config_revision: z.number().int(), pair: PairSymbolSchema,
+  requested_target_exposure: z.string(), target_exposure: z.string(),
+  risk: z.object({ passed: z.boolean(), requested_target_exposure: z.string(), capped_target_exposure: z.string(), connection_weights: z.array(z.string()), connection_targets: z.array(z.object({ book_id: z.string(), connection_id: z.string(), weight: z.string(), book_equity: z.string(), target_exposure: z.string(), target_signed_notional: z.string() }).strict()), rejected_by: z.string(), reason: z.string(), cap_source: z.string() }).strict(),
+  connection_risks: z.array(z.object({ connection_id: z.string(), passed: z.boolean(), risk_increase: z.boolean(), reason: z.string(), operation: z.string() }).strict()),
+  connection_plans: z.array(ConnectionPlanSchema), unavailable_connections: z.array(z.string()), errors: z.array(z.string()), ready: z.boolean(),
+}).strict();
+export const ApprovalRequestSchema = z.object({ approval_id: z.string(), cycle_id: z.string(), book_id: z.string(), pair: z.string(), config_revision: z.number().int(), proposal: BookProposalSchema, status: z.enum(['pending', 'approved', 'rejected', 'invalidated', 'executed']), created_at: z.string(), decided_at: z.string().nullable() }).strict();
 
 export const HitlPendingListSchema = z.array(ApprovalRequestSchema);
 
 export const HitlRespondSchema = z.object({
   approval_id: z.string(),
   cycle_id: z.string(),
-  status: z.string(),
+  approval_status: z.string(),
   cycle_status: z.string(),
+  execution_status: z.string(),
+  requires_attention: z.boolean(),
 });
+
+const ConnectionPortfolioSchema = z.object({ connection_id: z.string(), equity: z.string(), balances: z.array(z.object({ asset: z.string(), amount: z.string() }).strict()), position: z.object({ pair: z.string(), signed_amount: z.string(), signed_notional: z.string(), entry_price: z.string().nullable() }).strict() }).strict();
+const PortfolioBookSchema = z.object({ book_id: z.string(), capital_scope: z.enum(['simulated', 'real']), pair: z.string(), total_equity: z.string(), total_signed_notional: z.string(), connections: z.array(ConnectionPortfolioSchema) }).strict();
+export const PortfolioBooksSchema = z.object({ pair: z.string(), simulated: z.object({ books: z.array(PortfolioBookSchema), totals: z.object({ equity: z.string(), signed_notional: z.string() }).strict() }).strict(), real: z.object({ books: z.array(PortfolioBookSchema), totals: z.object({ equity: z.string(), signed_notional: z.string() }).strict() }).strict() }).strict();
+const CycleConnectionSchema = z.object({ connection_id: z.string(), portfolio_before: ConnectionPortfolioSchema.nullable(), portfolio_after: ConnectionPortfolioSchema.nullable(), risk: z.unknown().nullable(), plan: ConnectionPlanSchema.nullable(), execution: z.object({ status: z.string(), orders: z.array(z.object({ id: z.string(), pair: PairSymbolSchema, side: z.string(), order_type: z.string(), amount: z.string(), filled_amount: z.string(), average_price: z.string().nullable(), status: z.string(), reduce_only: z.boolean() }).strict()), error_operation: z.string(), requires_attention: z.boolean(), trace: z.array(z.string()) }).passthrough().nullable(), unavailable: z.boolean() }).strict();
+const CycleBookSchema = z.object({ book_id: z.string(), capital_scope: z.enum(['simulated', 'real']), config_revision: z.number().int(), pair: z.string(), market_type: z.string(), status: z.string(), hitl: z.object({ approval_id: z.string().nullable(), status: z.string(), config_revision: z.number().int() }).strict(), failure: z.object({ stage: z.string() }).strict().nullable(), requested_target_exposure: z.string().nullable(), target_exposure: z.string().nullable(), risk: z.unknown().nullable(), ready: z.boolean().nullable(), errors: z.array(z.string()), execution: z.object({ status: z.string(), requires_attention: z.boolean(), reallocated: z.boolean() }).strict().nullable(), portfolio_before: z.unknown().nullable(), portfolio_after: z.unknown().nullable(), portfolio_after_available: z.boolean().nullable(), connections: z.array(CycleConnectionSchema) }).strict();
+export const CycleSchema = z.object({ cycle_id: z.string(), config_revision: z.number().int(), market_data_source_id: z.string(), shared_signals: z.object({ components: z.array(z.object({ component_id: z.string(), direction: z.string(), confidence: z.number(), reasoning: z.string(), details: z.array(z.unknown()) }).strict()), fused: z.object({ score: z.number(), reasoning: z.string(), contributions: z.array(z.object({ component_id: z.string(), weight: z.number(), signed_score: z.number(), weighted_score: z.number() }).strict()) }).strict().nullable(), target_position: z.object({ side: z.string(), size_ratio: z.number() }).strict().nullable() }).strict(), books: z.array(CycleBookSchema), cycle_status: z.string(), execution_status: z.string(), requires_attention: z.boolean(), created_at: z.string() }).strict();
+export const PaginatedCyclesSchema = z.object({ items: z.array(CycleSchema), total: z.number().int(), page: z.number().int(), size: z.number().int(), has_next: z.boolean() }).strict();

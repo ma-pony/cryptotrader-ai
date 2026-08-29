@@ -80,26 +80,20 @@ export const ActivityFeed = ({ limit = 12 }: { limit?: number }) => {
     const out: FeedItem[] = [];
 
     for (const d of decisions.data?.items ?? []) {
-      const action = d.target_position?.side ?? 'flat';
-      const kind: FeedItem['kind'] = d.execution_result?.succeeded
-        ? 'filled'
-        : d.status === 'no_change'
-          ? 'hold'
-          : d.status === 'component_failed' || d.status === 'risk_rejected' || d.status === 'execution_failed'
-            ? 'block'
-            : 'skipped';
+      const action = d.shared_signals.target_position?.side ?? 'flat';
+      const kind: FeedItem['kind'] = d.execution_status === 'completed' ? 'filled' : d.requires_attention ? 'block' : 'skipped';
       out.push({
         id: `cycle-${d.cycle_id}`,
-        ts: d.ts,
+        ts: d.created_at,
         kind,
         primary: (
           <span className="flex items-center gap-2">
             <ActionBadge action={action} />
-            <span className="font-mono text-foreground">{d.pair_display}</span>
+            <span className="font-mono text-foreground">{d.books.map((book) => book.pair).join(', ')}</span>
           </span>
         ),
-        secondary: d.execution_result?.succeeded ? null : d.status,
-        onClick: () => void navigate(`/decisions/${d.cycle_id}`),
+        secondary: d.execution_status,
+        onClick: () => void navigate(`/cycles/${d.cycle_id}`),
       });
     }
 

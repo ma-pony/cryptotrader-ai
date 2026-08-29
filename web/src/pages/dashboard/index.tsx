@@ -2,46 +2,29 @@ import { useTranslation } from 'react-i18next';
 
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
-import { usePortfolioSnapshot } from '@/hooks/use-portfolio-snapshot';
+import { usePortfolioBooks } from '@/hooks/use-portfolio-books';
 import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 
-import { ActivityFeed } from './components/activity-feed';
-import { EquityChartSection } from './components/equity-chart-section';
-import { MetricCardsRow } from './components/metric-cards-row';
-import { PnlAttributionCard } from './components/pnl-attribution-card';
-import { PositionsTable } from './components/positions-table';
 import { SchedulerCard } from './components/scheduler-card';
 
 const DashboardContent = () => {
   const { t } = useTranslation('dashboard');
-  const portfolio = usePortfolioSnapshot();
+  const portfolio = usePortfolioBooks();
   const scheduler = useSchedulerStatus();
 
   return (
     <div className="space-y-6">
       <PageHeader title={t('title', { defaultValue: '总览' })} />
 
-      <MetricCardsRow data={portfolio.data} isLoading={portfolio.isLoading} connectionStatus={portfolio.connectionStatus} />
-
-      <PnlAttributionCard data={portfolio.data} isLoading={portfolio.isLoading} />
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <EquityChartSection />
-        </div>
-        <div className="space-y-4">
-          <SchedulerCard data={scheduler.data} isLoading={scheduler.isLoading} isError={scheduler.isError} />
-        </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        {(['simulated', 'real'] as const).map((scope) => (
+          <section key={scope} className="rounded-lg border border-border bg-card p-4" aria-label={t(`scopes.${scope}`, { defaultValue: scope })}>
+            <h2 className="text-sm font-semibold">{t(`scopes.${scope}`, { defaultValue: scope === 'simulated' ? 'Simulated capital' : 'Real capital' })}</h2>
+            {portfolio.isLoading ? <p className="mt-3 text-sm text-muted-foreground">…</p> : portfolio.data?.[scope].books.length ? portfolio.data[scope].books.map((book) => <div key={book.book_id} className="mt-3 rounded border border-border p-3"><div className="font-mono text-xs">{book.book_id}</div><div className="mt-1 text-lg font-semibold">{book.total_equity} USDT</div>{book.connections.map((connection) => <div key={connection.connection_id} className="mt-1 text-xs text-muted-foreground">{connection.connection_id} · {connection.equity} · {connection.position.signed_notional}</div>)}</div>) : <p className="mt-3 text-sm text-muted-foreground">{t('scopes.empty', { defaultValue: 'No execution books in this scope.' })}</p>}
+          </section>
+        ))}
       </div>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <PositionsTable positions={portfolio.data?.positions} isLoading={portfolio.isLoading} />
-        </div>
-        <div>
-          <ActivityFeed />
-        </div>
-      </div>
+      <SchedulerCard data={scheduler.data} isLoading={scheduler.isLoading} isError={scheduler.isError} />
     </div>
   );
 };

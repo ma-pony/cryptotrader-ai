@@ -7,6 +7,8 @@ import { RouteSkeleton } from '@/components/route-skeleton';
 import { useRuntimeConfig } from '@/hooks/use-runtime-config';
 const DashboardPage = lazy(() => import('@/pages/dashboard'));
 const DecisionsPage = lazy(() => import('@/pages/decisions'));
+const CyclesPage = lazy(() => import('@/pages/cycles'));
+const CycleDetailPage = lazy(() => import('@/pages/cycles/cycle-detail'));
 const DebatePage = lazy(() => import('@/pages/debate'));
 const BacktestPage = lazy(() => import('@/pages/backtest'));
 const RiskPage = lazy(() => import('@/pages/risk'));
@@ -47,6 +49,8 @@ const GuardedRoutes = () => {
         <Route path="settings/execution-books" element={<BooksPage />} />
         <Route path="decisions" element={<DecisionsPage />} />
         <Route path="decisions/:cycleId" element={<DecisionsPage />} />
+        <Route path="cycles" element={<CyclesPage />} />
+        <Route path="cycles/:cycleId" element={<CycleDetailPage />} />
         <Route path="debate" element={<DebatePage />} />
         <Route path="debate/:cycleId" element={<DebatePage />} />
         <Route path="backtest" element={<BacktestPage />} />

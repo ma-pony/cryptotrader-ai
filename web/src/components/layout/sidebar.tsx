@@ -26,6 +26,7 @@ type NavLabelKey =
   | 'nav.dashboard'
   | 'nav.strategy'
   | 'nav.decisions'
+  | 'nav.cycles'
   | 'nav.debate'
   | 'nav.backtest'
   | 'nav.risk'
@@ -62,6 +63,7 @@ const NAV_SECTIONS: NavSection[] = [
       { to: '/', labelKey: 'nav.dashboard', icon: Briefcase },
       { to: '/strategy', labelKey: 'nav.strategy', icon: SlidersHorizontal },
       { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
+      { to: '/cycles', labelKey: 'nav.cycles', icon: GitBranch },
       { to: '/debate', labelKey: 'nav.debate', icon: GitBranch },
     ],
   },

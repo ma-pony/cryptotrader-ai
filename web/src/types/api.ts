@@ -5,6 +5,9 @@ import type { z } from 'zod';
 
 import type {
   ApprovalRequestSchema,
+  PortfolioBooksSchema,
+  CycleSchema,
+  PaginatedCyclesSchema,
   BacktestMetricsSchema,
   BacktestParamsSchema,
   BacktestResultSchema,
@@ -130,6 +133,9 @@ export type PaginatedTriggerEvents = z.output<typeof PaginatedTriggerEventsSchem
 // §8 HITL Approvals
 export type ApprovalRequest = z.output<typeof ApprovalRequestSchema>;
 export type HitlRespond = z.output<typeof HitlRespondSchema>;
+export type PortfolioBooks = z.output<typeof PortfolioBooksSchema>;
+export type Cycle = z.output<typeof CycleSchema>;
+export type PaginatedCycles = z.output<typeof PaginatedCyclesSchema>;
 
 // §9 Chat (P2 — stub types for store compatibility)
 export type ChatRole = 'user' | 'assistant' | 'system';

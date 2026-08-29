@@ -1,62 +1,23 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate, useParams } from 'react-router';
+import { Link } from 'react-router';
 
-import { DecisionDetailPanel } from '@/components/decision-detail/decision-detail-panel';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { useDecisions } from '@/hooks/use-decisions';
-import type { DecisionListFilter } from '@/types/api';
-
-import { DecisionsFilterBar } from './components/decisions-filter-bar';
-import { DecisionsTable } from './components/decisions-table';
 
 const PAGE_SIZE = 20;
 
 const DecisionsContent = () => {
   const { t } = useTranslation('decisions');
-  const navigate = useNavigate();
-  const { cycleId } = useParams<{ cycleId?: string }>();
-  const [filter, setFilter] = useState<DecisionListFilter>({ page: 1, size: PAGE_SIZE });
+  const [page] = useState(1);
 
-  const { data, isLoading } = useDecisions(filter);
-
-  const pairs = useMemo(() => {
-    if (!data) return [];
-    return [...new Set(data.items.map((d) => d.pair))].sort();
-  }, [data]);
-
-  const handleSelect = useCallback(
-    (selectedCycleId: string) => {
-      void navigate(selectedCycleId === cycleId ? '/decisions' : `/decisions/${selectedCycleId}`, { replace: true });
-    },
-    [navigate, cycleId],
-  );
-
-  const handlePageChange = useCallback(
-    (page: number) => setFilter((prev) => ({ ...prev, page })),
-    [],
-  );
+  const { data, isLoading } = useDecisions({ page, size: PAGE_SIZE });
 
   return (
     <div className="space-y-6">
       <PageHeader title={t('title')} />
-      <DecisionsFilterBar filter={filter} onFilterChange={setFilter} pairs={pairs} />
-
-      <div className="grid min-h-[600px] grid-cols-1 gap-4 lg:grid-cols-5">
-        <div className="overflow-y-auto rounded-md border lg:col-span-2">
-          <DecisionsTable
-            data={data}
-            isLoading={isLoading}
-            selectedCycleId={cycleId}
-            onSelect={handleSelect}
-            onPageChange={handlePageChange}
-          />
-        </div>
-        <div className="overflow-hidden rounded-md border lg:col-span-3">
-          <DecisionDetailPanel cycleId={cycleId} />
-        </div>
-      </div>
+      {isLoading ? <p>Loading…</p> : data?.items.map((cycle) => <Link key={cycle.cycle_id} to={`/cycles/${cycle.cycle_id}`} className="block rounded border border-border p-3"><b>{cycle.cycle_id}</b><span className="ml-2 text-xs text-muted-foreground">{cycle.books.map((book) => `${book.book_id} (${book.capital_scope})`).join(', ')}</span>{cycle.requires_attention ? <span className="ml-2 text-amber-600">Requires attention</span> : null}</Link>)}
     </div>
   );
 };
