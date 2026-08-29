@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from decimal import Decimal
 from types import SimpleNamespace
@@ -206,6 +207,14 @@ async def api_harness(tmp_path):
         approvals=BookApprovalStore(),
         journal=MultiVenueCycleStore(),
     )
+
+    @asynccontextmanager
+    async def application_barrier():
+        yield
+
+    async def activate_applied(applied):
+        runtime.snapshot = applied
+
     runtime = SimpleNamespace(
         snapshot=snapshot,
         repository=repository,
@@ -215,8 +224,10 @@ async def api_harness(tmp_path):
         market_registry=SimpleNamespace(installed_ids=lambda: frozenset({"default"})),
         venue_registry=VenueAdapterRegistry(tuple(adapters.values())),
         reload_for_cycle=AsyncMock(),
+        application_barrier=application_barrier,
         prepare_candidate=AsyncMock(return_value=SimpleNamespace(close=AsyncMock())),
         publish_candidate=AsyncMock(),
+        activate_applied=AsyncMock(side_effect=activate_applied),
         fail_closed=AsyncMock(),
     )
     previous = getattr(app.state, "runtime", None)

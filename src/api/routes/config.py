@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
+from contextlib import asynccontextmanager, suppress
 from datetime import datetime
 from typing import Any
 
@@ -602,6 +602,7 @@ async def apply_document(
     expected_revision: int,
     document: RuntimeConfigDocument,
     refresh_owners,
+    clear_owners=None,
 ):
     """Apply one desired document without ever silently executing the old graph."""
     ensure_expected_revision(snapshot, expected_revision)
@@ -621,30 +622,60 @@ async def apply_document(
         candidate = await runtime.prepare_candidate(candidate_snapshot)
     except Exception:
         raise HTTPException(status_code=503, detail="Runtime configuration cannot be applied") from None
-    try:
-        saved = await runtime.repository.replace(expected_revision, document)
-    except RevisionConflict as error:
-        await candidate.close()
-        raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
-    return await publish_pending_snapshot(runtime, saved, refresh_owners, candidate)
+    async with application_barrier(runtime):
+        try:
+            saved = await runtime.repository.replace(expected_revision, document)
+        except RevisionConflict as error:
+            await candidate.close()
+            raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+        return await publish_pending_snapshot(
+            runtime,
+            saved,
+            refresh_owners,
+            candidate,
+            clear_owners=clear_owners,
+        )
 
 
-async def publish_pending_snapshot(runtime, pending, refresh_owners, candidate=None):
+@asynccontextmanager
+async def application_barrier(runtime):
+    """Use the Runtime application protocol; test doubles supply the same boundary."""
+    async with runtime.application_barrier():
+        yield
+
+
+async def publish_pending_snapshot(runtime, pending, refresh_owners, candidate=None, *, clear_owners=None):
     """Publish an already persisted desired revision, or leave that revision explicitly failed."""
     try:
         prepared = candidate or await runtime.prepare_candidate(pending)
         await runtime.publish_candidate(prepared, pending)
         if refresh_owners is not None:
-            await refresh_owners()
+            await refresh_owners(pending)
         applied = await runtime.repository.mark_applied(pending.revision)
-        runtime.snapshot = applied
+        await runtime.activate_applied(applied)
         return applied
     except Exception:
+        if clear_owners is not None:
+            with suppress(Exception):
+                await clear_owners()
         if candidate is not None:
             with suppress(Exception):
                 await candidate.close()
-        failed = await runtime.repository.mark_failed(pending.revision, "runtime application failed")
-        await runtime.fail_closed(failed)
+        try:
+            failed = await runtime.repository.mark_failed(pending.revision, "runtime application failed")
+        except Exception:
+            from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+
+            failed = RuntimeConfigSnapshot(
+                pending.revision,
+                pending.document,
+                pending.updated_at,
+                apply_status="failed",
+                applied_revision=pending.applied_revision,
+                apply_error="runtime application failed",
+            )
+        with suppress(Exception):
+            await runtime.fail_closed(failed)
         raise HTTPException(status_code=503, detail="Runtime configuration cannot be applied") from None
 
 
@@ -681,7 +712,14 @@ async def put_config(body: PutRuntimeConfigIn, request: Request) -> RuntimeConfi
     ensure_expected_revision(current, body.expected_revision)
     document = document_from_input(body.document, current.document)
     refresh_owners = getattr(request.app.state, "refresh_runtime_owners", None)
-    snapshot = await apply_document(runtime, current, body.expected_revision, document, refresh_owners)
+    snapshot = await apply_document(
+        runtime,
+        current,
+        body.expected_revision,
+        document,
+        refresh_owners,
+        getattr(request.app.state, "clear_runtime_owners", None),
+    )
     return await config_out(runtime.repository, snapshot)
 
 
@@ -693,16 +731,22 @@ async def _put_runtime_token(
     runtime = require_runtime(request)
     current = await runtime.repository.get_or_create()
     ensure_expected_revision(current, body.expected_revision)
-    try:
-        snapshot = await runtime.repository.put_token(
-            body.expected_revision,
-            credential_ref,
-            TokenPayload(token=body.token),
-        )
-    except RevisionConflict as error:
-        raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
     refresh_owners = getattr(request.app.state, "refresh_runtime_owners", None)
-    await publish_pending_snapshot(runtime, snapshot, refresh_owners)
+    async with application_barrier(runtime):
+        try:
+            snapshot = await runtime.repository.put_token(
+                body.expected_revision,
+                credential_ref,
+                TokenPayload(token=body.token),
+            )
+        except RevisionConflict as error:
+            raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+        await publish_pending_snapshot(
+            runtime,
+            snapshot,
+            refresh_owners,
+            clear_owners=getattr(request.app.state, "clear_runtime_owners", None),
+        )
     return TokenMutationOut(revision=snapshot.revision, configured=True, updated_at=snapshot.updated_at)
 
 

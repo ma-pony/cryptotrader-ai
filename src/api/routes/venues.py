@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from api.routes.config import (
     VenueConnectionOut,
+    application_barrier,
     apply_document,
     connection_out,
     ensure_expected_revision,
@@ -171,6 +172,7 @@ async def create_connection(body: CreateConnectionIn, request: Request) -> Conne
         body.expected_revision,
         document,
         getattr(request.app.state, "refresh_runtime_owners", None),
+        getattr(request.app.state, "clear_runtime_owners", None),
     )
     return ConnectionMutationOut(
         revision=saved.revision,
@@ -203,6 +205,7 @@ async def update_connection(
         body.expected_revision,
         document,
         getattr(request.app.state, "refresh_runtime_owners", None),
+        getattr(request.app.state, "clear_runtime_owners", None),
     )
     return ConnectionMutationOut(
         revision=saved.revision,
@@ -222,17 +225,23 @@ async def put_credentials(
     connection = _find_connection(snapshot, connection_id)
     if connection.environment == "paper" or connection.credential_ref is None:
         raise HTTPException(status_code=422, detail="Connection does not accept credentials")
-    try:
-        saved = await runtime.repository.put_credentials(
-            body.expected_revision,
-            connection.credential_ref,
-            body.credentials,
+    async with application_barrier(runtime):
+        try:
+            saved = await runtime.repository.put_credentials(
+                body.expected_revision,
+                connection.credential_ref,
+                body.credentials,
+            )
+        except RevisionConflict as error:
+            raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+        except Exception:
+            raise HTTPException(status_code=503, detail="Credential storage is unavailable") from None
+        await publish_pending_snapshot(
+            runtime,
+            saved,
+            getattr(request.app.state, "refresh_runtime_owners", None),
+            clear_owners=getattr(request.app.state, "clear_runtime_owners", None),
         )
-    except RevisionConflict as error:
-        raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
-    except Exception:
-        raise HTTPException(status_code=503, detail="Credential storage is unavailable") from None
-    await publish_pending_snapshot(runtime, saved, getattr(request.app.state, "refresh_runtime_owners", None))
     state = await runtime.repository.credential_state(connection.credential_ref)
     return CredentialMutationOut(
         revision=saved.revision,

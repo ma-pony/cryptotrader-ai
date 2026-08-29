@@ -37,11 +37,35 @@ class _Repository:
     async def reveal_credentials(self, credential_ref):
         return self.credentials[credential_ref][0]
 
+    async def reveal_token(self, _credential_ref):
+        from cryptotrader.runtime_config.repository import CredentialNotConfigured
+
+        raise CredentialNotConfigured("test")
+
     def publish(self, document) -> RuntimeConfigSnapshot:
         self.snapshot = RuntimeConfigSnapshot(
             self.snapshot.revision + 1,
             document,
             self.snapshot.updated_at + timedelta(seconds=1),
+        )
+        return self.snapshot
+
+    async def mark_applied(self, revision):
+        assert self.snapshot.revision == revision
+        self.snapshot = replace(
+            self.snapshot,
+            apply_status="applied",
+            applied_revision=revision,
+            apply_error=None,
+        )
+        return self.snapshot
+
+    async def mark_failed(self, revision, error):
+        assert self.snapshot.revision == revision
+        self.snapshot = replace(
+            self.snapshot,
+            apply_status="failed",
+            apply_error=error,
         )
         return self.snapshot
 
@@ -588,6 +612,145 @@ async def test_non_applied_startup_and_reload_never_admit_a_cycle_or_session(app
     assert runtime.cycle is None
     assert runtime.sessions == {}
     assert adapter.sessions[0].close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_application_barrier_rejects_new_cycle_work_but_never_blocks_an_existing_lease_release():
+    """A desired revision cannot be observed by cycle work until its application commits."""
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    lease = runtime.cycle_lease()
+    await lease.__aenter__()
+    try:
+        async with runtime.application_barrier():
+            with pytest.raises(RuntimeLeaseUnavailableError, match="application"):
+                await runtime.cycle_lease().__aenter__()
+            with pytest.raises(RuntimeError, match="application"):
+                await runtime.reload_for_cycle()
+
+            # Releasing an already admitted lease must not wait for the application
+            # barrier.  Owner shutdown relies on that property to avoid deadlock.
+            await asyncio.wait_for(lease.__aexit__(None, None, None), timeout=0.2)
+    finally:
+        if runtime._active_leases:
+            await lease.__aexit__(None, None, None)
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_application_protocol_starts_real_owner_factories_for_pending_graph_then_exposes_applied_revision(
+    monkeypatch,
+):
+    """Owners initialize from the pending graph; HTTP/cycle admission opens only after commit."""
+    from api import main as api_main
+    from api.routes.config import publish_pending_snapshot
+
+    old = _connection("paper-a", parameters={"initial_equity": "10000"})
+    runtime, repository, _, _ = await _build(_document(old))
+    changed = _connection("paper-a", parameters={"initial_equity": "20000"})
+    pending = RuntimeConfigSnapshot(8, _document(changed), NOW + timedelta(seconds=1), "pending", 7)
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+    started: list[tuple[str, int]] = []
+    stopped: list[str] = []
+    rejected: list[str] = []
+
+    class _Trigger:
+        async def stop(self):
+            stopped.append("old-trigger")
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(runtime=runtime, trigger_engine=_Trigger(), scheduler=object(), scheduler_task=object())
+    )
+
+    async def shutdown_scheduler(_app):
+        stopped.append("old-scheduler")
+
+    async def init_trigger(_app, *, snapshot=None):
+        started.append(("trigger", snapshot.revision))
+        _app.state.trigger_engine = SimpleNamespace(stop=lambda: None)
+
+    async def init_scheduler(_app, *, snapshot=None):
+        with pytest.raises(RuntimeLeaseUnavailableError):
+            await runtime.cycle_lease().__aenter__()
+        with pytest.raises(RuntimeError):
+            await runtime.reload_for_cycle()
+        rejected.append("cycle-and-reload")
+        started.append(("scheduler", snapshot.revision))
+        _app.state.scheduler = object()
+        _app.state.scheduler_task = object()
+
+    monkeypatch.setattr(api_main, "_shutdown_scheduler", shutdown_scheduler)
+    monkeypatch.setattr(api_main, "_init_trigger_engine", init_trigger)
+    monkeypatch.setattr(api_main, "_init_scheduler", init_scheduler)
+
+    async with runtime.application_barrier():
+        applied = await publish_pending_snapshot(
+            runtime,
+            pending,
+            lambda snapshot: api_main._refresh_runtime_owners(app, snapshot=snapshot),
+            candidate,
+        )
+
+    assert started == [("trigger", 8), ("scheduler", 8)]
+    assert rejected == ["cycle-and-reload"]
+    assert stopped == ["old-scheduler", "old-trigger"]
+    assert applied.apply_status == "applied"
+    assert runtime.snapshot is applied
+    assert runtime.cycle is not None
+    assert runtime.cycle.snapshot.revision == 8
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_application_protocol_owner_start_failure_stops_partial_owner_and_fails_closed(monkeypatch):
+    """A partially initialized owner can never survive a failed desired revision."""
+    from api import main as api_main
+    from api.routes.config import publish_pending_snapshot
+
+    runtime, repository, _, _ = await _build(_document(_connection("paper-a")))
+    pending = RuntimeConfigSnapshot(
+        8,
+        _document(_connection("paper-a", parameters={"initial_equity": "20000"})),
+        NOW + timedelta(seconds=1),
+        "pending",
+        7,
+    )
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+    stopped: list[str] = []
+
+    class _PartialTrigger:
+        async def stop(self):
+            stopped.append("partial-trigger")
+
+    app = SimpleNamespace(
+        state=SimpleNamespace(runtime=runtime, trigger_engine=None, scheduler=None, scheduler_task=None)
+    )
+
+    async def init_trigger(_app, *, snapshot=None):
+        _app.state.trigger_engine = _PartialTrigger()
+
+    async def init_scheduler(_app, *, snapshot=None):
+        raise RuntimeError("scheduler factory failed")
+
+    monkeypatch.setattr(api_main, "_init_trigger_engine", init_trigger)
+    monkeypatch.setattr(api_main, "_init_scheduler", init_scheduler)
+
+    async with runtime.application_barrier():
+        with pytest.raises(Exception, match="Runtime configuration cannot be applied"):
+            await publish_pending_snapshot(
+                runtime,
+                pending,
+                lambda snapshot: api_main._refresh_runtime_owners(app, snapshot=snapshot),
+                candidate,
+                clear_owners=lambda: api_main._clear_runtime_owners(app),
+            )
+
+    assert stopped == ["partial-trigger"]
+    assert runtime.snapshot.apply_status == "failed"
+    assert runtime.sessions == {}
+    assert runtime.cycle is None
+    await runtime.close()
 
 
 @pytest.mark.asyncio

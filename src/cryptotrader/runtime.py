@@ -87,9 +87,33 @@ class Runtime:
     _closed: bool = field(default=False, init=False, repr=False)
     _close_completion: asyncio.Task[None] | None = field(default=None, init=False, repr=False)
     _lifecycle_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _application_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False, repr=False)
+    _application_owner: asyncio.Task[object] | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._leases_drained.set()
+
+    @property
+    def application_in_progress(self) -> bool:
+        """Whether a desired revision is being committed into the live graph."""
+        return self._application_owner is not None
+
+    @asynccontextmanager
+    async def application_barrier(self):
+        """Serialize configuration application while leaving existing leases releasable."""
+        await self._application_lock.acquire()
+        owner = asyncio.current_task()
+        try:
+            async with self._lifecycle_lock:
+                if self._closing or self._closed:
+                    raise RuntimeError("runtime is unavailable")
+                self._application_owner = owner
+            yield
+        finally:
+            async with self._lifecycle_lock:
+                if self._application_owner is owner:
+                    self._application_owner = None
+            self._application_lock.release()
 
     @asynccontextmanager
     async def cycle_lease(self):
@@ -98,6 +122,8 @@ class Runtime:
         async with self._lifecycle_lock:
             if self._closing or self._closed:
                 raise RuntimeLeaseUnavailableError("runtime is unavailable")
+            if self._application_owner is not None:
+                raise RuntimeLeaseUnavailableError("runtime application is in progress")
             cycle = await self._reload_for_cycle_locked()
             if cycle is None:
                 raise RuntimeLeaseUnavailableError("runtime is unavailable")
@@ -142,6 +168,8 @@ class Runtime:
         async with self._lifecycle_lock:
             if self._closing or self._closed:
                 raise RuntimeError("runtime is closed")
+            if self._application_owner is not None:
+                raise RuntimeError("runtime application is in progress")
             return await self._reload_for_cycle_locked()
 
     async def prepare_candidate(self, snapshot: RuntimeConfigSnapshot) -> Runtime:
@@ -153,13 +181,25 @@ class Runtime:
             apply_status="applied",
             applied_revision=snapshot.revision,
         )
-        return await build_runtime(repository=self.repository, snapshot=prepared, event_sink=self.events)
+        if self._registry_discoverer is None:
+            return await build_runtime(repository=self.repository, snapshot=prepared, event_sink=self.events)
+        signals, venues, markets = await self._registry_discoverer(prepared.document)
+        return await build_runtime(
+            repository=self.repository,
+            snapshot=prepared,
+            event_sink=self.events,
+            signal_registry=signals,
+            venue_registry=venues,
+            market_registry=markets,
+        )
 
     async def publish_candidate(self, candidate: Runtime, snapshot: RuntimeConfigSnapshot) -> None:
         """Atomically make an already prepared graph the only executable graph."""
         async with self._lifecycle_lock:
             if self._closing or self._closed:
                 raise RuntimeError("runtime is unavailable")
+            if self._application_owner is None:
+                raise RuntimeError("runtime application barrier is required")
             retired = tuple(self.sessions.values())
             self.snapshot = snapshot
             self.sessions = candidate.sessions
@@ -173,9 +213,20 @@ class Runtime:
             candidate.cycle = None
             await self._retire_sessions(retired)
 
+    async def activate_applied(self, snapshot: RuntimeConfigSnapshot) -> None:
+        """Expose a committed revision only after its owners have started."""
+        async with self._lifecycle_lock:
+            if self._application_owner is None:
+                raise RuntimeError("runtime application barrier is required")
+            if self.snapshot.revision != snapshot.revision:
+                raise RuntimeError("runtime revision changed during application")
+            self.snapshot = snapshot
+
     async def fail_closed(self, snapshot: RuntimeConfigSnapshot) -> None:
         """Retain the failed desired document while ensuring no executable graph remains."""
         async with self._lifecycle_lock:
+            if self._application_owner is None:
+                raise RuntimeError("runtime application barrier is required")
             retired = tuple(self.sessions.values())
             self.snapshot = snapshot
             self.sessions = {}

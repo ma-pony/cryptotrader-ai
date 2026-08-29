@@ -51,7 +51,8 @@ async def lifespan(_app: FastAPI):
     from cryptotrader.log_config import setup_logging
 
     await _init_runtime(_app)
-    _app.state.refresh_runtime_owners = lambda: _refresh_runtime_owners(_app)
+    _app.state.refresh_runtime_owners = lambda snapshot=None: _refresh_runtime_owners(_app, snapshot=snapshot)
+    _app.state.clear_runtime_owners = lambda: _clear_runtime_owners(_app)
     runtime = _app.state.runtime
     setup_logging(runtime.snapshot.document)
 
@@ -113,22 +114,30 @@ async def _shutdown_runtime_owners(app_instance: FastAPI, runtime, *, active: bo
         raise failures[0]
 
 
-async def _refresh_runtime_owners(app_instance) -> None:
-    """Replace app-owned scheduler and trigger resources for the published graph."""
+async def _clear_runtime_owners(app_instance) -> None:
+    """Stop app-owned execution resources without closing the runtime graph."""
     await _shutdown_scheduler(app_instance)
+    app_instance.state.scheduler = None
+    app_instance.state.scheduler_task = None
     trigger_engine = getattr(app_instance.state, "trigger_engine", None)
     if trigger_engine is not None:
         await trigger_engine.stop()
     app_instance.state.trigger_engine = None
     app_instance.state.trigger_store = None
+
+
+async def _refresh_runtime_owners(app_instance, *, snapshot=None) -> None:
+    """Replace app-owned scheduler and trigger resources for the published graph."""
+    await _clear_runtime_owners(app_instance)
     runtime = app_instance.state.runtime
-    if runtime.snapshot.setup_required:
+    owner_snapshot = snapshot or runtime.snapshot
+    if not owner_snapshot.document.system.active:
         return
-    await _init_trigger_engine(app_instance)
-    await _init_scheduler(app_instance)
+    await _init_trigger_engine(app_instance, snapshot=owner_snapshot)
+    await _init_scheduler(app_instance, snapshot=owner_snapshot)
 
 
-async def _init_trigger_engine(app_instance: FastAPI) -> None:
+async def _init_trigger_engine(app_instance: FastAPI, *, snapshot=None) -> None:
     """Initialize PriceTriggerEngine and attach to app.state if triggers enabled."""
     from cryptotrader.db import get_async_session
     from cryptotrader.risk.state import RedisStateManager
@@ -136,7 +145,7 @@ async def _init_trigger_engine(app_instance: FastAPI) -> None:
     from cryptotrader.triggers.store import TriggerRuleStore
 
     runtime = app_instance.state.runtime
-    config = runtime.snapshot.document
+    config = (snapshot or runtime.snapshot).document
     if not config.triggers.enabled:
         app_instance.state.trigger_engine = None
         app_instance.state.trigger_store = None
@@ -172,7 +181,7 @@ async def _init_trigger_engine(app_instance: FastAPI) -> None:
     logger.info("PriceTriggerEngine initialized")
 
 
-async def _init_scheduler(app_instance: FastAPI) -> None:
+async def _init_scheduler(app_instance: FastAPI, *, snapshot=None) -> None:
     """Start the trading Scheduler in a background task if scheduler.enabled.
 
     The Scheduler runs trading_cycle (interval) + daily_summary (cron) jobs.
@@ -185,7 +194,7 @@ async def _init_scheduler(app_instance: FastAPI) -> None:
     from cryptotrader.scheduler import Scheduler
 
     runtime = app_instance.state.runtime
-    config = runtime.snapshot.document
+    config = (snapshot or runtime.snapshot).document
     if not config.scheduler.enabled:
         app_instance.state.scheduler = None
         app_instance.state.scheduler_task = None
