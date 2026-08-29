@@ -76,6 +76,16 @@ class _Repository:
         return snapshot
 
 
+class _MutableRepository:
+    def __init__(self, snapshot: RuntimeConfigSnapshot) -> None:
+        self.current = snapshot
+        self.calls = 0
+
+    async def get_or_create(self) -> RuntimeConfigSnapshot:
+        self.calls += 1
+        return self.current
+
+
 class _MarketSource:
     id = "default"
 
@@ -182,6 +192,11 @@ class _ConcurrentCoordinator:
         return _execution(proposal)
 
 
+class _FailingEventSink:
+    async def publish(self, event) -> None:
+        raise RuntimeError(f"observer failed at {event.name}")
+
+
 def _cycle(snapshot, *, failed_books=(), execution_failed_books=(), repository=None):
     proposals = {
         book.id: _proposal_for(
@@ -235,6 +250,21 @@ async def test_one_signal_pass_drives_simulation_and_live_books():
     assert len(coordinator.proposals) == 2
     assert outcome.target_position.side == "long"
     assert {result.book_id for result in outcome.books} == {"simulation", "live"}
+
+
+@pytest.mark.asyncio
+async def test_cycle_started_base_observer_failure_is_journaled_before_propagation():
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink
+
+    simulation = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False)
+    cycle, _, _, journal, _ = _cycle(_snapshot(simulation))
+    cycle.events = MultiplexedCycleEventSink(_FailingEventSink())
+
+    with pytest.raises(RuntimeError, match="observer failed at cycle_failed"):
+        await cycle.run(CycleRequest(PAIR))
+
+    assert len(journal.records) == 1
+    assert journal.records[0].cycle_status == "cycle_failed"
 
 
 @pytest.mark.asyncio
@@ -341,6 +371,34 @@ async def test_execute_approved_invalidates_revision_change_without_claiming_or_
 
 
 @pytest.mark.asyncio
+async def test_execute_approved_reads_revision_after_approval_and_journal_identity_validation():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    initial = _snapshot(live, revision=9)
+    repository = _MutableRepository(initial)
+    cycle, _, coordinator, journal, approvals = _cycle(initial, repository=repository)
+    awaiting = await cycle.run(CycleRequest(PAIR))
+    approval_id = awaiting.book("live").hitl.approval_id
+    await approvals.approve(approval_id)
+    original_get = journal.get
+
+    async def get_then_change_revision(candidate_id):
+        record = await original_get(candidate_id)
+        repository.current = replace(initial, revision=10)
+        return record
+
+    journal.get = get_then_change_revision
+
+    invalidated = await cycle.execute_approved(approval_id)
+
+    assert repository.calls == 2
+    assert invalidated.book("live").hitl.status == "invalidated"
+    approval = await approvals.get(approval_id)
+    assert approval is not None
+    assert approval.status == "invalidated"
+    assert coordinator.proposals == []
+
+
+@pytest.mark.asyncio
 async def test_cancellation_after_approval_creation_invalidates_unjournaled_approval():
     live = _book("live", "real", ("live-first", "live-second"), hitl=True)
     cycle, _, _, journal, approvals = _cycle(_snapshot(live))
@@ -381,6 +439,50 @@ async def test_approval_durably_created_before_create_error_is_invalidated_when_
     assert len(approvals.records) == 1
     assert approvals.records[0].status == "invalidated"
     assert await approvals.list_pending() == []
+
+
+@pytest.mark.asyncio
+async def test_successful_journal_save_is_authoritative_for_pending_approval_cleanup():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    cycle, _, _, _, approvals = _cycle(_snapshot(live))
+
+    class _WriteOnlyAfterSaveJournal(MultiVenueCycleStore):
+        async def get(self, cycle_id):
+            raise RuntimeError("transient journal read outage")
+
+    journal = _WriteOnlyAfterSaveJournal()
+    cycle.journal = journal
+
+    outcome = await cycle.run(CycleRequest(PAIR))
+
+    approval_id = outcome.book("live").hitl.approval_id
+    assert approval_id is not None
+    assert journal.records[0].cycle_status == "awaiting_approval"
+    assert (await approvals.get(approval_id)).status == "pending"
+
+
+@pytest.mark.asyncio
+async def test_ambiguous_journal_write_and_failed_read_does_not_invalidate_possible_durable_approval():
+    live = _book("live", "real", ("live-first", "live-second"), hitl=True)
+    cycle, _, _, _, approvals = _cycle(_snapshot(live))
+
+    class _AmbiguousJournal(MultiVenueCycleStore):
+        async def save(self, record):
+            await super().save(record)
+            raise RuntimeError("ambiguous write response")
+
+        async def get(self, cycle_id):
+            raise RuntimeError("durable read unavailable")
+
+    journal = _AmbiguousJournal()
+    cycle.journal = journal
+
+    with pytest.raises(RuntimeError, match="durable read unavailable"):
+        await cycle.run(CycleRequest(PAIR))
+
+    assert journal.records[0].cycle_status == "awaiting_approval"
+    assert len(approvals.records) == 1
+    assert approvals.records[0].status == "pending"
 
 
 @pytest.mark.asyncio

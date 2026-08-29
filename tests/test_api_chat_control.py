@@ -10,7 +10,6 @@ import pytest
 from cryptotrader.chat.event_buffer import EventBuffer
 from cryptotrader.chat.event_bus import EventBus
 from cryptotrader.chat.task_manager import BackgroundTaskManager
-from cryptotrader.config import ChatConfig
 from cryptotrader.risk.state import RedisStateManager
 
 
@@ -57,8 +56,7 @@ class _BlockingCancellationCycle:
 async def test_interrupt_returns_received(state_mgr):
     from api.routes.chat_control import interrupt_analysis
 
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     bus = _make_bus("s1", state_mgr)
     mgr.create("s1", "BTC/USDT", _long_coro, "chat", bus)
 
@@ -71,8 +69,7 @@ async def test_interrupt_returns_received(state_mgr):
 async def test_interrupt_noop_when_already_interrupted(state_mgr):
     from api.routes.chat_control import interrupt_analysis
 
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     bus = _make_bus("s1", state_mgr)
     mgr.create("s1", "BTC/USDT", _long_coro, "chat", bus)
 
@@ -87,8 +84,7 @@ async def test_interrupt_404_for_unknown():
 
     from api.routes.chat_control import interrupt_analysis
 
-    config = ChatConfig(max_concurrent_tasks=5)
-    BackgroundTaskManager.get_instance(config)
+    BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     with pytest.raises(HTTPException) as exc_info:
         await interrupt_analysis("nonexistent")
     assert exc_info.value.status_code == 404
@@ -99,8 +95,7 @@ async def test_interrupt_response_waits_for_exact_old_task_cleanup_before_same_s
     from api.routes.chat_control import interrupt_analysis
     from cryptotrader.chat.analysis_runner import run_analysis_and_buffer
 
-    config = ChatConfig(max_concurrent_tasks=5)
-    manager = BackgroundTaskManager.get_instance(config)
+    manager = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     shared_buffer = EventBuffer("s1", state_mgr)
     old_bus = EventBus("s1", shared_buffer)
     old_cycle = _BlockingCancellationCycle(old_bus)

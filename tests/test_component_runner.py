@@ -107,15 +107,36 @@ async def test_component_cancellation_is_not_wrapped_as_failure():
 
 
 @pytest.mark.asyncio
-async def test_event_payload_identifies_component_and_signal():
+async def test_event_payload_identifies_component_without_provider_payload():
     from cryptotrader.signals.runner import ComponentRunner
 
     sink = RecordingSink()
     await ComponentRunner(sink).run((FakeComponent("kronos"),), context())
 
     completed = next(event for event in sink.events if event.name == "component_completed")
-    assert completed.data["component_id"] == "kronos"
-    assert completed.data["signal"].component_id == "kronos"
+    assert completed.data == {
+        "component_id": "kronos",
+        "direction": "long",
+        "confidence": 0.8,
+    }
+
+
+@pytest.mark.asyncio
+async def test_component_events_do_not_expose_signal_or_error_secrets():
+    from cryptotrader.signals.runner import ComponentRunError, ComponentRunner
+
+    sensitive_marker = "provider-sensitive-marker"
+    sink = RecordingSink()
+    with pytest.raises(ComponentRunError):
+        await ComponentRunner(sink).run(
+            (
+                FakeComponent("safe", result=signal("safe", reasoning=sensitive_marker)),
+                FakeComponent("failed", error=RuntimeError(sensitive_marker)),
+            ),
+            context(),
+        )
+
+    assert sensitive_marker not in repr(sink.events)
 
 
 @pytest.mark.asyncio

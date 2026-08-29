@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -94,12 +95,6 @@ class TradingCycle:
         books = tuple(book for book in document.execution.books if book.enabled)
         cycle_id = str(uuid4())
         created_at = self._now()
-        await self._publish(
-            "cycle_started",
-            cycle_id=cycle_id,
-            config_revision=snapshot.revision,
-            pair=request.pair.canonical(),
-        )
 
         context: SignalContext | None = None
         signals: tuple[ComponentSignal, ...] = ()
@@ -107,7 +102,18 @@ class TradingCycle:
         target: TargetPosition | None = None
         created_approval_ids: list[str] = []
         initial_record_saved = False
+        journal_write_attempted = False
+        durable_record: MultiVenueCycleRecord | None = None
+        cycle_scope = getattr(self.events, "cycle", None)
+        event_scope = cycle_scope(cycle_id, snapshot.revision) if callable(cycle_scope) else nullcontext()
+        event_scope.__enter__()
         try:
+            await self._publish(
+                "cycle_started",
+                cycle_id=cycle_id,
+                config_revision=snapshot.revision,
+                pair=request.pair.canonical(),
+            )
             components = self.registry.enabled(profile)
             requirements = DataRequirements.merge(
                 *(component.requirements() for component in components),
@@ -169,9 +175,15 @@ class TradingCycle:
                 book_results=book_results,
                 created_at=created_at,
             )
+            journal_write_attempted = True
             await self.journal.save(record)
             initial_record_saved = True
-            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            durable_record = record
+            await self._invalidate_unjournaled_approvals(
+                cycle_id,
+                created_approval_ids,
+                durable_record=record,
+            )
             await self._publish(
                 "cycle_completed",
                 cycle_id=cycle_id,
@@ -182,7 +194,12 @@ class TradingCycle:
             )
             return self._outcome(record)
         except asyncio.CancelledError:
-            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            await self._invalidate_unjournaled_approvals(
+                cycle_id,
+                created_approval_ids,
+                durable_record=durable_record,
+                reconcile_ambiguous_write=journal_write_attempted,
+            )
             if not initial_record_saved:
                 await self._record_or_save_empty(
                     cycle_id,
@@ -202,7 +219,12 @@ class TradingCycle:
             )
             raise
         except ComponentRunError:
-            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            await self._invalidate_unjournaled_approvals(
+                cycle_id,
+                created_approval_ids,
+                durable_record=durable_record,
+                reconcile_ambiguous_write=journal_write_attempted,
+            )
             if initial_record_saved:
                 record = await self._required_record(cycle_id)
             else:
@@ -224,7 +246,12 @@ class TradingCycle:
             )
             return self._outcome(record)
         except Exception:
-            await self._invalidate_unjournaled_approvals(cycle_id, created_approval_ids)
+            await self._invalidate_unjournaled_approvals(
+                cycle_id,
+                created_approval_ids,
+                durable_record=durable_record,
+                reconcile_ambiguous_write=journal_write_attempted,
+            )
             if initial_record_saved:
                 record = await self._required_record(cycle_id)
             else:
@@ -245,9 +272,10 @@ class TradingCycle:
                 status="cycle_failed",
             )
             return self._outcome(record)
+        finally:
+            event_scope.__exit__(None, None, None)
 
     async def execute_approved(self, approval_id: str) -> CycleOutcome:
-        snapshot = await self.repository.get_or_create()
         approval = await self.approvals.get(approval_id)
         if approval is None:
             raise LookupError("approval was not found")
@@ -255,6 +283,7 @@ class TradingCycle:
         original = self._required_approval_book(record, approval_id, approval.book_id)
         if original.proposal != approval.proposal:
             raise ValueError("approval proposal does not match the journaled approval")
+        snapshot = await self.repository.get_or_create()
         if snapshot.revision != approval.config_revision:
             await self.approvals.invalidate(approval_id)
             replacement = await self._persist_approval_transition(record, original, "invalidated")
@@ -759,16 +788,19 @@ class TradingCycle:
         self,
         cycle_id: str,
         approval_ids: list[str],
+        *,
+        durable_record: MultiVenueCycleRecord | None = None,
+        reconcile_ambiguous_write: bool = False,
     ) -> None:
         if not approval_ids:
             return
-        durable_ids: set[str] = set()
-        try:
+        record = durable_record
+        if record is None and reconcile_ambiguous_write:
             record = await self.journal.get(cycle_id)
-        except Exception:
-            record = None
         if record is not None:
             durable_ids = {item.hitl.approval_id for item in record.book_results if item.hitl.approval_id is not None}
+        else:
+            durable_ids = set()
         pending_cleanup = tuple(
             self.approvals.invalidate(approval_id) for approval_id in approval_ids if approval_id not in durable_ids
         )

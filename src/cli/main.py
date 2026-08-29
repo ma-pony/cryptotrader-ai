@@ -399,7 +399,7 @@ async def _agent_list() -> None:
         table.add_column("Name")
         table.add_column("Status")
         table.add_column("Description")
-        for component in runtime.signals.metadata():
+        for component in runtime.signal_registry.metadata():
             status = "[green]enabled[/green]" if component.component_id in enabled else "[dim]disabled[/dim]"
             table.add_row(
                 component.component_id,
@@ -450,41 +450,6 @@ def mcp_list():
         tools = ", ".join(server.tools) if server.tools else "<auto-discover>"
         table.add_row(server.name, server.transport, enabled, tools)
     console.print(table)
-
-
-@mcp_app.command("call")
-def mcp_call(
-    tool_name: str = typer.Argument(..., help="MCP tool name to call"),
-    args: str = typer.Option("{}", "--args", help="JSON arguments for the tool"),
-):
-    """Call an enabled code-owned MCP tool directly for debugging."""
-    import json
-
-    from cryptotrader.mcp.registry import MCPRegistry, MCPToolNotFoundError
-
-    config = _mcp_config()
-    if not config.enabled:
-        console.print("[red]MCP is disabled.[/red]")
-        raise typer.Exit(code=1)
-    try:
-        parsed_args = json.loads(args)
-    except json.JSONDecodeError as exc:
-        console.print(f"[red]Invalid JSON args: {exc}[/red]")
-        raise typer.Exit(code=1) from exc
-    registry = MCPRegistry.from_config(config)
-
-    async def _call():
-        return await registry.call_tool(tool_name, parsed_args)
-
-    try:
-        result = asyncio.run(_call())
-        console.print_json(json.dumps(result, default=str, indent=2))
-    except MCPToolNotFoundError as exc:
-        console.print(f"[red]Tool '{tool_name}' not found. Use 'arena mcp list' to see available tools.[/red]")
-        raise typer.Exit(code=1) from exc
-    except Exception as exc:
-        console.print(f"[red]Error calling tool: {exc}[/red]")
-        raise typer.Exit(code=1) from exc
 
 
 if __name__ == "__main__":

@@ -25,7 +25,13 @@ def test_run_command_has_no_graph_option() -> None:
 
 
 def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:
-    runtime = SimpleNamespace(
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
+    from cryptotrader.runtime import Runtime
+
+    signal_registry = SimpleNamespace(
+        metadata=lambda: (ComponentMetadata("llm_committee", "LLM committee", "Internal debate"),)
+    )
+    runtime = Runtime(
         snapshot=SimpleNamespace(
             document=SimpleNamespace(
                 signals=SimpleNamespace(
@@ -33,11 +39,15 @@ def test_agent_list_reads_runtime_signal_registry_and_closes_runtime() -> None:
                 )
             )
         ),
-        signals=SimpleNamespace(
-            metadata=lambda: (ComponentMetadata("llm_committee", "LLM committee", "Internal debate"),)
-        ),
-        close=AsyncMock(),
+        repository=object(),
+        cycle=None,
+        sessions={},
+        signal_registry=signal_registry,
+        market_registry=object(),
+        venue_registry=object(),
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
+    runtime.close = AsyncMock()
     with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
         result = CliRunner().invoke(app, ["agent", "list"])
 

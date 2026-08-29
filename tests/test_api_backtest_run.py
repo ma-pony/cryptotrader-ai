@@ -6,6 +6,7 @@ Param validation rejects invalid dates, capital, and retired strategy selectors.
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,7 +17,16 @@ from fastapi.testclient import TestClient
 def client() -> TestClient:
     from api.main import app
 
-    return TestClient(app, raise_server_exceptions=False)
+    previous = getattr(app.state, "runtime", None)
+    app.state.runtime = SimpleNamespace(
+        repository=object(),
+        snapshot=object(),
+        signal_registry=object(),
+    )
+    try:
+        yield TestClient(app, raise_server_exceptions=False)
+    finally:
+        app.state.runtime = previous
 
 
 def _mock_config() -> MagicMock:
@@ -39,12 +49,18 @@ class TestBacktestRunHappyPath:
     def test_returns_202_with_run_id(self, client: TestClient, monkeypatch) -> None:
         from api.main import app
 
-        shared_profiles = object()
-        shared_custom_components = (object(),)
-        shared_journal = object()
-        monkeypatch.setattr(app.state, "signal_profile_repository", shared_profiles, raising=False)
-        monkeypatch.setattr(app.state, "signal_custom_components", shared_custom_components, raising=False)
-        monkeypatch.setattr(app.state, "cycle_journal_store", shared_journal, raising=False)
+        shared_repository = object()
+        shared_snapshot = object()
+        shared_signal_registry = object()
+        monkeypatch.setattr(
+            app.state,
+            "runtime",
+            SimpleNamespace(
+                repository=shared_repository,
+                snapshot=shared_snapshot,
+                signal_registry=shared_signal_registry,
+            ),
+        )
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
             patch("api.routes.backtest._spawn_run", return_value="run_a1b2c3") as spawn_run,
@@ -52,9 +68,12 @@ class TestBacktestRunHappyPath:
             resp = client.post("/api/backtest/run", json=_valid_payload())
 
         assert resp.status_code == 202
-        assert spawn_run.call_args.args[1] is shared_profiles
-        assert spawn_run.call_args.args[2] is shared_custom_components
-        assert spawn_run.call_args.args[3] is shared_journal
+        assert spawn_run.call_args.args[1] is shared_repository
+        assert spawn_run.call_args.args[2] is shared_snapshot
+        assert spawn_run.call_args.args[3] is shared_signal_registry
+        from cryptotrader.journal.store import MultiVenueCycleStore
+
+        assert isinstance(spawn_run.call_args.args[4], MultiVenueCycleStore)
         body = resp.json()
         assert "run_id" in body
         assert body["run_id"].startswith("run_")
@@ -119,3 +138,49 @@ class TestBacktestRunValidation:
         with patch("cryptotrader.config.load_config", return_value=_mock_config()):
             resp = client.post("/api/backtest/run", json=payload)
         assert resp.status_code in (400, 422)
+
+
+@pytest.mark.asyncio
+async def test_mounted_backtest_route_completes_with_runtime_dependencies(monkeypatch) -> None:
+    import httpx
+
+    from api.main import app
+    from api.routes.backtest import _RUNS, _TASKS
+    from cryptotrader.backtest.result import BacktestResult
+
+    repository = object()
+    snapshot = object()
+    signal_registry = object()
+    previous = getattr(app.state, "runtime", None)
+    app.state.runtime = SimpleNamespace(
+        repository=repository,
+        snapshot=snapshot,
+        signal_registry=signal_registry,
+    )
+    captured = {}
+
+    class FakeEngine:
+        def __init__(self, *args, **kwargs) -> None:
+            captured.update(kwargs)
+
+        async def run(self):
+            return BacktestResult(equity_curve=[10_000.0])
+
+    monkeypatch.setattr("cryptotrader.backtest.engine.BacktestEngine", FakeEngine)
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.post("/api/backtest/run", json=_valid_payload())
+            assert response.status_code == 202
+            run_id = response.json()["run_id"]
+            await _TASKS[run_id]
+            status = await client.get(f"/api/backtest/runs/{run_id}")
+    finally:
+        app.state.runtime = previous
+
+    assert status.json()["status"] == "completed"
+    assert captured["repository"] is repository
+    assert captured["snapshot"] is snapshot
+    assert captured["signal_registry"] is signal_registry
+    assert captured["journal_store"].database_url is None
+    assert _RUNS[run_id]["error"] is None

@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 import pytest
 
 from cryptotrader.chat.event_buffer import EventBuffer
 from cryptotrader.chat.event_bus import EventBus
 from cryptotrader.chat.task_manager import BackgroundTaskManager, TooManyTasksError
-from cryptotrader.config import ChatConfig
 from cryptotrader.risk.state import RedisStateManager
 
 
@@ -40,8 +40,7 @@ async def _long_coro(_interrupt_event):
 
 @pytest.mark.asyncio
 async def test_create_and_get(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     bus = _make_bus("s1", state_mgr)
     task = mgr.create("s1", "BTC/USDT", _noop_coro, "chat", bus)
     assert task.session_id == "s1"
@@ -51,8 +50,7 @@ async def test_create_and_get(state_mgr):
 
 @pytest.mark.asyncio
 async def test_concurrent_limit(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=2)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=2)
     mgr.create("s1", "BTC/USDT", _long_coro, "chat", _make_bus("s1", state_mgr))
     mgr.create("s2", "ETH/USDT", _long_coro, "chat", _make_bus("s2", state_mgr))
     with pytest.raises(TooManyTasksError):
@@ -61,8 +59,7 @@ async def test_concurrent_limit(state_mgr):
 
 @pytest.mark.asyncio
 async def test_session_replacement(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     bus1 = _make_bus("s1", state_mgr)
     task1 = mgr.create("s1", "BTC/USDT", _long_coro, "chat", bus1)
     bus2 = _make_bus("s1", state_mgr)
@@ -73,8 +70,7 @@ async def test_session_replacement(state_mgr):
 
 @pytest.mark.asyncio
 async def test_replaced_task_callback_cannot_mark_new_task_completed(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    manager = BackgroundTaskManager.get_instance(config)
+    manager = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     old_entered = asyncio.Event()
     old_cleanup_started = asyncio.Event()
     old_cleanup_release = asyncio.Event()
@@ -120,8 +116,7 @@ async def test_replaced_task_callback_cannot_mark_new_task_completed(state_mgr):
 
 @pytest.mark.asyncio
 async def test_interrupt(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     bus = _make_bus("s1", state_mgr)
     task = mgr.create("s1", "BTC/USDT", _long_coro, "chat", bus)
     assert not task.interrupt_event.is_set()
@@ -132,8 +127,7 @@ async def test_interrupt(state_mgr):
 
 @pytest.mark.asyncio
 async def test_task_done_marks_completed(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     bus = _make_bus("s1", state_mgr)
     mgr.create("s1", "BTC/USDT", _noop_coro, "chat", bus)
     await asyncio.sleep(0.05)
@@ -143,14 +137,31 @@ async def test_task_done_marks_completed(state_mgr):
 
 
 @pytest.mark.asyncio
+async def test_create_publishes_workflow_through_injected_runtime_state_dependency(state_mgr):
+    published = []
+
+    async def publisher(channel, payload):
+        published.append((channel, json.loads(payload)))
+
+    manager = BackgroundTaskManager.get_instance(workflow_publisher=publisher)
+    manager.create("s1", "BTC/USDT", _noop_coro, "chat", _make_bus("s1", state_mgr))
+    await asyncio.sleep(0.02)
+
+    assert published == [
+        (
+            "analysis:new_workflow",
+            {"session_id": "s1", "pair": "BTC/USDT", "trigger_source": "chat"},
+        )
+    ]
+
+
+@pytest.mark.asyncio
 async def test_get_nonexistent(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     assert mgr.get("nonexistent") is None
 
 
 @pytest.mark.asyncio
 async def test_interrupt_nonexistent(state_mgr):
-    config = ChatConfig(max_concurrent_tasks=5)
-    mgr = BackgroundTaskManager.get_instance(config)
+    mgr = BackgroundTaskManager.get_instance(max_concurrent_tasks=5)
     assert not mgr.interrupt("nonexistent")

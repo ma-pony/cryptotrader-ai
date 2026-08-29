@@ -39,6 +39,18 @@ class MultiplexedCycleEventSink:
             f"cycle_event_subscribers_{id(self)}",
             default=(),
         )
+        self._identity: ContextVar[tuple[str, int] | None] = ContextVar(
+            f"cycle_event_identity_{id(self)}",
+            default=None,
+        )
+
+    @contextmanager
+    def cycle(self, cycle_id: str, config_revision: int):
+        token = self._identity.set((cycle_id, config_revision))
+        try:
+            yield
+        finally:
+            self._identity.reset(token)
 
     @contextmanager
     def route(self, sink: CycleEventSink):
@@ -50,6 +62,27 @@ class MultiplexedCycleEventSink:
             self._subscribers.reset(token)
 
     async def publish(self, event: CycleEvent) -> None:
+        identity = self._identity.get()
+        if identity is not None:
+            cycle_id, config_revision = identity
+            event = CycleEvent(
+                event.name,
+                {**event.data, "cycle_id": cycle_id, "config_revision": config_revision},
+                event.timestamp,
+            )
         sinks = (self.base, *self._subscribers.get())
         unique = tuple(sink for index, sink in enumerate(sinks) if all(sink is not prior for prior in sinks[:index]))
-        await asyncio.gather(*(sink.publish(event) for sink in unique))
+        results = await asyncio.gather(*(sink.publish(event) for sink in unique), return_exceptions=True)
+        base_result = results[0]
+        if isinstance(base_result, BaseException):
+            raise base_result
+        routed_control_flow = next(
+            (
+                result
+                for result in results[1:]
+                if isinstance(result, BaseException) and not isinstance(result, Exception)
+            ),
+            None,
+        )
+        if routed_control_flow is not None:
+            raise routed_control_flow

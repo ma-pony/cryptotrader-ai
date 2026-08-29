@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -110,16 +111,6 @@ class _EarlyCancelledCycle:
         await asyncio.Future()
 
 
-class _SharedRuntimeCycle:
-    def __init__(self, sink) -> None:
-        self.events = sink
-
-    async def run(self, cycle_request):
-        pair = cycle_request.pair.canonical()
-        await asyncio.create_task(self.events.publish(CycleEvent("internal_debate", {"pair": pair})))
-        return CycleOutcome(f"cycle-{pair}", 1, None, (), "completed", "not_started", False)
-
-
 class _BaseSink:
     def __init__(self) -> None:
         self.events = []
@@ -138,19 +129,77 @@ def _runtime_for(cycle):
 
 
 @pytest.mark.asyncio
-async def test_shared_runtime_routes_concurrent_component_events_to_the_correct_real_event_bus():
+async def test_mounted_chat_handler_never_reaches_legacy_load_config():
+    from api.routes.chat import ChatStreamRequest, _handle_new_analysis
+    from cryptotrader.chat.task_manager import BackgroundTaskManager
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
+
+    class RouteCycle:
+        async def run(self, cycle_request):
+            return CycleOutcome("cycle-chat", 4, None, (), "completed", "not_started", False)
+
+    runtime = SimpleNamespace(
+        cycle=RouteCycle(),
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+        snapshot=SimpleNamespace(
+            document=SimpleNamespace(
+                scheduler=SimpleNamespace(pairs=()),
+                infrastructure=SimpleNamespace(redis_url=""),
+            )
+        ),
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(runtime=runtime)))
+
+    with patch("cryptotrader.config.load_config", side_effect=AssertionError("legacy load_config reached")):
+        await _handle_new_analysis(
+            "mounted-chat",
+            ChatStreamRequest(message="BTC/USDT:USDT"),
+            request,
+        )
+        task = BackgroundTaskManager.get_instance().get("mounted-chat")
+        assert task is not None
+        await task.task
+
+
+@pytest.mark.asyncio
+async def test_real_runtime_cycle_routes_concurrent_component_events_to_the_correct_event_bus():
     from cryptotrader.chat.analysis_runner import run_analysis_and_buffer
     from cryptotrader.chat.event_buffer import EventBuffer
     from cryptotrader.chat.event_bus import EventBus
     from cryptotrader.cycle_events import MultiplexedCycleEventSink
     from cryptotrader.runtime import Runtime
+    from cryptotrader.signals.models import ComponentSignal, DataRequirements
+    from cryptotrader.signals.runner import ComponentRunner
+    from tests.test_multi_book_cycle import _book, _cycle, _snapshot
+
+    class RuntimeComponent:
+        id = "fixture"
+        display_name = "Fixture"
+        description = "runtime fixture"
+
+        @staticmethod
+        def requirements():
+            return DataRequirements()
+
+        async def evaluate(self, signal_context):
+            await asyncio.sleep(0)
+            return ComponentSignal(self.id, "long", 1.0, "fixture")
+
+    class RuntimeRegistry:
+        @staticmethod
+        def enabled(profile):
+            return (RuntimeComponent(),)
 
     base = _BaseSink()
     routed = MultiplexedCycleEventSink(base)
-    cycle = _SharedRuntimeCycle(routed)
+    snapshot = _snapshot(_book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False))
+    cycle, _, _, _, _ = _cycle(snapshot)
+    cycle.events = routed
+    cycle.runner = ComponentRunner(routed)
+    cycle.registry = RuntimeRegistry()
     runtime = Runtime(
-        snapshot=SimpleNamespace(),
-        repository=object(),
+        snapshot=snapshot,
+        repository=cycle.repository,
         cycle=cycle,
         sessions={},
         signal_registry=object(),
@@ -173,7 +222,7 @@ async def test_shared_runtime_routes_concurrent_component_events_to_the_correct_
             runtime=runtime,
         ),
         run_analysis_and_buffer(
-            pair="ETH/USDT:USDT",
+            pair="BTC/USDT:USDT",
             session_id="second-session",
             event_bus=second_bus,
             interrupt_event=asyncio.Event(),
@@ -184,14 +233,18 @@ async def test_shared_runtime_routes_concurrent_component_events_to_the_correct_
 
     first_events = await first_bus._buffer.range_after(0)
     second_events = await second_bus._buffer.range_after(0)
-    first_debate = next(event for event in first_events if event.type == "internal_debate")
-    second_debate = next(event for event in second_events if event.type == "internal_debate")
-    assert first_debate.data["pair"] == "BTC/USDT:USDT"
-    assert second_debate.data["pair"] == "ETH/USDT:USDT"
-    assert [event.data["pair"] for event in base.events if event.name == "internal_debate"] == [
-        "BTC/USDT:USDT",
-        "ETH/USDT:USDT",
-    ]
+    first_component = next(event for event in first_events if event.type == "component_completed")
+    second_component = next(event for event in second_events if event.type == "component_completed")
+    assert first_component.data["config_revision"] == snapshot.revision
+    assert second_component.data["config_revision"] == snapshot.revision
+    assert first_component.data["cycle_id"] != second_component.data["cycle_id"]
+    base_cycle_ids = {event.data["cycle_id"] for event in base.events if event.name == "component_completed"}
+    assert base_cycle_ids == {
+        first_component.data["cycle_id"],
+        second_component.data["cycle_id"],
+    }
+    assert not any(event.data.get("cycle_id") == second_component.data["cycle_id"] for event in first_events)
+    assert not any(event.data.get("cycle_id") == first_component.data["cycle_id"] for event in second_events)
 
 
 @pytest.mark.asyncio

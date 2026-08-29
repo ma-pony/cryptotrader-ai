@@ -81,8 +81,9 @@ def _new_run_id() -> str:
 
 def _spawn_run(
     params: BacktestParams,
-    profile_repository=None,
-    custom_components=None,
+    repository,
+    snapshot,
+    signal_registry,
     journal_store=None,
 ) -> str:
     """Schedule a backtest in the background. Returns the new run_id."""
@@ -101,7 +102,14 @@ def _spawn_run(
     }
 
     task = add_background_task(
-        _execute_backtest(run_id, params, profile_repository, custom_components, journal_store),
+        _execute_backtest(
+            run_id,
+            params,
+            repository,
+            snapshot,
+            signal_registry,
+            journal_store,
+        ),
         name=f"backtest:{run_id}",
     )
     _TASKS[run_id] = task
@@ -111,8 +119,9 @@ def _spawn_run(
 async def _execute_backtest(
     run_id: str,
     params: BacktestParams,
-    profile_repository=None,
-    custom_components=None,
+    repository,
+    snapshot,
+    signal_registry,
     journal_store=None,
 ) -> None:
     from cryptotrader.backtest.engine import BacktestEngine
@@ -128,8 +137,9 @@ async def _execute_backtest(
             end=params.end,
             initial_capital=params.initial_capital,
             progress_callback=_on_progress,
-            profile_repository=profile_repository,
-            custom_components=custom_components,
+            repository=repository,
+            snapshot=snapshot,
+            signal_registry=signal_registry,
             journal_store=journal_store,
         )
         result = await engine.run()
@@ -160,12 +170,13 @@ async def _execute_backtest(
         )
         raise
     except Exception as exc:
-        logger.exception("Backtest %s failed", run_id)
+        error_type = type(exc).__name__
+        logger.error("Backtest %s failed: %s", run_id, error_type)
         _RUNS[run_id].update(
             {
                 "status": "failed",
                 "finished_at": datetime.now(UTC).isoformat(),
-                "error": str(exc),
+                "error": f"backtest failed ({error_type})",
             }
         )
 
@@ -257,10 +268,18 @@ def _load_session(name: str) -> dict | None:
 
 @router.post("/run", response_model=BacktestRunResponse, status_code=202)
 async def run_backtest(params: BacktestParams, request: Request) -> BacktestRunResponse:
-    profiles = getattr(request.app.state, "signal_profile_repository", None)
-    custom_components = getattr(request.app.state, "signal_custom_components", None)
-    journal = getattr(request.app.state, "cycle_journal_store", None)
-    run_id = _spawn_run(params, profiles, custom_components, journal)
+    from cryptotrader.journal.store import MultiVenueCycleStore
+
+    runtime = getattr(request.app.state, "runtime", None)
+    if runtime is None:
+        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
+    run_id = _spawn_run(
+        params,
+        runtime.repository,
+        runtime.snapshot,
+        runtime.signal_registry,
+        MultiVenueCycleStore(),
+    )
     return BacktestRunResponse(run_id=run_id)
 
 

@@ -13,7 +13,8 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from cryptotrader.chat.event_bus import EventBus
-    from cryptotrader.config import ChatConfig
+
+    WorkflowPublisher = Callable[[str, str], Awaitable[object]]
 
 logger = logging.getLogger(__name__)
 
@@ -37,18 +38,30 @@ class AnalysisTask:
 class BackgroundTaskManager:
     _instance: BackgroundTaskManager | None = None
 
-    def __init__(self, config: ChatConfig) -> None:
-        self._config = config
+    def __init__(
+        self,
+        *,
+        max_concurrent_tasks: int = 5,
+        workflow_publisher: WorkflowPublisher | None = None,
+    ) -> None:
+        self._max_concurrent_tasks = max_concurrent_tasks
+        self._workflow_publisher = workflow_publisher
         self._tasks: dict[str, AnalysisTask] = {}
 
     @classmethod
-    def get_instance(cls, config: ChatConfig | None = None) -> BackgroundTaskManager:
+    def get_instance(
+        cls,
+        *,
+        max_concurrent_tasks: int = 5,
+        workflow_publisher: WorkflowPublisher | None = None,
+    ) -> BackgroundTaskManager:
         if cls._instance is None:
-            if config is None:
-                from cryptotrader.config import ChatConfig as ChatCfg
-
-                config = ChatCfg()
-            cls._instance = cls(config)
+            cls._instance = cls(
+                max_concurrent_tasks=max_concurrent_tasks,
+                workflow_publisher=workflow_publisher,
+            )
+        elif workflow_publisher is not None:
+            cls._instance._workflow_publisher = workflow_publisher
         return cls._instance
 
     @classmethod
@@ -64,8 +77,8 @@ class BackgroundTaskManager:
         event_bus: EventBus,
     ) -> AnalysisTask:
         active_count = sum(1 for t in self._tasks.values() if not t.completed)
-        if active_count >= self._config.max_concurrent_tasks:
-            raise TooManyTasksError(f"Max concurrent tasks ({self._config.max_concurrent_tasks}) reached")
+        if active_count >= self._max_concurrent_tasks:
+            raise TooManyTasksError(f"Max concurrent tasks ({self._max_concurrent_tasks}) reached")
 
         existing = self._tasks.get(session_id)
         if existing and not existing.completed:
@@ -90,8 +103,10 @@ class BackgroundTaskManager:
         )
         self._tasks[session_id] = analysis_task
 
-        broadcast = asyncio.ensure_future(self._broadcast_new_workflow(session_id, pair, trigger_source))
-        broadcast.add_done_callback(lambda _: None)
+        publisher = self._workflow_publisher
+        if publisher is not None:
+            broadcast = asyncio.ensure_future(self._broadcast_new_workflow(publisher, session_id, pair, trigger_source))
+            broadcast.add_done_callback(lambda _: None)
 
         return analysis_task
 
@@ -110,16 +125,12 @@ class BackgroundTaskManager:
 
     @staticmethod
     async def _broadcast_new_workflow(
+        publisher: WorkflowPublisher,
         session_id: str,
         pair: str,
         trigger_source: str,
     ) -> None:
         try:
-            from cryptotrader.config import load_config
-            from cryptotrader.risk.state import RedisStateManager
-
-            config = load_config()
-            state_mgr = RedisStateManager(config.infrastructure.redis_url or None)
             payload = json.dumps(
                 {
                     "session_id": session_id,
@@ -127,7 +138,7 @@ class BackgroundTaskManager:
                     "trigger_source": trigger_source,
                 }
             )
-            await state_mgr.publish("analysis:new_workflow", payload)
+            await publisher("analysis:new_workflow", payload)
         except Exception:
             logger.info("Failed to broadcast new_workflow", exc_info=True)
 

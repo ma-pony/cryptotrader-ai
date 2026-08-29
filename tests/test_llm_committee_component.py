@@ -213,6 +213,76 @@ async def test_debate_failure_fails_whole_component():
         await component.evaluate(_context())
 
 
+@pytest.mark.asyncio
+async def test_committee_events_do_not_expose_provider_payload_or_error_secrets():
+    from cryptotrader.signals.component import ComponentExecutionError
+    from cryptotrader.signals.components.llm_committee import LLMCommitteeComponent
+
+    sensitive_marker = "provider-sensitive-marker"
+    sink = RecordingSink()
+    component = LLMCommitteeComponent(
+        _config(),
+        agents=_agents(tech_agent=FakeAgent("tech", error=RuntimeError(sensitive_marker))),
+        summary=_summary,
+        sink=sink,
+    )
+
+    with pytest.raises(ComponentExecutionError):
+        await component.evaluate(_context())
+
+    assert sensitive_marker not in repr(sink.events)
+    failed = next(event for event in sink.events if event.name == "committee_agent_failed")
+    assert failed.data == {
+        "agent_id": "tech_agent",
+        "stage": "analysis",
+        "error_type": "RuntimeError",
+    }
+
+
+@pytest.mark.asyncio
+async def test_completed_committee_events_contain_only_safe_metadata():
+    from cryptotrader.signals.components.llm_committee import LLMCommitteeComponent
+
+    sensitive_marker = "provider-sensitive-marker"
+
+    class SecretAgent(FakeAgent):
+        async def analyze(self, snapshot):
+            analysis = await super().analyze(snapshot)
+            return analysis.__class__(
+                agent_id=analysis.agent_id,
+                pair=analysis.pair,
+                direction=analysis.direction,
+                confidence=analysis.confidence,
+                reasoning=sensitive_marker,
+                is_mock=False,
+            )
+
+    async def challenger(agent_id, analysis, others, signal_context, round_number):
+        return {**analysis, "reasoning": sensitive_marker}, {"reasoning": sensitive_marker}
+
+    sink = RecordingSink()
+    component = LLMCommitteeComponent(
+        _config(),
+        agents={name: SecretAgent(name) for name in _agents()},
+        summary=_summary,
+        challenger=challenger,
+        sink=sink,
+    )
+
+    await component.evaluate(_context())
+
+    assert sensitive_marker not in repr(sink.events)
+    assert all("analysis" not in event.data for event in sink.events)
+    assert all("analyses" not in event.data for event in sink.events)
+    summary = next(event for event in sink.events if event.name == "committee_summary_completed")
+    assert summary.data == {
+        "component_id": "llm_committee",
+        "stage": "summary",
+        "direction": "long",
+        "confidence": 0.65,
+    }
+
+
 def test_summary_payload_contains_only_component_signal_fields():
     from cryptotrader.signals.components.llm_committee import normalize_summary_payload
 

@@ -144,7 +144,7 @@ class LLMCommitteeComponent:
         )
         for name, result in zip(names, results, strict=True):
             if isinstance(result, BaseException):
-                raise self._error("analysis", RuntimeError(f"{name}: {result}")) from result
+                raise self._error("analysis", result, subject=name) from result
         return {"analyses": dict(zip(names, results, strict=True))}
 
     async def _analyze_one(self, name: str, agent, snapshot) -> dict[str, Any]:
@@ -160,11 +160,20 @@ class LLMCommitteeComponent:
             await self.events.publish(
                 CycleEvent(
                     "committee_agent_failed",
-                    {"agent_id": name, "error_type": type(error).__name__, "error": str(error)},
+                    {
+                        "agent_id": name,
+                        "stage": "analysis",
+                        "error_type": type(error).__name__,
+                    },
                 )
             )
             raise
-        await self.events.publish(CycleEvent("agent_analysis_completed", {"agent_id": name, "analysis": analysis}))
+        await self.events.publish(
+            CycleEvent(
+                "agent_analysis_completed",
+                {"agent_id": name, "stage": "analysis"},
+            )
+        )
         return analysis
 
     async def _debate_gate(self, state: CommitteeState) -> dict:
@@ -199,7 +208,7 @@ class LLMCommitteeComponent:
         )
         for name, result in zip(names, results, strict=True):
             if isinstance(result, BaseException):
-                raise self._error("debate", RuntimeError(f"{name}: {result}")) from result
+                raise self._error("debate", result, subject=name) from result
         updated = {}
         turns = list(state["debate_turns"])
         for name, result in zip(names, results, strict=True):
@@ -208,7 +217,7 @@ class LLMCommitteeComponent:
         await self.events.publish(
             CycleEvent(
                 "debate_round_completed",
-                {"round_number": round_number, "analyses": updated},
+                {"round_number": round_number, "stage": "debate"},
             )
         )
         return {"analyses": updated, "debate_turns": turns, "debate_round": round_number}
@@ -247,7 +256,17 @@ class LLMCommitteeComponent:
                 "debate_skip_reason": state["debate_skip_reason"],
             },
         )
-        await self.events.publish(CycleEvent("committee_summary_completed", {"signal": signal}))
+        await self.events.publish(
+            CycleEvent(
+                "committee_summary_completed",
+                {
+                    "component_id": self.id,
+                    "stage": "summary",
+                    "direction": signal.direction,
+                    "confidence": signal.confidence,
+                },
+            )
+        )
         return {"final_signal": signal}
 
     async def _challenge_with_llm(
@@ -375,8 +394,15 @@ class LLMCommitteeComponent:
                 )
         return result
 
-    def _error(self, stage: str, cause: BaseException) -> ComponentExecutionError:
-        return ComponentExecutionError(self.id, RuntimeError(f"{stage}: {cause}"))
+    def _error(
+        self,
+        stage: str,
+        cause: BaseException,
+        *,
+        subject: str | None = None,
+    ) -> ComponentExecutionError:
+        identity = stage if subject is None else f"{stage}:{subject}"
+        return ComponentExecutionError(self.id, RuntimeError(f"{identity}:{type(cause).__name__}"))
 
 
 def create_component(

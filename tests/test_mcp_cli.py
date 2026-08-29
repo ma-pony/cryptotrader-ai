@@ -14,8 +14,8 @@ def test_mcp_list_shows_code_owned_servers() -> None:
     assert "cryptotrader-macro" in result.output
 
 
-def test_mcp_call_disabled_exits_nonzero() -> None:
-    result = CliRunner().invoke(app, ["mcp", "call", "binance_derivatives"])
+def test_mcp_call_is_not_registered_while_catalog_is_disabled() -> None:
+    result = CliRunner().invoke(app, ["mcp", "--help"])
 
-    assert result.exit_code == 1
-    assert "disabled" in result.output.lower()
+    assert result.exit_code == 0
+    assert "call" not in result.output

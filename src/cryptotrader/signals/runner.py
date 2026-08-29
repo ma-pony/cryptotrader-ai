@@ -70,6 +70,7 @@ class ComponentRunner:
                     "component_failed",
                     {
                         "component_id": component.id,
+                        "stage": "evaluation",
                         "error_type": type(error).__name__,
                     },
                 )
@@ -78,7 +79,11 @@ class ComponentRunner:
         await self.events.publish(
             CycleEvent(
                 "component_completed",
-                {"component_id": component.id, "signal": result},
+                {
+                    "component_id": component.id,
+                    "direction": result.direction,
+                    "confidence": result.confidence,
+                },
             )
         )
         return result

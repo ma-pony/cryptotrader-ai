@@ -127,7 +127,7 @@ async def _handle_new_analysis(
         )
 
     try:
-        BackgroundTaskManager.get_instance().create(
+        BackgroundTaskManager.get_instance(workflow_publisher=state.publish).create(
             session_id,
             pair,
             run_cycle,
