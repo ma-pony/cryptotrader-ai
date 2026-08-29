@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
@@ -250,6 +251,82 @@ async def test_unknown_approval_returns_not_found(api_harness):
     response = await api_harness.client.get("/api/hitl/missing")
 
     assert response.status_code == 404
+
+
+async def test_inactive_runtime_returns_fixed_unavailable_for_respond_and_detail(api_harness):
+    api_harness.runtime.cycle = None
+
+    respond = await api_harness.client.post(
+        "/api/hitl/approval-1/respond",
+        json={"decision": "approve"},
+    )
+    detail = await api_harness.client.get("/api/hitl/approval-1")
+
+    assert respond.status_code == 503
+    assert respond.json() == {"detail": "Trading runtime is not active"}
+    assert detail.status_code == 503
+    assert detail.json() == {"detail": "Trading runtime is not active"}
+
+
+async def test_concurrent_runtime_close_during_lease_acquisition_returns_fixed_unavailable(api_harness):
+    cycle = _Cycle()
+    await _seed(cycle)
+    runtime = Runtime(
+        snapshot=api_harness.runtime.snapshot,
+        repository=api_harness.runtime.repository,
+        cycle=cycle,
+        sessions={},
+        signal_registry=object(),
+        market_registry=object(),
+        venue_registry=object(),
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+    )
+    lease_entered = asyncio.Event()
+    original_lease = runtime.cycle_lease
+
+    @asynccontextmanager
+    async def observed_lease():
+        lease_entered.set()
+        async with original_lease() as leased_cycle:
+            yield leased_cycle
+
+    runtime.cycle_lease = observed_lease
+    api_harness.runtime = runtime
+    from api.main import app
+
+    app.state.runtime = runtime
+    await runtime._lifecycle_lock.acquire()
+    responding = asyncio.create_task(
+        api_harness.client.post(
+            "/api/hitl/approval-1/respond",
+            json={"decision": "approve"},
+        )
+    )
+    await lease_entered.wait()
+    closing = asyncio.create_task(runtime.close())
+    await asyncio.sleep(0)
+    runtime._lifecycle_lock.release()
+
+    response = await responding
+    await closing
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Trading runtime is not active"}
+    cycle.execute_approved.assert_not_awaited()
+
+
+async def test_execution_runtime_error_remains_internal_failure_not_unavailable(api_harness):
+    cycle = _Cycle()
+    _mount_cycle(api_harness, cycle)
+    await _seed(cycle)
+    cycle.execute_approved.side_effect = RuntimeError("execution body failed")
+
+    response = await api_harness.client.post(
+        "/api/hitl/approval-1/respond",
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 500
+    assert response.status_code != 503
 
 
 async def test_approval_state_error_returns_fixed_detail_without_internal_marker(api_harness):

@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict
 from api.routes.response_dto import BookExecutionProposalOut, proposal_out
 from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.hitl.store import ApprovalStateError
+from cryptotrader.runtime import RuntimeLeaseUnavailableError
 
 if TYPE_CHECKING:
     from cryptotrader.hitl.models import BookApproval
@@ -59,7 +60,7 @@ def _cycle(request: Request):
 
 def _runtime(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
-    if runtime is None:
+    if runtime is None or runtime.cycle is None:
         raise HTTPException(status_code=503, detail="Trading runtime is not active")
     return runtime
 
@@ -97,6 +98,8 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
     try:
         operation = asyncio.create_task(_respond_owned(_runtime(request), approval_id, body.decision))
         outcome, final_approval = await wait_for_owned(operation)
+    except RuntimeLeaseUnavailableError:
+        raise HTTPException(status_code=503, detail="Trading runtime is not active") from None
     except ApprovalStateError:
         raise HTTPException(status_code=409, detail="Approval state conflict") from None
     except LookupError:

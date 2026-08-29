@@ -43,6 +43,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class RuntimeLeaseUnavailableError(RuntimeError):
+    """The Runtime cannot admit a new execution owner."""
+
+
 @dataclass(frozen=True)
 class _CloseBatchResult:
     ordinary_failures: tuple[object, ...]
@@ -87,10 +91,10 @@ class Runtime:
 
         async with self._lifecycle_lock:
             if self._closing or self._closed:
-                raise RuntimeError("runtime is closing")
+                raise RuntimeLeaseUnavailableError("runtime is unavailable")
             cycle = await self._reload_for_cycle_locked()
             if cycle is None:
-                raise RuntimeError("runtime configuration is not active")
+                raise RuntimeLeaseUnavailableError("runtime is unavailable")
             self._active_leases += 1
             self._leases_drained.clear()
         try:

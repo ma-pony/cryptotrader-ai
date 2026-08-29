@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
-from cryptotrader.runtime import build_runtime
+from cryptotrader.runtime import RuntimeLeaseUnavailableError, build_runtime
 from cryptotrader.runtime_config.models import ExecutionConfig, RuntimeConfigSnapshot, SystemConfig
 from cryptotrader.runtime_config.repository import CredentialState
 from cryptotrader.venues.models import VenueConnection
@@ -223,12 +223,23 @@ async def test_runtime_close_rejects_new_lease_and_waits_for_inflight_owner():
     closing = asyncio.create_task(runtime.close())
     await asyncio.sleep(0)
     assert not closing.done()
-    with pytest.raises(RuntimeError, match="closing"):
+    with pytest.raises(RuntimeLeaseUnavailableError, match="unavailable"):
         async with runtime.cycle_lease():
             pass
 
     await lease.__aexit__(None, None, None)
     await closing
+
+
+@pytest.mark.asyncio
+async def test_inactive_runtime_lease_uses_dedicated_unavailable_error():
+    runtime, _, _, _ = await _build(_document(active=False))
+
+    with pytest.raises(RuntimeLeaseUnavailableError, match="unavailable"):
+        async with runtime.cycle_lease():
+            pass
+
+    await runtime.close()
 
 
 @pytest.mark.asyncio
