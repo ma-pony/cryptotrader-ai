@@ -13,7 +13,12 @@ import pytest
 
 from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.runtime import RuntimeLeaseUnavailableError, build_runtime
-from cryptotrader.runtime_config.models import ExecutionConfig, RuntimeConfigSnapshot, SystemConfig
+from cryptotrader.runtime_config.models import (
+    ExecutionConfig,
+    InfrastructureConfig,
+    RuntimeConfigSnapshot,
+    SystemConfig,
+)
 from cryptotrader.runtime_config.repository import CredentialState
 from cryptotrader.venues.models import VenueConnection
 from tests.factories.runtime_config import runtime_document
@@ -187,6 +192,7 @@ def _document(
         books=books,
         system=SystemConfig(active=active),
         execution=ExecutionConfig(connections=connections, books=books),
+        infrastructure=InfrastructureConfig(redis_url="redis://runtime-test"),
         market_data=MarketDataConfig(source_id=market_source),
     )
 
