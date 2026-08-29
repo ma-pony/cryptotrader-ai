@@ -144,6 +144,45 @@ class Runtime:
                 raise RuntimeError("runtime is closed")
             return await self._reload_for_cycle_locked()
 
+    async def prepare_candidate(self, snapshot: RuntimeConfigSnapshot) -> Runtime:
+        """Build a complete, unpublished graph for one desired revision."""
+        prepared = RuntimeConfigSnapshot(
+            snapshot.revision,
+            snapshot.document,
+            snapshot.updated_at,
+            apply_status="applied",
+            applied_revision=snapshot.revision,
+        )
+        return await build_runtime(repository=self.repository, snapshot=prepared, event_sink=self.events)
+
+    async def publish_candidate(self, candidate: Runtime, snapshot: RuntimeConfigSnapshot) -> None:
+        """Atomically make an already prepared graph the only executable graph."""
+        async with self._lifecycle_lock:
+            if self._closing or self._closed:
+                raise RuntimeError("runtime is unavailable")
+            retired = tuple(self.sessions.values())
+            self.snapshot = snapshot
+            self.sessions = candidate.sessions
+            self.cycle = candidate.cycle
+            self.signal_registry = candidate.signal_registry
+            self.market_registry = candidate.market_registry
+            self.venue_registry = candidate.venue_registry
+            self._session_keys = candidate._session_keys
+            candidate.sessions = {}
+            candidate._session_keys = {}
+            candidate.cycle = None
+            await self._retire_sessions(retired)
+
+    async def fail_closed(self, snapshot: RuntimeConfigSnapshot) -> None:
+        """Retain the failed desired document while ensuring no executable graph remains."""
+        async with self._lifecycle_lock:
+            retired = tuple(self.sessions.values())
+            self.snapshot = snapshot
+            self.sessions = {}
+            self._session_keys = {}
+            self.cycle = None
+            await self._retire_sessions(retired)
+
     async def _reload_for_cycle_locked(self) -> TradingCycle | None:
         if self._active_leases == 0:
             await self._cleanup_retired_sessions()

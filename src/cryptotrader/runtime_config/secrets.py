@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from pydantic import BaseModel, ConfigDict, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, ValidationError, field_validator, model_validator
 
 _URLSAFE_ALPHABET = frozenset(string.ascii_letters + string.digits + "-_")
 _CREDENTIAL_FIELDS = frozenset({"api_key", "secret", "passphrase"})
@@ -55,6 +55,14 @@ class TokenPayload(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, hide_input_in_errors=True, strict=True)
 
     token: str
+
+    @field_validator("token")
+    @classmethod
+    def _normalize_non_empty_token(cls, value: str) -> str:
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("token must not be empty")
+        return normalized
 
     def __repr__(self) -> str:
         return "TokenPayload(**redacted**)"

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 from dataclasses import asdict
 
 import pytest
@@ -32,6 +33,7 @@ async def test_get_or_create_is_stable_and_round_trips_the_exact_document(reposi
     from cryptotrader.runtime_config.models import MarketDataConfig
 
     first = await repository.get_or_create()
+    assert (first.apply_status, first.applied_revision, first.apply_error) == ("applied", 1, None)
     document = runtime_document(
         market_data=MarketDataConfig(
             source_id="fixture-market",
@@ -45,6 +47,17 @@ async def test_get_or_create_is_stable_and_round_trips_the_exact_document(reposi
     assert loaded == saved
     assert loaded.document == document
     assert loaded.document.model_dump(mode="json") == document.model_dump(mode="json")
+    assert (loaded.apply_status, loaded.applied_revision, loaded.apply_error) == ("pending", 1, None)
+
+
+async def test_document_revision_is_pending_until_the_runtime_application_is_marked(repository):
+    first = await repository.get_or_create()
+
+    pending = await repository.replace(first.revision, active_document())
+
+    assert (pending.apply_status, pending.applied_revision, pending.apply_error) == ("pending", 1, None)
+    applied = await repository.mark_applied(pending.revision)
+    assert (applied.apply_status, applied.applied_revision, applied.apply_error) == ("applied", pending.revision, None)
 
 
 async def test_get_existing_never_creates_schema_or_default_row(tmp_path):
@@ -202,6 +215,24 @@ async def test_token_update_is_cas_protected_and_never_uses_venue_payloads(repos
             LLM_GATEWAY_CREDENTIAL_REF,
             TokenPayload(token="replacement-token"),
         )
+
+
+@pytest.mark.parametrize("token", ["", "   ", "\n\t"])
+async def test_token_payload_rejects_empty_material_at_vault_boundaries(repository, token):
+    """An encrypted legacy empty token must never become an authentication credential."""
+    from cryptotrader.runtime_config.secrets import TokenPayload
+
+    with pytest.raises(ValueError):
+        TokenPayload(token=token)
+
+    nonce = os.urandom(repository._vault._NONCE_BYTES)
+    legacy_empty_envelope = (
+        repository._vault.VERSION
+        + nonce
+        + repository._vault._cipher.encrypt(nonce, json.dumps({"token": token}).encode(), b"api-access")
+    )
+    with pytest.raises(ValueError):
+        repository._vault.open_token("api-access", legacy_empty_envelope)
 
 
 async def test_stale_credential_insert_rolls_back(repository):

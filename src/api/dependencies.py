@@ -42,12 +42,18 @@ async def verify_api_key(request: Request):
         raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")
     if not security.enabled:
         return
-    key = request.headers.get("X-API-Key", "")
+    key = request.headers.get("X-API-Key")
+    if not isinstance(key, str) or not key.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or missing API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
         expected = (await runtime.repository.reveal_token(API_ACCESS_CREDENTIAL_REF)).token
     except CredentialNotConfigured:
         raise HTTPException(status_code=503, detail="API access credential is not configured") from None
-    if not secrets.compare_digest(key, expected):
+    if not isinstance(expected, str) or not expected.strip() or not secrets.compare_digest(key, expected):
         raise HTTPException(
             status_code=401,
             detail="Invalid or missing API key",

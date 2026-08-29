@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime  # noqa: TC003 - Pydantic resolves this response field at runtime.
+from contextlib import suppress
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
@@ -252,6 +253,9 @@ class RuntimeConfigOut(StrictOut):
     revision: int
     updated_at: datetime
     setup_required: bool
+    apply_status: str
+    applied_revision: int | None
+    apply_error: str | None
     document: RuntimeDocumentOut
 
 
@@ -461,6 +465,9 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
         revision=snapshot.revision,
         updated_at=snapshot.updated_at,
         setup_required=snapshot.setup_required,
+        apply_status=snapshot.apply_status,
+        applied_revision=snapshot.applied_revision,
+        apply_error=snapshot.apply_error,
         document=RuntimeDocumentOut(
             system=SystemConfigOut(active=document.system.active),
             security=SecurityConfigOut(
@@ -589,14 +596,75 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
     )
 
 
-async def replace_document(runtime, snapshot, expected_revision: int, document: RuntimeConfigDocument):
+async def apply_document(
+    runtime,
+    snapshot,
+    expected_revision: int,
+    document: RuntimeConfigDocument,
+    refresh_owners,
+):
+    """Apply one desired document without ever silently executing the old graph."""
     ensure_expected_revision(snapshot, expected_revision)
     validate_connection_lifecycle(snapshot.document, document)
     validate_document(runtime, document)
+    await validate_activation_prerequisites(runtime.repository, document)
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
+
+    candidate_snapshot = RuntimeConfigSnapshot(
+        expected_revision + 1,
+        document,
+        datetime.now().astimezone(),
+        apply_status="applied",
+        applied_revision=expected_revision + 1,
+    )
     try:
-        return await runtime.repository.replace(expected_revision, document)
+        candidate = await runtime.prepare_candidate(candidate_snapshot)
+    except Exception:
+        raise HTTPException(status_code=503, detail="Runtime configuration cannot be applied") from None
+    try:
+        saved = await runtime.repository.replace(expected_revision, document)
     except RevisionConflict as error:
+        await candidate.close()
         raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+    return await publish_pending_snapshot(runtime, saved, refresh_owners, candidate)
+
+
+async def publish_pending_snapshot(runtime, pending, refresh_owners, candidate=None):
+    """Publish an already persisted desired revision, or leave that revision explicitly failed."""
+    try:
+        prepared = candidate or await runtime.prepare_candidate(pending)
+        await runtime.publish_candidate(prepared, pending)
+        if refresh_owners is not None:
+            await refresh_owners()
+        applied = await runtime.repository.mark_applied(pending.revision)
+        runtime.snapshot = applied
+        return applied
+    except Exception:
+        if candidate is not None:
+            with suppress(Exception):
+                await candidate.close()
+        failed = await runtime.repository.mark_failed(pending.revision, "runtime application failed")
+        await runtime.fail_closed(failed)
+        raise HTTPException(status_code=503, detail="Runtime configuration cannot be applied") from None
+
+
+async def validate_activation_prerequisites(repository, document: RuntimeConfigDocument) -> None:
+    if not document.system.active:
+        return
+    required = []
+    if document.security.enabled:
+        required.append(API_ACCESS_CREDENTIAL_REF)
+    if any(
+        component.enabled and component.component_id == "llm_committee" for component in document.signals.components
+    ):
+        required.append(LLM_GATEWAY_CREDENTIAL_REF)
+    for credential_ref in required:
+        try:
+            token = await repository.reveal_token(credential_ref)
+        except Exception:
+            raise HTTPException(status_code=422, detail="Required runtime credential is not configured") from None
+        if not token.token.strip():
+            raise HTTPException(status_code=422, detail="Required runtime credential is not configured")
 
 
 @router.get("", response_model=RuntimeConfigOut)
@@ -612,11 +680,8 @@ async def put_config(body: PutRuntimeConfigIn, request: Request) -> RuntimeConfi
     current = await runtime.repository.get_or_create()
     ensure_expected_revision(current, body.expected_revision)
     document = document_from_input(body.document, current.document)
-    snapshot = await replace_document(runtime, current, body.expected_revision, document)
-    await runtime.reload_for_cycle()
     refresh_owners = getattr(request.app.state, "refresh_runtime_owners", None)
-    if refresh_owners is not None:
-        await refresh_owners()
+    snapshot = await apply_document(runtime, current, body.expected_revision, document, refresh_owners)
     return await config_out(runtime.repository, snapshot)
 
 
@@ -636,6 +701,8 @@ async def _put_runtime_token(
         )
     except RevisionConflict as error:
         raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+    refresh_owners = getattr(request.app.state, "refresh_runtime_owners", None)
+    await publish_pending_snapshot(runtime, snapshot, refresh_owners)
     return TokenMutationOut(revision=snapshot.revision, configured=True, updated_at=snapshot.updated_at)
 
 

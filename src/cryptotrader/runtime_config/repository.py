@@ -60,6 +60,9 @@ class _RuntimeConfigRow(_Base):
     revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
     document: Mapped[dict[str, Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    apply_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    applied_revision: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    apply_error: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
 
 class _RuntimeCredentialRow(_Base):
@@ -79,6 +82,9 @@ def _snapshot(row: _RuntimeConfigRow) -> RuntimeConfigSnapshot:
         revision=row.revision,
         document=RuntimeConfigDocument.model_validate(row.document),
         updated_at=_normalize_datetime(row.updated_at),
+        apply_status=row.apply_status,
+        applied_revision=row.applied_revision,
+        apply_error=row.apply_error,
     )
 
 
@@ -112,6 +118,9 @@ class RuntimeConfigRepository:
                     revision=1,
                     document=self._default_factory().model_dump(mode="json"),
                     updated_at=datetime.now(UTC),
+                    apply_status="applied",
+                    applied_revision=1,
+                    apply_error=None,
                 )
                 session.add(row)
                 try:
@@ -160,6 +169,8 @@ class RuntimeConfigRepository:
                 document=document.model_dump(mode="json"),
                 revision=_RuntimeConfigRow.revision + 1,
                 updated_at=updated_at,
+                apply_status="pending",
+                apply_error=None,
             )
         )
         session = await get_async_session(self.database_url)
@@ -170,7 +181,13 @@ class RuntimeConfigRepository:
                 await session.rollback()
                 raise RevisionConflict(expected_revision, actual)
             await session.commit()
-            return RuntimeConfigSnapshot(expected_revision + 1, document, updated_at)
+            return RuntimeConfigSnapshot(
+                expected_revision + 1,
+                document,
+                updated_at,
+                apply_status="pending",
+                applied_revision=expected_revision,
+            )
         finally:
             await session.close()
 
@@ -194,6 +211,8 @@ class RuntimeConfigRepository:
                 .values(
                     revision=_RuntimeConfigRow.revision + 1,
                     updated_at=updated_at,
+                    apply_status="pending",
+                    apply_error=None,
                 )
             )
             if result.rowcount != 1:
@@ -276,6 +295,49 @@ class RuntimeConfigRepository:
             if row is None:
                 raise CredentialNotConfigured(credential_ref)
             return self._vault.open_token(credential_ref, row.encrypted_payload)
+        finally:
+            await session.close()
+
+    async def mark_applied(self, revision: int) -> RuntimeConfigSnapshot:
+        return await self._set_apply_state(revision, "applied", applied_revision=revision, apply_error=None)
+
+    async def mark_failed(self, revision: int, error: str) -> RuntimeConfigSnapshot:
+        await self.ensure_tables()
+        session = await get_async_session(self.database_url)
+        try:
+            row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+            if row is None or row.revision != revision:
+                raise RevisionConflict(revision, 0 if row is None else row.revision)
+            previous_applied_revision = row.applied_revision
+        finally:
+            await session.close()
+        return await self._set_apply_state(
+            revision,
+            "failed",
+            applied_revision=previous_applied_revision,
+            apply_error=error[:256],
+        )
+
+    async def _set_apply_state(
+        self, revision: int, status: str, *, applied_revision: int | None, apply_error: str | None
+    ) -> RuntimeConfigSnapshot:
+        await self.ensure_tables()
+        session = await get_async_session(self.database_url)
+        try:
+            result = await session.execute(
+                update(_RuntimeConfigRow)
+                .where(_RuntimeConfigRow.id == _GLOBAL_ID, _RuntimeConfigRow.revision == revision)
+                .values(apply_status=status, applied_revision=applied_revision, apply_error=apply_error)
+            )
+            if result.rowcount != 1:
+                actual = await self._actual_revision(session)
+                await session.rollback()
+                raise RevisionConflict(revision, actual)
+            row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+            await session.commit()
+            if row is None:
+                raise RuntimeError("runtime config row disappeared")
+            return _snapshot(row)
         finally:
             await session.close()
 

@@ -12,9 +12,10 @@ from pydantic import BaseModel, ConfigDict
 
 from api.routes.config import (
     VenueConnectionOut,
+    apply_document,
     connection_out,
     ensure_expected_revision,
-    replace_document,
+    publish_pending_snapshot,
     require_runtime,
     server_credential_ref,
 )
@@ -164,7 +165,13 @@ async def create_connection(body: CreateConnectionIn, request: Request) -> Conne
         raise HTTPException(status_code=422, detail="Venue connection already exists")
     connection = _connection_from_create(body)
     document = _document_with_connections(snapshot, (*snapshot.document.execution.connections, connection))
-    saved = await replace_document(runtime, snapshot, body.expected_revision, document)
+    saved = await apply_document(
+        runtime,
+        snapshot,
+        body.expected_revision,
+        document,
+        getattr(request.app.state, "refresh_runtime_owners", None),
+    )
     return ConnectionMutationOut(
         revision=saved.revision,
         connection=await connection_out(runtime.repository, connection),
@@ -190,7 +197,13 @@ async def update_connection(
         replacement if item.id == connection_id else item for item in snapshot.document.execution.connections
     )
     document = _document_with_connections(snapshot, connections)
-    saved = await replace_document(runtime, snapshot, body.expected_revision, document)
+    saved = await apply_document(
+        runtime,
+        snapshot,
+        body.expected_revision,
+        document,
+        getattr(request.app.state, "refresh_runtime_owners", None),
+    )
     return ConnectionMutationOut(
         revision=saved.revision,
         connection=await connection_out(runtime.repository, replacement),
@@ -219,6 +232,7 @@ async def put_credentials(
         raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
     except Exception:
         raise HTTPException(status_code=503, detail="Credential storage is unavailable") from None
+    await publish_pending_snapshot(runtime, saved, getattr(request.app.state, "refresh_runtime_owners", None))
     state = await runtime.repository.credential_state(connection.credential_ref)
     return CredentialMutationOut(
         revision=saved.revision,

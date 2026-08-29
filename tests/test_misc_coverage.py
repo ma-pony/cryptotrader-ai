@@ -84,6 +84,21 @@ class TestVerifyApiKey:
             await verify_api_key(req)
         assert exc_info.value.status_code == 401
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("provided", "expected"), [(None, "expected"), ("   ", "expected"), ("expected", "   ")])
+    async def test_missing_or_empty_key_never_authenticates(self, provided, expected):
+        from fastapi import HTTPException
+
+        from api.dependencies import verify_api_key
+
+        req = MagicMock()
+        req.headers.get.return_value = provided
+        req.app.state.runtime.snapshot.document.security.enabled = True
+        req.app.state.runtime.repository.reveal_token = AsyncMock(return_value=SimpleNamespace(token=expected))
+        with pytest.raises(HTTPException) as exc_info:
+            await verify_api_key(req)
+        assert exc_info.value.status_code in {401, 503}
+
 
 # ── cryptotrader/mcp/__init__.py ──
 

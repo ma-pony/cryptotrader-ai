@@ -166,8 +166,8 @@ def _document(
     )
 
 
-async def _build(document, *, adapter=None, repository=None, markets=None):
-    snapshot = RuntimeConfigSnapshot(7, document, NOW)
+async def _build(document, *, adapter=None, repository=None, markets=None, snapshot=None):
+    snapshot = snapshot or RuntimeConfigSnapshot(7, document, NOW)
     repository = repository or _Repository(snapshot)
     adapter = adapter or _Adapter()
     markets = markets or _MarketRegistry()
@@ -568,6 +568,26 @@ async def test_inactive_reload_closes_sessions_and_publishes_no_cycle():
     assert cycle is None
     assert runtime.cycle is None
     assert first_session.close_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("apply_status", ["pending", "failed"])
+async def test_non_applied_startup_and_reload_never_admit_a_cycle_or_session(apply_status):
+    connection = _connection("paper-a")
+    desired = RuntimeConfigSnapshot(7, _document(connection), NOW, apply_status, 6, "application failed")
+    repository = _Repository(desired)
+
+    startup, _, startup_adapter, _ = await _build(desired.document, repository=repository, snapshot=desired)
+    assert startup.cycle is None
+    assert startup.sessions == {}
+    assert startup_adapter.connect_calls == []
+
+    runtime, _, adapter, _ = await _build(_document(connection))
+    runtime.repository.snapshot = desired
+    assert await runtime.reload_for_cycle() is None
+    assert runtime.cycle is None
+    assert runtime.sessions == {}
+    assert adapter.sessions[0].close_calls == 1
 
 
 @pytest.mark.asyncio

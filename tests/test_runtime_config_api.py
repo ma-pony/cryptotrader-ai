@@ -21,6 +21,7 @@ from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
 from cryptotrader.runtime_config.models import (
     ExecutionConfig,
     RuntimeConfigDocument,
+    SignalComponentConfig,
     SystemConfig,
 )
 from cryptotrader.runtime_config.repository import RuntimeConfigRepository
@@ -84,7 +85,7 @@ def active_document() -> RuntimeConfigDocument:
     return RuntimeConfigDocument(
         system=SystemConfig(active=True),
         market_data=market_config(),
-        signals=signal_config(),
+        signals=signal_config(components=(SignalComponentConfig(component_id="kronos", enabled=True, weight=1.0),)),
         execution=ExecutionConfig(connections=connections, books=books),
     )
 
@@ -214,6 +215,9 @@ async def api_harness(tmp_path):
         market_registry=SimpleNamespace(installed_ids=lambda: frozenset({"default"})),
         venue_registry=VenueAdapterRegistry(tuple(adapters.values())),
         reload_for_cycle=AsyncMock(),
+        prepare_candidate=AsyncMock(return_value=SimpleNamespace(close=AsyncMock())),
+        publish_candidate=AsyncMock(),
+        fail_closed=AsyncMock(),
     )
     previous = getattr(app.state, "runtime", None)
     app.state.runtime = runtime
@@ -291,7 +295,6 @@ async def test_put_config_requires_expected_revision(api_harness):
 
 
 async def test_put_config_publishes_the_saved_revision_to_the_running_runtime(api_harness):
-    api_harness.runtime.reload_for_cycle = AsyncMock()
     current = await api_harness.client.get("/api/config")
 
     saved = await api_harness.client.put(
@@ -300,7 +303,8 @@ async def test_put_config_publishes_the_saved_revision_to_the_running_runtime(ap
     )
 
     assert saved.status_code == 200
-    api_harness.runtime.reload_for_cycle.assert_awaited_once()
+    api_harness.runtime.prepare_candidate.assert_awaited_once()
+    api_harness.runtime.publish_candidate.assert_awaited_once()
 
 
 async def test_put_config_refreshes_application_runtime_owners_after_publication(api_harness):
@@ -320,6 +324,86 @@ async def test_put_config_refreshes_application_runtime_owners_after_publication
 
     assert saved.status_code == 200
     refresh.assert_awaited_once()
+
+
+async def test_candidate_failure_leaves_the_desired_revision_unwritten(api_harness):
+    api_harness.runtime.prepare_candidate = AsyncMock(side_effect=RuntimeError("adapter failure"))
+    current = await api_harness.client.get("/api/config")
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": active_payload()},
+    )
+
+    assert response.status_code == 503
+    assert (await api_harness.client.get("/api/config")).json()["revision"] == current.json()["revision"]
+
+
+async def test_owner_failure_marks_desired_revision_failed_then_a_later_revision_recovers(api_harness):
+    from api.main import app
+
+    old_refresh = getattr(app.state, "refresh_runtime_owners", None)
+    app.state.refresh_runtime_owners = AsyncMock(side_effect=RuntimeError("owner failure"))
+    try:
+        current = await api_harness.client.get("/api/config")
+        failed = await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": current.json()["revision"], "document": active_payload()},
+        )
+        assert failed.status_code == 503
+        status = (await api_harness.client.get("/api/config")).json()
+        assert (status["revision"], status["apply_status"], status["applied_revision"]) == (2, "failed", 1)
+        api_harness.runtime.fail_closed.assert_awaited_once()
+        app.state.refresh_runtime_owners = AsyncMock()
+        recovered = await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": status["revision"], "document": active_payload()},
+        )
+    finally:
+        app.state.refresh_runtime_owners = old_refresh
+
+    assert recovered.status_code == 200
+    assert (recovered.json()["apply_status"], recovered.json()["applied_revision"]) == ("applied", 3)
+
+
+async def test_cas_conflict_closes_the_candidate_and_keeps_the_old_runtime_operational(api_harness):
+    from cryptotrader.runtime_config.repository import RevisionConflict
+
+    current = await api_harness.client.get("/api/config")
+    candidate = SimpleNamespace(close=AsyncMock())
+    api_harness.runtime.prepare_candidate = AsyncMock(return_value=candidate)
+    original_replace = api_harness.runtime.repository.replace
+    api_harness.runtime.repository.replace = AsyncMock(side_effect=RevisionConflict(current.json()["revision"], 2))
+    try:
+        conflict = await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": current.json()["revision"], "document": active_payload()},
+        )
+    finally:
+        api_harness.runtime.repository.replace = original_replace
+
+    assert conflict.status_code == 409
+    candidate.close.assert_awaited_once()
+    api_harness.runtime.publish_candidate.assert_not_awaited()
+    assert api_harness.runtime.snapshot.revision == current.json()["revision"]
+
+
+async def test_mark_applied_failure_fails_closed_and_exposes_failed_desired_revision(api_harness):
+    current = await api_harness.client.get("/api/config")
+    original_mark_applied = api_harness.runtime.repository.mark_applied
+    api_harness.runtime.repository.mark_applied = AsyncMock(side_effect=RuntimeError("write failure"))
+    try:
+        failed = await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": current.json()["revision"], "document": active_payload()},
+        )
+    finally:
+        api_harness.runtime.repository.mark_applied = original_mark_applied
+
+    assert failed.status_code == 503
+    status = (await api_harness.client.get("/api/config")).json()
+    assert (status["apply_status"], status["applied_revision"]) == ("failed", 1)
+    api_harness.runtime.fail_closed.assert_awaited_once()
 
 
 async def test_stale_put_config_conflicts_before_connection_domain_construction(api_harness):
@@ -355,6 +439,35 @@ async def test_put_config_validates_the_whole_document(api_harness):
     )
 
     assert response.status_code == 422
+
+
+async def test_activation_requires_nonempty_api_and_llm_credentials_before_persisting(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    document["security"] = {"enabled": True}
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
+    )
+
+    assert response.status_code == 422
+    after = await api_harness.client.get("/api/config")
+    assert after.json()["revision"] == current.json()["revision"]
+
+
+async def test_activation_with_llm_committee_requires_gateway_credential_before_persisting(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    document["signals"] = signal_config().model_dump(mode="json")
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
+    )
+
+    assert response.status_code == 422
+    assert (await api_harness.client.get("/api/config")).json()["revision"] == current.json()["revision"]
 
 
 async def test_put_config_cannot_change_existing_connection_environment(api_harness):

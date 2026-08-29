@@ -287,10 +287,21 @@ class RuntimeConfigSnapshot:
     revision: int
     document: RuntimeConfigDocument
     updated_at: datetime
+    apply_status: str = "applied"
+    applied_revision: int | None = None
+    apply_error: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.apply_status == "applied" and self.applied_revision is None:
+            object.__setattr__(self, "applied_revision", self.revision)
 
     @property
     def setup_required(self) -> bool:
-        return not self.document.system.active
+        return not self.operational
+
+    @property
+    def operational(self) -> bool:
+        return self.document.system.active and self.apply_status == "applied" and self.applied_revision == self.revision
 
 
 def validate_runtime_document(
