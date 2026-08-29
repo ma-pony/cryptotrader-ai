@@ -183,17 +183,21 @@ async def _execute_backtest(
 
 def _result_to_dict(result: Any) -> dict:
     """Translate cryptotrader BacktestResult → contract data-model §3 BacktestResult."""
-    return {
-        "metrics": {
-            "total_return_pct": float(getattr(result, "total_return", 0.0) or 0.0),
-            "sharpe": float(getattr(result, "sharpe_ratio", 0.0) or 0.0),
-            "max_drawdown_pct": float(getattr(result, "max_drawdown", 0.0) or 0.0),
-            "win_rate": float(getattr(result, "win_rate", 0.0) or 0.0),
-            "trades_count": len(getattr(result, "trades", []) or []),
-        },
-        "equity_curve": _equity_curve_to_dicts(getattr(result, "equity_curve", []) or []),
-        "decisions": list(getattr(result, "decisions", []) or []),
-    }
+    from cryptotrader.cycle_serialization import json_value
+
+    return json_value(
+        {
+            "metrics": {
+                "total_return_pct": float(getattr(result, "total_return", 0.0) or 0.0),
+                "sharpe": float(getattr(result, "sharpe_ratio", 0.0) or 0.0),
+                "max_drawdown_pct": float(getattr(result, "max_drawdown", 0.0) or 0.0),
+                "win_rate": float(getattr(result, "win_rate", 0.0) or 0.0),
+                "trades_count": len(getattr(result, "trades", []) or []),
+            },
+            "equity_curve": _equity_curve_to_dicts(getattr(result, "equity_curve", []) or []),
+            "decisions": list(getattr(result, "decisions", []) or []),
+        }
+    )
 
 
 def _equity_curve_to_dicts(curve: list) -> list[dict]:

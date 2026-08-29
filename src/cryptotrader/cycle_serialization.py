@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, is_dataclass
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from cryptotrader.decision.models import TargetPosition, TradePlan
 from cryptotrader.pair import Pair
@@ -13,16 +14,17 @@ from cryptotrader.profiles.models import ComponentWeight, SignalProfile
 from cryptotrader.signals.fusion import ComponentContribution, FusedSignal
 from cryptotrader.signals.models import ComponentSignal, SignalContext
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping
-
 
 def json_value(value: Any) -> Any:
     """把组件 details 等扩展字段收敛为可持久化 JSON 值。"""
 
     def encode(item):
         if is_dataclass(item):
-            return asdict(item)
+            return {field.name: getattr(item, field.name) for field in fields(item)}
+        if isinstance(item, Mapping):
+            return dict(item)
+        if isinstance(item, set | frozenset):
+            return list(item)
         return str(item)
 
     return json.loads(json.dumps(value, default=encode))

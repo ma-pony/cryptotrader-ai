@@ -6,7 +6,8 @@ Param validation rejects invalid dates, capital, and retired strategy selectors.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+from datetime import UTC, datetime
+from types import MappingProxyType, SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -146,31 +147,105 @@ async def test_mounted_backtest_route_completes_with_runtime_dependencies(monkey
 
     from api.main import app
     from api.routes.backtest import _RUNS, _TASKS
-    from cryptotrader.backtest.result import BacktestResult
-
-    repository = object()
-    snapshot = object()
-    signal_registry = object()
-    previous = getattr(app.state, "runtime", None)
-    app.state.runtime = SimpleNamespace(
-        repository=repository,
-        snapshot=snapshot,
-        signal_registry=signal_registry,
+    from cryptotrader.backtest.cache import _TF_MS
+    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
+    from cryptotrader.runtime import Runtime
+    from cryptotrader.runtime_config.models import (
+        MarketDataConfig,
+        RuntimeConfigSnapshot,
+        SignalComponentConfig,
+        SignalConfig,
+        SystemConfig,
     )
-    captured = {}
+    from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.runtime_config import runtime_document
 
-    class FakeEngine:
-        def __init__(self, *args, **kwargs) -> None:
-            captured.update(kwargs)
+    class Component:
+        id = "fixture"
+        display_name = "Fixture"
+        description = "deterministic API backtest signal"
 
-        async def run(self):
-            return BacktestResult(equity_curve=[10_000.0])
+        @staticmethod
+        def requirements():
+            return DataRequirements(candles=(CandleRequirement("1h", 20),))
 
-    monkeypatch.setattr("cryptotrader.backtest.engine.BacktestEngine", FakeEngine)
+        async def evaluate(self, context):
+            return ComponentSignal(
+                self.id,
+                "long",
+                1.0,
+                "mounted route evidence",
+                MappingProxyType({"evidence": MappingProxyType({"source": "mounted-real-engine"})}),
+            )
+
+    document = runtime_document(
+        system=SystemConfig(active=True),
+        market_data=MarketDataConfig(
+            source_id="default",
+            parameters={"timeframe": "1h", "limit": 20},
+        ),
+        signals=SignalConfig(
+            components=(SignalComponentConfig(component_id="fixture", enabled=True, weight=1.0),),
+            neutral_threshold=0.2,
+            max_target_ratio=1.0,
+            atr_stop_multiplier=2.0,
+            reward_ratio=2.0,
+        ),
+    )
+    snapshot = RuntimeConfigSnapshot(4, document, datetime.now(UTC))
+
+    class Repository:
+        database_url = None
+
+        async def get_or_create(self):
+            return snapshot
+
+        async def reveal_credentials(self, credential_ref):
+            raise AssertionError("backtest must not reveal venue credentials")
+
+    repository = Repository()
+    signal_registry = SignalComponentRegistry((Component(),))
+    runtime = Runtime(
+        snapshot=snapshot,
+        repository=repository,
+        cycle=None,
+        sessions={},
+        signal_registry=signal_registry,
+        market_registry=object(),
+        venue_registry=object(),
+        events=MultiplexedCycleEventSink(NullCycleEventSink()),
+    )
+    previous = getattr(app.state, "runtime", None)
+    app.state.runtime = runtime
+
+    async def load_historical(self, requirements):
+        for requirement in requirements.candles:
+            interval_ms = _TF_MS[requirement.timeframe]
+            start_ms = self.start_ms - requirement.limit * interval_ms
+            self._candles_by_timeframe[requirement.timeframe] = [
+                [
+                    start_ms + index * interval_ms,
+                    100.0 + index,
+                    102.0 + index,
+                    99.0 + index,
+                    101.0 + index,
+                    10.0,
+                ]
+                for index in range(requirement.limit + 3)
+            ]
+        self._candles = self._candles_by_timeframe[self.interval]
+
+    monkeypatch.setattr(
+        "cryptotrader.backtest.engine.BacktestEngine._fetch_historical_data",
+        load_historical,
+    )
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.post("/api/backtest/run", json=_valid_payload())
+            payload = _valid_payload()
+            payload.pop("session_name")
+            response = await client.post("/api/backtest/run", json=payload)
             assert response.status_code == 202
             run_id = response.json()["run_id"]
             await _TASKS[run_id]
@@ -178,9 +253,11 @@ async def test_mounted_backtest_route_completes_with_runtime_dependencies(monkey
     finally:
         app.state.runtime = previous
 
-    assert status.json()["status"] == "completed"
-    assert captured["repository"] is repository
-    assert captured["snapshot"] is snapshot
-    assert captured["signal_registry"] is signal_registry
-    assert captured["journal_store"].database_url is None
+    assert status.status_code == 200
+    body = status.json()
+    assert body["status"] == "completed"
+    decision = body["result"]["decisions"][0]
+    assert decision["config_revision"] == 4
+    assert decision["components"][0]["details"]["evidence"] == {"source": "mounted-real-engine"}
+    assert decision["books"][0]["book_id"] == "backtest"
     assert _RUNS[run_id]["error"] is None
