@@ -155,10 +155,13 @@ class Runtime:
             if not redis_url:
                 raise RuntimeLeaseUnavailableError("Redis is required for production execution")
             redis_state = RedisStateManager(redis_url)
-            async with cycle_lock(redis_state, pair) as acquired:
-                if not acquired:
-                    raise RuntimeLeaseUnavailableError(f"execution lease held for {pair}")
-                yield cycle
+            try:
+                async with cycle_lock(redis_state, pair) as acquired:
+                    if not acquired:
+                        raise RuntimeLeaseUnavailableError(f"execution lease held for {pair}")
+                    yield cycle
+            finally:
+                await redis_state.aclose()
 
     async def _release_cycle_lease(self) -> None:
         deferred_control: BaseException | None = None

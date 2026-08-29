@@ -392,6 +392,10 @@ const SetupEditor = ({
     if (step === 4)
       return (
         <div className="space-y-3">
+          <section className="rounded border border-amber-500/50 bg-amber-500/5 p-3">
+            <p className="text-sm text-muted-foreground">{t('liveWrite.warning')}</p>
+            <label className="mt-2 flex items-center gap-2 text-sm font-medium"><input aria-label={t('liveWrite.enable')} type="checkbox" checked={draft.execution.live_order_execution_enabled} onChange={(event) => setDraft((current) => ({ ...current, execution: { ...current.execution, live_order_execution_enabled: event.target.checked } }))} />{t('liveWrite.enable')}</label>
+          </section>
           {draft.execution.books.map((book, index) => (
             <BookForm
               key={`${book.id}-${index}`}
@@ -508,6 +512,7 @@ const SetupEditor = ({
           </label>
           <label>{t('wizard.schedulerPairs')}<input aria-label={t('wizard.schedulerPairs')} value={draft.scheduler.pairs.join(',')} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, pairs: event.target.value.split(',').map((pair) => pair.trim()).filter(Boolean) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
           <label>{t('wizard.summaryHour')}<input aria-label={t('wizard.summaryHour')} type="number" value={draft.scheduler.daily_summary_hour} onChange={(event) => setDraft((current) => ({ ...current, scheduler: { ...current.scheduler, daily_summary_hour: Number(event.target.value) } }))} className="ml-2 h-9 rounded border bg-background px-2" /></label>
+          <label className="md:col-span-2">{t('liveWrite.redis')}<input aria-label={t('liveWrite.redis')} value={draft.infrastructure.redis_url} onChange={(event) => setDraft((current) => ({ ...current, infrastructure: { ...current.infrastructure, redis_url: event.target.value } }))} className="ml-2 h-9 w-full rounded border bg-background px-2 font-mono" /></label>
         </div>
       );
     return (

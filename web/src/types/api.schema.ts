@@ -391,6 +391,7 @@ const RuntimeDocumentSchema = strictRecord({
     connections: z.array(RuntimeConnectionSchema),
     books: z.array(RuntimeBookSchema),
     allocation_policy: z.string(),
+    live_order_execution_enabled: z.boolean(),
   }),
   hitl: strictRecord({ approval_ttl_minutes: z.number().int() }),
   scheduler: strictRecord({

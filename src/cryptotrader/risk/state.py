@@ -164,6 +164,11 @@ class RedisStateManager:
     def available(self) -> bool:
         return self._redis is not None
 
+    async def aclose(self) -> None:
+        """Release a client created for a short-lived execution lease."""
+        if self._redis is not None:
+            await self._redis.aclose()
+
     async def ping(self) -> bool:
         """Check if Redis is currently reachable."""
         if self._redis is None:

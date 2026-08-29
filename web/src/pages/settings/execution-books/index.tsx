@@ -14,22 +14,23 @@ const ExecutionBooksPage = () => {
   const runtime = useRuntimeConfig();
   const document = runtime.document;
   const [books, setBooks] = useState<NonNullable<typeof runtime.document>['execution']['books']>([]);
+  const [liveOrderExecutionEnabled, setLiveOrderExecutionEnabled] = useState(false);
   const [equity, setEquity] = useState(100000);
   const [exposure, setExposure] = useState(0.5);
   const [saveError, setSaveError] = useState('');
   const hydrated = useRef(false);
   useEffect(() => {
-    if (document && !hydrated.current) { setBooks(document.execution.books); hydrated.current = true; }
+    if (document && !hydrated.current) { setBooks(document.execution.books); setLiveOrderExecutionEnabled(document.execution.live_order_execution_enabled); hydrated.current = true; }
   }, [document]);
   const errors = document ? validateBooks(books, document.execution.connections) : [];
   const save = async () => {
     if (!document) return;
-    try { setSaveError(''); await runtime.replace({ ...document, execution: { ...document.execution, books } }); }
+    try { setSaveError(''); await runtime.replace({ ...document, execution: { ...document.execution, books, live_order_execution_enabled: liveOrderExecutionEnabled } }); }
     catch { setSaveError(t('saveFailed')); }
   };
   const reload = async () => {
     const result = await runtime.reload();
-    if (result.isSuccess && !result.error && result.data) setBooks(toRuntimeDocument(result.data.document).execution.books);
+    if (result.isSuccess && !result.error && result.data) { const execution = toRuntimeDocument(result.data.document).execution; setBooks(execution.books); setLiveOrderExecutionEnabled(execution.live_order_execution_enabled); }
   };
   return (
     <PageBoundary
@@ -87,6 +88,14 @@ const ExecutionBooksPage = () => {
               </section>
             ))}
           </div>
+          <section className="rounded-2xl border border-amber-500/50 bg-amber-500/5 p-5">
+            <h2 className="font-semibold text-amber-600">{t('liveWrite.title')}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{t('liveWrite.warning')}</p>
+            <label className="mt-4 flex items-center gap-2 text-sm font-medium">
+              <input aria-label={t('liveWrite.enable')} type="checkbox" checked={liveOrderExecutionEnabled} onChange={(event) => setLiveOrderExecutionEnabled(event.target.checked)} />
+              {t('liveWrite.enable')}
+            </label>
+          </section>
           <section className="rounded-2xl border border-border bg-card p-5">
             <h2 className="font-semibold">{t('allocationPreview')}</h2>
             <div className="mt-3 flex flex-wrap gap-3">
