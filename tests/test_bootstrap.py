@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from importlib import import_module
+from importlib import import_module, metadata
 from unittest.mock import AsyncMock
 
 import pytest
@@ -74,50 +74,63 @@ async def test_first_start_seeds_setup_document_without_opening_venue_session(tm
 
 @pytest.mark.asyncio
 async def test_setup_discovers_all_metadata_without_resolving_or_opening_runtime_resources(monkeypatch, tmp_path):
+    import cryptotrader.runtime as runtime_module
     from cryptotrader.market_sources.registry import MarketSourceRegistry
-    from cryptotrader.runtime import build_runtime
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
+    from cryptotrader.runtime_config.models import validate_runtime_document
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
     from cryptotrader.signals.registry import SignalComponentRegistry
     from cryptotrader.venues.registry import VenueAdapterRegistry
 
-    discovery_calls: list[str] = []
-    signals = _MetadataRegistry({"kronos", "llm_committee"})
-    venues = _MetadataRegistry({"paper", "okx", "bybit"})
-    markets = _MetadataRegistry({"default"})
+    downstream_calls: list[str] = []
 
-    def discover_signals(_cls, _document, _event_sink):
-        discovery_calls.append("signals")
-        return signals
+    def fail_if_called(stage):
+        def fail(*_args, **_kwargs):
+            downstream_calls.append(stage)
+            raise AssertionError(f"setup must not enter {stage}")
 
-    def discover_venues(_cls, configured_adapter_ids):
-        assert tuple(configured_adapter_ids) == ()
-        discovery_calls.append("venues")
-        return venues
+        return fail
 
-    def discover_markets(_cls, _market_data):
-        discovery_calls.append("markets")
-        return markets
-
-    monkeypatch.setattr(SignalComponentRegistry, "discover", classmethod(discover_signals))
-    monkeypatch.setattr(VenueAdapterRegistry, "discover", classmethod(discover_venues))
-    monkeypatch.setattr(MarketSourceRegistry, "discover", classmethod(discover_markets))
-    reveal = AsyncMock(side_effect=AssertionError("setup must not reveal sensitive material"))
+    monkeypatch.setattr(SignalComponentRegistry, "enabled", fail_if_called("signal execution resolution"))
+    monkeypatch.setattr(VenueAdapterRegistry, "require", fail_if_called("venue adapter resolution"))
+    monkeypatch.setattr(MarketSourceRegistry, "require", fail_if_called("market source resolution"))
+    monkeypatch.setattr(runtime_module, "_assemble_cycle", fail_if_called("cycle assembly"))
+    reveal = AsyncMock(side_effect=fail_if_called("credential reveal"))
     monkeypatch.setattr(RuntimeConfigRepository, "reveal_credentials", reveal)
     settings = _settings_type()(f"sqlite+aiosqlite:///{tmp_path / 'setup.db'}", MASTER_KEY)
 
-    runtime = await build_runtime(settings)
+    runtime = await runtime_module.build_runtime(settings)
+    document = runtime.snapshot.document
+    configured_signal_ids = {component.component_id for component in document.signals.components}
+    expected_signal_ids = {"kronos", "llm_committee"} | {
+        entry_point.name for entry_point in metadata.entry_points(group="cryptotrader.signal_components")
+    }
+    expected_venue_ids = {
+        entry_point.name for entry_point in metadata.entry_points(group="cryptotrader.venue_adapters")
+    }
+    expected_market_ids = {"default"} | {
+        entry_point.name for entry_point in metadata.entry_points(group="cryptotrader.market_sources")
+    }
 
-    assert discovery_calls == ["signals", "venues", "markets"]
-    assert signals.installed_calls == 1
-    assert venues.installed_calls == 1
-    assert markets.installed_calls == 1
-    assert runtime.signal_registry is signals
-    assert runtime.venue_registry is venues
-    assert runtime.market_registry is markets
-    assert signals.require_calls == []
-    assert venues.require_calls == []
-    assert markets.require_calls == []
+    assert type(runtime.signal_registry) is SignalComponentRegistry
+    assert type(runtime.venue_registry) is VenueAdapterRegistry
+    assert type(runtime.market_registry) is MarketSourceRegistry
+    assert document == minimal_runtime_document()
+    assert runtime.signal_registry.installed_ids() == frozenset(expected_signal_ids)
+    assert runtime.venue_registry.installed_ids() == frozenset(expected_venue_ids)
+    assert runtime.market_registry.installed_ids() == frozenset(expected_market_ids)
+    assert set(runtime.signal_registry.ids()) == configured_signal_ids
+    assert set(runtime.venue_registry.ids()) == expected_venue_ids
+    assert set(runtime.market_registry.ids()) == {document.market_data.source_id}
+    validate_runtime_document(
+        document,
+        set(runtime.signal_registry.installed_ids()),
+        set(runtime.venue_registry.installed_ids()),
+        set(runtime.market_registry.installed_ids()),
+    )
+    assert runtime.snapshot.setup_required is True
     reveal.assert_not_awaited()
+    assert downstream_calls == []
     assert runtime.sessions == {}
     assert runtime.cycle is None
     await runtime.close()
@@ -139,18 +152,3 @@ class _RecordingVenueRegistry(_InstalledRegistry):
     def require(self, adapter_id):
         self.connect_calls.append(adapter_id)
         raise AssertionError("setup runtime must not resolve or connect a venue adapter")
-
-
-class _MetadataRegistry(_InstalledRegistry):
-    def __init__(self, installed: set[str]) -> None:
-        super().__init__(installed)
-        self.installed_calls = 0
-        self.require_calls: list[str] = []
-
-    def installed_ids(self):
-        self.installed_calls += 1
-        return super().installed_ids()
-
-    def require(self, resource_id):
-        self.require_calls.append(resource_id)
-        raise AssertionError("setup runtime must not resolve executable resources")
