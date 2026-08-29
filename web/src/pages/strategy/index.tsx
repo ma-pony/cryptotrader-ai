@@ -213,6 +213,9 @@ const StrategyPage = () => {
             </div>
           ) : null}
           <div className="sticky bottom-4 flex justify-end rounded-xl border border-border bg-card/95 p-3">
+            <Button variant="outline" onClick={() => void reload()}>
+              重新加载
+            </Button>
             <Button size="lg" disabled={!valid || runtime.isSaving} onClick={() => void save()}>
               <Save className="h-4 w-4" />
               {runtime.isSaving ? '保存中' : '保存完整配置'}
