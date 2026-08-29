@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from decimal import Decimal
@@ -56,6 +57,7 @@ def active_document() -> RuntimeConfigDocument:
         _connection("okx-demo", "demo", "okx", credential_ref="okx-demo-credentials"),
         _connection("bybit-testnet", "testnet", "bybit", credential_ref="bybit-testnet-credentials"),
         _connection("okx-live", "live", "okx", credential_ref="okx-live-credentials"),
+        _connection("paper-spare", "paper", "paper", credential_ref=None),
     )
     books = (
         ExecutionBook(
@@ -87,7 +89,10 @@ def active_document() -> RuntimeConfigDocument:
 
 
 def active_payload() -> dict:
-    return active_document().model_dump(mode="json")
+    payload = active_document().model_dump(mode="json")
+    for connection in payload["execution"]["connections"]:
+        connection.pop("credential_ref")
+    return payload
 
 
 def _portfolio(connection_id: str, equity: str, notional: str) -> ConnectionPortfolioSnapshot:
@@ -103,20 +108,39 @@ class FakeSession:
     def __init__(self, snapshot: ConnectionPortfolioSnapshot) -> None:
         self.connection_id = snapshot.connection_id
         self.snapshot = snapshot
-        self.capabilities = VenueCapabilities(
+        self._capabilities = VenueCapabilities(
             frozenset({"swap"}),
             True,
             False,
             True,
             frozenset({"market"}),
         )
+        self.capabilities_error: Exception | None = None
         self.closed = 0
+        self.close_started = asyncio.Event()
+        self.close_finished = asyncio.Event()
+        self.close_release: asyncio.Event | None = None
+        self.order_calls = 0
+
+    @property
+    def capabilities(self) -> VenueCapabilities:
+        if self.capabilities_error is not None:
+            raise self.capabilities_error
+        return self._capabilities
+
+    @capabilities.setter
+    def capabilities(self, value: VenueCapabilities) -> None:
+        self._capabilities = value
 
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
         return self.snapshot
 
     async def close(self) -> None:
+        self.close_started.set()
+        if self.close_release is not None:
+            await self.close_release.wait()
         self.closed += 1
+        self.close_finished.set()
 
 
 class FakeAdapter:
@@ -125,6 +149,9 @@ class FakeAdapter:
         self.connect_calls: list[tuple[VenueConnection, object]] = []
         self.opened_sessions: list[FakeSession] = []
         self.error: Exception | None = None
+        self.session_capabilities_error: Exception | None = None
+        self.block_close = False
+        self.session_opened = asyncio.Event()
 
     def capabilities(self, environment):
         return VenueCapabilities(
@@ -141,7 +168,10 @@ class FakeAdapter:
             raise self.error
         session = FakeSession(_portfolio(connection.id, "1", "0"))
         session.capabilities = self.capabilities(connection.environment)
+        session.capabilities_error = self.session_capabilities_error
+        session.close_release = asyncio.Event() if self.block_close else None
         self.opened_sessions.append(session)
+        self.session_opened.set()
         return session
 
 
@@ -216,6 +246,7 @@ async def test_get_config_exposes_latest_snapshot_and_credential_state(api_harne
     assert body["setup_required"] is False
     assert body["document"]["execution"]["connections"][0]["credential_configured"] is False
     assert body["document"]["execution"]["connections"][0]["credential_updated_at"] is None
+    assert "credential_ref" not in json.dumps(body)
 
 
 async def test_put_config_requires_expected_revision(api_harness):
@@ -234,6 +265,28 @@ async def test_put_config_requires_expected_revision(api_harness):
     assert stale.json() == {"detail": "Runtime configuration changed; reload and retry"}
 
 
+async def test_stale_put_config_conflicts_before_connection_domain_construction(api_harness):
+    current = await api_harness.client.get("/api/config")
+    revision = current.json()["revision"]
+    assert (
+        await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": revision, "document": active_payload()},
+        )
+    ).status_code == 200
+    invalid = active_payload()
+    connection = next(item for item in invalid["execution"]["connections"] if item["id"] == "paper-spare")
+    connection.update(adapter_id="okx", environment="live")
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": revision, "document": invalid},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Runtime configuration changed; reload and retry"}
+
+
 async def test_put_config_validates_the_whole_document(api_harness):
     current = await api_harness.client.get("/api/config")
     invalid = active_payload()
@@ -242,6 +295,52 @@ async def test_put_config_validates_the_whole_document(api_harness):
     response = await api_harness.client.put(
         "/api/config",
         json={"expected_revision": current.json()["revision"], "document": invalid},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_put_config_cannot_change_existing_connection_environment(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    connection = next(item for item in document["execution"]["connections"] if item["id"] == "paper-spare")
+    connection.update(
+        adapter_id="okx",
+        environment="demo",
+    )
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_put_config_cannot_delete_existing_connection(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    document["execution"]["connections"] = [
+        item for item in document["execution"]["connections"] if item["id"] != "paper-spare"
+    ]
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
+    )
+
+    assert response.status_code == 422
+
+
+async def test_put_config_cannot_disable_connection_referenced_by_enabled_book(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    connection = next(item for item in document["execution"]["connections"] if item["id"] == "okx-demo")
+    connection["enabled"] = False
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
     )
 
     assert response.status_code == 422
@@ -256,6 +355,7 @@ async def test_config_and_connection_responses_never_return_credentials(api_harn
     portfolio = await api_harness.client.get("/api/portfolio/books", params={"pair": PAIR.canonical()})
     body = json.dumps(config.json()) + json.dumps(portfolio.json()) + saved.text
     assert marker not in body
+    assert "credential_ref" not in body
     assert '"configured":true' in saved.text
     assert config.json()["document"]["execution"]["connections"][0]["credential_configured"] is True
 

@@ -4,10 +4,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from unittest.mock import ANY, AsyncMock
 
+import pytest
+
 from cryptotrader.pair import Pair
-from tests.test_runtime_config_api import ApiHarness, api_harness, put_fixture_credentials
+from tests.test_runtime_config_api import ApiHarness, active_payload, api_harness, put_fixture_credentials
 
 PAIR = Pair.parse("BTC/USDT:USDT")
 
@@ -25,7 +28,6 @@ def create_payload(
         "adapter_id": "paper" if environment == "paper" else "okx",
         "environment": environment,
         "enabled": True,
-        "credential_ref": None if environment == "paper" else f"{connection_id}-credentials",
         "leverage": 1,
         "margin_mode": "isolated",
         "parameters": {},
@@ -39,10 +41,9 @@ def update_payload(revision: int, connection: dict, **overrides) -> dict:
         "adapter_id": connection["adapter_id"],
         "environment": connection["environment"],
         "enabled": connection["enabled"],
-        "credential_ref": connection["credential_ref"],
         "leverage": connection["leverage"],
         "margin_mode": connection["margin_mode"],
-        "parameters": connection["parameters"],
+        "parameters": {},
     } | overrides
 
 
@@ -96,16 +97,66 @@ async def test_connection_update_rejects_stale_revision(api_harness):
     assert stale.status_code == 409
 
 
+async def test_stale_create_returns_conflict_before_duplicate_validation(api_harness):
+    _, revision = await _connection_and_revision(api_harness, "okx-demo")
+    assert (
+        await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": revision, "document": active_payload()},
+        )
+    ).status_code == 200
+
+    stale = await api_harness.client.post(
+        "/api/venue-connections",
+        json=create_payload(revision, connection_id="okx-demo", environment="demo"),
+    )
+
+    assert stale.status_code == 409
+    assert stale.json() == {"detail": "Runtime configuration changed; reload and retry"}
+
+
+async def test_stale_update_returns_conflict_before_environment_validation(api_harness):
+    connection, revision = await _connection_and_revision(api_harness, "okx-demo")
+    assert (
+        await api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": revision, "document": active_payload()},
+        )
+    ).status_code == 200
+
+    stale = await api_harness.client.put(
+        "/api/venue-connections/okx-demo",
+        json=update_payload(revision, connection, environment="live"),
+    )
+
+    assert stale.status_code == 409
+    assert stale.json() == {"detail": "Runtime configuration changed; reload and retry"}
+
+
 async def test_credentials_use_connection_credential_ref_and_increment_global_revision(api_harness):
     saved = await put_fixture_credentials(api_harness, "okx-demo", marker="credential-marker")
 
     assert saved.status_code == 200
     assert saved.json()["revision"] == 2
     assert saved.json()["credential"] == {
-        "credential_ref": "okx-demo-credentials",
         "configured": True,
         "updated_at": ANY,
     }
+
+
+async def test_connection_update_preserves_server_owned_credential_reference(api_harness):
+    assert (await put_fixture_credentials(api_harness, "okx-demo", marker="preserved-secret")).status_code == 200
+    connection, revision = await _connection_and_revision(api_harness, "okx-demo")
+
+    updated = await api_harness.client.put(
+        "/api/venue-connections/okx-demo",
+        json=update_payload(revision, connection, label="Updated without an internal reference"),
+    )
+    tested = await api_harness.client.post("/api/venue-connections/okx-demo/test")
+
+    assert updated.status_code == 200
+    assert "credential_ref" not in updated.text
+    assert tested.status_code == 200
 
 
 async def test_paper_connection_rejects_credentials(api_harness):
@@ -185,3 +236,39 @@ async def test_connection_test_returns_safe_bad_gateway_and_closes_session(api_h
 
     assert response.status_code == 502
     assert marker not in response.text
+
+
+async def test_connection_test_closes_session_after_post_connect_failure(api_harness):
+    marker = "post-connect-internal-marker"
+    assert (await put_fixture_credentials(api_harness, "okx-demo")).status_code == 200
+    adapter = api_harness.adapters["okx"]
+    adapter.session_capabilities_error = RuntimeError(marker)
+
+    response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
+
+    assert response.status_code == 502
+    assert marker not in response.text
+    assert adapter.opened_sessions[0].closed == 1
+    assert adapter.opened_sessions[0].order_calls == 0
+
+
+async def test_connection_test_finishes_session_close_before_propagating_cancellation(api_harness):
+    assert (await put_fixture_credentials(api_harness, "okx-demo")).status_code == 200
+    adapter = api_harness.adapters["okx"]
+    adapter.block_close = True
+
+    request = asyncio.create_task(api_harness.client.post("/api/venue-connections/okx-demo/test"))
+    await asyncio.wait_for(adapter.session_opened.wait(), timeout=1)
+    session = adapter.opened_sessions[0]
+    await asyncio.wait_for(session.close_started.wait(), timeout=1)
+    request.cancel()
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert request.done() is False
+    session.close_release.set()
+
+    with pytest.raises(asyncio.CancelledError):
+        await request
+    await asyncio.wait_for(session.close_finished.wait(), timeout=1)
+    assert session.closed == 1
+    assert session.order_calls == 0

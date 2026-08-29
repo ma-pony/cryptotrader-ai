@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Literal
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from cryptotrader.execution.codec import book_execution_proposal_payload
+from api.routes.response_dto import BookExecutionProposalOut, proposal_out
 from cryptotrader.hitl.store import ApprovalStateError
 
 if TYPE_CHECKING:
@@ -24,7 +24,7 @@ class ApprovalRequestOut(BaseModel):
     book_id: str
     pair: str
     config_revision: int
-    proposal: dict
+    proposal: BookExecutionProposalOut
     status: Literal["pending", "approved", "rejected", "invalidated", "executed"]
     created_at: str
     decided_at: str | None
@@ -61,7 +61,7 @@ def _response(record: BookApproval) -> ApprovalRequestOut:
         book_id=record.book_id,
         pair=record.proposal.pair.canonical(),
         config_revision=record.config_revision,
-        proposal=book_execution_proposal_payload(record.proposal),
+        proposal=proposal_out(record.proposal),
         status=record.status,
         created_at=record.created_at.isoformat(),
         decided_at=record.decided_at.isoformat() if record.decided_at is not None else None,
@@ -91,10 +91,10 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
             outcome = await cycle.execute_approved(approval_id)
         else:
             outcome = await cycle.reject_approval(approval_id)
-    except ApprovalStateError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    except LookupError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+    except ApprovalStateError:
+        raise HTTPException(status_code=409, detail="Approval state conflict") from None
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Approval request not found") from None
     except ValueError as error:
         raise HTTPException(status_code=422, detail="Approval proposal is invalid") from error
     final_approval = await cycle.approvals.get(approval_id)

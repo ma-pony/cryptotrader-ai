@@ -22,7 +22,16 @@ async def test_cycles_list_returns_shared_signals_books_and_connections(api_harn
     assert item["cycle_id"] == "cycle-1"
     assert set(item["shared_signals"]) == {"components", "fused", "target_position"}
     assert item["shared_signals"]["components"][0]["component_id"] == "kronos"
+    assert {entry["key"] for entry in item["shared_signals"]["components"][0]["details"]} == {
+        "as_of",
+        "direction",
+        "pair",
+        "threshold",
+        "window",
+    }
+    assert item["shared_signals"]["fused"]["contributions"][0]["component_id"] == "kronos"
     assert item["books"][0]["book_id"] == "simulation"
+    assert item["books"][0]["risk"]["connection_targets"][0]["connection_id"] == "sim-first"
     assert [connection["connection_id"] for connection in item["books"][0]["connections"]] == [
         "sim-first",
         "sim-second",

@@ -27,12 +27,19 @@ class PositionOut(BaseModel):
     entry_price: Decimal | None
 
 
+class AssetBalanceOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    asset: str
+    amount: Decimal
+
+
 class ConnectionPortfolioOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     connection_id: str
     equity: Decimal
-    balances: dict[str, Decimal]
+    balances: list[AssetBalanceOut]
     position: PositionOut
 
 
@@ -41,6 +48,7 @@ class BookPortfolioOut(BaseModel):
 
     book_id: str
     capital_scope: Literal["simulated", "real"]
+    pair: str
     total_equity: Decimal
     total_signed_notional: Decimal
     connections: list[ConnectionPortfolioOut]
@@ -73,7 +81,7 @@ def connection_portfolio_out(snapshot: ConnectionPortfolioSnapshot) -> Connectio
     return ConnectionPortfolioOut(
         connection_id=snapshot.connection_id,
         equity=snapshot.equity,
-        balances=dict(snapshot.balances),
+        balances=[AssetBalanceOut(asset=asset, amount=amount) for asset, amount in sorted(snapshot.balances.items())],
         position=PositionOut(
             pair=position.pair.canonical(),
             signed_amount=position.signed_amount,
@@ -87,6 +95,7 @@ def book_portfolio_out(snapshot: BookPortfolioSnapshot) -> BookPortfolioOut:
     return BookPortfolioOut(
         book_id=snapshot.book_id,
         capital_scope=snapshot.capital_scope,
+        pair=snapshot.connections[0].position.pair.canonical(),
         total_equity=snapshot.total_equity,
         total_signed_notional=snapshot.total_signed_notional,
         connections=[connection_portfolio_out(item) for item in snapshot.connections],

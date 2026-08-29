@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime  # noqa: TC003 - Pydantic resolves this response field at runtime.
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -14,18 +14,62 @@ from api.routes.portfolio_books import (
     book_portfolio_out,
     connection_portfolio_out,
 )
-from cryptotrader.cycle_serialization import component_signal_payload, fused_signal_payload, target_payload
-from cryptotrader.execution.codec import book_execution_proposal_payload, book_execution_result_payload
+from api.routes.response_dto import (
+    BookRiskDecisionOut,
+    ConnectionExecutionPlanOut,
+    ConnectionExecutionResultOut,
+    ConnectionRiskDecisionOut,
+    JsonEntryOut,
+    book_risk_out,
+    connection_execution_out,
+    connection_risk_out,
+    json_entries_out,
+    plan_out,
+)
 
 router = APIRouter(prefix="/api/cycles", tags=["cycles"])
+
+
+class ComponentSignalOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    component_id: str
+    direction: str
+    confidence: float
+    reasoning: str
+    details: list[JsonEntryOut]
+
+
+class ComponentContributionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    component_id: str
+    weight: float
+    signed_score: float
+    weighted_score: float
+
+
+class FusedSignalOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    score: float
+    reasoning: str
+    contributions: list[ComponentContributionOut]
+
+
+class TargetPositionOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    side: str
+    size_ratio: float
 
 
 class SharedSignalsOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    components: list[dict[str, Any]]
-    fused: dict[str, Any] | None
-    target_position: dict[str, Any] | None
+    components: list[ComponentSignalOut]
+    fused: FusedSignalOut | None
+    target_position: TargetPositionOut | None
 
 
 class BookHitlOut(BaseModel):
@@ -50,10 +94,16 @@ class CycleConnectionOut(BaseModel):
     connection_id: str
     portfolio_before: ConnectionPortfolioOut | None
     portfolio_after: ConnectionPortfolioOut | None
-    risk: dict[str, Any] | None
-    plan: dict[str, Any] | None
-    execution: dict[str, Any] | None
+    risk: ConnectionRiskDecisionOut | None
+    plan: ConnectionExecutionPlanOut | None
+    execution: ConnectionExecutionResultOut | None
     unavailable: bool
+
+
+class BookFailureOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: str
 
 
 class BookCycleOut(BaseModel):
@@ -66,10 +116,10 @@ class BookCycleOut(BaseModel):
     market_type: str
     status: str
     hitl: BookHitlOut
-    failure: dict[str, str] | None
+    failure: BookFailureOut | None
     requested_target_exposure: str | None
     target_exposure: str | None
-    risk: dict[str, Any] | None
+    risk: BookRiskDecisionOut | None
     ready: bool | None
     errors: list[str]
     execution: BookExecutionSummaryOut | None
@@ -133,8 +183,7 @@ def _connection_ids(book) -> tuple[str, ...]:
 
 
 def _book_out(book) -> BookCycleOut:
-    proposal_payload = book_execution_proposal_payload(book.proposal) if book.proposal is not None else None
-    execution_payload = book_execution_result_payload(book.execution) if book.execution is not None else None
+    proposal = book.proposal
     before = (
         {item.connection_id: connection_portfolio_out(item) for item in book.portfolio_before.connections}
         if book.portfolio_before is not None
@@ -145,10 +194,18 @@ def _book_out(book) -> BookCycleOut:
         if book.portfolio_after is not None
         else {}
     )
-    risks = {item["connection_id"]: item for item in (proposal_payload or {}).get("connection_risks", [])}
-    plans = {item["connection_id"]: item for item in (proposal_payload or {}).get("connection_plans", [])}
-    executions = {item["connection_id"]: item for item in (execution_payload or {}).get("connection_results", [])}
-    unavailable = set((proposal_payload or {}).get("unavailable_connections", []))
+    risks = (
+        {item.connection_id: connection_risk_out(item) for item in proposal.connection_risks}
+        if proposal is not None
+        else {}
+    )
+    plans = {item.connection_id: plan_out(item) for item in proposal.connection_plans} if proposal is not None else {}
+    executions = (
+        {item.connection_id: connection_execution_out(item) for item in book.execution.connection_results}
+        if book.execution is not None
+        else {}
+    )
+    unavailable = set(proposal.unavailable_connections if proposal is not None else ())
     connections = [
         CycleConnectionOut(
             connection_id=connection_id,
@@ -163,11 +220,11 @@ def _book_out(book) -> BookCycleOut:
     ]
     execution = (
         BookExecutionSummaryOut(
-            status=execution_payload["status"],
-            requires_attention=execution_payload["requires_attention"],
-            reallocated=execution_payload["reallocated"],
+            status=book.execution.status,
+            requires_attention=book.execution.requires_attention,
+            reallocated=book.execution.reallocated,
         )
-        if execution_payload is not None
+        if book.execution is not None
         else None
     )
     return BookCycleOut(
@@ -182,12 +239,12 @@ def _book_out(book) -> BookCycleOut:
             status=book.hitl.status,
             config_revision=book.hitl.config_revision,
         ),
-        failure={"stage": book.failure.stage} if book.failure is not None else None,
-        requested_target_exposure=(proposal_payload or {}).get("requested_target_exposure"),
-        target_exposure=(proposal_payload or {}).get("target_exposure"),
-        risk=(proposal_payload or {}).get("risk"),
-        ready=(proposal_payload or {}).get("ready"),
-        errors=list((proposal_payload or {}).get("errors", [])),
+        failure=BookFailureOut(stage=book.failure.stage) if book.failure is not None else None,
+        requested_target_exposure=(str(proposal.requested_target_exposure) if proposal is not None else None),
+        target_exposure=str(proposal.target_exposure) if proposal is not None else None,
+        risk=book_risk_out(proposal.risk) if proposal is not None else None,
+        ready=proposal.ready if proposal is not None else None,
+        errors=list(proposal.errors if proposal is not None else ()),
         execution=execution,
         portfolio_before=book_portfolio_out(book.portfolio_before) if book.portfolio_before is not None else None,
         portfolio_after=book_portfolio_out(book.portfolio_after) if book.portfolio_after is not None else None,
@@ -202,9 +259,41 @@ def cycle_out(record) -> CycleOut:
         config_revision=record.config_revision,
         market_data_source_id=record.market_data_source_id,
         shared_signals=SharedSignalsOut(
-            components=[component_signal_payload(item) for item in record.component_signals],
-            fused=fused_signal_payload(record.fused_signal) if record.fused_signal is not None else None,
-            target_position=target_payload(record.target_position) if record.target_position is not None else None,
+            components=[
+                ComponentSignalOut(
+                    component_id=item.component_id,
+                    direction=item.direction,
+                    confidence=item.confidence,
+                    reasoning=item.reasoning,
+                    details=json_entries_out(item.details),
+                )
+                for item in record.component_signals
+            ],
+            fused=(
+                FusedSignalOut(
+                    score=record.fused_signal.score,
+                    reasoning=record.fused_signal.reasoning,
+                    contributions=[
+                        ComponentContributionOut(
+                            component_id=item.component_id,
+                            weight=item.weight,
+                            signed_score=item.signed_score,
+                            weighted_score=item.weighted_score,
+                        )
+                        for item in record.fused_signal.contributions
+                    ],
+                )
+                if record.fused_signal is not None
+                else None
+            ),
+            target_position=(
+                TargetPositionOut(
+                    side=record.target_position.side,
+                    size_ratio=record.target_position.size_ratio,
+                )
+                if record.target_position is not None
+                else None
+            ),
         ),
         books=[_book_out(item) for item in record.book_results],
         cycle_status=record.cycle_status,

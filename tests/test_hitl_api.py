@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
 from cryptotrader.decision.models import CycleOutcome, TargetPosition
-from cryptotrader.hitl.store import BookApprovalStore
+from cryptotrader.hitl.store import ApprovalStateError, BookApprovalStore
 from cryptotrader.pair import Pair
 from tests.test_multi_venue_journal import _proposal_for
 from tests.test_runtime_config_api import api_harness
@@ -59,6 +59,9 @@ async def test_pending_api_exposes_frozen_book_proposal(api_harness):
     assert item["book_id"] == "live"
     assert item["config_revision"] == 9
     assert item["proposal"]["book_id"] == "live"
+    assert item["proposal"]["pair"] == {"symbol": "BTC/USDT:USDT"}
+    assert item["proposal"]["risk"]["connection_targets"][0]["connection_id"] == "live-first"
+    assert item["proposal"]["connection_plans"][0]["connection_id"] == "live-first"
 
 
 async def test_approve_api_returns_final_approval_and_cycle_state(api_harness):
@@ -142,6 +145,42 @@ async def test_unknown_approval_returns_not_found(api_harness):
     response = await api_harness.client.get("/api/hitl/missing")
 
     assert response.status_code == 404
+
+
+async def test_approval_state_error_returns_fixed_detail_without_internal_marker(api_harness):
+    cycle = _Cycle()
+    api_harness.runtime.cycle = cycle
+    await _seed(cycle)
+    marker = "approval-1 internal-state-marker"
+    cycle.execute_approved.side_effect = ApprovalStateError(marker)
+
+    response = await api_harness.client.post(
+        "/api/hitl/approval-1/respond",
+        json={"decision": "approve"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Approval state conflict"}
+    assert marker not in response.text
+    assert "approval-1" not in response.text
+
+
+async def test_lookup_error_returns_fixed_detail_without_internal_marker(api_harness):
+    cycle = _Cycle()
+    api_harness.runtime.cycle = cycle
+    await _seed(cycle)
+    marker = "approval-1 internal-lookup-marker"
+    cycle.reject_approval.side_effect = LookupError(marker)
+
+    response = await api_harness.client.post(
+        "/api/hitl/approval-1/respond",
+        json={"decision": "reject"},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Approval request not found"}
+    assert marker not in response.text
+    assert "approval-1" not in response.text
 
 
 async def test_hitl_request_rejects_unknown_fields(api_harness):

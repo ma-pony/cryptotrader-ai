@@ -24,7 +24,9 @@ async def test_cycle_detail_preserves_book_connection_execution_audit(api_harnes
     assert book["portfolio_before"]["book_id"] == "simulation"
     assert book["portfolio_after"]["book_id"] == "simulation"
     assert book["connections"][0]["plan"]["connection_id"] == "sim-first"
+    assert book["connections"][0]["plan"]["pair"] == {"symbol": "BTC/USDT:USDT"}
     assert book["connections"][0]["execution"]["connection_id"] == "sim-first"
+    assert book["connections"][0]["execution"]["final_position"]["position"]["pair"] == {"symbol": "BTC/USDT:USDT"}
 
 
 async def test_decision_detail_is_exactly_the_canonical_cycle_contract(api_harness):

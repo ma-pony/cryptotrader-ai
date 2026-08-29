@@ -231,7 +231,7 @@ def test_openapi_response_schemas_never_declare_credential_or_ciphertext_fields(
     from api.main import app
 
     schema = app.openapi()
-    forbidden = {"api_key", "secret", "passphrase", "encrypted_payload"}
+    forbidden = {"api_key", "secret", "passphrase", "encrypted_payload", "credential_ref"}
     runtime_paths = {
         path: operations
         for path, operations in schema["paths"].items()
@@ -265,11 +265,71 @@ def test_openapi_response_schemas_never_declare_credential_or_ciphertext_fields(
         return names
 
     response_fields = set()
+    request_fields = set()
     for operations in runtime_paths.values():
         for operation in operations.values():
+            for media in operation.get("requestBody", {}).get("content", {}).values():
+                request_fields |= property_names(media.get("schema", {}))
             for response in operation.get("responses", {}).values():
                 for media in response.get("content", {}).values():
                     response_fields |= property_names(media.get("schema", {}))
 
     assert runtime_paths
     assert not forbidden & response_fields
+    assert "credential_ref" not in request_fields
+
+
+def test_runtime_response_openapi_has_no_free_form_object_escape_hatches():  # noqa: C901
+    from api.main import app
+
+    schema = app.openapi()
+    runtime_paths = {
+        path: operations
+        for path, operations in schema["paths"].items()
+        if path.startswith(
+            (
+                "/api/config",
+                "/api/venue-connections",
+                "/api/portfolio/books",
+                "/api/cycles",
+                "/api/decisions",
+                "/api/hitl",
+            )
+        )
+    }
+
+    def free_form_paths(node, location: str, seen_refs=frozenset()):
+        if not isinstance(node, dict):
+            return []
+        failures = []
+        reference = node.get("$ref")
+        if reference is not None and reference not in seen_refs:
+            component = reference.rsplit("/", 1)[-1]
+            failures.extend(
+                free_form_paths(
+                    schema["components"]["schemas"][component],
+                    f"{location}->{component}",
+                    seen_refs | {reference},
+                )
+            )
+        additional = node.get("additionalProperties")
+        if additional not in (None, False):
+            failures.append(location)
+        for key in ("items", "anyOf", "oneOf", "allOf"):
+            value = node.get(key, ())
+            children = value if isinstance(value, list) else (value,)
+            for index, child in enumerate(children):
+                failures.extend(free_form_paths(child, f"{location}.{key}[{index}]", seen_refs))
+        for name, child in node.get("properties", {}).items():
+            failures.extend(free_form_paths(child, f"{location}.{name}", seen_refs))
+        return failures
+
+    failures = []
+    for path, operations in runtime_paths.items():
+        for method, operation in operations.items():
+            for status, response in operation.get("responses", {}).items():
+                for media in response.get("content", {}).values():
+                    failures.extend(free_form_paths(media.get("schema", {}), f"{method.upper()} {path} {status}"))
+
+    assert runtime_paths
+    assert failures == []

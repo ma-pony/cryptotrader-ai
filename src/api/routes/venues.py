@@ -2,13 +2,22 @@
 
 from __future__ import annotations
 
+import asyncio
+from contextlib import suppress
 from datetime import datetime  # noqa: TC003 - Pydantic resolves this response field at runtime.
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict
 
-from api.routes.config import VenueConnectionOut, connection_out, replace_document, require_runtime
+from api.routes.config import (
+    VenueConnectionOut,
+    connection_out,
+    ensure_expected_revision,
+    replace_document,
+    require_runtime,
+    server_credential_ref,
+)
 from cryptotrader.runtime_config.repository import CredentialNotConfigured, RevisionConflict
 from cryptotrader.runtime_config.secrets import (  # noqa: TC001 - Pydantic resolves this request field at runtime.
     CredentialPayload,
@@ -32,7 +41,6 @@ class CreateConnectionIn(BaseModel):
     adapter_id: str
     environment: ConnectionEnvironment
     enabled: bool
-    credential_ref: str | None
     leverage: int
     margin_mode: MarginMode
     parameters: dict[str, Any]
@@ -46,7 +54,6 @@ class UpdateConnectionIn(BaseModel):
     adapter_id: str
     environment: ConnectionEnvironment
     enabled: bool
-    credential_ref: str | None
     leverage: int
     margin_mode: MarginMode
     parameters: dict[str, Any]
@@ -69,7 +76,6 @@ class PutCredentialsIn(BaseModel):
 class CredentialStateOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    credential_ref: str
     configured: bool
     updated_at: datetime | None
 
@@ -102,10 +108,14 @@ class ConnectionHealthOut(BaseModel):
 
 
 def _connection_from_create(body: CreateConnectionIn) -> VenueConnection:
-    return _build_connection(body.id, body)
+    return _build_connection(body.id, body, server_credential_ref(body.id, body.environment))
 
 
-def _build_connection(connection_id: str, body: CreateConnectionIn | UpdateConnectionIn) -> VenueConnection:
+def _build_connection(
+    connection_id: str,
+    body: CreateConnectionIn | UpdateConnectionIn,
+    credential_ref: str | None,
+) -> VenueConnection:
     try:
         return VenueConnection(
             id=connection_id,
@@ -113,7 +123,7 @@ def _build_connection(connection_id: str, body: CreateConnectionIn | UpdateConne
             adapter_id=body.adapter_id,
             environment=body.environment,
             enabled=body.enabled,
-            credential_ref=body.credential_ref,
+            credential_ref=credential_ref,
             leverage=body.leverage,
             margin_mode=body.margin_mode,
             parameters=body.parameters,
@@ -149,11 +159,12 @@ def _is_referenced_by_enabled_book(snapshot, connection_id: str) -> bool:
 async def create_connection(body: CreateConnectionIn, request: Request) -> ConnectionMutationOut:
     runtime = require_runtime(request)
     snapshot = await runtime.repository.get_or_create()
+    ensure_expected_revision(snapshot, body.expected_revision)
     if any(item.id == body.id for item in snapshot.document.execution.connections):
         raise HTTPException(status_code=422, detail="Venue connection already exists")
     connection = _connection_from_create(body)
     document = _document_with_connections(snapshot, (*snapshot.document.execution.connections, connection))
-    saved = await replace_document(runtime, body.expected_revision, document)
+    saved = await replace_document(runtime, snapshot, body.expected_revision, document)
     return ConnectionMutationOut(
         revision=saved.revision,
         connection=await connection_out(runtime.repository, connection),
@@ -168,17 +179,18 @@ async def update_connection(
 ) -> ConnectionMutationOut:
     runtime = require_runtime(request)
     snapshot = await runtime.repository.get_or_create()
+    ensure_expected_revision(snapshot, body.expected_revision)
     current = _find_connection(snapshot, connection_id)
     if body.environment != current.environment:
         raise HTTPException(status_code=422, detail="Connection environment cannot be changed")
     if not body.enabled and _is_referenced_by_enabled_book(snapshot, connection_id):
         raise HTTPException(status_code=422, detail="Enabled book still references this connection")
-    replacement = _build_connection(connection_id, body)
+    replacement = _build_connection(connection_id, body, current.credential_ref)
     connections = tuple(
         replacement if item.id == connection_id else item for item in snapshot.document.execution.connections
     )
     document = _document_with_connections(snapshot, connections)
-    saved = await replace_document(runtime, body.expected_revision, document)
+    saved = await replace_document(runtime, snapshot, body.expected_revision, document)
     return ConnectionMutationOut(
         revision=saved.revision,
         connection=await connection_out(runtime.repository, replacement),
@@ -193,6 +205,7 @@ async def put_credentials(
 ) -> CredentialMutationOut:
     runtime = require_runtime(request)
     snapshot = await runtime.repository.get_or_create()
+    ensure_expected_revision(snapshot, body.expected_revision)
     connection = _find_connection(snapshot, connection_id)
     if connection.environment == "paper" or connection.credential_ref is None:
         raise HTTPException(status_code=422, detail="Connection does not accept credentials")
@@ -210,7 +223,6 @@ async def put_credentials(
     return CredentialMutationOut(
         revision=saved.revision,
         credential=CredentialStateOut(
-            credential_ref=state.credential_ref,
             configured=state.configured,
             updated_at=state.updated_at,
         ),
@@ -225,6 +237,20 @@ def _capabilities_out(capabilities: VenueCapabilities) -> VenueCapabilitiesOut:
         reduce_only=capabilities.reduce_only,
         supported_order_types=sorted(capabilities.supported_order_types),
     )
+
+
+async def _close_session(session) -> None:
+    close_task = asyncio.create_task(session.close())
+    try:
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError as cancellation:
+        current = asyncio.current_task()
+        if current is not None:
+            while current.cancelling():
+                current.uncancel()
+        with suppress(Exception):
+            await asyncio.shield(close_task)
+        raise cancellation
 
 
 @router.post("/{connection_id}/test", response_model=ConnectionHealthOut)
@@ -253,7 +279,7 @@ async def test_connection(connection_id: str, request: Request) -> ConnectionHea
     finally:
         if session is not None:
             try:
-                await session.close()
+                await _close_session(session)
             except Exception:
                 raise HTTPException(status_code=502, detail="Venue connection test failed") from None
     return ConnectionHealthOut(
