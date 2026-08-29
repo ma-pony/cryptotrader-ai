@@ -65,6 +65,8 @@ def test_removed_legacy_production_modules_do_not_exist():
         "src/cryptotrader/portfolio/exchange_reader.py",
         "src/cryptotrader/profiles/repository.py",
         "src/api/routes/signal_profile.py",
+        "src/cryptotrader/hitl/gate.py",
+        "tests/test_hitl_gate.py",
         "web/src/hooks/use-signal-profile.ts",
     ):
         assert not Path(path).exists()
