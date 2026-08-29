@@ -1,13 +1,15 @@
-"""US4 (spec 013, T034) — API responses include pair_display + market_type.
+"""US4 (spec 013, T034) — API responses expose canonical pair identity.
 
 Validates the response shape for both /api/portfolio/snapshot and the
-decisions endpoints. Uses unit-level assertions on the helper functions
-plus minimal Pydantic round-trips so the test runs without a live DB.
+canonical multi-venue cycle endpoints. Uses unit-level assertions so the
+test runs without a live DB.
 """
+
+# ruff: noqa: F401, F811 - 导入 fixture 供本模块的 pytest 参数解析。
 
 from __future__ import annotations
 
-import pytest
+from tests.test_runtime_config_api import api_harness
 
 
 class TestPortfolioPositionOutShape:
@@ -64,25 +66,18 @@ class TestPortfolioPositionOutShape:
         assert out[0].market_type == "spot"
 
 
-class TestDecisionsPairMeta:
-    @pytest.mark.parametrize(
-        ("pair", "expected_display", "expected_mt"),
-        [
-            ("BTC/USDT", "BTC/USDT", "spot"),
-            ("BTC/USDT:USDT", "BTC/USDT (perp)", "swap"),
-            ("BTC/USD:BTC", "BTC/USD (perp)", "swap"),
-        ],
-    )
-    def test_pair_meta_helper(self, pair: str, expected_display: str, expected_mt: str) -> None:
-        from api.routes.decisions import _pair_meta
+class TestMultiVenueCyclePair:
+    async def test_cycle_book_includes_pair_market_type_and_connection_hierarchy(self, api_harness) -> None:
+        from tests.test_multi_venue_journal import _record
 
-        assert _pair_meta(pair) == (expected_display, expected_mt)
+        await api_harness.runtime.cycle.journal.save(_record())
+        response = await api_harness.client.get("/api/cycles/cycle-1")
 
-    def test_decision_list_item_includes_pair_meta(self) -> None:
-        from api.routes.decisions import _list_item
-        from tests.factories.signal_fusion import cycle_record
-
-        item = _list_item(cycle_record(pair="BTC/USDT:USDT"))
-        assert item.pair == "BTC/USDT:USDT"
-        assert item.pair_display == "BTC/USDT (perp)"
-        assert item.market_type == "swap"
+        assert response.status_code == 200
+        book = response.json()["books"][0]
+        assert book["pair"] == "BTC/USDT:USDT"
+        assert book["market_type"] == "swap"
+        assert [connection["connection_id"] for connection in book["connections"]] == [
+            "sim-first",
+            "sim-second",
+        ]

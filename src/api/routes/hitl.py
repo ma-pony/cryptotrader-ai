@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from cryptotrader.execution.codec import book_execution_proposal_payload
 from cryptotrader.hitl.store import ApprovalStateError
@@ -17,6 +17,8 @@ router = APIRouter(prefix="/api/hitl", tags=["hitl"])
 
 
 class ApprovalRequestOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     approval_id: str
     cycle_id: str
     book_id: str
@@ -29,14 +31,20 @@ class ApprovalRequestOut(BaseModel):
 
 
 class HitlRespondIn(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     decision: Literal["approve", "reject"]
 
 
 class HitlRespondOut(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     approval_id: str
     cycle_id: str
-    status: str
+    approval_status: str
     cycle_status: str
+    execution_status: str
+    requires_attention: bool
 
 
 def _cycle(request: Request):
@@ -87,12 +95,16 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
         raise HTTPException(status_code=409, detail=str(error)) from error
     except LookupError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail="Approval proposal is invalid") from error
     final_approval = await cycle.approvals.get(approval_id)
     if final_approval is None:
         raise HTTPException(status_code=404, detail="Approval request not found")
     return HitlRespondOut(
         approval_id=approval_id,
         cycle_id=outcome.cycle_id,
-        status=final_approval.status,
+        approval_status=final_approval.status,
         cycle_status=outcome.status,
+        execution_status=outcome.execution_status,
+        requires_attention=outcome.requires_attention,
     )

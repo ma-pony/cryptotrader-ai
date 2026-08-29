@@ -200,3 +200,76 @@ class TestRequestValidationErrorHandler:
         # The logged message or args should mention method/path info
         all_log_text = " ".join(str(c) for c in log_calls)
         assert "POST" in all_log_text or "/api/backtest/run" in all_log_text
+
+
+def test_runtime_api_routes_are_api_key_protected_and_signal_profile_is_absent():
+    from api.dependencies import verify_api_key
+    from api.main import app
+
+    expected = {
+        "/api/config",
+        "/api/venue-connections",
+        "/api/venue-connections/{connection_id}",
+        "/api/venue-connections/{connection_id}/credentials",
+        "/api/venue-connections/{connection_id}/test",
+        "/api/portfolio/books",
+        "/api/portfolio/books/{book_id}",
+        "/api/cycles",
+        "/api/cycles/{cycle_id}",
+        "/api/decisions",
+        "/api/decisions/{cycle_id}",
+    }
+    routes = {route.path: route for route in app.routes if route.path in expected}
+
+    assert set(routes) == expected
+    assert "/api/signal-profile" not in {route.path for route in app.routes}
+    for route in routes.values():
+        assert any(dependency.call is verify_api_key for dependency in route.dependant.dependencies)
+
+
+def test_openapi_response_schemas_never_declare_credential_or_ciphertext_fields():  # noqa: C901
+    from api.main import app
+
+    schema = app.openapi()
+    forbidden = {"api_key", "secret", "passphrase", "encrypted_payload"}
+    runtime_paths = {
+        path: operations
+        for path, operations in schema["paths"].items()
+        if path.startswith(
+            (
+                "/api/config",
+                "/api/venue-connections",
+                "/api/portfolio/books",
+                "/api/cycles",
+                "/api/decisions",
+                "/api/hitl",
+            )
+        )
+    }
+
+    def property_names(node, seen_refs=frozenset()):
+        if not isinstance(node, dict):
+            return set()
+        names = set(node.get("properties", {}))
+        reference = node.get("$ref")
+        if reference is not None and reference not in seen_refs:
+            component = reference.rsplit("/", 1)[-1]
+            names |= property_names(schema["components"]["schemas"][component], seen_refs | {reference})
+        for key in ("items", "anyOf", "oneOf", "allOf"):
+            value = node.get(key, ())
+            children = value if isinstance(value, list) else (value,)
+            for child in children:
+                names |= property_names(child, seen_refs)
+        for child in node.get("properties", {}).values():
+            names |= property_names(child, seen_refs)
+        return names
+
+    response_fields = set()
+    for operations in runtime_paths.values():
+        for operation in operations.values():
+            for response in operation.get("responses", {}).values():
+                for media in response.get("content", {}).values():
+                    response_fields |= property_names(media.get("schema", {}))
+
+    assert runtime_paths
+    assert not forbidden & response_fields

@@ -28,16 +28,21 @@ from api.routes import (
     backtest,
     chat,
     chat_control,
+    config,
+    cycles,
+    decisions,
     events,
     health,
     hitl,
     market,
     memory,
     metrics,
+    portfolio_books,
     portfolio_v2,
     risk,
     scheduler,
     skills,
+    venues,
 )
 from cryptotrader.tracing import set_trace_id
 
@@ -256,7 +261,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     # Pydantic v2 includes for value_error types.
     sanitized = []
     for err in exc.errors():
-        clean = {k: v for k, v in err.items() if k != "ctx"}
+        clean = {k: v for k, v in err.items() if k not in {"ctx", "input"}}
         clean["loc"] = list(clean.get("loc", ()))
         sanitized.append(clean)
     return JSONResponse(
@@ -402,6 +407,11 @@ app.include_router(scheduler.router)
 
 # Protected routes require API key
 app.include_router(portfolio_v2.router, dependencies=[Depends(verify_api_key)])
+app.include_router(config.router, dependencies=[Depends(verify_api_key)])
+app.include_router(venues.router, dependencies=[Depends(verify_api_key)])
+app.include_router(portfolio_books.router, dependencies=[Depends(verify_api_key)])
+app.include_router(cycles.router, dependencies=[Depends(verify_api_key)])
+app.include_router(decisions.router, dependencies=[Depends(verify_api_key)])
 app.include_router(backtest.router, dependencies=[Depends(verify_api_key)])
 app.include_router(risk.router, dependencies=[Depends(verify_api_key)])
 app.include_router(scheduler.api_router, dependencies=[Depends(verify_api_key)])
