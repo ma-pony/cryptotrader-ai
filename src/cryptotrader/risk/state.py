@@ -22,6 +22,13 @@ from redis.exceptions import RedisError
 
 logger = logging.getLogger(__name__)
 
+_RELEASE_STRICT_LOCK = """
+if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('DEL', KEYS[1])
+end
+return 0
+"""
+
 
 class _MemoryStore:
     """Minimal in-memory key-value store with TTL expiry."""
@@ -259,12 +266,7 @@ class RedisStateManager:
         if self._redis is None:
             raise RuntimeError("Redis is required for production execution lease")
         try:
-            current = await self._redis.get(key)
-            if isinstance(current, bytes):
-                current = current.decode()
-            if current != owner_id:
-                return False
-            return bool(await self._redis.delete(key))
+            return bool(await self._redis.eval(_RELEASE_STRICT_LOCK, 1, key, owner_id))
         except RedisError as error:
             raise RuntimeError("Redis is unavailable for production execution lease") from error
 

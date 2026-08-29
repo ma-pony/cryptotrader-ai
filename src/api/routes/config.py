@@ -377,6 +377,7 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
                 connections=connections,
                 books=body.execution.books,
                 allocation_policy=body.execution.allocation_policy,
+                live_order_execution_enabled=body.execution.live_order_execution_enabled,
             ),
             hitl=body.hitl,
             scheduler=body.scheduler,

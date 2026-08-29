@@ -143,7 +143,7 @@ describe('SetupPage', () => {
       execution: { ...base.document.execution, connections: [{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }], books: [{ id: 'sim', label: 'Sim', capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [{ connection_id: 'paper', enabled: true, weight: 1 }] }] },
     };
     const initial = runtimeConfigFixture({ setup_required: true, document });
-    const saved = runtimeConfigFixture({ revision: 3, setup_required: false, document: { ...document, system: { active: true }, security: { enabled: true, access_credential_configured: true, access_credential_updated_at: '2026-08-30T00:00:00Z' } } });
+    const saved = runtimeConfigFixture({ revision: 3, setup_required: false, document: { ...document, system: { active: true }, security: { enabled: true, access_credential_configured: true, access_credential_updated_at: '2026-08-30T00:00:00Z' }, execution: { ...document.execution, live_order_execution_enabled: true } } });
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       if (url.includes('/test')) return Promise.resolve(new Response(JSON.stringify({ connection_id: 'paper', healthy: true, environment: 'paper', credential_configured: false, capabilities: { market_types: [], native_protection: false, hedge_mode: false, reduce_only: true, supported_order_types: [] } }), { status: 200 }));
       if (url.includes('/credentials/api-access')) return Promise.resolve(new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), { status: 200 }));
@@ -157,7 +157,9 @@ describe('SetupPage', () => {
     for (let stage = 2; stage <= 4; stage += 1) fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
     fireEvent.click(await screen.findByRole('button', { name: '测试连接' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/test'))).toBe(true));
-    for (let stage = 5; stage <= 8; stage += 1) fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
+    fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
+    fireEvent.click(await screen.findByRole('checkbox', { name: '允许实盘下单' }));
+    for (let stage = 6; stage <= 8; stage += 1) fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
     fireEvent.change(await screen.findByLabelText('API 访问密钥'), { target: { value: 'activation-api-key' } });
     fireEvent.click(screen.getByRole('button', { name: '保存 API 访问密钥' }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/credentials/api-access'))).toBe(true));
@@ -168,7 +170,8 @@ describe('SetupPage', () => {
     const put = fetchMock.mock.calls.find(([url, init]) => String(url).endsWith('/api/config') && init?.method === 'PUT')!;
     expect(new Headers((put[1] as RequestInit).headers).get('X-API-Key')).toBe('activation-api-key');
     const body = JSON.parse((put[1] as RequestInit).body as string);
-    expect(body).toMatchObject({ expected_revision: 2, document: { system: { active: true }, signals: { components: [{ component_id: 'kronos', parameters: {} }] }, execution: { books: [{ id: 'sim', allocations: [{ connection_id: 'paper', weight: 1 }] }] } } });
+    expect(body).toMatchObject({ expected_revision: 2, document: { system: { active: true }, signals: { components: [{ component_id: 'kronos', parameters: {} }] }, execution: { live_order_execution_enabled: true, books: [{ id: 'sim', allocations: [{ connection_id: 'paper', weight: 1 }] }] } } });
+    await waitFor(() => expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toMatchObject({ revision: 3, document: { execution: { live_order_execution_enabled: true } } }));
     fireEvent.change(screen.getByLabelText('API 访问密钥'), { target: { value: 'rotated-api-key' } });
     fireEvent.click(screen.getByRole('button', { name: '轮换 API 访问密钥' }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).includes('/credentials/api-access'))).toHaveLength(2));

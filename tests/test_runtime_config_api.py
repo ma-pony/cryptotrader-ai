@@ -328,6 +328,24 @@ async def test_put_config_publishes_the_saved_revision_to_the_running_runtime(ap
     api_harness.runtime.publish_candidate.assert_awaited_once()
 
 
+async def test_put_config_persists_the_explicit_live_order_execution_gate(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    document["execution"]["live_order_execution_enabled"] = True
+
+    saved = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
+    )
+
+    assert saved.status_code == 200
+    assert saved.json()["document"]["execution"]["live_order_execution_enabled"] is True
+    assert (await api_harness.client.get("/api/config")).json()["document"]["execution"][
+        "live_order_execution_enabled"
+    ] is True
+    assert api_harness.runtime.snapshot.document.execution.live_order_execution_enabled is True
+
+
 async def test_put_config_refreshes_application_runtime_owners_after_publication(api_harness):
     from api.main import app
 

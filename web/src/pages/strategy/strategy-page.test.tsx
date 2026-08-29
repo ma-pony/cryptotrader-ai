@@ -34,9 +34,9 @@ describe('StrategyPage', () => {
     expect(screen.getByRole('button', { name: '保存完整配置' })).toBeDisabled();
   });
 
-  it('sends ordinary component parameter JSON and current model settings in the runtime PUT', async () => {
+  it('keeps the live-order gate in a strategy save and saved runtime reload', async () => {
     const base = runtimeConfigFixture();
-    const initial = runtimeConfigFixture({ document: { ...base.document, signals: { ...base.document.signals, components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }] } } });
+    const initial = runtimeConfigFixture({ document: { ...base.document, execution: { ...base.document.execution, live_order_execution_enabled: true }, signals: { ...base.document.signals, components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }] } } });
     const saved = runtimeConfigFixture({ revision: 2, document: initial.document });
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(initial), { status: 200 }))
@@ -50,7 +50,8 @@ describe('StrategyPage', () => {
     fireEvent.click(screen.getByRole('button', { name: '保存完整配置' }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const body = JSON.parse((fetchMock.mock.calls[1]![1] as RequestInit).body as string);
-    expect(body).toMatchObject({ expected_revision: 1, document: { signals: { neutral_threshold: 0.3, components: [{ component_id: 'kronos', parameters: { window: 20 } }] }, llm: { models: { tech_agent: 'new-model' } } } });
+    expect(body).toMatchObject({ expected_revision: 1, document: { execution: { live_order_execution_enabled: true }, signals: { neutral_threshold: 0.3, components: [{ component_id: 'kronos', parameters: { window: 20 } }] }, llm: { models: { tech_agent: 'new-model' } } } });
+    expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toMatchObject({ revision: 2, document: { execution: { live_order_execution_enabled: true } } });
   });
 
   it('keeps a strategy draft on background cache updates and failed reload, then resets only on successful reload', async () => {

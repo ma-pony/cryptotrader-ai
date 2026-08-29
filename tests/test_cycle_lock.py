@@ -27,6 +27,14 @@ class _Redis:
     async def delete(self, key):
         return int(self.values.pop(key, None) is not None)
 
+    async def eval(self, script, numkeys, key, owner_id):
+        assert numkeys == 1
+        assert "redis.call('GET', KEYS[1]) == ARGV[1]" in script
+        if self.values.get(key) != owner_id:
+            return 0
+        del self.values[key]
+        return 1
+
 
 def _strict_state() -> RedisStateManager:
     state = RedisStateManager(None)
@@ -66,3 +74,27 @@ async def test_same_pair_concurrent_execution_admits_exactly_one_holder():
     await asyncio.gather(worker(), worker())
     assert maximum == 1
     assert state._mem.get("cycle_lock:BTC/USDT") is None
+
+
+@pytest.mark.asyncio
+async def test_stale_execution_lease_release_cannot_delete_a_reassigned_redis_key():
+    """The comparison and deletion must occur in one Redis-side operation."""
+
+    class ReassignedLeaseRedis(_Redis):
+        async def get(self, key):
+            previous = await super().get(key)
+            self.values[key] = "new-owner"
+            return previous
+
+        async def eval(self, script, numkeys, key, owner_id):
+            self.values[key] = "new-owner"
+            return await super().eval(script, numkeys, key, owner_id)
+
+    state = RedisStateManager(None)
+    state._redis = ReassignedLeaseRedis()
+    state._redis.values["cycle_lock:BTC/USDT"] = "old-owner"
+
+    released = await state.release_strict_lock("cycle_lock:BTC/USDT", "old-owner")
+
+    assert released is False
+    assert state._redis.values["cycle_lock:BTC/USDT"] == "new-owner"
