@@ -17,6 +17,7 @@ from cryptotrader.market_sources.registry import MarketSourceRegistry
 from cryptotrader.pair import Pair
 from cryptotrader.runtime import build_runtime
 from cryptotrader.runtime_config.models import (
+    InfrastructureConfig,
     MarketDataConfig,
     RuntimeConfigSnapshot,
     SignalComponentConfig,
@@ -97,6 +98,7 @@ def _snapshot() -> RuntimeConfigSnapshot:
             connections=(paper,),
             books=(book,),
             system=SystemConfig(active=True),
+            infrastructure=InfrastructureConfig(redis_url="redis://runtime-test:6379/0"),
             market_data=MarketDataConfig(source_id="default", parameters={"timeframe": "1h", "limit": 20}),
             signals=SignalConfig(
                 components=(SignalComponentConfig(component_id="fixture", enabled=True, weight=1.0),),
