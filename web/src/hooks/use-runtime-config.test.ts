@@ -37,6 +37,9 @@ describe('runtime config response decoder', () => {
     ['custom prototype', { nested: Object.create({ inherited: true }) }],
     ['symbol own key', (() => { const value = { nested: 1 }; Object.defineProperty(value, Symbol('secret'), { value: 2 }); return value; })()],
     ['sparse array', { nested: [, 1] }],
+    ['array symbol property', (() => { const value = [1]; Object.defineProperty(value, Symbol('x'), { value: 2 }); return value; })()],
+    ['array extra property', Object.assign([1], { extra: 2 })],
+    ['array accessor', (() => { const value: unknown[] = []; Object.defineProperty(value, '0', { get: () => 1, enumerable: true }); value.length = 1; return value; })()],
   ])('rejects runtime JSON containing %s before it can be serialized', (_name, value) => {
     expect(() => assertRuntimeJsonDocument(value)).toThrow('Invalid runtime JSON');
   });

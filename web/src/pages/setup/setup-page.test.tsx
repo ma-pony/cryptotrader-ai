@@ -20,6 +20,7 @@ describe('SetupPage', () => {
     expect(validateLlmAdvanced(valid)).toEqual(valid);
     expect(validateLlmAdvanced({ ...valid, extra: true })).toBeUndefined();
     expect(validateLlmAdvanced({ ...valid, retry: { ...valid.retry, retry_jitter: 'yes' } })).toBeUndefined();
+    expect(validateLlmAdvanced({ ...valid, retry: { ...valid.retry, max_attempts: 1.5 } })).toBeUndefined();
     expect(validateLlmAdvanced({ ...valid, model_costs: [{ ...valid.model_costs[0], input_usd_per_mtok: Infinity }] })).toBeUndefined();
   });
 
