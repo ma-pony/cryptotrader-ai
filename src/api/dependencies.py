@@ -8,37 +8,28 @@ from fastapi import HTTPException, Request
 
 from cryptotrader.runtime_config.repository import API_ACCESS_CREDENTIAL_REF, CredentialNotConfigured
 
-_SETUP_COMMISSIONING_ROUTES = frozenset(
-    {
-        ("GET", "/api/config"),
+
+def _commissioning_route_kind(request: Request) -> str | None:
+    """Classify the single setup surface once for both setup and application admission."""
+    method, path = request.method, request.url.path
+    if (method, path) == ("GET", "/api/config"):
+        return "read"
+    if (method, path) in {
         ("PUT", "/api/config"),
         ("PUT", "/api/config/credentials/llm-gateway"),
         ("PUT", "/api/config/credentials/api-access"),
-    }
-)
-
-
-def _is_application_mutation_request(request: Request) -> bool:
-    if (request.method, request.url.path) in _SETUP_COMMISSIONING_ROUTES - {("GET", "/api/config")}:
-        return True
-    if request.url.path == "/api/venue-connections" and request.method == "POST":
-        return True
+        ("POST", "/api/venue-connections"),
+    }:
+        return "mutation"
     segments = request.url.path.split("/")
-    return len(segments) == 4 and segments[:3] == ["", "api", "venue-connections"] and request.method == "PUT"
-
-
-def _is_setup_commissioning_request(request: Request) -> bool:
-    if (request.method, request.url.path) in _SETUP_COMMISSIONING_ROUTES:
-        return True
-    if request.url.path == "/api/venue-connections" and request.method == "POST":
-        return True
-    segments = request.url.path.split("/")
-    return (len(segments) == 4 and segments[:3] == ["", "api", "venue-connections"] and request.method == "PUT") or (
-        len(segments) == 5
-        and segments[:3] == ["", "api", "venue-connections"]
-        and segments[4] in {"credentials", "test"}
-        and request.method == ("PUT" if segments[4] == "credentials" else "POST")
-    )
+    if len(segments) == 4 and segments[:3] == ["", "api", "venue-connections"] and method == "PUT":
+        return "mutation"
+    if len(segments) == 5 and segments[:3] == ["", "api", "venue-connections"]:
+        if segments[4] == "credentials" and method == "PUT":
+            return "mutation"
+        if segments[4] == "test" and method == "POST":
+            return "read"
+    return None
 
 
 async def verify_api_key(request: Request):
@@ -46,10 +37,11 @@ async def verify_api_key(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None or getattr(runtime, "snapshot", None) is None:
         raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")
-    if getattr(runtime, "application_in_progress", False) is True and not _is_application_mutation_request(request):
+    commissioning_route = _commissioning_route_kind(request)
+    if getattr(runtime, "application_in_progress", False) is True and commissioning_route != "mutation":
         raise HTTPException(status_code=503, detail="Runtime configuration is being applied")
     security = runtime.snapshot.document.security
-    if runtime.snapshot.setup_required is True and not _is_setup_commissioning_request(request):
+    if runtime.snapshot.setup_required is True and commissioning_route is None:
         raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")
     if not security.enabled:
         return

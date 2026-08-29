@@ -60,11 +60,12 @@ class _Repository:
         )
         return self.snapshot
 
-    async def mark_failed(self, revision, error):
+    async def mark_failed(self, revision, error, *, last_activated_revision):
         assert self.snapshot.revision == revision
         self.snapshot = replace(
             self.snapshot,
             apply_status="failed",
+            applied_revision=last_activated_revision,
             apply_error=error,
         )
         return self.snapshot

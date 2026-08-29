@@ -459,6 +459,52 @@ async def test_config_read_is_rejected_while_a_real_asgi_application_request_has
     assert (await applying).status_code == 200
 
 
+@pytest.mark.asyncio
+async def test_venue_credential_mutation_waits_for_application_barrier_while_reads_and_connection_test_are_rejected(
+    api_harness,
+):
+    """Only commissioning mutations queue behind an application; reads and test-connect never enter it."""
+    current = await api_harness.client.get("/api/config")
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def block_activation(applied):
+        entered.set()
+        await release.wait()
+        api_harness.runtime.snapshot = applied
+
+    api_harness.runtime.activate_applied = AsyncMock(side_effect=block_activation)
+    applying = asyncio.create_task(
+        api_harness.client.put(
+            "/api/config",
+            json={"expected_revision": current.json()["revision"], "document": active_payload()},
+        )
+    )
+    await entered.wait()
+
+    queued = asyncio.create_task(
+        api_harness.client.put(
+            "/api/venue-connections/okx-demo/credentials",
+            json={
+                "expected_revision": current.json()["revision"] + 1,
+                "credentials": {
+                    "api_key": "queued-key",  # pragma: allowlist secret
+                    "secret": "queued-secret",  # pragma: allowlist secret
+                    "passphrase": "queued-pass",
+                },  # pragma: allowlist secret
+            },
+        )
+    )
+    await asyncio.sleep(0)
+    assert queued.done() is False
+    assert (await api_harness.client.get("/api/config")).status_code == 503
+    assert (await api_harness.client.post("/api/venue-connections/okx-demo/test")).status_code == 503
+
+    release.set()
+    assert (await applying).status_code == 200
+    assert (await queued).status_code == 200
+
+
 async def test_stale_put_config_conflicts_before_connection_domain_construction(api_harness):
     current = await api_harness.client.get("/api/config")
     revision = current.json()["revision"]

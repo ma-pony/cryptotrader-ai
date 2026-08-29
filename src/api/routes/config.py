@@ -687,7 +687,11 @@ async def _fail_pending_application(runtime, pending, candidate, clear_owners) -
     if cleanup_incomplete:
         error = "runtime application failed: cleanup incomplete"
     try:
-        failed = await runtime.repository.mark_failed(pending.revision, error)
+        failed = await runtime.repository.mark_failed(
+            pending.revision,
+            error,
+            last_activated_revision=pending.applied_revision,
+        )
     except BaseException:
         from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
 

@@ -315,20 +315,13 @@ class RuntimeConfigRepository:
     async def mark_applied(self, revision: int) -> RuntimeConfigSnapshot:
         return await self._set_apply_state(revision, "applied", applied_revision=revision, apply_error=None)
 
-    async def mark_failed(self, revision: int, error: str) -> RuntimeConfigSnapshot:
-        await self.ensure_tables()
-        session = await get_async_session(self.database_url)
-        try:
-            row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
-            if row is None or row.revision != revision:
-                raise RevisionConflict(revision, 0 if row is None else row.revision)
-            previous_applied_revision = row.applied_revision
-        finally:
-            await session.close()
+    async def mark_failed(
+        self, revision: int, error: str, *, last_activated_revision: int | None
+    ) -> RuntimeConfigSnapshot:
         return await self._set_apply_state(
             revision,
             "failed",
-            applied_revision=previous_applied_revision,
+            applied_revision=last_activated_revision,
             apply_error=error[:256],
         )
 

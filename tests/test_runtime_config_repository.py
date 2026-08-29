@@ -114,6 +114,27 @@ async def test_document_revision_is_pending_until_the_runtime_application_is_mar
     assert (applied.apply_status, applied.applied_revision, applied.apply_error) == ("applied", pending.revision, None)
 
 
+async def test_failed_transition_keeps_the_last_activated_revision_when_mark_applied_already_wrote_current_row(
+    repository,
+):
+    """The DB row cannot infer the last live graph after the applied write races activation."""
+    first = await repository.get_or_create()
+    pending = await repository.replace(first.revision, active_document())
+
+    await repository.mark_applied(pending.revision)
+    failed = await repository.mark_failed(
+        pending.revision,
+        "runtime application failed",
+        last_activated_revision=pending.applied_revision,
+    )
+
+    assert (failed.apply_status, failed.applied_revision, failed.apply_error) == (
+        "failed",
+        first.revision,
+        "runtime application failed",
+    )
+
+
 async def test_get_existing_never_creates_schema_or_default_row(tmp_path):
     from cryptotrader.db import get_async_session
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository, RuntimeConfigUnavailable
