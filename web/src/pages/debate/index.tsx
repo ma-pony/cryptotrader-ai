@@ -7,9 +7,10 @@ import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
 import { cn } from '@/lib/cn';
-import { useDecisionDetail } from '@/hooks/use-decision-detail';
+import { useMultiVenueCycle } from '@/hooks/use-multi-venue-cycles';
 import { useDecisions } from '@/hooks/use-decisions';
-import type { CommitteeDebateTurn, DecisionDetail } from '@/types/api';
+import type { CommitteeDebateTurn, Cycle } from '@/types/api';
+import { decodeEntries } from '@/hooks/use-runtime-config';
 
 import { DirChip } from '@/components/ui/dir-chip';
 
@@ -51,12 +52,12 @@ const normalizeDir = (raw: string): NormalizedDir => {
   return 'neutral';
 };
 
-const toScenario = (d: DecisionDetail): DebateScenario | null => {
-  if (!d.context.available) return null;
-  const committee = d.components.find((component) => component.component_id === 'llm_committee');
+const toScenario = (d: Cycle): DebateScenario | null => {
+  const committee = d.shared_signals.components.find((component) => component.component_id === 'llm_committee');
   if (!committee) return null;
-  const turnsApi = committee.details.debate_turns ?? [];
-  const analyses = committee.details.analyses ? Object.values(committee.details.analyses) : [];
+  const details = decodeEntries(committee.details as Parameters<typeof decodeEntries>[0]) as { debate_turns?: CommitteeDebateTurn[]; analyses?: Record<string, { agent_id: string; direction: string; confidence: number }>; consensus_metrics?: { dispersion?: number }; debate_skipped?: boolean; debate_skip_reason?: string };
+  const turnsApi = details.debate_turns ?? [];
+  const analyses = details.analyses ? Object.values(details.analyses) : [];
   const groupedInitial = new Map<AgentKind, { dir: NormalizedDir; conf: number }>();
 
   // Initial positions = before-state of each agent's first-round turn; fall
@@ -99,7 +100,7 @@ const toScenario = (d: DecisionDetail): DebateScenario | null => {
       })),
     }));
 
-  const cm = committee.details.consensus_metrics;
+  const cm = details.consensus_metrics;
   const before = cm?.dispersion ?? 0;
   // FE-I12: default afterDispersion to ``before`` rather than 0. Previously a single-
   // turn final round (e.g. one agent errored out) skipped recomputation and displayed
@@ -132,11 +133,11 @@ const toScenario = (d: DecisionDetail): DebateScenario | null => {
 
   return {
     id: d.cycle_id,
-    pair: d.pair,
-    price: d.context.current_price,
+    pair: d.books[0]?.pair ?? '—',
+    price: null,
     gate: {
-      decision: committee.details.debate_skipped ? 'skipped' : 'debate',
-      reason: committee.details.debate_skip_reason ?? '',
+      decision: details.debate_skipped ? 'skipped' : 'debate',
+      reason: details.debate_skip_reason ?? '',
     },
     initial,
     rounds,
@@ -168,7 +169,7 @@ const DebateContent = () => {
     return items[0]?.cycle_id;
   }, [cycleId, decisions.data]);
 
-  const detail = useDecisionDetail(targetCycleId);
+  const detail = useMultiVenueCycle(targetCycleId);
 
   // FE-I7: memoize the scenario normalisation so toScenario does not re-run on
   // every ancestor re-render (React Query polling, URL param changes, etc.).
@@ -217,8 +218,7 @@ const DebateContent = () => {
         title={hasDebate ? `${d.rounds.length} 轮交叉挑战辩论` : '无辩论（门控跳过）'}
         subtitle={
           <>
-            <span className="font-mono">{d.pair}</span> @{' '}
-            <span className="font-mono">${d.price.toLocaleString()}</span>
+            <span className="font-mono">{d.pair}</span>
             {hasDebate ? <> · 初始分歧度 {d.convergence.before.toFixed(2)} 触发辩论</> : null}
           </>
         }

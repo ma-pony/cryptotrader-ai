@@ -30,7 +30,7 @@ export interface DebateRound {
 export interface DebateScenario {
   id: string;
   pair: string;
-  price: number;
+  price: number | null;
   gate: { decision: 'debate' | 'skipped'; reason: string };
   initial: { kind: AgentKind; dir: Direction; conf: number }[];
   rounds: DebateRound[];

@@ -345,5 +345,7 @@ export const DecisionDetailPanel = ({ cycleId }: Props) => {
   if (isLoading) return <div className="space-y-3 p-4">{Array.from({ length: 5 }).map((_, index) => <Skeleton key={index} className="h-24 w-full" />)}</div>;
   if (isError || !data) return <div className="p-4 text-sm text-destructive">{t('detail.load_error')}</div>;
 
-  return <div className="h-full overflow-y-auto"><CycleDecisionDetail data={data} /></div>;
+  // Legacy panel is no longer routed; retain this export only while dependent
+  // tests are migrated to the canonical cycle detail page.
+  return <div className="h-full overflow-y-auto"><CycleDecisionDetail data={data as unknown as DecisionDetail} /></div>;
 };
