@@ -154,7 +154,7 @@ export const useRuntimeConfig = () => {
     reload,
     conflict,
     isLoading: query.isLoading,
-    isError: query.isError,
+    isError: query.isError && query.data === undefined,
     isSaving: mutation.isPending,
   };
 };

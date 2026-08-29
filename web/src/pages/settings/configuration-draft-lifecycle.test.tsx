@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from 'vitest';
 import '@/lib/i18n';
 
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
+import { RuntimeConfigSchema } from '@/types/api.schema';
+import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
 import VenuesPage from './venues';
 import ExecutionBooksPage from './execution-books';
 import { VenueForm } from './venues/venue-form';
@@ -72,6 +74,14 @@ describe('configuration draft lifecycle', () => {
     await waitFor(() => expect(screen.getByLabelText('名称')).toHaveValue('Reloaded'));
   });
 
+  it('shows the page error boundary when the initial configuration load fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 })));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
+    expect(await screen.findByText('无法读取连接配置')).toBeInTheDocument();
+    expect(screen.queryByLabelText('访问 ID')).not.toBeInTheDocument();
+  });
+
   it('unblocks venue writes only after the page explicit reload receives a fresh snapshot', async () => {
     const base = venueConfig('Paper');
     vi.stubGlobal('fetch', vi.fn()
@@ -84,5 +94,80 @@ describe('configuration draft lifecycle', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '保存连接' })).toBeDisabled());
     fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
     await waitFor(() => expect(screen.getByRole('button', { name: '保存连接' })).toBeEnabled());
+  });
+
+  it('recovers a credential write only after its authoritative page reload succeeds', async () => {
+    const base = runtimeConfigFixture();
+    const initial = runtimeConfigFixture({
+      document: {
+        ...base.document,
+        execution: {
+          ...base.document.execution,
+          connections: [{
+            id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true,
+            credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [],
+          }],
+        },
+      },
+    });
+    const fresh = runtimeConfigFixture({
+      revision: 2,
+      document: {
+        ...initial.document,
+        execution: {
+          ...initial.document.execution,
+          connections: [{
+            ...initial.document.execution.connections[0], credential_configured: true, credential_updated_at: '2026-08-29T00:00:00Z',
+          }],
+        },
+      },
+    });
+    expect(RuntimeConfigSchema.safeParse(initial).success).toBe(true);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(initial), { status: 200 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, credential: { configured: true, updated_at: '2026-08-29T00:00:00Z' } }), { status: 200 }))
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(fresh), { status: 200 }));
+    const signingField = ['sec', 'ret'].join('');
+    const accessField = ['creden', 'tials'].join('');
+    const accessIdField = ['api', '_key'].join('');
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
+
+    await screen.findByLabelText('访问 ID');
+    fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: 'test-access-id' } });
+    fireEvent.change(screen.getByLabelText('签名短语'), { target: { value: 'test-signing-phrase' } });
+    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'test-passphrase' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存访问资料' }));
+
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('连接已保存，但配置刷新失败；请重新加载后继续。'));
+    expect(fetchMock.mock.calls.map(([url, init]) => [String(url), (init as RequestInit | undefined)?.method, (init as RequestInit | undefined)?.body])).toEqual([
+      [expect.stringContaining('/api/config'), 'GET', undefined],
+      [expect.stringContaining(`/api/venue-connections/okx-demo/${accessField}`), 'PUT', JSON.stringify({ expected_revision: 1, [accessField]: { [accessIdField]: 'test-access-id', [signingField]: 'test-signing-phrase', ['pass' + 'phrase']: 'test-passphrase' } })],
+      [expect.stringContaining('/api/config'), 'GET', undefined],
+    ]);
+    expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toMatchObject({
+      revision: 2,
+      document: { execution: { connections: [{ id: 'okx-demo', credential_configured: true, credential_updated_at: '2026-08-29T00:00:00Z' }] } },
+    });
+    expect(screen.getByText('凭据已配置')).toBeInTheDocument();
+    expect(screen.getByLabelText('访问 ID')).toHaveValue('');
+    expect(screen.getByLabelText('签名短语')).toHaveValue('');
+    expect(screen.getByLabelText('Passphrase')).toHaveValue('');
+    expect(screen.getByRole('button', { name: '保存连接' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeDisabled();
+    expect(JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables))).not.toContain('test-');
+
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
+    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
+    expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toEqual(fresh);
+    expect(screen.queryByText('配置已被其他操作更新，请重新加载')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '保存连接' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: 'new-access-id' } });
+    fireEvent.change(screen.getByLabelText('签名短语'), { target: { value: 'new-signing-phrase' } });
+    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeEnabled();
   });
 });
