@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
-from dataclasses import replace
 from pathlib import Path
 
 _SRC = Path(__file__).resolve().parents[1] / "src"
@@ -13,15 +12,7 @@ if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
 
-class _ProfileRepository:
-    def __init__(self, profile) -> None:
-        self.profile = profile
-
-    async def get(self):
-        return self.profile
-
-
-async def _run(label: str, profile, args: argparse.Namespace):
+async def _run(label: str, snapshot, args: argparse.Namespace):
     from cryptotrader.backtest.engine import BacktestEngine
 
     result = await BacktestEngine(
@@ -29,14 +20,16 @@ async def _run(label: str, profile, args: argparse.Namespace):
         start=args.start,
         end=args.end,
         interval=args.interval,
-        profile_repository=_ProfileRepository(profile),
+        snapshot=snapshot,
     ).run()
     return label, result
 
 
 async def main() -> None:
-    from cryptotrader.config import load_config
-    from cryptotrader.profiles.models import ComponentWeight
+    from cryptotrader.bootstrap import BootstrapSettings
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SignalComponentConfig
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.runtime_config.secrets import CredentialVault
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--pair", default="BTC/USDT:USDT")
@@ -45,13 +38,21 @@ async def main() -> None:
     parser.add_argument("--interval", default="4h")
     args = parser.parse_args()
 
-    active = load_config().signal_profile_defaults.to_profile()
-    kronos_only = replace(
-        active,
-        components=(
-            ComponentWeight("kronos", True, 1.0),
-            ComponentWeight("llm_committee", False, 0.0),
+    settings = BootstrapSettings.from_environment()
+    repository = RuntimeConfigRepository(settings.database_url, CredentialVault(settings.config_master_key))
+    active = await repository.get_or_create()
+    kronos_only = RuntimeConfigSnapshot(
+        active.revision,
+        active.document.model_copy(
+            update={
+                "signals": active.document.signals.model_copy(
+                    update={
+                        "components": (SignalComponentConfig(component_id="kronos", enabled=True, weight=1.0),),
+                    }
+                ),
+            }
         ),
+        active.updated_at,
     )
     for label, result in (
         await _run("configured fusion", active, args),

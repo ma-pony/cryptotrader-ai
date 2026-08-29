@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import secrets
 from datetime import date, datetime
-from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -30,7 +28,7 @@ class BacktestParams(BaseModel):
     end: str
     pair: str
     initial_capital: float = Field(ge=100)
-    session_name: str | None = None
+    session_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 
     @model_validator(mode="after")
     def _validate_dates(self) -> BacktestParams:
@@ -81,10 +79,8 @@ def _new_run_id() -> str:
 
 def _spawn_run(
     params: BacktestParams,
-    repository,
     snapshot,
     signal_registry,
-    journal_store=None,
 ) -> str:
     """Schedule a backtest in the background. Returns the new run_id."""
     from cryptotrader.task_registry import add_background_task
@@ -105,10 +101,8 @@ def _spawn_run(
         _execute_backtest(
             run_id,
             params,
-            repository,
             snapshot,
             signal_registry,
-            journal_store,
         ),
         name=f"backtest:{run_id}",
     )
@@ -119,10 +113,8 @@ def _spawn_run(
 async def _execute_backtest(
     run_id: str,
     params: BacktestParams,
-    repository,
     snapshot,
     signal_registry,
-    journal_store=None,
 ) -> None:
     from cryptotrader.backtest.engine import BacktestEngine
 
@@ -137,10 +129,8 @@ async def _execute_backtest(
             end=params.end,
             initial_capital=params.initial_capital,
             progress_callback=_on_progress,
-            repository=repository,
             snapshot=snapshot,
             signal_registry=signal_registry,
-            journal_store=journal_store,
         )
         result = await engine.run()
         # Persist named session so /api/backtest/sessions can list/load it.
@@ -148,9 +138,7 @@ async def _execute_backtest(
             try:
                 from cryptotrader.backtest import session as session_mod
 
-                session_mod.save_result(params.session_name, result)
-                if result.cycle_records:
-                    session_mod.save_cycles(params.session_name, result.cycle_records)
+                session_mod.save_session(params.session_name, params.model_dump(), result)
             except Exception:
                 logger.warning("Failed to save backtest session %s", params.session_name, exc_info=True)
         _RUNS[run_id].update(
@@ -227,62 +215,18 @@ def _cancel_run(run_id: str) -> bool:
     return True
 
 
-# ── Sessions persistence helpers ──
-
-_SESSIONS_DIR = Path.home() / ".cryptotrader" / "backtest_sessions"
-
-
-def _load_session(name: str) -> dict | None:
-    """Load a saved backtest session by name. Returns None if missing."""
-    session_dir = _SESSIONS_DIR / name
-    if not session_dir.is_dir():
-        return None
-
-    result_path = session_dir / "result.json"
-    params_path = session_dir / "params.json"
-    if not result_path.exists():
-        return None
-
-    try:
-        with open(result_path) as f:
-            result = json.load(f)
-    except (OSError, json.JSONDecodeError):
-        logger.warning("Failed to load session result %s", result_path, exc_info=True)
-        return None
-
-    params: dict = {}
-    if params_path.exists():
-        try:
-            with open(params_path) as f:
-                params = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            logger.info("Failed to load session params %s", params_path, exc_info=True)
-
-    saved_at = datetime.fromtimestamp(result_path.stat().st_mtime, tz=UTC).isoformat()
-    return {
-        "name": name,
-        "params": params,
-        "result": result,
-        "saved_at": saved_at,
-    }
-
-
 # ── Routes ──
 
 
 @router.post("/run", response_model=BacktestRunResponse, status_code=202)
 async def run_backtest(params: BacktestParams, request: Request) -> BacktestRunResponse:
-    from cryptotrader.journal.store import MultiVenueCycleStore
-
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None:
         raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
     run_id = _spawn_run(
         params,
-        runtime.repository,
         runtime.snapshot,
         runtime.signal_registry,
-        MultiVenueCycleStore(),
     )
     return BacktestRunResponse(run_id=run_id)
 
@@ -315,7 +259,9 @@ async def list_backtest_sessions() -> BacktestSessionsList:
 
 @router.get("/sessions/{name}")
 async def get_backtest_session(name: str) -> dict:
-    loaded = _load_session(name)
+    from cryptotrader.backtest import session as session_mod
+
+    loaded = session_mod.load_session(name)
     if loaded is None:
         raise HTTPException(status_code=404, detail=f"Session {name} not found")
     return loaded

@@ -69,12 +69,8 @@ class TestBacktestRunHappyPath:
             resp = client.post("/api/backtest/run", json=_valid_payload())
 
         assert resp.status_code == 202
-        assert spawn_run.call_args.args[1] is shared_repository
-        assert spawn_run.call_args.args[2] is shared_snapshot
-        assert spawn_run.call_args.args[3] is shared_signal_registry
-        from cryptotrader.journal.store import MultiVenueCycleStore
-
-        assert isinstance(spawn_run.call_args.args[4], MultiVenueCycleStore)
+        assert spawn_run.call_args.args[1] is shared_snapshot
+        assert spawn_run.call_args.args[2] is shared_signal_registry
         body = resp.json()
         assert "run_id" in body
         assert body["run_id"].startswith("run_")
@@ -101,6 +97,13 @@ class TestBacktestRunHappyPath:
 
 
 class TestBacktestRunValidation:
+    def test_422_when_session_name_is_not_a_safe_identifier(self, client: TestClient) -> None:
+        payload = _valid_payload()
+        payload["session_name"] = "../outside"
+        with patch("api.routes.backtest._spawn_run", return_value="run_unused"):
+            response = client.post("/api/backtest/run", json=payload)
+        assert response.status_code == 422
+
     def test_400_when_start_after_end(self, client: TestClient) -> None:
         payload = _valid_payload()
         payload["start"] = "2026-05-01"

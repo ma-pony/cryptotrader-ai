@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import replace
 from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
@@ -16,16 +15,15 @@ from cryptotrader.backtest.cache import _TF_MS, fetch_historical
 from cryptotrader.backtest.result import BacktestResult
 from cryptotrader.decision.models import CycleRequest
 from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
-from cryptotrader.execution.service import ExecutionOrderResult, ExecutionResult
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 from cryptotrader.pair import Pair
-from cryptotrader.signals.models import CandleRequirement, DataRequirements, PositionSnapshot
+from cryptotrader.signals.models import CandleRequirement, DataRequirements
 from cryptotrader.venues.models import VenueConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from cryptotrader.decision.models import CycleOutcome, ExecutionPlan
+    from cryptotrader.decision.models import CycleOutcome
     from cryptotrader.journal.models import MultiVenueCycleRecord
     from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
     from cryptotrader.signals.registry import SignalComponentRegistry
@@ -45,153 +43,6 @@ class _FrozenRuntimeRepository:
         return self.snapshot
 
 
-class BacktestExecutor:
-    """Queue plans at signal close and fill them at the following bar open."""
-
-    def __init__(self, *, initial_capital: float, slippage_bps: float, fee_bps: float) -> None:
-        self.initial_capital = initial_capital
-        self.cash = initial_capital
-        self.slippage_bps = slippage_bps
-        self.fee_bps = fee_bps
-        self._signed_amount = 0.0
-        self._entry_price = 0.0
-        self._pending: ExecutionPlan | None = None
-        self._pair = ""
-        self.protection: tuple[float, float] | None = None
-        self.trades: list[dict[str, Any]] = []
-
-    @property
-    def position(self) -> PositionSnapshot:
-        if abs(self._signed_amount) < 1e-12:
-            return PositionSnapshot("flat", 0.0, 0.0)
-        return PositionSnapshot(
-            "long" if self._signed_amount > 0.0 else "short",
-            abs(self._signed_amount),
-            0.0,
-            self._entry_price,
-            0.0,
-        )
-
-    def position_at(self, price: float) -> PositionSnapshot:
-        position = self.position
-        if position.side == "flat":
-            return position
-        direction = 1.0 if position.side == "long" else -1.0
-        unrealized = (price - self._entry_price) * position.amount * direction
-        return replace(position, unrealized_pnl=unrealized)
-
-    def equity_at(self, price: float) -> float:
-        return self.cash + self.position_at(price).unrealized_pnl
-
-    async def execute(self, plan: ExecutionPlan, _context) -> ExecutionResult:
-        if self._pending is not None:
-            return ExecutionResult(False, (), None, "a backtest execution is already pending")
-        self._pending = plan
-        if plan.intents:
-            self._pair = plan.intents[-1].pair
-        orders = tuple(
-            ExecutionOrderResult(
-                intent=intent,
-                status="scheduled",
-                exchange_id=None,
-                raw={"execution": "next_bar_open"},
-            )
-            for intent in plan.intents
-        )
-        return ExecutionResult(True, orders, None, None)
-
-    def execute_pending_at(self, bar: list) -> None:
-        if self._pending is None:
-            return
-        plan = self._pending
-        self._pending = None
-        open_price = float(bar[1] or bar[4])
-        for intent in plan.intents:
-            self._fill(intent.side, intent.amount, open_price, int(bar[0]), reason="target_position")
-        if abs(self._signed_amount) < 1e-12:
-            self.protection = None
-        elif plan.stop_loss is not None and plan.take_profit is not None:
-            self.protection = (plan.stop_loss, plan.take_profit)
-        else:
-            raise ValueError("non-flat backtest position requires stop loss and take profit")
-
-    def process_protection(self, bar: list) -> None:
-        if self.protection is None or abs(self._signed_amount) < 1e-12:
-            return
-        stop_loss, take_profit = self.protection
-        high, low = float(bar[2]), float(bar[3])
-        trigger: float | None = None
-        reason = ""
-        if self._signed_amount > 0.0:
-            if low <= stop_loss:
-                trigger, reason = stop_loss, "stop_loss"
-            elif high >= take_profit:
-                trigger, reason = take_profit, "take_profit"
-        else:
-            if high >= stop_loss:
-                trigger, reason = stop_loss, "stop_loss"
-            elif low <= take_profit:
-                trigger, reason = take_profit, "take_profit"
-        if trigger is None:
-            return
-        self._fill(
-            "sell" if self._signed_amount > 0.0 else "buy",
-            abs(self._signed_amount),
-            trigger,
-            int(bar[0]),
-            reason=reason,
-        )
-        self.protection = None
-
-    def close_at(self, price: float, ts: int) -> None:
-        self._pending = None
-        if abs(self._signed_amount) < 1e-12:
-            return
-        self._fill(
-            "sell" if self._signed_amount > 0.0 else "buy",
-            abs(self._signed_amount),
-            price,
-            ts,
-            reason="backtest_end",
-        )
-        self.protection = None
-
-    def _fill(self, side: str, amount: float, price: float, ts: int, *, reason: str) -> None:
-        slippage = self.slippage_bps / 10_000
-        fill_price = price * (1.0 + slippage if side == "buy" else 1.0 - slippage)
-        fee = amount * fill_price * self.fee_bps / 10_000
-        before = self._signed_amount
-        delta = amount if side == "buy" else -amount
-        after = before + delta
-        closed_amount = min(abs(before), abs(delta)) if before * delta < 0.0 else 0.0
-        pnl = 0.0
-        if closed_amount > 0.0:
-            direction = 1.0 if before > 0.0 else -1.0
-            pnl = (fill_price - self._entry_price) * closed_amount * direction
-        self.cash += pnl - fee
-
-        if abs(after) < 1e-12:
-            self._entry_price = 0.0
-            after = 0.0
-        elif before == 0.0 or before * after <= 0.0:
-            self._entry_price = fill_price
-        elif before * delta > 0.0:
-            self._entry_price = (self._entry_price * abs(before) + fill_price * abs(delta)) / abs(after)
-        self._signed_amount = after
-        self.trades.append(
-            {
-                "pair": self._pair,
-                "side": side,
-                "amount": amount,
-                "price": fill_price,
-                "fee": fee,
-                "pnl": pnl,
-                "reason": reason,
-                "ts": ts,
-            }
-        )
-
-
 class BacktestEngine:
     def __init__(
         self,
@@ -200,15 +51,13 @@ class BacktestEngine:
         end: str,
         interval: str = "4h",
         initial_capital: float | None = None,
-        slippage_bps: float | None = None,
-        fee_bps: float | None = None,
         lookback: int | None = None,
         progress_callback: Callable[[float], None] | None = None,
         *,
         repository=None,
         snapshot: RuntimeConfigSnapshot | None = None,
         signal_registry: SignalComponentRegistry | None = None,
-        journal_store=None,
+        venue_registry=None,
     ) -> None:
         self.pair = Pair.parse(pair)
         self.start = start
@@ -217,14 +66,12 @@ class BacktestEngine:
         self.end_ms = int(datetime.fromisoformat(end).replace(tzinfo=UTC).timestamp() * 1000)
         self.interval = interval
         self.capital = initial_capital if initial_capital is not None else 10_000.0
-        self.slippage_bps = slippage_bps if slippage_bps is not None else 10.0
-        self.fee_bps = fee_bps if fee_bps is not None else 10.0
         self.lookback = lookback if lookback is not None else 512
         self.progress_callback = progress_callback
         self.repository = repository
         self.snapshot = snapshot
         self.signal_registry = signal_registry
-        self.journal_store = journal_store
+        self.venue_registry = venue_registry
         self._as_of: datetime | None = None
         self._candles_by_timeframe: dict[str, list[list]] = {}
         self._candles: list[list] = []
@@ -249,12 +96,6 @@ class BacktestEngine:
         from cryptotrader.journal.store import MultiVenueCycleStore
         from cryptotrader.market_sources.registry import MarketSourceRegistry
         from cryptotrader.runtime import build_runtime
-        from cryptotrader.runtime_config.models import (
-            ExecutionConfig,
-            MarketDataConfig,
-            RuntimeConfigSnapshot,
-            SystemConfig,
-        )
         from cryptotrader.runtime_config.repository import RuntimeConfigRepository
         from cryptotrader.runtime_config.secrets import CredentialVault
         from cryptotrader.signals.context import HistoricalSignalContextProvider
@@ -289,6 +130,37 @@ class BacktestEngine:
             self._snapshot_at,
             default_timeframe=default_timeframe,
         )
+        frozen = self._backtest_snapshot(source_snapshot)
+        frozen_repository = _FrozenRuntimeRepository(frozen)
+        paper_registry = self.venue_registry or VenueAdapterRegistry((PaperVenueAdapter(),))
+        if set(paper_registry.ids()) != {"paper"}:
+            raise ValueError("backtest venue registry must contain only the Paper adapter")
+        runtime = await build_runtime(
+            repository=frozen_repository,
+            snapshot=frozen,
+            signal_registry=registry,
+            venue_registry=paper_registry,
+            market_registry=MarketSourceRegistry((historical,)),
+            event_sink=events,
+        )
+        try:
+            async with runtime.cycle_lease() as cycle:
+                cycle.clock = self._clock
+                cycle.journal = MultiVenueCycleStore()
+                return await self._run_bars(cycle, runtime.sessions["backtest-paper"])
+        finally:
+            await runtime.close()
+
+    def _backtest_snapshot(self, source_snapshot):
+        from cryptotrader.runtime_config.models import (
+            ExecutionConfig,
+            MarketDataConfig,
+            RuntimeConfigSnapshot,
+            SystemConfig,
+        )
+
+        default_timeframe = str(source_snapshot.document.market_data.parameters.get("timeframe", self.interval))
+        limit = int(source_snapshot.document.market_data.parameters.get("limit", self.lookback))
         connection = VenueConnection(
             id="backtest-paper",
             label="Backtest Paper",
@@ -318,26 +190,9 @@ class BacktestEngine:
                 "execution": ExecutionConfig(connections=(connection,), books=(book,)),
             }
         )
-        frozen = RuntimeConfigSnapshot(source_snapshot.revision, document, source_snapshot.updated_at)
-        frozen_repository = _FrozenRuntimeRepository(frozen)
-        runtime = await build_runtime(
-            repository=frozen_repository,
-            snapshot=frozen,
-            signal_registry=registry,
-            venue_registry=VenueAdapterRegistry((PaperVenueAdapter(),)),
-            market_registry=MarketSourceRegistry((historical,)),
-            event_sink=events,
-        )
-        if runtime.cycle is None:
-            raise RuntimeError("backtest Paper runtime did not create a cycle")
-        runtime.cycle.clock = self._clock
-        runtime.cycle.journal = self.journal_store or MultiVenueCycleStore()
-        try:
-            return await self._run_bars(runtime)
-        finally:
-            await runtime.close()
+        return RuntimeConfigSnapshot(source_snapshot.revision, document, source_snapshot.updated_at)
 
-    async def _run_bars(self, runtime) -> BacktestResult:
+    async def _run_bars(self, cycle, session) -> BacktestResult:
         interval_ms = _TF_MS.get(self.interval)
         if interval_ms is None:
             raise ValueError(f"unsupported backtest timeframe {self.interval!r}")
@@ -349,12 +204,11 @@ class BacktestEngine:
 
         outcomes: list[CycleOutcome] = []
         curve = [self.capital]
-        session = runtime.sessions["backtest-paper"]
         for step, index in enumerate(indexes):
             candle = self._candles[index]
             self._as_of = datetime.fromtimestamp((int(candle[0]) + interval_ms) / 1000, UTC)
             await session.set_quote(self.pair, Decimal(str(candle[4])))
-            outcome = await runtime.cycle.run(CycleRequest(self.pair))
+            outcome = await cycle.run(CycleRequest(self.pair))
             outcomes.append(outcome)
             portfolio = await session.fetch_portfolio(self.pair)
             curve.append(float(portfolio.equity))
@@ -364,7 +218,7 @@ class BacktestEngine:
         final_equity = curve[-1]
         records = []
         for outcome in outcomes:
-            record = await runtime.cycle.journal.get(outcome.cycle_id)
+            record = await cycle.journal.get(outcome.cycle_id)
             if record is None:
                 raise RuntimeError(f"backtest cycle {outcome.cycle_id!r} is missing from the journal")
             records.append(record)

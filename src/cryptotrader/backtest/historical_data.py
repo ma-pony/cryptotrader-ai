@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from datetime import datetime
 
@@ -192,8 +191,6 @@ async def fetch_btc_dominance(start_date: str, end_date: str) -> dict[str, float
 async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_key: str = "") -> dict[str, float]:
     """Fetch a FRED time series. Returns {date_str: value}. Fills weekends/holidays forward."""
     _ensure_tables()
-    if not api_key:
-        api_key = os.environ.get("FRED_API_KEY", "")
     with sqlite3.connect(str(CACHE_DB)) as conn:
         cached = dict(
             conn.execute(
@@ -201,6 +198,9 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_
                 (series_id, start_date, end_date),
             ).fetchall()
         )
+
+    if not api_key:
+        return cached
 
     start_dt = datetime.fromisoformat(start_date).replace(tzinfo=UTC)
     expected = (datetime.fromisoformat(end_date).replace(tzinfo=UTC) - start_dt).days

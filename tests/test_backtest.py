@@ -5,11 +5,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from cryptotrader.backtest.engine import BacktestEngine, BacktestExecutor
+from cryptotrader.backtest.engine import BacktestEngine
 from cryptotrader.backtest.result import BacktestResult
-from cryptotrader.decision.models import ExecutionPlan, OrderIntent
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
-from tests.factories.signal_fusion import context
 
 
 def _candles(count: int = 8) -> list[list]:
@@ -87,6 +85,8 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
         adapter_id="okx",
         credential_ref="must-not-be-read",
     )
+    demo_connection = connection("configured-demo", "demo", adapter_id="okx")
+    testnet_connection = connection("configured-testnet", "testnet", adapter_id="bybit")
     live_book = ExecutionBook(
         "configured-live",
         "Configured Live",
@@ -96,7 +96,7 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
         (ConnectionAllocation("configured-live", True, 1.0),),
     )
     document = runtime_document(
-        connections=(live_connection,),
+        connections=(live_connection, demo_connection, testnet_connection),
         books=(live_book,),
         system=SystemConfig(active=True),
         market_data=MarketDataConfig(source_id="default", parameters={"timeframe": "1h", "limit": 20}),
@@ -117,6 +117,20 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
         async def reveal_credentials(self, _credential_ref):
             raise AssertionError("backtest must not reveal configured venue credentials")
 
+    from cryptotrader.venues.paper import PaperVenueAdapter
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+
+    class RecordingPaperAdapter(PaperVenueAdapter):
+        def __init__(self):
+            super().__init__()
+            self.connect_calls: list[tuple[str, str]] = []
+
+        async def connect(self, configured_connection, credentials):
+            assert credentials is None
+            self.connect_calls.append((configured_connection.adapter_id, configured_connection.id))
+            return await super().connect(configured_connection, credentials)
+
+    paper = RecordingPaperAdapter()
     engine = BacktestEngine(
         "BTC/USDT:USDT",
         "2024-01-01",
@@ -125,6 +139,7 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
         lookback=20,
         repository=Repository(),
         signal_registry=SignalComponentRegistry((Component(),)),
+        venue_registry=VenueAdapterRegistry((paper,)),
     )
 
     async def fake_fetch(_requirements):
@@ -137,6 +152,7 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
 
     assert result.config_revisions == [7] * len(result.cycle_records)
     assert {book.book_id for record in result.cycle_records for book in record.book_results} == {"backtest"}
+    assert paper.connect_calls == [("paper", "backtest-paper")]
 
 
 def test_snapshot_uses_previous_completed_day_for_daily_inputs():
@@ -198,6 +214,25 @@ async def test_historical_daily_sources_include_previous_day():
     assert loaded_starts == ["2023-12-31"]
 
 
+@pytest.mark.asyncio
+async def test_fred_without_an_explicit_key_uses_only_cached_observations(monkeypatch, tmp_path):
+    from cryptotrader.backtest import historical_data
+
+    monkeypatch.setattr(historical_data, "CACHE_DB", tmp_path / "historical.sqlite")
+    monkeypatch.setenv("FRED_API_KEY", "must-not-be-read")
+
+    class NoNetworkClient:
+        async def __aenter__(self):
+            raise AssertionError("missing explicit FRED key must not start a remote request")
+
+        async def __aexit__(self, *args):
+            return None
+
+    monkeypatch.setattr(historical_data.httpx, "AsyncClient", NoNetworkClient)
+
+    assert await historical_data.fetch_fred_series("DFF", "2024-01-01", "2024-01-03") == {}
+
+
 def test_inexact_historical_kronos_aux_sources_remain_absent():
     start = datetime(2024, 1, 1, tzinfo=UTC)
     bars = []
@@ -231,47 +266,7 @@ def test_inexact_historical_kronos_aux_sources_remain_absent():
     assert not hasattr(snapshot.market, "premium_index_5d")
 
 
-@pytest.mark.asyncio
-async def test_executor_schedules_target_delta_for_next_bar_open():
-    executor = BacktestExecutor(initial_capital=10_000.0, slippage_bps=10.0, fee_bps=5.0)
-    execution_plan = ExecutionPlan(
-        intents=(OrderIntent("BTC/USDT:USDT", "buy", 10.0, False),),
-        stop_loss=95.0,
-        take_profit=115.0,
-    )
-
-    scheduled = await executor.execute(execution_plan, context(price=100.0))
-
-    assert scheduled.succeeded is True
-    assert executor.position.side == "flat"
-
-    executor.execute_pending_at([1, 101.0, 105.0, 100.0, 104.0, 10.0])
-
-    assert executor.position.side == "long"
-    assert executor.position.amount == pytest.approx(10.0)
-    assert executor.position.avg_price == pytest.approx(101.101)
-    assert executor.protection == (95.0, 115.0)
-
-
-@pytest.mark.asyncio
-async def test_executor_applies_protection_from_existing_trade_plan():
-    executor = BacktestExecutor(initial_capital=10_000.0, slippage_bps=0.0, fee_bps=0.0)
-    plan = ExecutionPlan(
-        intents=(OrderIntent("BTC/USDT:USDT", "buy", 10.0, False),),
-        stop_loss=95.0,
-        take_profit=115.0,
-    )
-    await executor.execute(plan, context(price=100.0))
-    executor.execute_pending_at([1, 100.0, 104.0, 99.0, 103.0, 10.0])
-
-    executor.process_protection([2, 103.0, 104.0, 94.0, 96.0, 10.0])
-
-    assert executor.position.side == "flat"
-    assert executor.trades[-1]["reason"] == "stop_loss"
-    assert executor.trades[-1]["pnl"] == pytest.approx(-50.0)
-
-
-def test_result_computes_metrics_from_executor_state():
+def test_result_computes_metrics_from_paper_cycle_equity():
     engine = BacktestEngine(
         "BTC/USDT:USDT",
         "2024-01-01",

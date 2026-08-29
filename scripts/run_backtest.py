@@ -36,7 +36,7 @@ async def main() -> None:
     )
     result = await engine.run()
     print(json.dumps(result.summary(), ensure_ascii=False, indent=2))
-    print(f"profile revisions: {sorted(set(result.profile_revisions))}")
+    print(f"config revisions: {sorted(set(result.config_revisions))}")
     print(f"cycles: {len(result.cycle_ids)}")
 
 

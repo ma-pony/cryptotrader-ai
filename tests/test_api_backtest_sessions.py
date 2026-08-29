@@ -77,7 +77,7 @@ class TestSessionDetail:
         }
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("api.routes.backtest._load_session", return_value=loaded),
+            patch("cryptotrader.backtest.session.load_session", return_value=loaded),
         ):
             resp = client.get("/api/backtest/sessions/q1-rules-baseline")
 
@@ -90,7 +90,7 @@ class TestSessionDetail:
     def test_404_when_session_unknown(self, client: TestClient) -> None:
         with (
             patch("cryptotrader.config.load_config", return_value=_mock_config()),
-            patch("api.routes.backtest._load_session", return_value=None),
+            patch("cryptotrader.backtest.session.load_session", return_value=None),
         ):
             resp = client.get("/api/backtest/sessions/never-existed")
         assert resp.status_code == 404
