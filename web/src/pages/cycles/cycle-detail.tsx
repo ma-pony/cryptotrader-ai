@@ -5,8 +5,9 @@ import type { z } from 'zod';
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
 import { useMultiVenueCycle } from '@/hooks/use-multi-venue-cycles';
+import { decodeJsonValue } from '@/hooks/use-runtime-config';
 import { formatCycleStatus } from '@/lib/cycle-status';
-import type { CycleSchema } from '@/types/api.schema';
+import type { CycleSchema, JsonValueOut } from '@/types/api.schema';
 
 type Cycle = z.infer<typeof CycleSchema>;
 type Book = Cycle['books'][number];
@@ -18,10 +19,14 @@ const scalar = (item: unknown) => {
   return '—';
 };
 
-const Field = ({ label, children }: { label: string; children: unknown }) => (
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => (
   <div className="grid grid-cols-[minmax(9rem,auto)_1fr] gap-x-3 text-sm">
     <dt className="text-muted-foreground">{label}</dt>
-    <dd className="break-all font-mono text-foreground">{scalar(children)}</dd>
+    <dd className="break-all font-mono text-foreground">
+      {typeof children === 'string' || typeof children === 'number' || typeof children === 'boolean'
+        ? scalar(children)
+        : children}
+    </dd>
   </div>
 );
 
@@ -31,6 +36,54 @@ const Section = ({ title, children, open = false }: { title: string; children: R
     <dl className="mt-3 space-y-2">{children}</dl>
   </details>
 );
+
+const JsonValueDetails = ({ value }: { value: JsonValueOut }) => {
+  const { t } = useTranslation('cycles');
+  try {
+    return (
+      <pre className="max-h-60 overflow-auto whitespace-pre-wrap rounded bg-muted/60 p-2 text-xs text-foreground">
+        {JSON.stringify(decodeJsonValue(value), null, 2)}
+      </pre>
+    );
+  } catch {
+    return <span className="text-destructive">{t('invalidPluginEvidence')}</span>;
+  }
+};
+
+const ProtectionDetails = ({ protection, title }: { protection: NonNullable<Connection['execution']>['protection']; title: string }) => {
+  const { t } = useTranslation('cycles');
+  if (!protection) return <Field label={title}>—</Field>;
+  return (
+    <Section title={title}>
+      <Field label={t('protectionIds')}>{protection.protection_ids.join(', ')}</Field>
+      <Field label={t('pair')}>{protection.pair.symbol}</Field>
+      <Field label={t('positionSide')}>{protection.position_side}</Field>
+      <Field label={t('amount')}>{protection.amount}</Field>
+      <Field label={t('stopLoss')}>{protection.stop_loss ?? '—'}</Field>
+      <Field label={t('takeProfit')}>{protection.take_profit ?? '—'}</Field>
+      <Field label={t('active')}>{protection.active}</Field>
+      <Field label={t('triggered')}>{protection.triggered}</Field>
+    </Section>
+  );
+};
+
+const OrderDetails = ({ order, title }: { order: NonNullable<Connection['execution']>['orders'][number] | null; title: string }) => {
+  const { t } = useTranslation('cycles');
+  if (!order) return <Field label={title}>—</Field>;
+  return (
+    <Section title={title}>
+      <Field label={t('orderId')}>{order.id}</Field>
+      <Field label={t('pair')}>{order.pair.symbol}</Field>
+      <Field label={t('side')}>{order.side}</Field>
+      <Field label={t('orderType')}>{order.order_type}</Field>
+      <Field label={t('amount')}>{order.amount}</Field>
+      <Field label={t('filledAmount')}>{order.filled_amount}</Field>
+      <Field label={t('averagePrice')}>{order.average_price ?? '—'}</Field>
+      <Field label={t('statusLabel')}>{formatCycleStatus(t, order.status)}</Field>
+      <Field label={t('reduceOnly')}>{order.reduce_only}</Field>
+    </Section>
+  );
+};
 
 const ConnectionPortfolio = ({ portfolio, title }: { portfolio: Connection['portfolio_before']; title: string }) => {
   const { t } = useTranslation('cycles');
@@ -124,28 +177,42 @@ const ConnectionAudit = ({ connection }: { connection: Connection }) => {
           <Field
             label={t('targetLabel')}
           >{`${execution.target_signed_notional} / ${execution.target_signed_amount}`}</Field>
-          <Field label={t('orders')}>
-            {execution.orders.map((order) => `${order.id} ${order.side} ${order.amount} ${order.status}`).join('; ')}
-          </Field>
-          <Field label={t('protection')}>
-            {execution.protection
-              ? `${execution.protection.protection_ids.join(', ')} ${execution.protection.active}`
-              : '—'}
-          </Field>
-          <Field
-            label={t('compensation')}
-          >{`${execution.compensation.operation}; ${execution.compensation.attempted}/${execution.compensation.succeeded}; ${execution.compensation.safe_signed_amount}`}</Field>
-          <Field label={t('finalPosition')}>
-            {execution.final_position
-              ? `${execution.final_position.position.pair.symbol} ${execution.final_position.position.signed_amount}; ${execution.final_position.protection_ids.join(', ')}`
-              : '—'}
-          </Field>
+          <Section title={t('orders')}>
+            {execution.orders.map((order) => (
+              <OrderDetails key={order.id} order={order} title={order.id} />
+            ))}
+          </Section>
+          <ProtectionDetails protection={execution.protection} title={t('protection')} />
+          <Section title={t('compensation')}>
+            <Field label={t('attempted')}>{execution.compensation.attempted}</Field>
+            <Field label={t('succeeded')}>{execution.compensation.succeeded}</Field>
+            <Field label={t('operation')}>{execution.compensation.operation}</Field>
+            <Field label={t('safeSignedAmount')}>{execution.compensation.safe_signed_amount ?? '—'}</Field>
+            <OrderDetails order={execution.compensation.order} title={t('compensationOrder')} />
+            <ProtectionDetails protection={execution.compensation.required_protection} title={t('requiredProtection')} />
+          </Section>
+          {execution.final_position ? (
+            <Section title={t('finalPosition')}>
+              <Field label={t('pair')}>{execution.final_position.position.pair.symbol}</Field>
+              <Field label={t('signedAmount')}>{execution.final_position.position.signed_amount}</Field>
+              <Field label={t('signedNotional')}>{execution.final_position.position.signed_notional}</Field>
+              <Field label={t('entryPrice')}>{execution.final_position.position.entry_price ?? '—'}</Field>
+              <Field label={t('protected')}>{execution.final_position.protected}</Field>
+              <Field label={t('protectionIds')}>{execution.final_position.protection_ids.join(', ')}</Field>
+              {execution.final_position.protections.map((protection) => (
+                <ProtectionDetails key={protection.protection_ids.join('-')} protection={protection} title={t('nestedProtection')} />
+              ))}
+            </Section>
+          ) : null}
           <Field label={t('trace')}>{execution.trace.join(' → ')}</Field>
-          <Field label={t('executionQuote')}>
-            {execution.execution_quote
-              ? `${execution.execution_quote.bid}/${execution.execution_quote.ask}/${execution.execution_quote.last}`
-              : '—'}
-          </Field>
+          {execution.execution_quote ? (
+            <Section title={t('executionQuote')}>
+              <Field label={t('pair')}>{execution.execution_quote.pair.symbol}</Field>
+              <Field label={t('bid')}>{execution.execution_quote.bid}</Field>
+              <Field label={t('ask')}>{execution.execution_quote.ask}</Field>
+              <Field label={t('last')}>{execution.execution_quote.last}</Field>
+            </Section>
+          ) : null}
         </Section>
       ) : null}
     </article>
@@ -186,6 +253,19 @@ const BookAudit = ({ book }: { book: Book }) => {
         <Field label={t('passed')}>{book.risk?.passed}</Field>
         <Field label={t('requestedExposure')}>{book.requested_target_exposure}</Field>
         <Field label={t('targetExposure')}>{book.target_exposure}</Field>
+        <Field label={t('riskRequestedExposure')}>{book.risk?.requested_target_exposure}</Field>
+        <Field label={t('cappedExposure')}>{book.risk?.capped_target_exposure}</Field>
+        <Field label={t('connectionWeights')}>{book.risk?.connection_weights.join(', ')}</Field>
+        {book.risk?.connection_targets.map((target) => (
+          <Section key={target.connection_id} title={`${t('connectionTarget')}: ${target.connection_id}`}>
+            <Field label={t('book')}>{target.book_id}</Field>
+            <Field label={t('connection')}>{target.connection_id}</Field>
+            <Field label={t('weight')}>{target.weight}</Field>
+            <Field label={t('bookEquity')}>{target.book_equity}</Field>
+            <Field label={t('targetExposure')}>{target.target_exposure}</Field>
+            <Field label={t('signedNotional')}>{target.target_signed_notional}</Field>
+          </Section>
+        ))}
         <Field label={t('ready')}>{book.ready}</Field>
         <Field label={t('execution')}>
           {book.execution
@@ -240,14 +320,11 @@ export default function CycleDetailPage() {
               <h3>{component.component_id}</h3>
               <Field label={t('confidence')}>{component.confidence}</Field>
               <Field label={t('reasoning')}>{component.reasoning}</Field>
-              <Field label={t('details')}>
-                {component.details
-                  .map(
-                    (detail) =>
-                      `${detail.key}: ${detail.value.string_value ?? detail.value.number_value ?? detail.value.boolean_value ?? detail.value.kind}`,
-                  )
-                  .join(', ')}
-              </Field>
+              {component.details.map((detail) => (
+                <Field key={detail.key} label={`${t('details')}: ${detail.key}`}>
+                  <JsonValueDetails value={detail.value} />
+                </Field>
+              ))}
             </article>
           ))}
           {item.shared_signals.fused ? (

@@ -4,9 +4,10 @@ import { MemoryRouter, Route, Routes } from 'react-router';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import i18n from '@/lib/i18n';
+import { formatCycleStatus } from '@/lib/cycle-status';
 import CycleDetailPage from '@/pages/cycles/cycle-detail';
 import CyclesPage from '@/pages/cycles';
-import { CycleSchema } from '@/types/api.schema';
+import { CycleSchema, type JsonValueOut } from '@/types/api.schema';
 
 const cycleQuery = vi.fn();
 const cyclesQuery = vi.fn();
@@ -16,8 +17,8 @@ vi.mock('@/hooks/use-multi-venue-cycles', () => ({
   useMultiVenueCycles: () => cyclesQuery() as never,
 }));
 
-const jsonString = (string_value: string) => ({
-  kind: 'string' as const,
+const jsonString = (string_value: string): JsonValueOut => ({
+  kind: 'string',
   boolean_value: null,
   number_value: null,
   string_value,
@@ -25,6 +26,36 @@ const jsonString = (string_value: string) => ({
   pair_value: null,
   items: [],
   entries: [],
+});
+const jsonNumber = (number_value: string): JsonValueOut => ({
+  kind: 'number',
+  boolean_value: null,
+  number_value,
+  string_value: null,
+  datetime_value: null,
+  pair_value: null,
+  items: [],
+  entries: [],
+});
+const jsonArray = (items: JsonValueOut[]): JsonValueOut => ({
+  kind: 'array',
+  boolean_value: null,
+  number_value: null,
+  string_value: null,
+  datetime_value: null,
+  pair_value: null,
+  items,
+  entries: [],
+});
+const jsonObject = (entries: Array<{ key: string; value: JsonValueOut }>): JsonValueOut => ({
+  kind: 'object',
+  boolean_value: null,
+  number_value: null,
+  string_value: null,
+  datetime_value: null,
+  pair_value: null,
+  items: [],
+  entries,
 });
 const quote = { pair: { symbol: 'BTC/USDT' }, bid: '99', ask: '101', last: '100' };
 const position = { pair: 'BTC/USDT', signed_amount: '1', signed_notional: '100', entry_price: '98' };
@@ -57,23 +88,23 @@ const plan = {
   },
 };
 const order = {
-  id: 'order-1',
+  id: 'order-marker',
   pair: { symbol: 'BTC/USDT' },
-  side: 'buy',
-  order_type: 'market',
-  amount: '1',
-  filled_amount: '1',
-  average_price: '101',
+  side: 'order-side-marker',
+  order_type: 'order-type-marker',
+  amount: 'order-amount-marker',
+  filled_amount: 'order-filled-marker',
+  average_price: 'order-price-marker',
   status: 'filled',
   reduce_only: false,
 };
 const protection = {
-  protection_ids: ['protection-1'],
+  protection_ids: ['protection-marker'],
   pair: { symbol: 'BTC/USDT' },
-  position_side: 'long',
-  amount: '1',
-  stop_loss: '90',
-  take_profit: '120',
+  position_side: 'protection-side-marker',
+  amount: 'protection-amount-marker',
+  stop_loss: 'protection-stop-marker',
+  take_profit: 'protection-take-marker',
   active: true,
   triggered: false,
 };
@@ -99,7 +130,16 @@ const partialCycle = CycleSchema.parse({
         direction: 'long',
         confidence: 0.91,
         reasoning: 'committee reasoning',
-        details: [{ key: 'source', value: jsonString('model-a') }],
+        details: [
+          {
+            key: 'plugin-evidence',
+            value: jsonObject([
+              { key: 'nested-marker', value: jsonString('nested plugin value') },
+              { key: 'confidence-marker', value: jsonNumber('0.73') },
+              { key: 'array-marker', value: jsonArray([jsonString('nested array value')]) },
+            ]),
+          },
+        ],
       },
     ],
     fused: {
@@ -125,15 +165,15 @@ const partialCycle = CycleSchema.parse({
         passed: false,
         requested_target_exposure: '0.5',
         capped_target_exposure: '0.4',
-        connection_weights: ['1'],
+        connection_weights: ['connection-weight-marker'],
         connection_targets: [
           {
             book_id: 'real-book',
             connection_id: 'venue-down',
-            weight: '1',
-            book_equity: '1000',
-            target_exposure: '0.4',
-            target_signed_notional: '400',
+            weight: 'target-weight-marker',
+            book_equity: 'target-equity-marker',
+            target_exposure: 'target-exposure-marker',
+            target_signed_notional: 'target-notional-marker',
           },
         ],
         rejected_by: 'cap',
@@ -244,18 +284,50 @@ describe('cycles pages', () => {
       'approval-1',
       'connection failure',
       'risk reason',
+      '0.5',
+      '0.4',
+      'book-cap',
+      'venue-down',
+      'connection-weight-marker',
+      'target-weight-marker',
+      'target-equity-marker',
+      'target-exposure-marker',
+      'target-notional-marker',
       'Portfolio before',
       'Connection unavailable',
       'Immutable plan',
-      'order-1',
-      'protection-1',
+      'order-marker',
+      'order-side-marker',
+      'order-type-marker',
+      'order-amount-marker',
+      'order-filled-marker',
+      'filled',
+      'order-price-marker',
+      'protection-marker',
+      'protection-side-marker',
+      'protection-amount-marker',
+      'protection-stop-marker',
+      'protection-take-marker',
       'compensate',
+      'false',
       'Final position',
       'place-order',
       'planned → failed',
       'Requires attention',
+      'nested plugin value',
+      '0.73',
+      'nested array value',
     ])
       expect(screen.getAllByText(text, { exact: false }).length).toBeGreaterThan(0);
+  });
+
+  it('localizes an unknown backend status while retaining its raw code', async () => {
+    await i18n.changeLanguage('en-US');
+    expect(formatCycleStatus(i18n.t, 'plugin_waiting')).toContain('Unknown status');
+    expect(formatCycleStatus(i18n.t, 'plugin_waiting')).toContain('plugin_waiting');
+    await i18n.changeLanguage('zh-CN');
+    expect(formatCycleStatus(i18n.t, 'plugin_waiting')).toContain('未知状态');
+    expect(formatCycleStatus(i18n.t, 'plugin_waiting')).toContain('plugin_waiting');
   });
 
   it('renders localized list states, named cycle link, pagination, and status', async () => {
