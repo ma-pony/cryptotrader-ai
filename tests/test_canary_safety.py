@@ -52,6 +52,7 @@ class _Session:
     signed_amount: Decimal = Decimal("0")
     cleaned: bool = False
     order_calls: int = 0
+    order_amounts: list[Decimal] = field(default_factory=list)
 
     connection_id: str = "paper"
     capabilities: VenueCapabilities = field(
@@ -69,6 +70,7 @@ class _Session:
 
     async def place_order(self, intent):
         self.order_calls += 1
+        self.order_amounts.append(intent.amount)
         if self.fail_open and not intent.reduce_only:
             raise RuntimeError("open failed")
         self.signed_amount += intent.amount if intent.side == "buy" else -intent.amount
@@ -96,6 +98,18 @@ async def test_failed_canary_still_runs_cleanup():
 
     assert result["status"] == "failed"
     assert session.cleaned is True
+
+
+@pytest.mark.asyncio
+async def test_canary_uses_small_quote_notional_instead_of_a_fixed_base_amount():
+    venue_canary = _script("venue_canary.py")
+    session = _Session(Pair.parse("BTC/USDT:USDT"))
+
+    await venue_canary.run_simulated_canary(session, session.pair)
+
+    assert session.order_calls == 2
+    assert session.order_amounts[0] == Decimal("0.1")
+    assert session.signed_amount == Decimal("0")
 
 
 @pytest.mark.asyncio

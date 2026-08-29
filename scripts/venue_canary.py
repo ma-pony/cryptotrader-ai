@@ -25,6 +25,7 @@ from cryptotrader.venues.registry import VenueAdapterRegistry
 
 _SIMULATED_ENVIRONMENTS = frozenset({"paper", "demo", "testnet"})
 _REDACTED = "[redacted]"
+_CANARY_QUOTE_NOTIONAL = Decimal("10")
 
 
 class CanarySafetyError(RuntimeError):
@@ -133,7 +134,7 @@ async def run_simulated_canary(session, pair: Pair) -> dict[str, Any]:
         if initial["requires_attention"]:
             raise CanarySafetyError("canary requires initial zero position, orders, and protections")
         result["steps"].append("read_health_balance_open_state")
-        amount = await session.normalize_amount(pair, Decimal("0.0001"))
+        amount = await session.normalize_amount(pair, _CANARY_QUOTE_NOTIONAL / quote.last)
         if amount <= 0:
             raise CanarySafetyError("venue did not provide a positive minimum canary amount")
         canary_write_attempted = True
