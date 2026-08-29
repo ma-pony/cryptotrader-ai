@@ -103,19 +103,21 @@ export const TargetPositionSchema = z.object({
   size_ratio: z.number(),
 });
 
-export const CommitteeAgentAnalysisSchema = z.object({
-  agent_id: z.string(),
-  pair: z.string().optional(),
-  direction: z.enum(['bullish', 'bearish', 'neutral']),
-  confidence: z.number(),
-  reasoning: z.string(),
-  key_factors: z.array(z.string()).default([]),
-  risk_flags: z.array(z.string()).default([]),
-  data_points: z.record(z.unknown()).default({}),
-  data_sufficiency: z.enum(['high', 'medium', 'low']).optional(),
-  timestamp: z.string().optional(),
-  new_findings: z.string().optional(),
-}).passthrough();
+export const CommitteeAgentAnalysisSchema = z
+  .object({
+    agent_id: z.string(),
+    pair: z.string().optional(),
+    direction: z.enum(['bullish', 'bearish', 'neutral']),
+    confidence: z.number(),
+    reasoning: z.string(),
+    key_factors: z.array(z.string()).default([]),
+    risk_flags: z.array(z.string()).default([]),
+    data_points: z.record(z.unknown()).default({}),
+    data_sufficiency: z.enum(['high', 'medium', 'low']).optional(),
+    timestamp: z.string().optional(),
+    new_findings: z.string().optional(),
+  })
+  .passthrough();
 
 export const CommitteeDebateTurnSchema = z.object({
   round: z.number(),
@@ -135,19 +137,23 @@ export const CommitteeDebateTurnSchema = z.object({
   errored: z.boolean().default(false),
 });
 
-export const ConsensusMetricsSchema = z.object({
-  strength: z.number().default(0),
-  mean_score: z.number().default(0),
-  dispersion: z.number().default(0),
-}).passthrough();
+export const ConsensusMetricsSchema = z
+  .object({
+    strength: z.number().default(0),
+    mean_score: z.number().default(0),
+    dispersion: z.number().default(0),
+  })
+  .passthrough();
 
-export const ComponentDetailsSchema = z.object({
-  analyses: z.record(CommitteeAgentAnalysisSchema).optional(),
-  debate_turns: z.array(CommitteeDebateTurnSchema).optional(),
-  consensus_metrics: ConsensusMetricsSchema.optional(),
-  debate_skipped: z.boolean().optional(),
-  debate_skip_reason: z.string().optional(),
-}).passthrough();
+export const ComponentDetailsSchema = z
+  .object({
+    analyses: z.record(CommitteeAgentAnalysisSchema).optional(),
+    debate_turns: z.array(CommitteeDebateTurnSchema).optional(),
+    consensus_metrics: ConsensusMetricsSchema.optional(),
+    debate_skipped: z.boolean().optional(),
+    debate_skip_reason: z.string().optional(),
+  })
+  .passthrough();
 
 export const ComponentSignalSchema = z.object({
   component_id: z.string(),
@@ -204,12 +210,15 @@ export const CycleExecutionResultSchema = z.object({
   algo_id: z.string().nullable(),
   error: z.string().nullable(),
   retained_algo_ids: z.array(z.string()).default([]),
-  protection_trigger: z.object({
-    algo_id: z.string(),
-    trigger_reason: z.string(),
-    trigger_price: z.number(),
-    order_id: z.string(),
-  }).nullable().optional(),
+  protection_trigger: z
+    .object({
+      algo_id: z.string(),
+      trigger_reason: z.string(),
+      trigger_price: z.number(),
+      order_id: z.string(),
+    })
+    .nullable()
+    .optional(),
   orders: z.array(ExecutionOrderResultSchema),
 });
 
@@ -238,35 +247,41 @@ export const PaginatedDecisionsSchema = z.object({
   has_next: z.boolean(),
 });
 
-const SignalContextPositionSchema = z.object({
-  side: z.enum(['long', 'short', 'flat']),
-  amount: z.number(),
-  size_ratio: z.number(),
-  avg_price: z.number().nullable(),
-  unrealized_pnl: z.number(),
-}).strict();
+const SignalContextPositionSchema = z
+  .object({
+    side: z.enum(['long', 'short', 'flat']),
+    amount: z.number(),
+    size_ratio: z.number(),
+    avg_price: z.number().nullable(),
+    unrealized_pnl: z.number(),
+  })
+  .strict();
 
-const AvailableSignalContextSchema = z.object({
-  available: z.literal(true),
-  pair: z.string(),
-  as_of: z.string(),
-  mode: z.enum(['live', 'paper', 'backtest']),
-  exchange_id: z.string(),
-  market_type: MarketTypeSchema,
-  equity: z.number(),
-  current_price: z.number(),
-  atr: z.number(),
-  current_position: SignalContextPositionSchema,
-  portfolio: z.record(z.unknown()),
-}).strict();
+const AvailableSignalContextSchema = z
+  .object({
+    available: z.literal(true),
+    pair: z.string(),
+    as_of: z.string(),
+    mode: z.enum(['live', 'paper', 'backtest']),
+    exchange_id: z.string(),
+    market_type: MarketTypeSchema,
+    equity: z.number(),
+    current_price: z.number(),
+    atr: z.number(),
+    current_position: SignalContextPositionSchema,
+    portfolio: z.record(z.unknown()),
+  })
+  .strict();
 
-const UnavailableSignalContextSchema = z.object({
-  available: z.literal(false),
-  pair: z.string(),
-  as_of: z.string().nullable(),
-  mode: z.enum(['live', 'paper', 'backtest']),
-  exchange_id: z.string(),
-}).strict();
+const UnavailableSignalContextSchema = z
+  .object({
+    available: z.literal(false),
+    pair: z.string(),
+    as_of: z.string().nullable(),
+    mode: z.enum(['live', 'paper', 'backtest']),
+    exchange_id: z.string(),
+  })
+  .strict();
 
 export const DecisionContextSchema = z.discriminatedUnion('available', [
   AvailableSignalContextSchema,
@@ -288,11 +303,13 @@ export const DecisionDetailSchema = z.object({
   fusion: FusedSignalSchema.nullable(),
   target_position: TargetPositionSchema.nullable(),
   trade_plan: TradePlanSchema.nullable(),
-  hitl_result: z.object({
-    approval_id: z.string(),
-    status: z.enum(['pending', 'approved', 'rejected']),
-    decision_by: z.string().optional(),
-  }).nullable(),
+  hitl_result: z
+    .object({
+      approval_id: z.string(),
+      status: z.enum(['pending', 'approved', 'rejected']),
+      decision_by: z.string().optional(),
+    })
+    .nullable(),
   risk_result: CycleRiskResultSchema.nullable(),
   execution_result: CycleExecutionResultSchema.nullable(),
 });
@@ -360,44 +377,225 @@ export const SignalProfileSchema = z.object({
 
 // Runtime configuration response DTOs deliberately model JsonEntry values separately
 // from the writable document shape.  Secrets are represented only by a configured bit.
-export type JsonValueOut =
-  | { kind: 'null' }
-  | { kind: 'boolean'; boolean_value: boolean }
-  | { kind: 'number'; number_value: string }
-  | { kind: 'string'; string_value: string }
-  | { kind: 'datetime'; datetime_value: string }
-  | { kind: 'pair'; pair_value: string }
-  | { kind: 'array'; items: JsonValueOut[] }
-  | { kind: 'object'; entries: { key: string; value: JsonValueOut }[] };
-export const JsonValueSchema: z.ZodType<JsonValueOut> = z.lazy(() => z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('null'), boolean_value: z.null().optional(), number_value: z.null().optional(), string_value: z.null().optional(), datetime_value: z.null().optional(), pair_value: z.null().optional(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('boolean'), boolean_value: z.boolean(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('number'), number_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('string'), string_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('datetime'), datetime_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('pair'), pair_value: z.string(), items: z.array(JsonValueSchema).default([]), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('array'), items: z.array(JsonValueSchema), entries: z.array(JsonEntrySchema).default([]) }),
-  z.object({ kind: z.literal('object'), entries: z.array(JsonEntrySchema), items: z.array(JsonValueSchema).default([]) }),
-]));
-export const JsonEntrySchema: z.ZodType<{ key: string; value: JsonValueOut }> = z.lazy(() => z.object({ key: z.string(), value: JsonValueSchema }));
-export const RuntimeConnectionSchema = z.object({
-  id: z.string(), label: z.string(), adapter_id: z.string(), environment: z.enum(['paper', 'demo', 'testnet', 'live']), enabled: z.boolean(),
-  credential_configured: z.boolean(), credential_updated_at: z.string().nullable(), leverage: z.number(), margin_mode: z.string(), parameters: z.array(JsonEntrySchema).default([]),
+export type JsonValueOut = {
+  kind: 'null' | 'boolean' | 'number' | 'string' | 'datetime' | 'pair' | 'array' | 'object';
+  boolean_value: boolean | null;
+  number_value: string | null;
+  string_value: string | null;
+  datetime_value: string | null;
+  pair_value: string | null;
+  items: JsonValueOut[];
+  entries: Array<{ key: string; value: JsonValueOut }>;
+};
+export const JsonValueSchema: z.ZodType<JsonValueOut> = z.lazy(() =>
+  z
+    .object({
+      kind: z.enum(['null', 'boolean', 'number', 'string', 'datetime', 'pair', 'array', 'object']),
+      boolean_value: z.boolean().nullable(),
+      number_value: z.string().nullable(),
+      string_value: z.string().nullable(),
+      datetime_value: z.string().nullable(),
+      pair_value: z.string().nullable(),
+      items: z.array(JsonValueSchema),
+      entries: z.array(JsonEntrySchema),
+    })
+    .strict()
+    .superRefine((value, ctx) => {
+      const required =
+        value.kind === 'boolean'
+          ? value.boolean_value
+          : value.kind === 'number'
+            ? value.number_value
+            : value.kind === 'string'
+              ? value.string_value
+              : value.kind === 'datetime'
+                ? value.datetime_value
+                : value.kind === 'pair'
+                  ? value.pair_value
+                  : true;
+      if (required === null) ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'kind value is required' });
+      if (value.kind === 'array' && value.entries.length)
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'array cannot contain entries' });
+      if (value.kind === 'object' && value.items.length)
+        ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'object cannot contain items' });
+    }),
+);
+export const JsonEntrySchema: z.ZodType<{ key: string; value: JsonValueOut }> = z.lazy(() =>
+  z.object({ key: z.string(), value: JsonValueSchema }).strict(),
+);
+export const RuntimeConnectionSchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    adapter_id: z.string(),
+    environment: z.enum(['paper', 'demo', 'testnet', 'live']),
+    enabled: z.boolean(),
+    credential_configured: z.boolean(),
+    credential_updated_at: z.string().nullable(),
+    leverage: z.number(),
+    margin_mode: z.string(),
+    parameters: z.array(JsonEntrySchema).default([]),
+  })
+  .strict();
+export const RuntimeBookSchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    capital_scope: z.enum(['simulated', 'real']),
+    enabled: z.boolean(),
+    hitl_required: z.boolean(),
+    allocations: z
+      .array(z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() }).strict())
+      .default([]),
+  })
+  .strict();
+const StrictJsonEntrySchema = JsonEntrySchema;
+const StrictConnectionSchema = z
+  .object({
+    id: z.string(),
+    label: z.string(),
+    adapter_id: z.string(),
+    environment: z.enum(['paper', 'demo', 'testnet', 'live']),
+    enabled: z.boolean(),
+    credential_configured: z.boolean(),
+    credential_updated_at: z.string().nullable(),
+    leverage: z.number().int(),
+    margin_mode: z.enum(['cross', 'isolated']),
+    parameters: z.array(StrictJsonEntrySchema),
+  })
+  .strict();
+const allocationSchema = z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() }).strict();
+const strictRecord = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
+const LlmModelsSchema = strictRecord({
+  analysis: z.string(),
+  debate: z.string(),
+  committee_summary: z.string(),
+  tech_agent: z.string(),
+  chain_agent: z.string(),
+  news_agent: z.string(),
+  macro_agent: z.string(),
+  fallback: z.string(),
+  timeout_seconds: z.number().int(),
 });
-export const RuntimeBookSchema = z.object({ id: z.string(), label: z.string(), capital_scope: z.enum(['simulated', 'real']), enabled: z.boolean(), hitl_required: z.boolean(), allocations: z.array(z.object({ connection_id: z.string(), enabled: z.boolean(), weight: z.number() })).default([]) });
-export const RuntimeConfigSchema = z.object({
-  revision: z.number().int(), updated_at: z.string(), setup_required: z.boolean(),
-  document: z.object({
-    system: z.object({ active: z.boolean() }), market_data: z.object({ source_id: z.string(), parameters: z.array(JsonEntrySchema).default([]) }),
-    llm: z.object({ models: z.object({ analysis: z.string(), debate: z.string(), committee_summary: z.string(), tech_agent: z.string(), chain_agent: z.string(), news_agent: z.string(), macro_agent: z.string(), fallback: z.string(), timeout_seconds: z.number() }).partial().default({}) }).passthrough().default({}),
-    signals: z.object({ components: z.array(z.object({ component_id: z.string(), enabled: z.boolean(), weight: z.number(), parameters: z.array(JsonEntrySchema).default([]) })).default([]), neutral_threshold: z.number().default(0.2), max_target_ratio: z.number().default(1), atr_stop_multiplier: z.number().default(2), reward_ratio: z.number().default(2), hitl_required: z.boolean().default(false) }),
-    risk: z.record(z.unknown()).default({}), execution: z.object({ connections: z.array(RuntimeConnectionSchema).default([]), books: z.array(RuntimeBookSchema).default([]), allocation_policy: z.string().default('weighted') }),
-    hitl: z.record(z.unknown()).default({}), scheduler: z.record(z.unknown()).default({}), triggers: z.record(z.unknown()).default({}), notifications: z.record(z.unknown()).default({}), infrastructure: z.record(z.unknown()).default({}),
+const RuntimeDocumentSchema = strictRecord({
+  system: strictRecord({ active: z.boolean() }),
+  market_data: strictRecord({ source_id: z.string(), parameters: z.array(StrictJsonEntrySchema) }),
+  llm: strictRecord({
+    base_url: z.string(),
+    streaming_models: z.array(z.string()),
+    default_temperature: z.number(),
+    timeout: z.number().int(),
+    prompt_caching: z.boolean(),
+    retry: strictRecord({
+      max_attempts: z.number().int(),
+      retry_base_delay_s: z.number(),
+      retry_backoff_factor: z.number(),
+      retry_jitter: z.boolean(),
+    }),
+    model_costs: z.array(
+      strictRecord({ name: z.string(), input_usd_per_mtok: z.number(), output_usd_per_mtok: z.number() }),
+    ),
+    models: LlmModelsSchema,
+  }),
+  signals: strictRecord({
+    components: z.array(
+      strictRecord({
+        component_id: z.string(),
+        enabled: z.boolean(),
+        weight: z.number(),
+        parameters: z.array(StrictJsonEntrySchema),
+      }),
+    ),
+    neutral_threshold: z.number(),
+    max_target_ratio: z.number(),
+    atr_stop_multiplier: z.number(),
+    reward_ratio: z.number(),
+    hitl_required: z.boolean(),
+  }),
+  risk: strictRecord({
+    max_stop_loss_pct: z.number(),
+    position: strictRecord({
+      max_single_pct: z.number(),
+      max_total_exposure_pct: z.number(),
+      max_margin_used_pct: z.number(),
+      max_correlated_positions: z.number().int(),
+      max_same_direction_positions: z.number().int(),
+    }),
+    loss: strictRecord({
+      max_daily_loss_pct: z.number(),
+      max_drawdown_pct: z.number(),
+      max_cvar_95: z.number(),
+      cvar_min_returns: z.number().int(),
+    }),
+    cooldown: strictRecord({ same_pair_minutes: z.number().int(), post_loss_minutes: z.number().int() }),
+    volatility: strictRecord({
+      flash_crash_threshold: z.number(),
+      funding_rate_threshold: z.number(),
+      flash_crash_lookback: z.number().int(),
+    }),
+    exchange: strictRecord({ max_api_latency_ms: z.number().int(), health_check_interval_s: z.number().int() }),
+    rate_limit: strictRecord({ max_trades_per_hour: z.number().int(), max_trades_per_day: z.number().int() }),
+  }),
+  execution: strictRecord({
+    connections: z.array(StrictConnectionSchema),
+    books: z.array(
+      strictRecord({
+        id: z.string(),
+        label: z.string(),
+        capital_scope: z.enum(['simulated', 'real']),
+        enabled: z.boolean(),
+        hitl_required: z.boolean(),
+        allocations: z.array(allocationSchema),
+      }),
+    ),
+    allocation_policy: z.string(),
+  }),
+  hitl: strictRecord({ approval_ttl_minutes: z.number().int() }),
+  scheduler: strictRecord({
+    enabled: z.boolean(),
+    pairs: z.array(z.string()),
+    interval_minutes: z.number().int(),
+    daily_summary_hour: z.number().int(),
+  }),
+  triggers: strictRecord({
+    enabled: z.boolean(),
+    max_rules: z.number().int(),
+    ws_reconnect_max_s: z.number().int(),
+    funding_rate_poll_interval_minutes: z.number().int(),
+  }),
+  notifications: strictRecord({
+    webhook_url: z.string(),
+    enabled: z.boolean(),
+    webhook_timeout: z.number().int(),
+    events: z.array(z.string()),
+    telegram: strictRecord({ enabled: z.boolean(), chat_id: z.string() }),
+  }),
+  infrastructure: strictRecord({ redis_url: z.string() }),
+});
+export const RuntimeConfigSchema = strictRecord({
+  revision: z.number().int(),
+  updated_at: z.string(),
+  setup_required: z.boolean(),
+  document: RuntimeDocumentSchema,
+});
+export const VenueMutationSchema = strictRecord({ revision: z.number().int(), connection: StrictConnectionSchema });
+export const CredentialMutationSchema = strictRecord({
+  revision: z.number().int(),
+  credential: strictRecord({ configured: z.boolean(), updated_at: z.string().nullable() }),
+});
+export const ConnectionHealthSchema = strictRecord({
+  connection_id: z.string(),
+  healthy: z.boolean(),
+  environment: z.enum(['paper', 'demo', 'testnet', 'live']),
+  credential_configured: z.boolean(),
+  capabilities: strictRecord({
+    market_types: z.array(z.string()),
+    native_protection: z.boolean(),
+    hedge_mode: z.boolean(),
+    reduce_only: z.boolean(),
+    supported_order_types: z.array(z.string()),
   }),
 });
-export const VenueMutationSchema = z.object({ revision: z.number(), connection: RuntimeConnectionSchema });
-export const CredentialMutationSchema = z.object({ revision: z.number(), credential: z.object({ configured: z.boolean(), updated_at: z.string().nullable() }) });
-export const ConnectionHealthSchema = z.object({ connection_id: z.string(), healthy: z.boolean(), environment: z.string(), credential_configured: z.boolean(), capabilities: z.object({ market_types: z.array(z.string()), native_protection: z.boolean(), hedge_mode: z.boolean(), reduce_only: z.boolean(), supported_order_types: z.array(z.string()) }) });
 
 export const BacktestRunResponseSchema = z.object({
   run_id: z.string(),
