@@ -340,6 +340,19 @@ async def audit_in_subprocess(connection_id: str, pair: str) -> dict[str, Any]:
     return {"audit_status": payload.get("status"), "audit": payload}
 
 
+def merge_audit_result(result: dict[str, Any], audit: dict[str, Any]) -> dict[str, Any]:
+    """Attach audit evidence without allowing a clean audit to erase a failed write flow."""
+    merged = {**result, **audit}
+    if audit["audit_status"] != "completed":
+        merged["status"] = "failed"
+        merged["requires_attention"] = True
+    else:
+        merged["requires_attention"] = bool(result.get("requires_attention", False))
+        if result.get("status") != "completed":
+            merged["status"] = "failed"
+    return merged
+
+
 async def _main(options: argparse.Namespace) -> dict[str, Any]:
     snapshot, connection, repository = await _load_target(options.connection)
     pair = Pair.parse(options.pair)
@@ -361,7 +374,7 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
                 "open_state": _residual_from_state(state),
             }
         finally:
-            await session.close()
+            await wait_for_owned(asyncio.create_task(session.close()))
     require_simulated_environment(connection.environment)
     if options.audit:
         session = await _open_connection(connection, repository)
@@ -369,7 +382,7 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
             result = await inspect_residual(session, pair)
             return {"status": "completed" if not result["requires_attention"] else "failed", **result}
         finally:
-            await session.close()
+            await wait_for_owned(asyncio.create_task(session.close()))
     require_canary_only(connection)
     result: dict[str, Any] = {"status": "failed", "requires_attention": True}
     try:
@@ -381,12 +394,7 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
     result.update(
         {"connection_id": connection.id, "environment": connection.environment, "config_revision": snapshot.revision}
     )
-    audit = await audit_in_subprocess(connection.id, pair.canonical())
-    result.update(audit)
-    if audit["audit_status"] != "completed":
-        result["status"] = "failed"
-        result["requires_attention"] = True
-    return result
+    return merge_audit_result(result, await audit_in_subprocess(connection.id, pair.canonical()))
 
 
 def main(argv: list[str] | None = None) -> int:

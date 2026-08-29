@@ -237,6 +237,17 @@ async def test_subprocess_audit_rejects_nonzero_exit_noise_and_attention(monkeyp
     assert result["requires_attention"] is True
 
 
+def test_completed_audit_never_erases_main_flow_failure_attention():
+    venue_canary = _script("venue_canary.py")
+    result = venue_canary.merge_audit_result(
+        {"status": "failed", "requires_attention": True, "error_type": "TimeoutError"},
+        {"audit_status": "completed", "audit": {"status": "completed", "requires_attention": False}},
+    )
+
+    assert result["status"] == "failed"
+    assert result["requires_attention"] is True
+
+
 @dataclass
 class _AmbiguousCreateSession(_Session):
     """Exchange accepted the order before the caller saw a timeout."""
