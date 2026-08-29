@@ -44,11 +44,11 @@ def parse_signal_canary_args(argv: list[str] | None = None) -> argparse.Namespac
     return parser.parse_args(argv)
 
 
-def strict_llm_factory(config, gateway_key: str):
+def strict_llm_factory(config, gateway_key: str, response_observer=None):
     """Bind the database gateway while prohibiting transparent model fallback."""
     from cryptotrader.agents.base import create_runtime_llm_factory
 
-    runtime_factory = create_runtime_llm_factory(config, api_key=gateway_key)
+    runtime_factory = create_runtime_llm_factory(config, api_key=gateway_key, response_observer=response_observer)
 
     def invoke(**kwargs):
         kwargs["with_fallback"] = False
@@ -86,12 +86,17 @@ async def run_signal_canary(pair_text: str) -> dict[str, Any]:
     if not snapshot.operational:
         raise RuntimeError("active runtime configuration is required")
     gateway_key = (await repository.reveal_token(LLM_GATEWAY_CREDENTIAL_REF)).token
+    observed_models: dict[str, set[str]] = {}
+
+    def observe(role: str, model: str) -> None:
+        observed_models.setdefault(role, set()).add(model)
+
     events = NullCycleEventSink()
     registry = SignalComponentRegistry.discover(
         snapshot.document,
         events,
         llm_gateway_key=gateway_key,
-        llm_factory_builder=lambda config: strict_llm_factory(config, gateway_key),
+        llm_factory_builder=lambda config: strict_llm_factory(config, gateway_key, observe),
     )
     profile = snapshot.document.signals.to_profile(snapshot.revision)
     components = registry.enabled(profile)
@@ -103,17 +108,12 @@ async def run_signal_canary(pair_text: str) -> dict[str, Any]:
     requirements = DataRequirements.merge(*(component.requirements() for component in components))
     context = await source.collect(Pair.parse(pair_text), datetime.now(UTC), requirements)
     signals = await ComponentRunner(events).run(components, context)
+    required_roles = {"tech_agent", "chain_agent", "news_agent", "macro_agent", "debate", "committee_summary"}
+    if set(observed_models) != required_roles or any(not models for models in observed_models.values()):
+        raise RuntimeError("signal canary requires actual response model metadata for every committee role")
     fused = WeightedSignalFusion().fuse(signals, profile.components)
     target = DecisionEngine().target_for(fused, profile)
-    models = snapshot.document.llm.models
-    model_ids = {
-        "tech_agent": models.tech_agent or models.analysis,
-        "chain_agent": models.chain_agent or models.analysis,
-        "news_agent": models.news_agent or models.analysis,
-        "macro_agent": models.macro_agent or models.analysis,
-        "debate": models.debate or models.fallback,
-        "committee_summary": models.committee_summary or models.debate or models.fallback,
-    }
+    model_ids = {role: sorted(models) for role, models in observed_models.items()}
     return _safe_value(
         {
             "status": "completed",

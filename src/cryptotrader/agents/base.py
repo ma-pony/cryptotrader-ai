@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import structlog
+from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_openai import ChatOpenAI
 
@@ -131,7 +132,12 @@ def create_llm(
     )
 
 
-def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Callable[..., ChatOpenAI]:
+def create_runtime_llm_factory(  # noqa: C901 - one factory owns runtime model assembly
+    config: RuntimeLlmConfig,
+    *,
+    api_key: str,
+    response_observer: Callable[[str, str], None] | None = None,
+) -> Callable[..., ChatOpenAI]:
     """Bind the database LLM document to a factory that never reads legacy config."""
     from cryptotrader.llm.token_tracker import TokenTrackerCallback
 
@@ -155,7 +161,7 @@ def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Cal
         from cryptotrader.llm.retry import wrap_with_retry
         from cryptotrader.metrics import get_metrics_collector
 
-        del role
+        observer_callback = _ResponseModelObserver(role, response_observer) if response_observer is not None else None
         selected_model = model or config.models.analysis or config.models.fallback
         if not selected_model:
             raise ValueError("No LLM model configured in runtime_config")
@@ -178,6 +184,10 @@ def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Cal
                 kwargs["model_kwargs"] = {"response_format": {"type": "json_object"}}
             if track_tokens:
                 kwargs["callbacks"] = [callback]
+                if observer_callback is not None:
+                    kwargs["callbacks"].append(observer_callback)
+            elif observer_callback is not None:
+                kwargs["callbacks"] = [observer_callback]
             return wrap_with_retry(ChatOpenAI(**kwargs), config.retry)
 
         llm = build(selected_model)
@@ -193,6 +203,20 @@ def create_runtime_llm_factory(config: RuntimeLlmConfig, *, api_key: str) -> Cal
         return llm
 
     return runtime_create_llm
+
+
+class _ResponseModelObserver(BaseCallbackHandler):
+    def __init__(self, role: str, observer: Callable[[str, str], None]) -> None:
+        self._role = role
+        self._observer = observer
+
+    def on_llm_end(self, response: Any, **_: Any) -> None:
+        generations = response.generations or []
+        message = generations[0][0].message if generations and generations[0] else None
+        metadata = getattr(message, "response_metadata", {}) if message is not None else {}
+        model = metadata.get("model_name") if isinstance(metadata, dict) else None
+        if isinstance(model, str) and model:
+            self._observer(self._role, model)
 
 
 def _to_langchain_messages(messages: list[dict]) -> list:
@@ -403,7 +427,7 @@ class BaseAgent:
             model = self._resolve_model()
             if self._llm_factory is None:
                 raise RuntimeError("runtime agent requires an explicit LLM factory")
-            llm = self._llm_factory(model=model)
+            llm = self._llm_factory(model=model, role=self.agent_id)
             messages = [sys_msg, usr_msg]
             from cryptotrader.llm.prompt_cache import apply_cache_control, is_anthropic_model, should_cache
 
@@ -583,6 +607,7 @@ class ToolAgent(BaseAgent):
                 model=self.model,
                 temperature=0.2,
                 with_fallback=False,
+                role=self.agent_id,
             )
             agent = create_agent(llm, tools=self.tools, system_prompt=sys_msg.content)
 

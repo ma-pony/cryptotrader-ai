@@ -193,8 +193,9 @@ def test_signal_canary_forces_each_real_model_call_to_fail_without_fallback(monk
     signal_canary = _script("signal_canary.py")
     calls = []
 
-    def build_factory(_config, *, api_key):
+    def build_factory(_config, *, api_key, response_observer=None):
         assert api_key == "gateway-token"  # pragma: allowlist secret
+        assert response_observer is None
 
         def invoke(**kwargs):
             calls.append(kwargs)

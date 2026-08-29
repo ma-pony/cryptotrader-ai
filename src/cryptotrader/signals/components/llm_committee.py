@@ -296,7 +296,7 @@ class LLMCommitteeComponent:
             model,
             self.models.timeout_seconds,
             round_number,
-            llm_factory=self._llm_factory,
+            llm_factory=(lambda **kwargs: self._llm_factory(**kwargs, role="debate")),
             prompt_caching=bool(self._prompt_caching),
         )
 
@@ -305,7 +305,12 @@ class LLMCommitteeComponent:
         from cryptotrader.llm.json_retry import extract_json_with_retry
 
         model = self.models.committee_summary or self.models.debate or self.models.fallback
-        llm = (self._llm_factory or create_llm)(model=model, temperature=0.1, json_mode=True)
+        llm = (self._llm_factory or create_llm)(
+            model=model,
+            temperature=0.1,
+            json_mode=True,
+            role="committee_summary",
+        )
         system = SystemMessage(
             content=(
                 "Summarize a four-domain market debate into one market view. Return JSON with exactly "
