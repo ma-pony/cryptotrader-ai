@@ -1,1 +1,28 @@
-export const AllocationPreview = ({ equity, targetExposure, allocations }: { equity: number; targetExposure: number; allocations: { connectionId: string; label: string; weight: number }[] }) => <div className="grid gap-2 sm:grid-cols-2">{allocations.map((item) => <div key={item.connectionId} className="rounded-lg border border-border bg-muted/20 p-3"><span className="text-xs text-muted-foreground">{item.label}</span><strong className="mt-1 block font-mono text-lg text-amber-500">{new Intl.NumberFormat('en-US').format(equity * targetExposure * item.weight / 100)} USDT</strong></div>)}</div>;
+import { useTranslation } from 'react-i18next';
+export function AllocationPreview({
+  equity,
+  targetExposure,
+  allocations,
+}: {
+  equity: number | '';
+  targetExposure: number | '';
+  allocations: { connectionId: string; label: string; weight: number | '' }[];
+}) {
+  const { i18n } = useTranslation();
+  return (
+    <dl className="configuration-allocation-preview">
+      {allocations.map((item) => (
+        <div key={item.connectionId}>
+          <dt>{item.label}</dt>
+          <dd className="font-mono tabular-nums">
+            {equity === '' || targetExposure === '' || item.weight === ''
+              ? '—'
+              : new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 2 }).format(
+                  (equity * targetExposure * item.weight) / 100,
+                ) + ' USDT'}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  );
+}

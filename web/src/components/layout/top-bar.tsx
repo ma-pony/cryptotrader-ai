@@ -16,6 +16,7 @@ import {
 import { useMarketDataWS } from '@/hooks/use-market-data-ws';
 import { useSettingsStore } from '@/stores/use-settings-store';
 import { useUIStore, type Locale, type Theme } from '@/stores/use-ui-store';
+import { SETTINGS_SECTIONS } from '@/pages/settings/navigation';
 
 const THEME_OPTIONS: { value: Theme; icon: typeof Sun; labelKey: 'theme.light' | 'theme.dark' | 'theme.system' }[] = [
   { value: 'light', icon: Sun, labelKey: 'theme.light' },
@@ -28,7 +29,19 @@ const LOCALE_OPTIONS: { value: Locale; labelKey: 'locale.zh-CN' | 'locale.en-US'
   { value: 'en-US', labelKey: 'locale.en-US' },
 ];
 
-const PATH_LABELS: Record<string, 'nav.dashboard' | 'nav.strategy' | 'nav.decisions' | 'nav.debate' | 'nav.backtest' | 'nav.risk' | 'nav.metrics' | 'nav.chat' | 'nav.market' | 'nav.scheduler'> = {
+const PATH_LABELS: Record<
+  string,
+  | 'nav.dashboard'
+  | 'nav.strategy'
+  | 'nav.decisions'
+  | 'nav.debate'
+  | 'nav.backtest'
+  | 'nav.risk'
+  | 'nav.metrics'
+  | 'nav.chat'
+  | 'nav.market'
+  | 'nav.scheduler'
+> = {
   '/': 'nav.dashboard',
   '/strategy': 'nav.strategy',
   '/decisions': 'nav.decisions',
@@ -73,9 +86,7 @@ const BtcPriceDisplay = () => {
       {Number.isFinite(changePct) ? (
         <span
           className={
-            changePct >= 0
-              ? 'font-mono text-[10px] text-trade-long'
-              : 'font-mono text-[10px] text-trade-short'
+            changePct >= 0 ? 'font-mono text-[10px] text-trade-long' : 'font-mono text-[10px] text-trade-short'
           }
         >
           {changePct >= 0 ? '+' : ''}
@@ -92,17 +103,21 @@ const Breadcrumb = () => {
   const segments = pathname.split('/').filter(Boolean);
   const topSegment = `/${segments[0] ?? ''}`.replace(/\/$/, '') || '/';
   const labelKey = PATH_LABELS[topSegment];
-  const pageLabel = labelKey ? t(labelKey) : segments[0] ?? '';
+  const section = SETTINGS_SECTIONS.find((item) => item.path === pathname);
+  const pageLabel = section
+    ? t('configuration:' + section.label)
+    : pathname === '/setup'
+      ? t('configuration:center.checklist')
+      : labelKey
+        ? t(labelKey)
+        : (segments[0] ?? '');
 
   return (
-    <nav
-      className="hidden items-center gap-1.5 text-[11px] font-medium md:flex"
-      aria-label="breadcrumb"
-    >
+    <nav className="hidden items-center gap-1.5 text-[11px] font-medium md:flex" aria-label="breadcrumb">
       <span className="text-muted-foreground">{t('app.name')}</span>
       <ChevronRight className="h-3 w-3 text-muted-foreground" strokeWidth={2} />
       <span className="text-foreground">{pageLabel || t('nav.dashboard')}</span>
-      {segments.length > 1 ? (
+      {segments.length > 1 && !section ? (
         <>
           <ChevronRight className="h-3 w-3 text-muted-foreground" strokeWidth={2} />
           <span className="font-mono text-muted-foreground">{segments.slice(1).join('/')}</span>

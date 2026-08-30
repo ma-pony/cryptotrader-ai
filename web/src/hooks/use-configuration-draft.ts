@@ -10,6 +10,7 @@ import type {
   RuntimeJsonObject,
 } from '@/types/api';
 import { ApiError } from '@/lib/api-client';
+import { bookErrors } from '@/lib/configuration-readiness';
 import { focusFirstError, type FieldErrors } from '@/components/configuration/field';
 import { getParameter } from '@/components/configuration/parameter-fields';
 import { decodeJsonValue, RUNTIME_CONFIG_QUERY_KEY, toRuntimeDocument, useRuntimeConfig } from './use-runtime-config';
@@ -21,12 +22,25 @@ export const CONFIGURATION_SECTION_KEYS = {
   risk: ['risk', 'hitl'],
   scheduler: ['scheduler', 'triggers'],
   system: ['security', 'infrastructure', 'notifications', 'observability'],
+  books: ['execution'],
 } as const;
 export type ConfigurationSection = keyof typeof CONFIGURATION_SECTION_KEYS;
 export type ConfigurationKey = (typeof CONFIGURATION_SECTION_KEYS)[ConfigurationSection][number];
 export type SaveStatus = 'saving' | 'saved' | 'failed';
 type DraftDocument = ConfigurationDraft<RuntimeDocument>;
-type DraftOverlay = Partial<Pick<DraftDocument, ConfigurationKey>>;
+type BookSettings = Pick<DraftDocument['execution'], 'books' | 'live_order_execution_enabled'>;
+type DraftOverlay = Partial<Omit<Pick<DraftDocument, ConfigurationKey>, 'execution'> & { execution: BookSettings }>;
+const bookSettings = (execution: DraftDocument['execution']): BookSettings => ({
+  books: execution.books,
+  live_order_execution_enabled: execution.live_order_execution_enabled,
+});
+const ownedValue = (key: ConfigurationKey, document: DraftDocument | undefined) =>
+  key === 'execution' && document ? bookSettings(document.execution) : document?.[key];
+const composeDraft = (baseline: RuntimeDocument, overlay: DraftOverlay): DraftDocument => ({
+  ...baseline,
+  ...overlay,
+  execution: { ...baseline.execution, ...overlay.execution },
+});
 
 /** Validates only the selected business section. The server still owns final CAS/validation. */
 export function validateConfigurationSection(
@@ -36,6 +50,12 @@ export function validateConfigurationSection(
   message: (key: string) => string,
 ): FieldErrors {
   const errors: FieldErrors = {};
+  if (section === 'books')
+    return bookErrors(
+      document.execution.books,
+      document.execution.connections as RuntimeDocument['execution']['connections'],
+      message,
+    );
   const number = (path: string, value: unknown, min = 0, max = Infinity, integer = false) => {
     if (
       typeof value !== 'number' ||
@@ -158,16 +178,20 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
   const [status, setStatus] = useState<Partial<Record<ConfigurationSection, SaveStatus>>>({});
   const [failure, setFailure] = useState<string>();
   const [isReloading, setReloading] = useState(false);
-  const document: DraftDocument | undefined = runtime.document ? { ...runtime.document, ...overlay } : undefined;
+  const document = runtime.document ? composeDraft(runtime.document, overlay) : undefined;
   const isDirty = (section: ConfigurationSection) =>
     CONFIGURATION_SECTION_KEYS[section].some(
-      (key) => overlay[key] !== undefined && JSON.stringify(overlay[key]) !== JSON.stringify(runtime.document?.[key]),
+      (key) =>
+        overlay[key] !== undefined &&
+        JSON.stringify(overlay[key]) !== JSON.stringify(ownedValue(key, runtime.document)),
     );
   const update = <K extends ConfigurationKey>(key: K, value: DraftDocument[K]) => {
     // An in-flight write may replace this baseline, so retain a restore until it settles.
-    const restored = !savingKeys.current.includes(key) && JSON.stringify(value) === JSON.stringify(runtime.document?.[key]);
+    const owned = key === 'execution' ? bookSettings(value as DraftDocument['execution']) : value;
+    const restored =
+      !savingKeys.current.includes(key) && JSON.stringify(owned) === JSON.stringify(ownedValue(key, runtime.document));
     setOverlay((current) => {
-      const next = { ...current, [key]: value };
+      const next = { ...current, [key]: owned };
       if (restored) delete next[key];
       return next;
     });
@@ -206,7 +230,7 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
     const latest = client.getQueryData<RuntimeConfig>(RUNTIME_CONFIG_QUERY_KEY);
     if (!latest) return false;
     const baseline = toRuntimeDocument(latest.document);
-    const currentDocument = { ...baseline, ...overlay };
+    const currentDocument = composeDraft(baseline, overlay);
     const sectionErrors = validateConfigurationSection(section, currentDocument, catalog, (key) =>
       t(`forms.validation.${key}`),
     );
@@ -249,7 +273,7 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
       setOverlay((current) => {
         const next = { ...current };
         for (const key of keys)
-          if (JSON.stringify(current[key]) === JSON.stringify(settledBaseline?.[key])) delete next[key];
+          if (JSON.stringify(current[key]) === JSON.stringify(ownedValue(key, settledBaseline))) delete next[key];
         return next;
       });
     }

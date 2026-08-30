@@ -56,7 +56,7 @@ it('requires confirmation before discarding and distinguishes persistence from a
     <SaveBar dirty={false} status="saved" applyStatus="pending" onSave={() => undefined} onDiscard={discard} />,
   );
   expect(screen.getByRole('status')).toHaveTextContent('配置已保存，尚未实际生效。');
-  expect(screen.getByRole('button', { name: '保存本节' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: '保存配置' })).toBeDisabled();
   confirm.mockRestore();
 });
 

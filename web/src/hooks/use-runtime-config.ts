@@ -26,15 +26,32 @@ export const assertRuntimeJsonDocument = <T>(value: T): T => {
     }
     if (Array.isArray(candidate)) {
       if (seen.has(candidate)) throw new Error('Invalid runtime JSON: cyclic value');
-      if (Object.getPrototypeOf(candidate) !== Array.prototype || Object.getOwnPropertySymbols(candidate).length > 0) throw new Error('Invalid runtime JSON: arrays must be ordinary');
+      if (Object.getPrototypeOf(candidate) !== Array.prototype || Object.getOwnPropertySymbols(candidate).length > 0)
+        throw new Error('Invalid runtime JSON: arrays must be ordinary');
       const names = Object.getOwnPropertyNames(candidate);
-      if (names.length !== candidate.length + 1 || names[names.length - 1] !== 'length') throw new Error('Invalid runtime JSON: arrays must be dense');
+      if (names.length !== candidate.length + 1 || names[names.length - 1] !== 'length')
+        throw new Error('Invalid runtime JSON: arrays must be dense');
       const lengthDescriptor = Object.getOwnPropertyDescriptor(candidate, 'length');
       const lengthValue: unknown = lengthDescriptor?.value;
-      if (!lengthDescriptor || !('value' in lengthDescriptor) || lengthValue !== candidate.length || !lengthDescriptor.writable || lengthDescriptor.enumerable || lengthDescriptor.configurable) throw new Error('Invalid runtime JSON: array length must be ordinary');
+      if (
+        !lengthDescriptor ||
+        !('value' in lengthDescriptor) ||
+        lengthValue !== candidate.length ||
+        !lengthDescriptor.writable ||
+        lengthDescriptor.enumerable ||
+        lengthDescriptor.configurable
+      )
+        throw new Error('Invalid runtime JSON: array length must be ordinary');
       for (let index = 0; index < candidate.length; index += 1) {
         const descriptor = Object.getOwnPropertyDescriptor(candidate, String(index));
-        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || !descriptor.writable || !descriptor.configurable) throw new Error('Invalid runtime JSON: array entries must be ordinary values');
+        if (
+          !descriptor ||
+          !('value' in descriptor) ||
+          !descriptor.enumerable ||
+          !descriptor.writable ||
+          !descriptor.configurable
+        )
+          throw new Error('Invalid runtime JSON: array entries must be ordinary values');
       }
       seen.add(candidate);
       candidate.forEach((item) => visit(item, seen));
@@ -44,8 +61,10 @@ export const assertRuntimeJsonDocument = <T>(value: T): T => {
     if (typeof candidate === 'object') {
       if (seen.has(candidate)) throw new Error('Invalid runtime JSON: cyclic value');
       const prototype: unknown = Object.getPrototypeOf(candidate);
-      if (prototype !== Object.prototype && prototype !== null) throw new Error('Invalid runtime JSON: objects must be plain');
-      if (Object.getOwnPropertySymbols(candidate).length > 0) throw new Error('Invalid runtime JSON: symbol keys are not supported');
+      if (prototype !== Object.prototype && prototype !== null)
+        throw new Error('Invalid runtime JSON: objects must be plain');
+      if (Object.getOwnPropertySymbols(candidate).length > 0)
+        throw new Error('Invalid runtime JSON: symbol keys are not supported');
       seen.add(candidate);
       Object.values(candidate as Record<string, unknown>).forEach((item) => visit(item, seen));
       seen.delete(candidate);
@@ -93,7 +112,9 @@ export const decodeEntries = (entries: { key: string; value: JsonValueOut }[]): 
 export const toRuntimeDocument = (response: RuntimeConfig['document']): RuntimeDocument => ({
   ...response,
   security: { enabled: response.security.enabled },
-  llm: (({ gateway_credential_configured: _configured, gateway_credential_updated_at: _updatedAt, ...llm }) => llm)(response.llm),
+  llm: (({ gateway_credential_configured: _configured, gateway_credential_updated_at: _updatedAt, ...llm }) => llm)(
+    response.llm,
+  ),
   market_data: { ...response.market_data, parameters: decodeEntries(response.market_data.parameters) },
   signals: {
     ...response.signals,
@@ -121,10 +142,19 @@ export const useRuntimeConfig = () => {
     queryFn: () => apiClient.get('/api/config', RuntimeConfigSchema),
   });
   const mutation = useMutation({
-    mutationFn: ({ document, expectedRevision }: { document: RuntimeDocument; expectedRevision: number | undefined }) => {
-      if (expectedRevision === undefined)
-        return Promise.reject(new Error('Runtime config revision is unavailable'));
-      return apiClient.put('/api/config', { expected_revision: expectedRevision, document: assertRuntimeJsonDocument(document) }, RuntimeConfigSchema);
+    mutationFn: ({
+      document,
+      expectedRevision,
+    }: {
+      document: RuntimeDocument;
+      expectedRevision: number | undefined;
+    }) => {
+      if (expectedRevision === undefined) return Promise.reject(new Error('Runtime config revision is unavailable'));
+      return apiClient.put(
+        '/api/config',
+        { expected_revision: expectedRevision, document: assertRuntimeJsonDocument(document) },
+        RuntimeConfigSchema,
+      );
     },
     onSuccess: (saved) => {
       client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, saved);
@@ -172,11 +202,13 @@ export const useRuntimeConfig = () => {
     appliedRevision: query.data?.applied_revision,
     applyError: query.data?.apply_error,
     updatedAt: query.data?.updated_at,
-    replace: (document: RuntimeDocument, expectedRevision = query.data?.revision) => mutation.mutateAsync({ document, expectedRevision }),
+    replace: (document: RuntimeDocument, expectedRevision = query.data?.revision) =>
+      mutation.mutateAsync({ document, expectedRevision }),
     reload,
     conflict,
     isLoading: query.isLoading,
     isError: query.isError && query.data === undefined,
+    authenticationRequired: query.error instanceof ApiError && query.error.status === 401,
     isSaving: mutation.isPending,
   };
 };

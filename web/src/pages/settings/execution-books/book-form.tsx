@@ -1,178 +1,161 @@
-import { Trash2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
-import type { RuntimeDocument } from '@/types/api';
+import { BooleanField, ChoiceField, NumberField, TextField, type FieldErrors } from '@/components/configuration/field';
+import { AdvancedSection } from '@/components/configuration/section';
+import { eligibleConnection, type BookDraft, type Connection } from '@/lib/configuration-readiness';
 
-type Book = RuntimeDocument['execution']['books'][number];
-type Connection = RuntimeDocument['execution']['connections'][number];
-const eligible = (scope: Book['capital_scope'], connection: Connection) =>
-  !connection.canary_only && (scope === 'simulated' ? connection.environment !== 'live' : connection.environment === 'live');
-
-export type BookValidationError = { code: string; params?: Record<string, string> };
-
-export const validateBooks = (books: Book[], connections: Connection[]): BookValidationError[] => {
-  const used = new Set<string>();
-  const errors: BookValidationError[] = [];
-  const bookIds = new Set<string>();
-  for (const book of books) {
-    if (!book.id.trim() || !book.label.trim()) errors.push({ code: 'required' });
-    if (bookIds.has(book.id)) errors.push({ code: 'duplicateBook' });
-    bookIds.add(book.id);
-    const allAllocations = new Set<string>();
-    for (const allocation of book.allocations) {
-      if (allAllocations.has(allocation.connection_id)) errors.push({ code: 'duplicateAllocation' });
-      allAllocations.add(allocation.connection_id);
-    }
-    const enabled = book.allocations.filter((item) => item.enabled);
-    for (const allocation of book.allocations) {
-      const connection = connections.find((item) => item.id === allocation.connection_id);
-      if (!connection || connection.canary_only)
-        errors.push({ code: book.capital_scope === 'simulated' ? 'invalidSimulated' : 'invalidReal' });
-    }
-    if (!book.enabled) continue;
-    if (enabled.length === 0 || Math.abs(enabled.reduce((sum, item) => sum + item.weight, 0) - 1) > 1e-9)
-      errors.push({ code: 'weightTotal', params: { label: book.label } });
-    const local = new Set<string>();
-    for (const allocation of enabled) {
-      const connection = connections.find((item) => item.id === allocation.connection_id);
-      if (!connection || !connection.enabled || !eligible(book.capital_scope, connection))
-        errors.push({ code: book.capital_scope === 'simulated' ? 'invalidSimulated' : 'invalidReal' });
-      if (local.has(allocation.connection_id)) errors.push({ code: 'duplicateAllocation' });
-      local.add(allocation.connection_id);
-      if (used.has(allocation.connection_id)) errors.push({ code: 'duplicateConnection' });
-      used.add(allocation.connection_id);
-    }
-  }
-  return errors;
-};
-
-export const BookForm = ({
-  book,
-  connections,
-  onChange,
-  onRemove,
-}: {
-  book: Book;
-  connections: Connection[];
-  onChange: (book: Book) => void;
-  onRemove: () => void;
-}) => {
-  const { t } = useTranslation('configuration');
-  const allowed = connections.filter((connection) => eligible(book.capital_scope, connection));
-  const allocationFor = (id: string) =>
-    book.allocations.find((allocation) => allocation.connection_id === id) ?? {
-      connection_id: id,
-      enabled: false,
-      weight: 0,
-    };
-  const setAllocation = (id: string, update: Partial<Book['allocations'][number]>) =>
-    onChange({
-      ...book,
-      allocations: book.allocations.some((item) => item.connection_id === id)
-        ? book.allocations.map((item) => (item.connection_id === id ? { ...item, ...update } : item))
-        : [...book.allocations, { ...allocationFor(id), ...update }],
-    });
-  return (
-    <article className="rounded-xl border border-border bg-muted/10 p-4">
-      <div className="grid gap-3 md:grid-cols-4">
-        <label className="text-xs text-muted-foreground">
-          {t('book.id')}
-          <input
-            aria-label={t('book.id')}
-            value={book.id}
-            onChange={(event) => onChange({ ...book, id: event.target.value })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
-          />
-        </label>
-        <label className="text-xs text-muted-foreground">
-          {t('book.name')}
-          <input
-            aria-label={t('book.name')}
-            value={book.label}
-            onChange={(event) => onChange({ ...book, label: event.target.value })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
-          />
-        </label>
-        <label className="text-xs text-muted-foreground">
-          {t('book.scope')}
-          <select
-            aria-label={t('book.scope')}
-            value={book.capital_scope}
-            onChange={(event) =>
-              onChange({ ...book, capital_scope: event.target.value as Book['capital_scope'], allocations: [] })
-            }
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
-          >
-            <option value="simulated">simulated</option>
-            <option value="real">real</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-2 pt-5 text-sm">
-          <input
-            type="checkbox"
-            checked={book.hitl_required}
-            onChange={(event) => onChange({ ...book, hitl_required: event.target.checked })}
-          />
-          {t('book.hitl')}
-        </label>
-      </div>
-      <div className="mt-4 space-y-2 border-t border-border pt-3">
-        {allowed.map((connection) => {
-          const allocation = allocationFor(connection.id);
-          return (
-            <div key={connection.id} className="flex items-center gap-3 text-sm">
-              <input
-                aria-label={t('book.enabledConnection', { name: connection.label })}
-                type="checkbox"
-                checked={allocation.enabled}
-                onChange={(event) =>
-                  setAllocation(connection.id, {
-                    enabled: event.target.checked,
-                    weight: event.target.checked && allocation.weight === 0 ? 1 : allocation.weight,
-                  })
-                }
-              />
-              <span className="min-w-36">
-                {connection.label} <small className="text-muted-foreground">{connection.environment}</small>
-              </span>
-              <input
-                aria-label={t('book.weight', { name: connection.label })}
-                disabled={!allocation.enabled}
-                type="number"
-                min="0"
-                max="100"
-                value={Math.round(allocation.weight * 100)}
-                onChange={(event) => setAllocation(connection.id, { weight: Number(event.target.value) / 100 })}
-                className="h-9 w-24 rounded border bg-background px-2 font-mono"
-              />
-              <span className="text-xs text-muted-foreground">%</span>
-            </div>
-          );
-        })}
-        {allowed.length === 0 ? <p className="text-sm text-muted-foreground">{t('book.noConnections')}</p> : null}
-      </div>
-      <div className="mt-4 flex items-center justify-between">
-        <label className="flex gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={book.enabled}
-            onChange={(event) => onChange({ ...book, enabled: event.target.checked })}
-          />
-          {t('book.enabled')}
-        </label>
-        <Button type="button" variant="ghost" onClick={onRemove}>
-          <Trash2 className="h-4 w-4" />
-          {t('book.delete')}
-        </Button>
-      </div>
-    </article>
-  );
-};
-export const newBook = (): Book => ({
-  id: '',
+export const newBook = (): BookDraft => ({
+  id: 'book-' + crypto.randomUUID(),
   label: '',
   capital_scope: 'simulated',
   enabled: true,
   hitl_required: true,
   allocations: [],
 });
+export function BookForm({
+  book,
+  index,
+  saved,
+  connections,
+  errors,
+  onChange,
+  onRemove,
+}: {
+  book: BookDraft;
+  index: number;
+  saved: boolean;
+  connections: Connection[];
+  errors: FieldErrors;
+  onChange: (book: BookDraft) => void;
+  onRemove: () => void;
+}) {
+  const { t } = useTranslation('configuration');
+  const prefix = 'execution.books.' + index;
+  const allowed = connections.filter((connection) => eligibleConnection(book.capital_scope, connection));
+  const total = book.allocations
+    .filter((item) => item.enabled)
+    .reduce((sum, item) => sum + (typeof item.weight === 'number' ? item.weight * 100 : 0), 0);
+  const setAllocation = (id: string, update: Partial<BookDraft['allocations'][number]>) =>
+    onChange({
+      ...book,
+      allocations: book.allocations.some((item) => item.connection_id === id)
+        ? book.allocations.map((item) => (item.connection_id === id ? { ...item, ...update } : item))
+        : [...book.allocations, { connection_id: id, enabled: false, weight: 0, ...update }],
+    });
+  const unavailable = book.allocations.filter(
+    (item) => !allowed.some((connection) => connection.id === item.connection_id),
+  );
+  return (
+    <article className="configuration-section">
+      <div className="configuration-grid">
+        <TextField
+          name={prefix + '.label'}
+          label={t('book.name')}
+          required
+          value={book.label}
+          error={errors[prefix + '.label']}
+          onChange={(label) => onChange({ ...book, label })}
+        />
+        <ChoiceField
+          name={prefix + '.capital_scope'}
+          label={t('book.scope')}
+          help={t('book.scopeHelp')}
+          disabled={saved}
+          value={book.capital_scope}
+          options={[
+            { value: 'simulated', label: t('simulatedBooks') },
+            { value: 'real', label: t('realBooks') },
+          ]}
+          onChange={(scope) =>
+            onChange({ ...book, capital_scope: scope as BookDraft['capital_scope'], allocations: [] })
+          }
+        />
+        <BooleanField
+          name={prefix + '.enabled'}
+          label={t('book.enabled')}
+          value={book.enabled}
+          error={errors[prefix + '.enabled']}
+          onChange={(enabled) => onChange({ ...book, enabled })}
+        />
+        <BooleanField
+          name={prefix + '.hitl_required'}
+          label={t('book.hitl')}
+          value={book.hitl_required}
+          help={t('forms.hitlHelp')}
+          onChange={(hitl_required) => onChange({ ...book, hitl_required })}
+        />
+      </div>
+      <AdvancedSection title={t('book.advanced')}>
+        <TextField
+          name={prefix + '.id'}
+          label={t('book.id')}
+          help={t('book.idHelp')}
+          disabled={saved}
+          required
+          value={book.id}
+          error={errors[prefix + '.id']}
+          onChange={(id) => onChange({ ...book, id })}
+        />
+      </AdvancedSection>
+      <div className="space-y-3">
+        {allowed.map((connection) => {
+          const row = book.allocations.findIndex((item) => item.connection_id === connection.id);
+          const allocation = book.allocations[row];
+          return (
+            <div key={connection.id} className="configuration-grid">
+              <BooleanField
+                name={prefix + '.connection.' + connection.id}
+                label={t('book.enabledConnection', { name: connection.label })}
+                value={allocation?.enabled ?? false}
+                onChange={(enabled) =>
+                  setAllocation(connection.id, {
+                    enabled,
+                    weight: enabled && !allocation?.weight ? 1 : (allocation?.weight ?? 0),
+                  })
+                }
+              />
+              <NumberField
+                name={prefix + '.allocations.' + row + '.weight'}
+                label={t('book.weight', { name: connection.label })}
+                percent
+                min={0}
+                max={100}
+                disabled={!allocation?.enabled}
+                value={allocation?.weight ?? 0}
+                error={errors[prefix + '.allocations.' + row + '.weight']}
+                onChange={(weight) => setAllocation(connection.id, { weight })}
+              />
+            </div>
+          );
+        })}
+        {unavailable.map((allocation) => (
+          <div key={allocation.connection_id} className="configuration-inline">
+            <p className="configuration-error">{t('book.unavailable', { name: allocation.connection_id })}</p>
+            <button
+              className="configuration-button"
+              type="button"
+              onClick={() => onChange({ ...book, allocations: book.allocations.filter((item) => item !== allocation) })}
+            >
+              {t('forms.remove')}
+            </button>
+          </div>
+        ))}
+        {!allowed.length ? <p className="configuration-help">{t('book.noConnections')}</p> : null}
+        <p className="configuration-help" aria-live="polite">
+          {t('forms.weightTotal', {
+            total: Number(total.toPrecision(12)),
+            remaining: Number((100 - total).toPrecision(12)),
+          })}
+        </p>
+      </div>
+      <button
+        type="button"
+        className="configuration-button"
+        onClick={() => {
+          if (!saved || window.confirm(t('book.removeConfirm'))) onRemove();
+        }}
+      >
+        {t('forms.remove')}
+      </button>
+    </article>
+  );
+}

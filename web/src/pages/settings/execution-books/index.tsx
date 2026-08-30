@@ -1,148 +1,103 @@
-import { Plus, Save } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
-import { PageBoundary } from '@/components/ui/page-boundary';
-import { PageHeader } from '@/components/ui/page-header';
-import { useRuntimeConfig } from '@/hooks/use-runtime-config';
-import { toRuntimeDocument } from '@/hooks/use-runtime-config';
+import { BooleanField, NumberField } from '@/components/configuration/field';
+import { Section } from '@/components/configuration/section';
+import { useConfiguration } from '../configuration-context';
+import { ConfigurationSaveBar } from '..';
 import { AllocationPreview } from './allocation-preview';
-import { BookForm, newBook, validateBooks } from './book-form';
+import { BookForm, newBook } from './book-form';
 
-const ExecutionBooksPage = () => {
+export default function ExecutionBooksPage() {
+  const runtime = useConfiguration();
   const { t } = useTranslation('configuration');
-  const runtime = useRuntimeConfig();
-  const document = runtime.document;
-  const [books, setBooks] = useState<NonNullable<typeof runtime.document>['execution']['books']>([]);
-  const [liveOrderExecutionEnabled, setLiveOrderExecutionEnabled] = useState(false);
-  const [equity, setEquity] = useState(100000);
-  const [exposure, setExposure] = useState(0.5);
-  const [saveError, setSaveError] = useState('');
-  const hydrated = useRef(false);
-  useEffect(() => {
-    if (document && !hydrated.current) { setBooks(document.execution.books); setLiveOrderExecutionEnabled(document.execution.live_order_execution_enabled); hydrated.current = true; }
-  }, [document]);
-  const errors = document ? validateBooks(books, document.execution.connections) : [];
-  const save = async () => {
-    if (!document) return;
-    try { setSaveError(''); await runtime.replace({ ...document, execution: { ...document.execution, books, live_order_execution_enabled: liveOrderExecutionEnabled } }); }
-    catch { setSaveError(t('saveFailed')); }
-  };
-  const reload = async () => {
-    const result = await runtime.reload();
-    if (result.isSuccess && !result.error && result.data) { const execution = toRuntimeDocument(result.data.document).execution; setBooks(execution.books); setLiveOrderExecutionEnabled(execution.live_order_execution_enabled); }
-  };
+  const form = useRef<HTMLFormElement>(null);
+  const [equity, setEquity] = useState<number | ''>(100000);
+  const [exposure, setExposure] = useState<number | ''>(0.5);
+  const execution = runtime.document?.execution;
+  const connections = runtime.baseline?.execution.connections;
+  if (!execution || !connections) return null;
+  const changeBooks = (books: typeof execution.books) => runtime.update('execution', { ...execution, books });
   return (
-    <PageBoundary
-      loading={runtime.isLoading}
-      isError={runtime.isError}
-      onRetry={() => void reload()}
-      errorTitle={t('bookLoadError')}
-      errorDescription={t('bookLoadDescription')}
+    <form
+      ref={form}
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        void runtime.save('books', form.current ?? undefined);
+      }}
     >
-      {document ? (
-        <div className="space-y-6">
-          <PageHeader
-            eyebrow="CAPITAL ROUTING"
-            title={t('books')}
-            subtitle={t('booksSubtitle')}
-            actions={<span className="font-mono text-xs text-amber-500">{t('revisionValue', { revision: runtime.revision })}</span>}
+      <header>
+        <h1 className="text-xl font-semibold">{t('books')}</h1>
+        <p className="configuration-help">{t('booksSubtitle')}</p>
+      </header>
+      {!execution.books.length ? <p className="configuration-help">{t('book.empty')}</p> : null}
+      {execution.books.map((book, index) => (
+        <BookForm
+          key={runtime.bookKeys[index] ?? book.id}
+          index={index}
+          book={book}
+          saved={runtime.baseline!.execution.books.some((item) => item.id === book.id)}
+          connections={connections}
+          errors={runtime.errors}
+          onChange={(next) => changeBooks(execution.books.map((item, i) => (i === index ? next : item)))}
+          onRemove={() => {
+            runtime.setBookKeys((current) => current.filter((_, i) => i !== index));
+            changeBooks(execution.books.filter((_, i) => i !== index));
+          }}
+        />
+      ))}
+      <button
+        type="button"
+        className="configuration-button"
+        onClick={() => {
+          runtime.setBookKeys((current) => [...current, crypto.randomUUID()]);
+          changeBooks([...execution.books, newBook()]);
+        }}
+      >
+        {t('addBook')}
+      </button>
+      <Section title={t('liveWrite.title')} description={t('liveWrite.warning')}>
+        <BooleanField
+          name="execution.live_order_execution_enabled"
+          label={t('liveWrite.enable')}
+          value={execution.live_order_execution_enabled}
+          onChange={(live_order_execution_enabled) =>
+            runtime.update('execution', { ...execution, live_order_execution_enabled })
+          }
+        />
+      </Section>
+      <Section title={t('allocationPreview')} description={t('book.exampleHelp')}>
+        <div className="configuration-grid">
+          <NumberField name="example.equity" label={t('sampleEquity')} value={equity} min={0} onChange={setEquity} />
+          <NumberField
+            name="example.exposure"
+            label={t('targetExposure')}
+            value={exposure}
+            percent
+            min={0}
+            max={100}
+            onChange={setExposure}
           />
-          <div className="grid gap-4">
-            {(['simulated', 'real'] as const).map((scope) => (
-              <section key={scope} className="rounded-2xl border border-border bg-card p-5">
-                <h2 className="font-semibold">{scope === 'simulated' ? t('simulatedBooks') : t('realBooks')}</h2>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {scope === 'simulated' ? t('simulatedDescription') : t('realDescription')}
-                </p>
-                <div className="mt-4 space-y-3">
-                  {books.map((book, index) =>
-                    book.capital_scope === scope ? (
-                      <div key={`${book.id}-${index}`}>
-                        <BookForm
-                          book={book}
-                          connections={document.execution.connections}
-                          onChange={(next) =>
-                            setBooks((current) => current.map((item, itemIndex) => (itemIndex === index ? next : item)))
-                          }
-                          onRemove={() => setBooks((current) => current.filter((_, itemIndex) => itemIndex !== index))}
-                        />
-                        <AllocationPreview
-                          equity={equity}
-                          targetExposure={exposure}
-                          allocations={book.allocations
-                            .filter((item) => item.enabled)
-                            .map((item) => ({
-                              connectionId: item.connection_id,
-                              label:
-                                document.execution.connections.find(
-                                  (connection) => connection.id === item.connection_id,
-                                )?.label ?? item.connection_id,
-                              weight: item.weight * 100,
-                            }))}
-                        />
-                      </div>
-                    ) : null,
-                  )}
-                </div>
-              </section>
-            ))}
-          </div>
-          <section className="rounded-2xl border border-amber-500/50 bg-amber-500/5 p-5">
-            <h2 className="font-semibold text-amber-600">{t('liveWrite.title')}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{t('liveWrite.warning')}</p>
-            <label className="mt-4 flex items-center gap-2 text-sm font-medium">
-              <input aria-label={t('liveWrite.enable')} type="checkbox" checked={liveOrderExecutionEnabled} onChange={(event) => setLiveOrderExecutionEnabled(event.target.checked)} />
-              {t('liveWrite.enable')}
-            </label>
-          </section>
-          <section className="rounded-2xl border border-border bg-card p-5">
-            <h2 className="font-semibold">{t('allocationPreview')}</h2>
-            <div className="mt-3 flex flex-wrap gap-3">
-              <label>
-                {t('sampleEquity')}
-                <input
-                  aria-label={t('sampleEquity')}
-                  type="number"
-                  value={equity}
-                  onChange={(event) => setEquity(Number(event.target.value))}
-                  className="ml-2 h-9 rounded border bg-background px-2"
-                />
-              </label>
-              <label>
-                {t('targetExposure')}
-                <input
-                  aria-label={t('targetExposure')}
-                  type="number"
-                  step="0.1"
-                  value={exposure}
-                  onChange={(event) => setExposure(Number(event.target.value))}
-                  className="ml-2 h-9 rounded border bg-background px-2"
-                />
-              </label>
-            </div>
-          </section>
-          <Button variant="outline" onClick={() => setBooks((current) => [...current, newBook()])}>
-            <Plus className="h-4 w-4" />
-            {t('addBook')}
-          </Button>
-          <Button variant="outline" onClick={() => void reload()}>
-            {t('reload')}
-          </Button>
-          {errors.map((error, index) => (
-            <p key={`${error.code}-${index}`} role="alert" className="text-sm text-trade-short">
-              {t(`book.errors.${error.code}`, error.params ?? {})}
-            </p>
-          ))}
-          {runtime.conflict ? <div className="flex gap-2"><p role="alert" className="text-sm text-trade-short">{t('conflict')}</p><Button variant="outline" onClick={() => void reload()}>{t('reload')}</Button></div> : null}
-          {saveError ? <p role="alert" className="text-sm text-trade-short">{saveError}</p> : null}
-          <Button disabled={runtime.isSaving || runtime.conflict || errors.length > 0} onClick={() => void save()}>
-            <Save className="h-4 w-4" />
-            {t('save')}
-          </Button>
         </div>
-      ) : null}
-    </PageBoundary>
+        {execution.books.map((book, index) => (
+          <section key={runtime.bookKeys[index] ?? book.id}>
+            <h3 className="text-sm font-semibold">{book.label || t('book.unnamed')}</h3>
+            <AllocationPreview
+              equity={equity}
+              targetExposure={exposure}
+              allocations={book.allocations
+                .filter((item) => item.enabled)
+                .map((item) => ({
+                  connectionId: item.connection_id,
+                  label:
+                    connections.find((connection) => connection.id === item.connection_id)?.label ?? item.connection_id,
+                  weight: item.weight === '' ? '' : item.weight * 100,
+                }))}
+            />
+          </section>
+        ))}
+      </Section>
+      <ConfigurationSaveBar section="books" form={form.current} />
+    </form>
   );
-};
-export default ExecutionBooksPage;
+}

@@ -1,299 +1,379 @@
-import { FlaskConical, Save } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
+import {
+  BooleanField,
+  ChoiceField,
+  NumberField,
+  TextField,
+  focusFirstError,
+  type FieldErrors,
+} from '@/components/configuration/field';
+import { AdvancedSection } from '@/components/configuration/section';
+import { ParameterFields, parameterDefaults, getParameter } from '@/components/configuration/parameter-fields';
 import { useVenueConnections } from '@/hooks/use-venue-connections';
-import type { RuntimeConfig, RuntimeDocument, RuntimeJsonObject } from '@/types/api';
+import { decodeJsonValue } from '@/hooks/use-runtime-config';
+import { ApiError } from '@/lib/api-client';
+import { connectionFingerprint, type Connection, type ConnectionCheck } from '@/lib/configuration-readiness';
+import type { ConfigurationCatalog, ConfigurationDraft } from '@/types/api';
 
-type Environment = 'paper' | 'demo' | 'testnet' | 'live';
-export type VenueDraft = {
-  id: string;
-  label: string;
-  adapter_id: string;
-  environment: Environment;
-  enabled: boolean;
-  leverage: number;
-  margin_mode: string;
-  canary_only: boolean;
-  parameters: RuntimeJsonObject;
+export type VenueDraft = ConfigurationDraft<Connection>;
+export const newVenue = (catalog: ConfigurationCatalog): VenueDraft => {
+  const adapter = catalog.venues.find((item) => item.id === 'paper') ?? catalog.venues[0];
+  return {
+    id: 'venue-' + crypto.randomUUID(),
+    label: '',
+    adapter_id: adapter?.id ?? '',
+    environment: (adapter?.environments[0] ?? 'paper') as Connection['environment'],
+    enabled: true,
+    leverage: 1,
+    margin_mode: 'cross',
+    canary_only: false,
+    parameters: parameterDefaults(adapter?.fields ?? []),
+  };
 };
-const emptyDraft = (): VenueDraft => ({
-  id: '',
-  label: '',
-  adapter_id: 'paper',
-  environment: 'paper',
-  enabled: true,
-  leverage: 1,
-  margin_mode: 'cross',
-  canary_only: false,
-  parameters: {},
-});
-
-export const VenueForm = ({
-  revision,
+export function VenueForm({
+  value,
   connection,
+  catalog,
+  revision,
+  credentialState,
+  check,
+  onChange,
   onSaved,
-  tested,
+  onChecked,
+  onCancel,
   writeBlocked = false,
 }: {
+  value: VenueDraft;
+  connection?: Connection | undefined;
+  catalog: ConfigurationCatalog;
   revision: number;
-  connection?: RuntimeDocument['execution']['connections'][number];
-  onSaved?: ((connection: RuntimeConfig['document']['execution']['connections'][number]) => void) | undefined;
-  tested?: ((id: string) => void) | undefined;
+  credentialState?: { configured: boolean; updatedAt: string | null } | undefined;
+  check?: ConnectionCheck | undefined;
+  onChange: (value: VenueDraft) => void;
+  onSaved: () => void;
+  onChecked: (check: ConnectionCheck | undefined) => void;
+  onCancel?: (() => void) | undefined;
   writeBlocked?: boolean;
-}) => {
-  const { t } = useTranslation('configuration');
+}) {
+  const { t, i18n } = useTranslation('configuration');
+  const form = useRef<HTMLFormElement>(null);
   const venues = useVenueConnections();
-  const [draft, setDraft] = useState<VenueDraft>(() => (connection ? { ...connection } : emptyDraft()));
-  const [apiKey, setApiKey] = useState('');
-  const [secret, setSecret] = useState('');
-  const [passphrase, setPassphrase] = useState('');
-  const [parametersText, setParametersText] = useState(() => JSON.stringify(connection?.parameters ?? {}));
-  const [parametersError, setParametersError] = useState(false);
+  const [credentials, setCredentials] = useState<Record<string, string>>({});
   const [credentialSaving, setCredentialSaving] = useState(false);
-  const [error, setError] = useState('');
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [failure, setFailure] = useState('');
   const [savedNeedsReload, setSavedNeedsReload] = useState(false);
-  const hydratedConnectionId = useRef(connection?.id);
-  useEffect(() => {
-    if (hydratedConnectionId.current === connection?.id) return;
-    hydratedConnectionId.current = connection?.id;
-    setDraft(connection ? { ...connection } : emptyDraft());
-    setApiKey('');
-    setSecret('');
-    setPassphrase('');
-    setParametersText(JSON.stringify(connection?.parameters ?? {}));
-    setParametersError(false);
-  }, [connection]);
-  const existing = Boolean(connection);
-  const isPaper = connection?.environment === 'paper';
+  const plugin = catalog.venues.find((item) => item.id === value.adapter_id);
+  const locale = i18n.language.startsWith('zh') ? 'zh_CN' : 'en_US';
+  const prefix = 'venue.' + (connection?.id ?? 'new');
+  const dirty = !connection || JSON.stringify(value) !== JSON.stringify(connection);
+  const pending = venues.create.isPending || venues.update.isPending || credentialSaving;
+  const blocked = pending || writeBlocked;
+  const fingerprint = connection ? connectionFingerprint(connection, credentialState?.updatedAt) : undefined;
+  const currentCheck =
+    !failure &&
+    !venues.test.isPending &&
+    !dirty &&
+    !Object.values(credentials).some(Boolean) &&
+    check?.fingerprint === fingerprint
+      ? check
+      : undefined;
+  const credentialLabels: Record<string, string> = {
+    api_key: 'API Key', // pragma: allowlist secret -- public field label
+    secret: 'API Secret', // pragma: allowlist secret -- public field label
+    passphrase: 'OKX Passphrase', // pragma: allowlist secret -- public field label
+  };
+  const credentialHelpKeys: Record<string, string> = {
+    api_key: 'identity', // pragma: allowlist secret -- translation key
+    secret: 'signing', // pragma: allowlist secret -- translation key
+    passphrase: 'phrase', // pragma: allowlist secret -- translation key
+  };
+  const change = (next: VenueDraft) => {
+    setErrors({});
+    setFailure('');
+    onChange(next);
+  };
+  const showFailure = (error: unknown, kind: 'save' | 'check' | 'access') => {
+    const code = error instanceof ApiError ? error.code : '';
+    setFailure(
+      t(
+        error instanceof ApiError && error.status === 409
+          ? 'forms.conflictHelp'
+          : kind === 'check'
+            ? code === 'authentication_failed'
+              ? 'connection.authFailed'
+              : code === 'credentials_missing'
+                ? 'connection.missingAccess'
+                : 'connection.testFailed'
+            : kind === 'access'
+              ? 'connection.accessSaveFailed'
+              : 'connection.saveFailed',
+      ),
+    );
+    if (error instanceof ApiError && error.details?.fieldErrors) {
+      const local = Object.fromEntries(
+        Object.keys(error.details.fieldErrors).map((path) => [
+          prefix + '.' + path.replace(/^connection\./, ''),
+          t('forms.validation.serverInvalid'),
+        ]),
+      );
+      setErrors(local);
+      focusFirstError(local, form.current ?? undefined);
+    }
+  };
   const save = async () => {
+    if (blocked) return;
+    const invalid: FieldErrors = {};
+    if (!value.id.trim()) invalid[prefix + '.id'] = t('forms.validation.required');
+    if (!value.label.trim()) invalid[prefix + '.label'] = t('forms.validation.required');
+    if (!plugin || !plugin.environments.includes(value.environment))
+      invalid[prefix + '.adapter_id'] = t('forms.validation.catalogRequired');
+    if (typeof value.leverage !== 'number' || !Number.isInteger(value.leverage) || value.leverage < 1)
+      invalid[prefix + '.leverage'] = t('forms.validation.integerInvalid');
+    for (const field of plugin?.fields ?? []) {
+      const candidate = getParameter(value.parameters, field.key) ?? decodeJsonValue(field.default_value);
+      const name = prefix + '.parameters.' + field.key;
+      if (field.kind === 'number' || field.kind === 'integer') {
+        if (
+          typeof candidate !== 'number' ||
+          !Number.isFinite(candidate) ||
+          candidate < (field.minimum ?? -Infinity) ||
+          candidate > (field.maximum ?? Infinity) ||
+          (field.kind === 'integer' && !Number.isInteger(candidate))
+        )
+          invalid[name] = t('forms.validation.numberInvalid');
+      } else if (field.required && (candidate === null || candidate === ''))
+        invalid[name] = t('forms.validation.required');
+      else if (field.kind === 'select' && !field.options.some((item) => item.value === candidate))
+        invalid[name] = t('forms.validation.selectInvalid');
+    }
+    setErrors(invalid);
+    if (Object.keys(invalid).length) {
+      focusFirstError(invalid, form.current ?? undefined);
+      return;
+    }
     try {
-      setError('');
-      if (!draft.id.trim() || !draft.label.trim() || !draft.adapter_id.trim()) return;
-      if (parametersError) return;
-      const saved = existing
-        ? await venues.update.mutateAsync({ id: draft.id, body: { ...draft, expected_revision: revision } })
-        : await venues.create.mutateAsync({ ...draft, expected_revision: revision });
-      onSaved?.(saved.connection);
+      setFailure('');
+      const body = { ...value, leverage: value.leverage as number, expected_revision: revision };
+      const saved = connection
+        ? await venues.update.mutateAsync({ id: connection.id, body })
+        : await venues.create.mutateAsync(body);
       setSavedNeedsReload(saved.savedNeedsReload);
-    } catch {
-      setError(t('connection.saveFailed'));
+      onSaved();
+    } catch (error) {
+      showFailure(error, 'save');
     }
   };
   const saveCredentials = async () => {
-    if (!connection || !apiKey || !secret) return;
+    if (!connection || blocked || dirty || !plugin?.credential_fields.every((key) => credentials[key]?.trim())) return;
+    setCredentialSaving(true);
+    setFailure('');
     try {
-      setError('');
-      setCredentialSaving(true);
       const saved = await venues.putCredentials({
         id: connection.id,
         expectedRevision: revision,
-        credentials: { api_key: apiKey, secret, ...(passphrase ? { passphrase } : {}) },
+        credentials: {
+          api_key: credentials.api_key!,
+          secret: credentials.secret!,
+          ...(credentials.passphrase ? { passphrase: credentials.passphrase } : {}),
+        },
       });
       setSavedNeedsReload(saved.savedNeedsReload);
-    } catch {
-      setError(t('connection.accessSaveFailed'));
+    } catch (error) {
+      showFailure(error, 'access');
     } finally {
-      // Credentials are one-shot material.  An error or revision conflict is
-      // never a reason to retain them in the rendered component state.
-      setApiKey('');
-      setSecret('');
-      setPassphrase('');
+      setCredentials({});
       setCredentialSaving(false);
     }
   };
   const test = async () => {
+    if (!connection || dirty || blocked) return;
+    setFailure('');
+    onChecked(undefined);
     try {
-      setError('');
-      const health = await venues.test.mutateAsync(draft.id);
-      if (health.healthy) tested?.(draft.id);
-    } catch {
-      setError(t('connection.testFailed'));
+      const health = await venues.test.mutateAsync(connection.id);
+      onChecked({ fingerprint: fingerprint!, health });
+    } catch (error) {
+      showFailure(error, 'check');
     }
   };
   return (
     <form
-      className="grid gap-3 rounded-xl border border-border bg-muted/10 p-4"
+      ref={form}
+      aria-label={connection?.label ?? t('addVenue')}
+      noValidate
+      className="configuration-venue-form"
       onSubmit={(event) => {
         event.preventDefault();
         void save();
       }}
     >
-      <div className="grid gap-3 md:grid-cols-3">
-        <label className="text-xs text-muted-foreground">
-          {t('connection.id')}
-          <input
-            aria-label={t('connection.id')}
-            disabled={existing}
-            value={draft.id}
-            onChange={(event) => setDraft({ ...draft, id: event.target.value })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
+      <fieldset disabled={pending} className="space-y-4">
+        <div className="configuration-grid">
+          <TextField
+            name={prefix + '.label'}
+            label={t('connection.name')}
+            required
+            value={value.label}
+            onChange={(label) => change({ ...value, label })}
+            error={errors[prefix + '.label']}
           />
-        </label>
-        <label className="text-xs text-muted-foreground">
-          {t('connection.name')}
-          <input
-            aria-label={t('connection.name')}
-            value={draft.label}
-            onChange={(event) => setDraft({ ...draft, label: event.target.value })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
+          <ChoiceField
+            name={prefix + '.adapter_id'}
+            label={t('connection.adapter')}
+            value={value.adapter_id}
+            disabled={Boolean(connection)}
+            options={catalog.venues.map((item) => ({ value: item.id, label: item.label[locale] }))}
+            onChange={(adapter_id) => {
+              const adapter = catalog.venues.find((item) => item.id === adapter_id)!;
+              setCredentials({});
+              change({
+                ...value,
+                adapter_id,
+                environment: adapter.environments[0] as Connection['environment'],
+                parameters: parameterDefaults(adapter.fields),
+              });
+            }}
+            error={errors[prefix + '.adapter_id']}
           />
-        </label>
-        <label className="text-xs text-muted-foreground">
-          {t('connection.adapter')}
-          <input
-            aria-label={t('connection.adapter')}
-            list="venue-adapters"
-            value={draft.adapter_id}
-            onChange={(event) => setDraft({ ...draft, adapter_id: event.target.value })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
+          <ChoiceField
+            name={prefix + '.environment'}
+            label={t('connection.environment')}
+            disabled={Boolean(connection)}
+            value={value.environment}
+            options={(plugin?.environments ?? []).map((environment) => ({
+              value: environment,
+              label: t('connection.environments.' + environment, { defaultValue: environment }),
+            }))}
+            onChange={(environment) => change({ ...value, environment: environment as Connection['environment'] })}
           />
-        </label>
-        <datalist id="venue-adapters">
-          <option value="paper" />
-          <option value="okx" />
-          <option value="bybit" />
-        </datalist>
-        <label className="text-xs text-muted-foreground">
-          {t('connection.environment')}
-          <select
-            aria-label={t('connection.environment')}
-            disabled={existing}
-            value={draft.environment}
-            onChange={(event) => setDraft({ ...draft, environment: event.target.value as Environment })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
-          >
-            <option value="paper">paper</option>
-            <option value="demo">demo</option>
-            <option value="testnet">testnet</option>
-            <option value="live">live</option>
-          </select>
-        </label>
-        <label className="text-xs text-muted-foreground">
-          {t('connection.leverage')}
-          <input
-            aria-label={t('connection.leverage')}
-            type="number"
-            min="1"
-            value={draft.leverage}
-            onChange={(event) => setDraft({ ...draft, leverage: Number(event.target.value) })}
-            className="mt-1 h-10 w-full rounded border bg-background px-3"
+          <BooleanField
+            name={prefix + '.enabled'}
+            label={t('connection.enabled')}
+            value={value.enabled}
+            onChange={(enabled) => change({ ...value, enabled })}
           />
-        </label>
-        <label className="text-xs text-muted-foreground">
-          {t('connection.marginMode')}
-          <select aria-label={t('connection.marginMode')} value={draft.margin_mode} onChange={(event) => setDraft({ ...draft, margin_mode: event.target.value })} className="mt-1 h-10 w-full rounded border bg-background px-3">
-            <option value="cross">cross</option>
-            <option value="isolated">isolated</option>
-          </select>
-        </label>
-        <label className="flex items-center gap-2 pt-5 text-sm">
-          <input
-            type="checkbox"
-            checked={draft.enabled}
-            onChange={(event) => setDraft({ ...draft, enabled: event.target.checked })}
-          />
-          {t('connection.enabled')}
-        </label>
-        <label className="flex items-center gap-2 pt-5 text-sm">
-          <input
-            type="checkbox"
-            checked={draft.canary_only}
-            onChange={(event) => setDraft({ ...draft, canary_only: event.target.checked })}
-          />
-          {t('connection.canaryOnly')}
-        </label>
-      </div>
-      {draft.canary_only ? <p className="text-sm text-amber-500">{t('connection.canaryWarning')}</p> : null}
-      <label className="text-xs text-muted-foreground">
-        {t('connection.parameters')}
-        <textarea
-          aria-label={t('connection.parameters')}
-          value={parametersText}
-          onChange={(event) => {
-            const text = event.target.value;
-            setParametersText(text);
-            try {
-              const parameters = JSON.parse(text) as RuntimeJsonObject;
-              if (!parameters || Array.isArray(parameters) || typeof parameters !== 'object') throw new Error();
-              setDraft((current) => ({ ...current, parameters }));
-              setParametersError(false);
-            } catch { setParametersError(true); }
-          }}
-          className="mt-1 min-h-20 w-full rounded border bg-background p-2 font-mono text-xs"
+        </div>
+        <ParameterFields
+          fields={plugin?.fields ?? []}
+          value={value.parameters}
+          idPrefix={prefix + '.parameters'}
+          onChange={(parameters) => change({ ...value, parameters })}
+          errors={errors}
         />
-      </label>
-      {parametersError ? <p role="alert" className="text-sm text-trade-short">{t('connection.parametersInvalid')}</p> : null}
-      {existing && !isPaper ? (
-        <div className="grid gap-3 border-t border-border pt-3 md:grid-cols-3">
-          <label className="text-xs text-muted-foreground">
-            {t('connection.apiAccessId')}
-            <input
-              aria-label={t('connection.apiAccessId')}
-              value={apiKey}
-              onChange={(event) => setApiKey(event.target.value)}
-              autoComplete="off"
-              className="mt-1 h-10 w-full rounded border bg-background px-3"
-            />
-          </label>
-          <label className="text-xs text-muted-foreground">
-            {t('connection.apiSigningPhrase')}
-            <input
-              aria-label={t('connection.apiSigningPhrase')}
-              type="password"
-              value={secret}
-              onChange={(event) => setSecret(event.target.value)}
-              autoComplete="new-password"
-              className="mt-1 h-10 w-full rounded border bg-background px-3"
-            />
-          </label>
-          <label className="text-xs text-muted-foreground">
-            {t('connection.accessPhrase')}
-            <input
-              aria-label="Passphrase"
-              type="password"
-              value={passphrase}
-              onChange={(event) => setPassphrase(event.target.value)}
-              autoComplete="new-password"
-              className="mt-1 h-10 w-full rounded border bg-background px-3"
-            />
-          </label>
-          <div className="flex gap-2 md:col-span-3">
-            <Button
+        <AdvancedSection title={t('connection.advanced')}>
+          <TextField
+            name={prefix + '.id'}
+            label={t('connection.id')}
+            help={t('connection.idHelp')}
+            disabled={Boolean(connection)}
+            required
+            value={value.id}
+            onChange={(id) => change({ ...value, id })}
+            error={errors[prefix + '.id']}
+          />
+          <NumberField
+            name={prefix + '.leverage'}
+            label={t('connection.leverage')}
+            value={value.leverage}
+            min={1}
+            step={1}
+            onChange={(leverage) => change({ ...value, leverage })}
+            error={errors[prefix + '.leverage']}
+          />
+          <ChoiceField
+            name={prefix + '.margin_mode'}
+            label={t('connection.marginMode')}
+            value={value.margin_mode}
+            options={['cross', 'isolated'].map((mode) => ({ value: mode, label: t('connection.modes.' + mode) }))}
+            onChange={(margin_mode) => change({ ...value, margin_mode: margin_mode as Connection['margin_mode'] })}
+          />
+          <BooleanField
+            name={prefix + '.canary_only'}
+            label={t('connection.canaryOnly')}
+            help={t('connection.canaryWarning')}
+            value={value.canary_only}
+            onChange={(canary_only) => change({ ...value, canary_only })}
+          />
+        </AdvancedSection>
+        <div className="configuration-actions">
+          <button className="configuration-button configuration-primary" type="submit" disabled={blocked || !dirty}>
+            {t(connection ? 'connection.save' : 'connection.create')}
+          </button>
+          {onCancel ? (
+            <button className="configuration-button" type="button" onClick={onCancel}>
+              {t('forms.discard')}
+            </button>
+          ) : null}
+        </div>
+        {plugin?.credential_fields.length ? (
+          <section className="configuration-secret">
+            <p className="configuration-help">{t('connection.accessHelp')}</p>
+            <div className="configuration-grid">
+              {plugin.credential_fields.map((key) => (
+                <TextField
+                  key={key}
+                  name={prefix + '.credentials.' + key}
+                  label={credentialLabels[key] ?? key}
+                  help={t('connection.credentialHelp.' + credentialHelpKeys[key], {
+                    defaultValue: t('runtimeSecrets.hint'),
+                  })}
+                  type="password"
+                  required
+                  value={credentials[key] ?? ''}
+                  onChange={(text) => setCredentials((current) => ({ ...current, [key]: text }))}
+                />
+              ))}
+            </div>
+            <button
               type="button"
-              variant="outline"
-              disabled={!apiKey || !secret || credentialSaving || venues.create.isPending || venues.update.isPending || savedNeedsReload || writeBlocked}
+              className="configuration-button"
+              disabled={
+                !connection || dirty || blocked || !plugin.credential_fields.every((key) => credentials[key]?.trim())
+              }
               onClick={() => void saveCredentials()}
             >
-              <Save className="h-4 w-4" />
               {t('connection.saveAccess')}
-            </Button>
-            <Button type="button" variant="outline" disabled={venues.test.isPending} onClick={() => void test()}>
-              <FlaskConical className="h-4 w-4" />
-              {t('connection.test')}
-            </Button>
-          </div>
+            </button>
+            <p className="configuration-help">
+              {t(credentialState?.configured ? 'forms.accessConfigured' : 'forms.accessMissing')}
+              {credentialState?.updatedAt ? ' · ' + credentialState.updatedAt : ''}
+            </p>
+          </section>
+        ) : (
+          <p className="configuration-help">{t('connection.paperNoAccess')}</p>
+        )}
+      </fieldset>
+      {connection ? (
+        <div className="configuration-check">
+          <p className="configuration-help">{t('connection.checkHelp')}</p>
+          <button
+            type="button"
+            className="configuration-button"
+            disabled={dirty || blocked || venues.test.isPending || Object.values(credentials).some(Boolean)}
+            onClick={() => void test()}
+          >
+            {t(venues.test.isPending ? 'connection.checking' : 'connection.test')}
+          </button>
+          {dirty ? <p className="configuration-help">{t('connection.saveBeforeCheck')}</p> : null}
+          {currentCheck?.health.healthy ? (
+            <p role="status">
+              {t('connection.verified')} · {currentCheck.health.checked_at}
+            </p>
+          ) : null}
         </div>
       ) : null}
-      {existing && isPaper ? (
-        <div className="flex items-center gap-2 border-t border-border pt-3 text-sm text-muted-foreground">
-          <span>{t('connection.paperNoAccess')}</span>
-          <Button type="button" variant="outline" disabled={venues.test.isPending} onClick={() => void test()}>
-            <FlaskConical className="h-4 w-4" />
-            {t('connection.test')}
-          </Button>
-        </div>
-      ) : null}
-      {error ? (
-        <p role="alert" className="text-sm text-trade-short">
-          {error}
+      {failure ? (
+        <p role="alert" className="configuration-error">
+          {failure}
         </p>
       ) : null}
-      {savedNeedsReload ? <p role="status" className="text-sm text-amber-500">{t('connection.savedNeedsReload')}</p> : null}
-      <Button type="submit" disabled={venues.create.isPending || venues.update.isPending || savedNeedsReload || writeBlocked || parametersError}>
-        <Save className="h-4 w-4" />
-        {existing ? t('connection.save') : t('connection.create')}
-      </Button>
+      {savedNeedsReload && writeBlocked ? (
+        <p role="status" className="configuration-error">
+          {t('connection.savedNeedsReload')}
+        </p>
+      ) : null}
     </form>
   );
-};
+}

@@ -186,6 +186,48 @@ it('keeps edits and reports a failed explicit reload', async () => {
   expect(result.current.failure).toBeTruthy();
 });
 
+it('compares restored book ownership without stale connections and retains other drafts', async () => {
+  const { result, client } = harness();
+  const original = result.current.document!.execution;
+  act(() => {
+    result.current.update('execution', { ...original, live_order_execution_enabled: true });
+    result.current.update('llm', { ...result.current.document!.llm, base_url: 'https://pending.example' });
+  });
+  const base = runtimeConfigFixture();
+  act(() => {
+    client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, {
+      ...base,
+      revision: 2,
+      document: {
+        ...base.document,
+        execution: {
+          ...base.document.execution,
+          connections: [
+            {
+              id: 'paper',
+              label: 'Newest connection',
+              adapter_id: 'paper',
+              environment: 'paper',
+              enabled: true,
+              canary_only: false,
+              leverage: 1,
+              margin_mode: 'cross',
+              credential_configured: false,
+              credential_updated_at: null,
+              parameters: [],
+            },
+          ],
+        },
+      },
+    });
+  });
+  await waitFor(() => expect(result.current.document!.execution.connections[0]?.label).toBe('Newest connection'));
+  act(() => result.current.update('execution', original));
+  expect(result.current.isDirty('books')).toBe(false);
+  expect(result.current.document!.execution.connections[0]?.label).toBe('Newest connection');
+  expect(result.current.isDirty('models')).toBe(true);
+});
+
 it.each([90, 15])('does not discard an edit to %s made while an earlier version is saving', async (minutes) => {
   const { result } = harness();
   let finish: (response: Response) => void = () => undefined;

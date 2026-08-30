@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from importlib import metadata
 
 import pytest
@@ -12,6 +13,34 @@ from tests.factories.runtime_config import runtime_document
 from tests.test_runtime_config_api import active_payload
 
 pytest_plugins = ("tests.test_runtime_config_api",)
+
+
+@pytest.mark.parametrize(
+    ("protected", "applying", "expected"),
+    [(False, False, 200), (True, False, 401), (False, True, 503)],
+)
+async def test_inactive_catalog_http_admission_keeps_authentication_and_application_barrier(
+    api_harness, protected, applying, expected
+):
+    snapshot = api_harness.runtime.snapshot
+    document = snapshot.document.model_copy(
+        update={
+            "system": snapshot.document.system.model_copy(update={"active": False}),
+            "security": snapshot.document.security.model_copy(update={"enabled": protected}),
+            "infrastructure": snapshot.document.infrastructure.model_copy(update={"redis_url": ""}),
+        }
+    )
+    api_harness.runtime.snapshot = replace(snapshot, document=document)
+    api_harness.runtime.application_in_progress = applying
+
+    response = await api_harness.client.get("/api/config/catalog")
+
+    assert response.status_code == expected
+    if expected == 200:
+        assert any(venue["id"] == "paper" for venue in response.json()["venues"])
+    elif applying:
+        assert response.json() == {"detail": "Runtime configuration is being applied"}
+    assert all(not adapter.connect_calls for adapter in api_harness.adapters.values())
 
 
 def _entry_point(name: str, value: str, group: str) -> metadata.EntryPoint:

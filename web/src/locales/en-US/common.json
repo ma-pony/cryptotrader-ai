@@ -19,8 +19,10 @@
     "section": {
       "trading": "Trading",
       "analysis": "Analysis",
-      "operations": "Operations"
-    }
+      "operations": "Operations",
+      "configuration": "Configuration"
+    },
+    "configuration": "Configuration"
   },
   "actions": {
     "refresh": "Refresh",

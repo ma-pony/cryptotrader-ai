@@ -9,7 +9,6 @@ import {
   ScrollText,
   ShieldCheck,
   Settings2,
-  SlidersHorizontal,
   TrendingUp,
   type LucideIcon,
 } from 'lucide-react';
@@ -36,7 +35,8 @@ type NavLabelKey =
   | 'nav.market'
   | 'nav.scheduler'
   | 'nav.venues'
-  | 'nav.execution_books';
+  | 'nav.execution_books'
+  | 'nav.configuration';
 
 interface NavItem {
   to: string;
@@ -46,7 +46,7 @@ interface NavItem {
 
 interface NavSection {
   /** Sidebar group label (i18n key with sensible defaultValue). */
-  titleKey: 'nav.section.trading' | 'nav.section.analysis' | 'nav.section.operations';
+  titleKey: 'nav.section.trading' | 'nav.section.analysis' | 'nav.section.operations' | 'nav.section.configuration';
   defaultTitle: string;
   items: NavItem[];
 }
@@ -61,7 +61,6 @@ const NAV_SECTIONS: NavSection[] = [
     defaultTitle: '交易',
     items: [
       { to: '/', labelKey: 'nav.dashboard', icon: Briefcase },
-      { to: '/strategy', labelKey: 'nav.strategy', icon: SlidersHorizontal },
       { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
       { to: '/cycles', labelKey: 'nav.cycles', icon: GitBranch },
       { to: '/debate', labelKey: 'nav.debate', icon: GitBranch },
@@ -87,12 +86,9 @@ const NAV_SECTIONS: NavSection[] = [
     ],
   },
   {
-    titleKey: 'nav.section.operations',
+    titleKey: 'nav.section.configuration',
     defaultTitle: '配置',
-    items: [
-      { to: '/settings/venues', labelKey: 'nav.venues', icon: Settings2 },
-      { to: '/settings/execution-books', labelKey: 'nav.execution_books', icon: Briefcase },
-    ],
+    items: [{ to: '/settings', labelKey: 'nav.configuration', icon: Settings2 }],
   },
 ];
 
@@ -107,9 +103,7 @@ const SidebarFooter = () => {
 
   return (
     <div className="flex flex-col gap-2 border-t border-border p-3">
-      <div
-        className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2"
-      >
+      <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2">
         <span
           className={cn(
             'h-2 w-2 rounded-full shrink-0',
@@ -150,9 +144,7 @@ const SidebarBrand = ({ collapsed }: { collapsed: boolean }) => {
       {!collapsed ? (
         <div className="flex flex-col leading-tight">
           <span className="text-sm font-semibold text-foreground">{t('app.name')}</span>
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-            AI · v2.4
-          </span>
+          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">AI · v2.4</span>
         </div>
       ) : null}
     </div>
@@ -170,10 +162,7 @@ const SidebarNav = ({ collapsed, onNavigate }: SidebarNavProps) => {
   return (
     <nav className="flex-1 overflow-y-auto px-2 py-3">
       {NAV_SECTIONS.map((section, sectionIdx) => (
-        <div
-          key={section.titleKey}
-          className={cn('space-y-0.5', sectionIdx > 0 && 'mt-4')}
-        >
+        <div key={section.titleKey} className={cn('space-y-0.5', sectionIdx > 0 && 'mt-4')}>
           {!collapsed ? (
             <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
               {t(section.titleKey, { defaultValue: section.defaultTitle })}

@@ -19,8 +19,10 @@
     "section": {
       "trading": "交易",
       "analysis": "分析",
-      "operations": "运维"
-    }
+      "operations": "运维",
+      "configuration": "配置"
+    },
+    "configuration": "配置中心"
   },
   "actions": {
     "refresh": "刷新",

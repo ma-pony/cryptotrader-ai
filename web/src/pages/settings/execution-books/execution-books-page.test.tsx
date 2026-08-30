@@ -1,83 +1,79 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import '@/lib/i18n';
-import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
-import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
-
-import { AllocationPreview } from './allocation-preview';
-import { validateBooks } from './book-form';
-import ExecutionBooksPage from './index';
-
-describe('ExecutionBooksPage', () => {
-  it('blocks mixed capital scopes and previews exact weighted notionals', () => {
-    render(<AllocationPreview equity={100000} targetExposure={0.5} allocations={[{ connectionId: 'paper', label: 'Paper', weight: 40 }, { connectionId: 'demo', label: 'Demo', weight: 60 }]} />);
-    expect(screen.getByText('20,000 USDT')).toBeInTheDocument();
-    expect(screen.getByText('30,000 USDT')).toBeInTheDocument();
-    expect(validateBooks([{ id: 'sim', label: '模拟资金池', capital_scope: 'simulated', enabled: true, hitl_required: true, allocations: [{ connection_id: 'live', enabled: true, weight: 1 }] }], [{ id: 'live', label: 'Live', adapter_id: 'okx', environment: 'live', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} }])).toContainEqual({ code: 'invalidSimulated' });
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { beforeEach, expect, it } from 'vitest';
+import i18n from '@/lib/i18n';
+import { workflowConfig, workflowHarness } from '@/test/configuration-workflow';
+beforeEach(() => i18n.changeLanguage('zh-CN'));
+it('keeps saved book identity immutable and new book ID input focused while typing', async () => {
+  workflowHarness('/settings/execution-books');
+  expect(await screen.findByLabelText('资金池 ID')).toBeDisabled();
+  expect(screen.getByLabelText('资金作用域')).toBeDisabled();
+  fireEvent.click(screen.getByRole('button', { name: '新增资金池' }));
+  const ids = screen.getAllByLabelText('资金池 ID');
+  const id = ids[1]!;
+  expect(id).not.toHaveValue('');
+  const user = userEvent.setup();
+  await user.clear(id);
+  await user.type(id, 'new-book');
+  expect(id).toHaveFocus();
+  expect(id).toHaveValue('new-book');
+  fireEvent.click(screen.getAllByRole('button', { name: '移除' })[1]!);
+  expect(screen.getAllByLabelText('资金池 ID')).toHaveLength(1);
+});
+it('excludes disabled, canary and wrong-scope connections and shows exact percentage remainder', async () => {
+  const config = workflowConfig();
+  const paper = config.document.execution.connections[0]!;
+  config.document.execution.connections.push(
+    { ...paper, id: 'disabled', label: 'Disabled', enabled: false },
+    { ...paper, id: 'canary', label: 'Canary', canary_only: true },
+    { ...paper, id: 'live', label: 'Live', adapter_id: 'okx', environment: 'live' },
+  );
+  workflowHarness('/settings/execution-books', config);
+  const weight = await screen.findByLabelText('Paper 权重（%）');
+  expect(screen.queryByRole('checkbox', { name: '启用 Disabled' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: '启用 Canary' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('checkbox', { name: '启用 Live' })).not.toBeInTheDocument();
+  fireEvent.change(weight, { target: { value: '40' } });
+  expect(screen.getByText('已分配 40% · 剩余 60%')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  expect(weight).toHaveAttribute('aria-invalid', 'true');
+  expect(screen.getByRole('checkbox', { name: '允许实盘下单' })).not.toBeChecked();
+});
+it('saves dirty books over latest venue and credential writes without reverting other drafts', async () => {
+  const h = workflowHarness('/settings/models');
+  fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'pending-model' } });
+  fireEvent.click(screen.getByRole('link', { name: '执行资金池' }));
+  fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'book-draft' } });
+  fireEvent.click(screen.getByRole('link', { name: '平台连接' }));
+  await screen.findByRole('heading', { name: '平台连接' });
+  fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'fresh-connection' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }));
+  await waitFor(() => expect(h.saved().revision).toBe(2));
+  fireEvent.click(screen.getByRole('button', { name: '新增连接' }));
+  const form = screen.getByRole('form', { name: '新增平台连接' });
+  fireEvent.change(within(form).getByLabelText('名称'), { target: { value: 'OKX' } });
+  fireEvent.change(within(form).getByLabelText('交易平台'), { target: { value: 'okx' } });
+  fireEvent.click(within(form).getByRole('button', { name: '创建连接' }));
+  await waitFor(() => expect(h.saved().revision).toBe(3));
+  await waitFor(() => expect(screen.queryByRole('form', { name: '新增平台连接' })).not.toBeInTheDocument());
+  fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'fixture-key' } });
+  fireEvent.change(screen.getByLabelText('API Secret'), { target: { value: 'fixture-signing' } });
+  fireEvent.change(screen.getByLabelText('OKX Passphrase'), { target: { value: 'fixture-phrase' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存凭据' }));
+  await waitFor(() => expect(h.saved().revision).toBe(4));
+  fireEvent.click(screen.getByRole('link', { name: '执行资金池' }));
+  await screen.findByRole('heading', { name: '执行资金池' });
+  expect(screen.getByLabelText('名称')).toHaveValue('book-draft');
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  await waitFor(() => expect(h.writes).toHaveLength(1));
+  expect(h.writes[0]).toMatchObject({
+    expected_revision: 4,
+    document: {
+      execution: { books: [{ label: 'book-draft' }], connections: [{ label: 'fresh-connection' }, { label: 'OKX' }] },
+      llm: { models: { analysis: 'analysis' } },
+    },
   });
-
-  it('rejects a canary-only allocation even when its execution book is disabled', () => {
-    expect(validateBooks(
-      [{ id: 'disabled', label: 'Disabled', capital_scope: 'simulated', enabled: false, hitl_required: false, allocations: [{ connection_id: 'canary', enabled: false, weight: 0 }] }],
-      [{ id: 'canary', label: 'Canary', adapter_id: 'bybit', environment: 'testnet', enabled: true, canary_only: true, leverage: 1, margin_mode: 'cross', parameters: {} }],
-    )).toContainEqual({ code: 'invalidSimulated' });
-  });
-
-  const configWithBook = (label = 'Server book') => {
-    const base = runtimeConfigFixture();
-    return runtimeConfigFixture({ document: {
-      ...base.document,
-      execution: {
-        ...base.document.execution,
-        connections: [{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }],
-        books: [{ id: 'sim', label, capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [{ connection_id: 'paper', enabled: true, weight: 1 }] }],
-      },
-    } });
-  };
-
-  const renderPage = (client: QueryClient) => render(<QueryClientProvider client={client}><ExecutionBooksPage /></QueryClientProvider>);
-
-  it('keeps a dirty book label when background runtime cache data changes', async () => {
-    const initial = configWithBook();
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(initial), { status: 200 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderPage(client);
-    const label = await screen.findByLabelText('名称');
-    fireEvent.change(label, { target: { value: 'Dirty book' } });
-    client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, configWithBook('Background replacement'));
-    await waitFor(() => expect(label).toHaveValue('Dirty book'));
-  });
-
-  it('retains a dirty book draft after failed explicit reload', async () => {
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(configWithBook()), { status: 200 }))
-      .mockResolvedValueOnce(new Response('down', { status: 503 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderPage(client);
-    const label = await screen.findByLabelText('名称');
-    fireEvent.change(label, { target: { value: 'Dirty book' } });
-    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
-    await waitFor(() => expect(label).toHaveValue('Dirty book'));
-  });
-
-  it('resets a book draft only after a successful explicit reload', async () => {
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(configWithBook()), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(configWithBook('Reloaded book')), { status: 200 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderPage(client);
-    fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'Dirty book' } });
-    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
-    await waitFor(() => expect(screen.getByLabelText('名称')).toHaveValue('Reloaded book'));
-  });
-
-  it('disables save when allocation validation reports an error', async () => {
-    const invalid = configWithBook();
-    invalid.document.execution.books[0]!.allocations[0]!.weight = 0.5;
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(invalid), { status: 200 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    renderPage(client);
-    expect(await screen.findByRole('button', { name: '保存完整配置' })).toBeDisabled();
-  });
+  expect(h.saved().document.execution.connections[1]!.credential_updated_at).toBe('2026-08-30T13:00:00Z');
+  fireEvent.click(screen.getByRole('link', { name: '模型与网关' }));
+  expect(await screen.findByLabelText('综合分析模型')).toHaveValue('pending-model');
 });

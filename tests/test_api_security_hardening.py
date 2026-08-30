@@ -99,6 +99,7 @@ def test_runtime_api_routes_are_api_key_protected_and_signal_profile_is_absent()
 
     expected = {
         "/api/config",
+        "/api/config/catalog",
         "/api/venue-connections",
         "/api/venue-connections/{connection_id}",
         "/api/venue-connections/{connection_id}/credentials",

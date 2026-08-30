@@ -1,173 +1,115 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { describe, expect, it, vi } from 'vitest';
-import '@/lib/i18n';
-
-import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
-import { RuntimeConfigSchema } from '@/types/api.schema';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
+import { beforeEach, expect, it, vi } from 'vitest';
+import i18n from '@/lib/i18n';
+import { workflowConfig, workflowHarness } from '@/test/configuration-workflow';
 import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
-import VenuesPage from './venues';
-import ExecutionBooksPage from './execution-books';
-import { VenueForm } from './venues/venue-form';
-import { setRuntimeConfigConflict } from '@/hooks/runtime-config-conflict';
+import { useSettingsStore } from '@/stores/use-settings-store';
+beforeEach(async () => {
+  await i18n.changeLanguage('zh-CN');
+  useSettingsStore.getState().reset();
+});
 
-describe('configuration draft lifecycle', () => {
-  const venueConfig = (label: string) => {
-    const base = runtimeConfigFixture();
-    return runtimeConfigFixture({
-      document: {
-        ...base.document,
-        execution: {
-          ...base.document.execution,
-          connections: [{ id: 'paper', label, adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] }],
-        },
-      },
-    });
-  };
-  it('does not render credential inputs for a Paper connection', () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenueForm revision={1} connection={{ id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross', parameters: {} } as const} /></QueryClientProvider>);
-    expect(screen.queryByLabelText('API Key')).not.toBeInTheDocument();
+it('retains venue edits through failed reload, successful reload and section navigation', async () => {
+  const h = workflowHarness('/settings/venues');
+  fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'pending-venue' } });
+  h.failReload(true);
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  await screen.findByText('重新加载失败，本地修改仍保留，请检查服务状态后重试。');
+  expect(screen.getByLabelText('名称')).toHaveValue('pending-venue');
+  h.failReload(false);
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  fireEvent.click(screen.getByRole('link', { name: '模型与网关' }));
+  await screen.findByLabelText('综合分析模型');
+  fireEvent.click(screen.getByRole('link', { name: '平台连接' }));
+  expect(await screen.findByLabelText('名称')).toHaveValue('pending-venue');
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+  fireEvent.click(screen.getByRole('button', { name: '放弃修改' }));
+  expect(screen.getByLabelText('名称')).toHaveValue('Paper');
+});
+it('clears failed venue credential inputs without caches and recovers a 409 only after reload', async () => {
+  const config = workflowConfig();
+  config.document.execution.connections = [
+    { ...config.document.execution.connections[0]!, adapter_id: 'okx', environment: 'demo' },
+  ];
+  const h = workflowHarness('/settings/venues', config);
+  await screen.findByLabelText('API Key');
+  for (const status of [500, 409]) {
+    h.fail(status, 'do-not-echo');
+    fireEvent.change(screen.getByLabelText('API Key'), { target: { value: 'credential-marker' } });
+    fireEvent.change(screen.getByLabelText('API Secret'), { target: { value: 'signing-marker' } });
+    fireEvent.change(screen.getByLabelText('OKX Passphrase'), { target: { value: 'phrase-marker' } });
+    fireEvent.click(screen.getByRole('button', { name: '保存凭据' }));
+    await waitFor(() => expect(screen.getByLabelText('API Key')).toHaveValue(''));
+    expect(screen.getByLabelText('API Secret')).toHaveValue('');
+    expect(screen.getByLabelText('OKX Passphrase')).toHaveValue('');
+    expect(document.body.textContent).not.toContain('do-not-echo');
+    expect(JSON.stringify(h.client.getQueryData(RUNTIME_CONFIG_QUERY_KEY))).not.toContain('credential-marker');
+    expect(
+      JSON.stringify(
+        h.client
+          .getMutationCache()
+          .getAll()
+          .map((mutation) => mutation.state.variables),
+      ),
+    ).not.toContain('signing-marker');
+  }
+  expect(screen.getByRole('button', { name: '只读检查' })).toBeDisabled();
+  h.clearFailure();
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: '只读检查' })).toBeEnabled());
+});
+it('recovers a successful credential write with failed refresh without keeping a stale local lock', async () => {
+  const config = workflowConfig();
+  config.document.execution.connections = [
+    { ...config.document.execution.connections[0]!, adapter_id: 'okx', environment: 'demo' },
+  ];
+  const h = workflowHarness('/settings/venues', config);
+  await screen.findByLabelText('API Key');
+  h.failReload(true);
+  for (const [name, value] of [
+    ['API Key', 'test-key'],
+    ['API Secret', 'test-signing'],
+    ['OKX Passphrase', 'test-phrase'],
+  ])
+    fireEvent.change(screen.getByLabelText(name!), { target: { value } });
+  fireEvent.click(screen.getByRole('button', { name: '保存凭据' }));
+  await screen.findByText('连接已保存，但配置刷新失败；请重新加载后继续。');
+  expect(screen.getByLabelText('API Key')).toHaveValue('');
+  h.failReload(false);
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  await waitFor(() =>
+    expect(screen.queryByText('连接已保存，但配置刷新失败；请重新加载后继续。')).not.toBeInTheDocument(),
+  );
+  expect(screen.getByRole('button', { name: '只读检查' })).toBeEnabled();
+});
+it('keeps ordinary edits while writing model keys and uses API access rotation for later authenticated saves', async () => {
+  const h = workflowHarness('/settings/models');
+  fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'pending-model' } });
+  fireEvent.change(screen.getByLabelText('LLM 网关密钥'), { target: { value: 'gateway-marker' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
+  await waitFor(() => expect(screen.getByLabelText('LLM 网关密钥')).toHaveValue(''));
+  expect(screen.getByLabelText('综合分析模型')).toHaveValue('pending-model');
+  fireEvent.click(screen.getByRole('link', { name: '系统与通知' }));
+  fireEvent.change(await screen.findByLabelText('API 访问密钥'), { target: { value: 'access-marker' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存 API 访问密钥' }));
+  await waitFor(() => expect(screen.getByLabelText('API 访问密钥')).toHaveValue(''));
+  fireEvent.click(screen.getByLabelText('启用 API 访问安全'));
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  await waitFor(() => expect(h.writes).toHaveLength(1));
+  const put = h.fetchMock.mock.calls.find(([url, init]) => url.endsWith('/api/config') && init?.method === 'PUT')!;
+  expect(new Headers(put[1]?.headers).get('X-API-Key')).toBe('access-marker');
+  expect(h.writes[0]).toMatchObject({
+    expected_revision: 3,
+    document: { llm: { models: { analysis: 'analysis' } }, security: { enabled: true }, system: { active: false } },
   });
-  it('retains a dirty venue label when the same connection props refresh', () => {
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper' as const, enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross' as const, parameters: {} };
-    const view = render(<QueryClientProvider client={client}><VenueForm revision={1} connection={connection} /></QueryClientProvider>);
-    fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'Dirty name' } });
-    view.rerender(<QueryClientProvider client={client}><VenueForm revision={2} connection={{ ...connection, label: 'Server name' }} /></QueryClientProvider>);
-    expect(screen.getByLabelText('名称')).toHaveValue('Dirty name');
-  });
-
-  it.each([
-    ['venues', <VenuesPage />],
-    ['execution books', <ExecutionBooksPage />],
-  ])('offers an explicit reload control for a %s draft', async (_name, page) => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue(new Response(JSON.stringify(runtimeConfigFixture()), { status: 200 })),
-    );
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}>{page}</QueryClientProvider>);
-    expect(await screen.findByRole('button', { name: '重新加载' })).toBeInTheDocument();
-  });
-
-  it('keeps a venue draft after a failed explicit reload', async () => {
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(venueConfig('Paper')), { status: 200 }))
-      .mockResolvedValueOnce(new Response('unavailable', { status: 503 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
-    const label = await screen.findByLabelText('名称');
-    fireEvent.change(label, { target: { value: 'Unsaved' } });
-    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
-    await waitFor(() => expect(label).toHaveValue('Unsaved'));
-  });
-
-  it('resets a venue draft only after a successful explicit reload', async () => {
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(venueConfig('Paper')), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(venueConfig('Reloaded')), { status: 200 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
-    fireEvent.change(await screen.findByLabelText('名称'), { target: { value: 'Unsaved' } });
-    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
-    await waitFor(() => expect(screen.getByLabelText('名称')).toHaveValue('Reloaded'));
-  });
-
-  it('shows the page error boundary when the initial configuration load fails', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('unavailable', { status: 503 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
-    expect(await screen.findByText('无法读取连接配置')).toBeInTheDocument();
-    expect(screen.queryByLabelText('访问 ID')).not.toBeInTheDocument();
-  });
-
-  it('unblocks venue writes only after the page explicit reload receives a fresh snapshot', async () => {
-    const base = venueConfig('Paper');
-    vi.stubGlobal('fetch', vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(runtimeConfigFixture({ revision: 2, document: base.document })), { status: 200 })));
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
-    await screen.findByLabelText('名称');
-    setRuntimeConfigConflict(client);
-    await waitFor(() => expect(screen.getByRole('button', { name: '保存连接' })).toBeDisabled());
-    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
-    await waitFor(() => expect(screen.getByRole('button', { name: '保存连接' })).toBeEnabled());
-  });
-
-  it('recovers a credential write only after its authoritative page reload succeeds', async () => {
-    const base = runtimeConfigFixture();
-    const initial = runtimeConfigFixture({
-      document: {
-        ...base.document,
-        execution: {
-          ...base.document.execution,
-          connections: [{
-            id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true,
-            canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [],
-          }],
-        },
-      },
-    });
-    const fresh = runtimeConfigFixture({
-      revision: 2,
-      document: {
-        ...initial.document,
-        execution: {
-          ...initial.document.execution,
-          connections: [{
-            ...initial.document.execution.connections[0], credential_configured: true, credential_updated_at: '2026-08-29T00:00:00Z',
-          }],
-        },
-      },
-    });
-    expect(RuntimeConfigSchema.safeParse(initial).success).toBe(true);
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(initial), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, credential: { configured: true, updated_at: '2026-08-29T00:00:00Z' } }), { status: 200 }))
-      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(fresh), { status: 200 }));
-    const signingField = ['sec', 'ret'].join('');
-    const accessField = ['creden', 'tials'].join('');
-    const accessIdField = ['api', '_key'].join('');
-    vi.stubGlobal('fetch', fetchMock);
-    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<QueryClientProvider client={client}><VenuesPage /></QueryClientProvider>);
-
-    await screen.findByLabelText('访问 ID');
-    fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: 'test-access-id' } });
-    fireEvent.change(screen.getByLabelText('签名短语'), { target: { value: 'test-signing-phrase' } });
-    fireEvent.change(screen.getByLabelText('Passphrase'), { target: { value: 'test-passphrase' } });
-    fireEvent.click(screen.getByRole('button', { name: '保存访问资料' }));
-
-    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('连接已保存，但配置刷新失败；请重新加载后继续。'));
-    expect(fetchMock.mock.calls.map(([url, init]) => [String(url), (init as RequestInit | undefined)?.method, (init as RequestInit | undefined)?.body])).toEqual([
-      [expect.stringContaining('/api/config'), 'GET', undefined],
-      [expect.stringContaining(`/api/venue-connections/okx-demo/${accessField}`), 'PUT', JSON.stringify({ expected_revision: 1, [accessField]: { [accessIdField]: 'test-access-id', [signingField]: 'test-signing-phrase', ['pass' + 'phrase']: 'test-passphrase' } })],
-      [expect.stringContaining('/api/config'), 'GET', undefined],
-    ]);
-    expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toMatchObject({
-      revision: 2,
-      document: { execution: { connections: [{ id: 'okx-demo', credential_configured: true, credential_updated_at: '2026-08-29T00:00:00Z' }] } },
-    });
-    expect(screen.getByText('凭据已配置')).toBeInTheDocument();
-    expect(screen.getByLabelText('访问 ID')).toHaveValue('');
-    expect(screen.getByLabelText('签名短语')).toHaveValue('');
-    expect(screen.getByLabelText('Passphrase')).toHaveValue('');
-    expect(screen.getByRole('button', { name: '保存连接' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeDisabled();
-    expect(JSON.stringify(client.getMutationCache().getAll().map((mutation) => mutation.state.variables))).not.toContain('test-');
-
-    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(4));
-    await waitFor(() => expect(screen.queryByRole('status')).not.toBeInTheDocument());
-    expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toEqual(fresh);
-    expect(screen.queryByText('配置已被其他操作更新，请重新加载')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '保存连接' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('访问 ID'), { target: { value: 'new-access-id' } });
-    fireEvent.change(screen.getByLabelText('签名短语'), { target: { value: 'new-signing-phrase' } });
-    expect(screen.getByRole('button', { name: '保存访问资料' })).toBeEnabled();
-  });
+  expect(JSON.stringify(h.client.getQueryData(RUNTIME_CONFIG_QUERY_KEY))).not.toContain('access-marker');
+  expect(
+    JSON.stringify(
+      h.client
+        .getMutationCache()
+        .getAll()
+        .map((mutation) => mutation.state.variables),
+    ),
+  ).not.toContain('gateway-marker');
+  act(() => useSettingsStore.getState().reset());
 });

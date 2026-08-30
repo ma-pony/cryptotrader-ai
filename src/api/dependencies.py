@@ -12,7 +12,7 @@ from cryptotrader.runtime_config.repository import API_ACCESS_CREDENTIAL_REF, Cr
 def _commissioning_route_kind(request: Request) -> str | None:
     """Classify the single setup surface once for both setup and application admission."""
     method, path = request.method, request.url.path
-    if (method, path) == ("GET", "/api/config"):
+    if (method, path) in {("GET", "/api/config"), ("GET", "/api/config/catalog")}:
         return "read"
     if (method, path) in {
         ("PUT", "/api/config"),

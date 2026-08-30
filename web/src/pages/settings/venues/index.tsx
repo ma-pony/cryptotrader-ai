@@ -1,101 +1,94 @@
-import { CheckCircle2, Plus } from 'lucide-react';
-import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Button } from '@/components/ui/button';
-import { PageBoundary } from '@/components/ui/page-boundary';
-import { PageHeader } from '@/components/ui/page-header';
-import { useRuntimeConfig } from '@/hooks/use-runtime-config';
-import { VenueForm } from './venue-form';
-
-const VenuesPage = ({ onTested }: { onTested?: (id: string) => void }) => {
+import { useConfiguration } from '../configuration-context';
+import { VenueForm, newVenue, type VenueDraft } from './venue-form';
+export default function VenuesPage() {
+  const runtime = useConfiguration();
   const { t } = useTranslation('configuration');
-  const runtime = useRuntimeConfig();
-  const [adding, setAdding] = useState(false);
-  const [editorGeneration, setEditorGeneration] = useState(0);
-  const reload = async () => {
-    const result = await runtime.reload();
-    if (result.isSuccess && !result.error && result.data) setEditorGeneration((current) => current + 1);
+  const catalog = runtime.catalog.data;
+  if (!runtime.baseline || !catalog) return null;
+  const clear = (key: string) =>
+    runtime.setVenueDrafts((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+  const connections = runtime.baseline.execution.connections;
+  const update = (key: string, value: VenueDraft) => {
+    const baseline = connections.find((item) => item.id === key);
+    if (baseline && JSON.stringify(baseline) === JSON.stringify(value)) clear(key);
+    else runtime.setVenueDrafts((current) => ({ ...current, [key]: value }));
   };
   return (
-    <PageBoundary
-      loading={runtime.isLoading}
-      isError={runtime.isError}
-      onRetry={() => void reload()}
-      errorTitle={t('venueLoadError')}
-      errorDescription={t('venueLoadDescription')}
-    >
-      {runtime.document && runtime.revision !== undefined ? (
-        <div className="space-y-6">
-          <PageHeader
-            eyebrow="VENUE CONTROL"
-            title={t('venues')}
-            subtitle={t('venuesSubtitle')}
-            actions={<span className="font-mono text-xs text-amber-500">{t('revisionValue', { revision: runtime.revision })}</span>}
+    <section className="space-y-6">
+      <header>
+        <h1 className="text-xl font-semibold">{t('venues')}</h1>
+        <p className="configuration-help">{t('venuesSubtitle')}</p>
+      </header>
+      {!connections.length ? <p className="configuration-help">{t('connection.empty')}</p> : null}
+      {connections.map((connection) => (
+        <section key={connection.id} className="configuration-section">
+          <h2 className="text-base font-semibold">{connection.label}</h2>
+          <VenueForm
+            connection={connection}
+            value={runtime.venueDrafts[connection.id] ?? connection}
+            catalog={catalog}
+            revision={runtime.revision ?? 0}
+            credentialState={runtime.credentialStates[connection.id]}
+            check={runtime.checks[connection.id]}
+            onChange={(value) => update(connection.id, value)}
+            onSaved={() => clear(connection.id)}
+            onChecked={(check) =>
+              runtime.setChecks((current) => {
+                const next = { ...current };
+                if (check) next[connection.id] = check;
+                else delete next[connection.id];
+                return next;
+              })
+            }
+            writeBlocked={runtime.conflict}
+            onCancel={
+              runtime.venueDrafts[connection.id]
+                ? () => {
+                    if (window.confirm(t('forms.discardConfirm'))) clear(connection.id);
+                  }
+                : undefined
+            }
           />
-          <div className="grid gap-4">
-            {runtime.document.execution.connections.map((connection) => (
-              <section key={connection.id} className="rounded-2xl border border-border bg-card p-5">
-                <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="font-semibold">{connection.label}</h2>
-                    <p className="font-mono text-xs text-muted-foreground">
-                      {connection.adapter_id} · {connection.id}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="rounded-full border border-amber-500/30 px-2 py-1 text-xs text-amber-500">
-                      {connection.environment}
-                    </span>
-                    {runtime.credentialStates[connection.id]?.configured ? (
-                      <span className="flex items-center gap-1 text-xs text-trade-long">
-                        <CheckCircle2 className="h-3 w-3" />
-                        {t('configured')}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
-                <VenueForm
-                  key={`${connection.id}-${editorGeneration}`}
-                  revision={runtime.revision ?? 0}
-                  connection={connection}
-                  onSaved={() => void runtime.reload()}
-                  writeBlocked={runtime.conflict}
-                  {...(onTested ? { tested: onTested } : {})}
-                />
-              </section>
-            ))}
-          </div>
-          {adding ? (
-            <section className="rounded-2xl border border-dashed border-amber-500/40 bg-card p-5">
-              <h2 className="mb-4 font-semibold">{t('addVenue')}</h2>
-              <VenueForm
-                key={`new-${editorGeneration}`}
-                revision={runtime.revision}
-                onSaved={() => {
-                  setAdding(false);
-                  void runtime.reload();
-                }}
-                writeBlocked={runtime.conflict}
-                {...(onTested ? { tested: onTested } : {})}
-              />
-            </section>
-          ) : (
-            <Button variant="outline" onClick={() => setAdding(true)}>
-              <Plus className="h-4 w-4" />
-              {t('addConnection')}
-            </Button>
-          )}
-          <Button variant="outline" onClick={() => void reload()}>
-            {t('reload')}
-          </Button>
-          {runtime.conflict ? (
-            <p role="alert" className="text-sm text-trade-short">
-              {t('conflict')}
-            </p>
-          ) : null}
-        </div>
+        </section>
+      ))}
+      {runtime.venueDrafts.new ? (
+        <section className="configuration-section">
+          <h2 className="text-base font-semibold">{t('addVenue')}</h2>
+          <VenueForm
+            value={runtime.venueDrafts.new}
+            catalog={catalog}
+            revision={runtime.revision ?? 0}
+            onChange={(value) => update('new', value)}
+            onSaved={() => clear('new')}
+            onChecked={() => {}}
+            writeBlocked={runtime.conflict}
+            onCancel={() => {
+              if (window.confirm(t('forms.discardConfirm'))) clear('new');
+            }}
+          />
+        </section>
+      ) : (
+        <button
+          className="configuration-button"
+          disabled={!catalog.venues.length}
+          onClick={() => update('new', newVenue(catalog))}
+        >
+          {t('addConnection')}
+        </button>
+      )}
+      <button className="configuration-button" disabled={runtime.isReloading} onClick={() => void runtime.reload()}>
+        {t('reload')}
+      </button>
+      {runtime.failure || runtime.conflict ? (
+        <p role="alert" className="configuration-error">
+          {runtime.failure ?? t('forms.conflictHelp')}
+        </p>
       ) : null}
-    </PageBoundary>
+    </section>
   );
-};
-export default VenuesPage;
+}
