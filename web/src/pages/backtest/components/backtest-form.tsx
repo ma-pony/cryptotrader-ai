@@ -26,6 +26,7 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
   const pairOptions = PAIRS.includes(pair) ? PAIRS : [...PAIRS, pair];
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
+    if (busy) return;
     const next: FieldErrors = {};
     if (!start) next.start = t('errors.start_required');
     if (!end) next.end = t('errors.end_required');
@@ -52,7 +53,7 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
           value={pair}
           onChange={setPair}
           options={pairOptions.map((value) => ({ value, label: value }))}
-          disabled={loadSession.isPending}
+          disabled={busy}
         />
         {(['start', 'end'] as const).map((name) => (
           <Field
@@ -72,10 +73,10 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
               max={today}
               aria-invalid={Boolean(errors[name])}
               aria-describedby={`${name}-help`}
-              disabled={loadSession.isPending}
+              disabled={busy}
               onChange={(event) => {
                 (name === 'start' ? setStart : setEnd)(event.target.value);
-                startMutation.reset();
+                if (startMutation.isError) startMutation.reset();
               }}
             />
           </Field>
@@ -87,10 +88,10 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
           value={capital}
           onChange={(value) => {
             setCapital(value);
-            startMutation.reset();
+            if (startMutation.isError) startMutation.reset();
           }}
           error={errors.initial_capital}
-          disabled={loadSession.isPending}
+          disabled={busy}
         />
       </div>
       {sessions.data?.sessions.length ? (

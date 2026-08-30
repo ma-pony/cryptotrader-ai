@@ -48,7 +48,7 @@ export const CircuitBreakerHero = ({ cb, redisAvailable }: Props) => {
             </div>
             <div className="text-xl font-semibold tracking-tight mt-0.5">
               {tripped
-                ? t('circuit_breaker.tripped', { defaultValue: '已触发 — 交易暂停' })
+                ? t('circuit_breaker.tripped', { defaultValue: '熔断触发记录' })
                 : t('circuit_breaker.normal', { defaultValue: '未触发' })}
             </div>
             <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
@@ -89,7 +89,7 @@ export const CircuitBreakerHero = ({ cb, redisAvailable }: Props) => {
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title={t('circuit_breaker.confirm_title', { defaultValue: '重置熔断器' })}
-        body={t('circuit_breaker.confirm_body', { defaultValue: '确认清空熔断并恢复交易？' })}
+        body={t('circuit_breaker.confirm_body', { defaultValue: '确认清除此断路器记录？' })}
         confirmLabel={t('circuit_breaker.confirm_action', { defaultValue: '立即重置' })}
         destructive
         onConfirm={() => void resetMutation.mutateAsync()}

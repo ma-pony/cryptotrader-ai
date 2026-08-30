@@ -5,6 +5,7 @@
     "window": "Trades in window"
   },
   "circuit_breaker": {
+    "tripped": "Circuit breaker trigger recorded",
     "title": "Circuit Breaker",
     "ACTIVE": "Active",
     "INACTIVE": "Inactive",
@@ -12,7 +13,7 @@
     "remaining": "Remaining",
     "reset": "Reset Circuit Breaker",
     "confirm_title": "Reset Circuit Breaker?",
-    "confirm_body": "Reset clears this circuit breaker only. Other risk checks and trading switches remain unchanged. Confirm the cause first.",
+    "confirm_body": "Reset clears this circuit breaker record only. Other risk checks and trading switches remain unchanged. Confirm the cause first.",
     "confirm_action": "Yes, reset now",
     "normal": "Not triggered"
   },

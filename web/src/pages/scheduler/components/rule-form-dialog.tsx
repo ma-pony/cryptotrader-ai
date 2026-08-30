@@ -246,7 +246,7 @@ export const RuleFormDialog = ({ open, onOpenChange, rule, prefill }: Props) => 
         { onSuccess: () => onOpenChange(false), onError: onRequestError },
       );
     } else {
-      createMutation.mutate(payload, { onSuccess: () => onOpenChange(false) });
+      createMutation.mutate(payload, { onSuccess: () => onOpenChange(false), onError: onRequestError });
     }
   };
 

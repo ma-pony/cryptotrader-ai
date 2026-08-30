@@ -5,6 +5,7 @@
     "window": "窗口期交易数"
   },
   "circuit_breaker": {
+    "tripped": "熔断触发记录",
     "title": "断路器",
     "ACTIVE": "已触发",
     "INACTIVE": "未触发",
@@ -12,7 +13,7 @@
     "remaining": "剩余",
     "reset": "重置断路器",
     "confirm_title": "确认重置断路器？",
-    "confirm_body": "重置将清除此断路器状态，其他风控与交易开关保持不变。请先确认触发原因。",
+    "confirm_body": "重置只清除此断路器记录，其他风控与交易开关保持不变。请先确认触发原因。",
     "confirm_action": "我已确认，立即重置",
     "normal": "未触发"
   },

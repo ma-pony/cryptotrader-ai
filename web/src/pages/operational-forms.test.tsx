@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import type { ReactNode } from 'react';
@@ -102,6 +103,47 @@ it('displays a backtest start failure and retains editable parameters', async ()
   expect(await screen.findByRole('alert')).toHaveTextContent('失败');
   expect(screen.getByLabelText('起始日期')).toHaveValue('2026-08-01');
 });
+it('keeps one pending start and delivers its run ID despite attempted edits and resubmission', async () => {
+  const started = vi.fn();
+  harness(<BacktestForm onRunStarted={started} />);
+  await screen.findByRole('combobox', { name: /历史|复用/ });
+  dates();
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requests: RequestInit[] = [];
+  const otherFetch = globalThis.fetch;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn((url: string, init: RequestInit) => {
+      if (!url.endsWith('/api/backtest/run') || init?.method !== 'POST') return otherFetch(url, init);
+      requests.push(init);
+      return pending.then(() => new Response(JSON.stringify({ run_id: 'delayed-run' })));
+    }),
+  );
+  const user = userEvent.setup();
+  const submit = screen.getByRole('button', { name: '运行回测' });
+  await user.click(submit);
+  await waitFor(() => expect(requests).toHaveLength(1));
+  try {
+    await user.type(screen.getByLabelText('初始资金（USDT）'), '9');
+    await user.click(submit);
+    expect(requests).toHaveLength(1);
+    await user.type(screen.getByLabelText('起始日期'), '2026-08-02');
+    await user.type(screen.getByLabelText('结束日期'), '2026-08-09');
+    for (const name of ['初始资金（USDT）', '起始日期', '结束日期', '币对']) {
+      expect(screen.getByLabelText(name)).toBeDisabled();
+    }
+    expect(submit).toBeDisabled();
+    fireEvent.submit(submit.closest('form')!);
+    expect(requests).toHaveLength(1);
+  } finally {
+    release();
+  }
+  await waitFor(() => expect(started).toHaveBeenCalledExactlyOnceWith('delayed-run'));
+  expect(requests).toHaveLength(1);
+});
 it('loads saved parameters through GET and never sends the old output session name', async () => {
   const started = vi.fn();
   const requests = harness(<BacktestForm onRunStarted={started} />);
@@ -181,26 +223,43 @@ it.each([
   expect(requests.filter((r) => r.method === 'POST')).toHaveLength(0);
 });
 
-it('associates an actual server field error with the scheduler input and retains the draft', async () => {
-  harness(<RuleFormDialog open onOpenChange={vi.fn()} rule={rule} prefill={undefined} />);
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(() =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({
-            detail: [{ loc: ['body', 'pair'], msg: 'Invalid pair', type: 'value_error' }],
-          }),
-          { status: 422 },
-        ),
-      ),
-    ),
-  );
-  fireEvent.click(screen.getByRole('button', { name: '保存' }));
-  await waitFor(() => expect(screen.getByLabelText('交易对')).toHaveAttribute('aria-invalid', 'true'));
-  expect(screen.getByLabelText('交易对')).toHaveFocus();
-  expect(screen.getByLabelText('规则名称')).toHaveValue('BTC rule');
-});
+it.each(['POST', 'PUT'])(
+  'associates a %s server field error with the scheduler input and retains the draft',
+  async (method) => {
+    harness(
+      <RuleFormDialog
+        open
+        onOpenChange={vi.fn()}
+        rule={method === 'PUT' ? rule : undefined}
+        prefill={
+          method === 'POST'
+            ? { name: 'BTC rule', trigger_type: 'price_threshold', parameters: rule.parameters }
+            : undefined
+        }
+      />,
+    );
+    const requests: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_url: string, init: RequestInit) => {
+        requests.push(init.method!);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              detail: [{ loc: ['body', 'pair'], msg: 'Invalid pair', type: 'value_error' }],
+            }),
+            { status: 422 },
+          ),
+        );
+      }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '保存' }));
+    await waitFor(() => expect(screen.getByLabelText('交易对')).toHaveAttribute('aria-invalid', 'true'));
+    expect(screen.getByLabelText('交易对')).toHaveFocus();
+    expect(screen.getByLabelText('规则名称')).toHaveValue('BTC rule');
+    expect(requests).toEqual([method]);
+  },
+);
 
 it('updates an existing rule with its active parameters and closes only on success', async () => {
   const close = vi.fn();
