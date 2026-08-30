@@ -25,6 +25,8 @@ Metrics page:
 
 from __future__ import annotations
 
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -134,15 +136,19 @@ class TestMetricsSummaryV2:
 async def test_llm_accounting_reads_usage_from_completed_cycle_components() -> None:
     from api.routes.metrics import _llm_accounting_last_24h
 
-    record = _record(
-        details={"token_usage": {"calls": 5, "cost_usd": 0.12, "cache_hits": 2}},
-        book_results=(_book_cycle(status="completed"),),
-        cycle_status="completed",
-        execution_status="completed",
-        requires_attention=False,
+    record = replace(
+        _record(
+            details={"token_usage": {"calls": 5, "cost_usd": 0.12, "cache_hits": 2}},
+            book_results=(_book_cycle(status="completed"),),
+            cycle_status="completed",
+            execution_status="completed",
+            requires_attention=False,
+        ),
+        created_at=datetime.now(UTC),
     )
+    stale_record = replace(record, cycle_id="stale-cycle", created_at=datetime.now(UTC) - timedelta(days=31))
     store = MagicMock()
-    store.list = AsyncMock(return_value=[record])
+    store.list = AsyncMock(return_value=[record, stale_record])
     calls, cost, hit_rate, decisions_per_day = await _llm_accounting_last_24h(None, store)
 
     assert calls == 5

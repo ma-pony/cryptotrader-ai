@@ -204,8 +204,20 @@ def test_venue_protocols_are_structural_and_contract_helper_checks_capabilities(
         async def normalize_amount(self, pair, base_amount):
             return base_amount
 
+        async def minimum_amount(self, pair, reference_price, minimum_quote_notional):
+            return None
+
         async def place_order(self, intent):
             return None
+
+        async def cancel_order(self, order_id, pair):
+            return None
+
+        async def find_order(self, pair, *, order_id=None, client_order_id=None):
+            return None
+
+        async def normalize_protection(self, spec):
+            return spec
 
         async def replace_protection(self, spec):
             return None

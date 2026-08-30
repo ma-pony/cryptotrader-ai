@@ -103,7 +103,7 @@ describe('venue connection write recovery', () => {
 
   it('serializes isolated custom adapter parameters as ordinary JSON and blocks invalid parameter text', async () => {
     await i18n.changeLanguage('en-US');
-    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'custom-1', label: 'Custom', adapter_id: 'custom', environment: 'demo', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'isolated', parameters: [] } }), { status: 201 })).mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, updated_at: 'x', setup_required: false, document: {} }), { status: 200 }));
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, connection: { id: 'custom-1', label: 'Custom', adapter_id: 'custom', environment: 'demo', enabled: true, canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'isolated', parameters: [] } }), { status: 201 })).mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, updated_at: 'x', setup_required: false, document: {} }), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><VenueForm revision={1} /></QueryClientProvider>);

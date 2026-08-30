@@ -105,7 +105,7 @@ describe('configuration draft lifecycle', () => {
           ...base.document.execution,
           connections: [{
             id: 'okx-demo', label: 'OKX Demo', adapter_id: 'okx', environment: 'demo', enabled: true,
-            credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [],
+            canary_only: false, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [],
           }],
         },
       },

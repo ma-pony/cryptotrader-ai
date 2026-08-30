@@ -187,16 +187,18 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
     with (
         patch("cryptotrader.triggers.engine.PriceTriggerEngine", Engine),
         patch("cryptotrader.triggers.store.TriggerRuleStore.ensure_tables", AsyncMock()),
-        patch("cryptotrader.risk.state.RedisStateManager", return_value=strict_redis),
+        patch("cryptotrader.cycle_lock.RedisStateManager", return_value=strict_redis),
     ):
         await main._init_trigger_engine(application)
 
         trigger_task = asyncio.create_task(Engine.instance.callback("BTC/USDT:USDT", {}))
-        await cycle.entered.wait()
-        scheduler = Scheduler(document.scheduler, runtime)
-        await scheduler._run_pair("BTC/USDT:USDT")
-        cycle.release.set()
-        await trigger_task
+        try:
+            await asyncio.wait_for(cycle.entered.wait(), timeout=1)
+            scheduler = Scheduler(document.scheduler, runtime)
+            await scheduler._run_pair("BTC/USDT:USDT")
+        finally:
+            cycle.release.set()
+            await asyncio.wait_for(trigger_task, timeout=1)
 
     assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT:USDT"))]
     assert scheduler.status["BTC/USDT:USDT"]["last_error"] == "cycle_failed"
