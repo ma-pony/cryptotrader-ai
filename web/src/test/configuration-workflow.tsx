@@ -255,10 +255,32 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
       const body = JSON.parse(init.body as string) as RuntimeDocument['execution']['connections'][number] & {
         expected_revision: number;
       };
+      const createFields = [
+        'expected_revision',
+        'id',
+        'label',
+        'adapter_id',
+        'environment',
+        'enabled',
+        'leverage',
+        'margin_mode',
+        'canary_only',
+        'parameters',
+      ];
+      const updateFields = createFields.filter((field) => field !== 'id');
+      const allowedFields = init.method === 'POST' ? createFields : updateFields;
+      const unexpectedField = Object.keys(body).find((field) => !allowedFields.includes(field));
+      if (unexpectedField) {
+        return response([
+          { type: 'extra_forbidden', loc: ['body', unexpectedField], msg: 'Extra inputs are not permitted' },
+        ], 422);
+      }
       const { expected_revision: _revision, ...input } = body;
-      const existing = saved.document.execution.connections.find((item) => item.id === body.id);
+      const id = init.method === 'POST' ? body.id : url.split('/').at(-1)!;
+      const existing = saved.document.execution.connections.find((item) => item.id === id);
       const connection = {
         ...input,
+        id,
         credential_configured: existing?.credential_configured ?? false,
         credential_updated_at: existing?.credential_updated_at ?? null,
         parameters: encode(body.parameters).entries,
@@ -269,9 +291,9 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
         document: {
           ...saved.document,
           execution: {
-            ...saved.document.execution,
-            connections: saved.document.execution.connections.some((c) => c.id === body.id)
-              ? saved.document.execution.connections.map((c) => (c.id === body.id ? connection : c))
+          ...saved.document.execution,
+            connections: saved.document.execution.connections.some((c) => c.id === id)
+              ? saved.document.execution.connections.map((c) => (c.id === id ? connection : c))
               : [...saved.document.execution.connections, connection],
           },
         },

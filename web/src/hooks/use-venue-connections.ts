@@ -9,7 +9,6 @@ import type { RuntimeConfig, RuntimeJsonObject } from '@/types/api';
 
 type ConnectionInput = {
   expected_revision: number;
-  id?: string;
   label: string;
   adapter_id: string;
   environment: 'paper' | 'demo' | 'testnet' | 'live';
@@ -19,6 +18,7 @@ type ConnectionInput = {
   margin_mode: string;
   parameters: RuntimeJsonObject;
 };
+type CreateConnectionInput = ConnectionInput & { id: string };
 export type CredentialInput = { api_key: string; secret: string; passphrase?: string };
 
 export const useVenueConnections = () => {
@@ -52,7 +52,7 @@ export const useVenueConnections = () => {
     if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
   };
   const create = useMutation({
-    mutationFn: (body: ConnectionInput & { id: string }) => writeThenRefresh(() => apiClient.post('/api/venue-connections', body, VenueMutationSchema)),
+    mutationFn: (body: CreateConnectionInput) => writeThenRefresh(() => apiClient.post('/api/venue-connections', body, VenueMutationSchema)),
     onError: conflict,
   });
   const update = useMutation({

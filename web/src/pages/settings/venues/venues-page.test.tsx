@@ -19,6 +19,55 @@ it('rejects zero Paper capital locally with an associated error and accepts a sm
   expect(h.saved().document.execution.connections[0]!.parameters[0]!.value.number_value).toBe('0.00001');
 });
 
+it('saves an edited connection through the strict update contract and then enables its read-only check', async () => {
+  const config = workflowConfig();
+  config.document.execution.connections[0] = {
+    ...config.document.execution.connections[0]!,
+    parameters: [{
+      key: 'initial_equity',
+      value: {
+        kind: 'number',
+        boolean_value: null,
+        number_value: '0.00001',
+        string_value: null,
+        datetime_value: null,
+        pair_value: null,
+        items: [],
+        entries: [],
+      },
+    }],
+  };
+  const h = workflowHarness('/settings/venues', config);
+  const amount = await screen.findByLabelText('模拟初始资金（USDT）');
+  fireEvent.change(amount, { target: { value: '10000' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }));
+
+  await waitFor(() => expect(h.saved().revision).toBe(2));
+  expect(h.saved().document.execution.connections[0]).toMatchObject({
+    id: 'paper',
+    parameters: [{ key: 'initial_equity', value: { number_value: '10000' } }],
+  });
+  const update = h.fetchMock.mock.calls.find(
+    ([url, init]) => url.endsWith('/api/venue-connections/paper') && init?.method === 'PUT',
+  );
+  expect(JSON.parse((update![1] as RequestInit).body as string)).toEqual({
+    expected_revision: 1,
+    label: 'Paper',
+    adapter_id: 'paper',
+    environment: 'paper',
+    enabled: true,
+    leverage: 1,
+    margin_mode: 'cross',
+    canary_only: false,
+    parameters: { initial_equity: 10000 },
+  });
+  expect(screen.getByRole('button', { name: '保存连接' })).toBeDisabled();
+  const check = screen.getByRole('button', { name: '只读检查' });
+  expect(check).toBeEnabled();
+  fireEvent.click(check);
+  expect(await screen.findByText(/账户读取已验证/)).toBeInTheDocument();
+});
+
 it('describes fixed shared margin for Paper while keeping leverage and external mode choices', async () => {
   workflowHarness('/settings/venues');
   fireEvent.click(await screen.findByRole('button', { name: '新增连接' }));

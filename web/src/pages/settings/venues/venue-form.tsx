@@ -151,14 +151,19 @@ export function VenueForm({
     try {
       setFailure('');
       const body = {
-        ...value,
+        label: value.label,
+        adapter_id: value.adapter_id,
+        environment: value.environment,
+        enabled: value.enabled,
+        canary_only: value.canary_only,
         margin_mode: plugin?.margin_modes.length === 1 ? plugin.margin_modes[0]! : value.margin_mode,
         leverage: value.leverage as number,
+        parameters: value.parameters,
         expected_revision: revision,
       };
       const saved = connection
         ? await venues.update.mutateAsync({ id: connection.id, body })
-        : await venues.create.mutateAsync(body);
+        : await venues.create.mutateAsync({ ...body, id: value.id });
       setSavedNeedsReload(saved.savedNeedsReload);
       onSaved();
     } catch (error) {
