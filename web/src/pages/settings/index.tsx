@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, NavLink, Outlet, useLocation } from 'react-router';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { SaveBar } from '@/components/configuration/save-bar';
 import type { ConfigurationSection } from '@/hooks/use-configuration-draft';
 import { ModelSettings } from './forms/model-settings';
@@ -16,6 +16,7 @@ export function ConfigurationLayout() {
   const runtime = useConfiguration();
   const { t } = useTranslation('configuration');
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   return (
     <div className="configuration-workbench">
       <header className="configuration-center-header">
@@ -25,13 +26,30 @@ export function ConfigurationLayout() {
         {pathname !== '/setup' ? <Link to="/setup">{t('center.checklist')}</Link> : null}
       </header>
       {pathname !== '/setup' ? (
-        <nav className="configuration-navigation" aria-label={t('center.title')}>
-          {SETTINGS_SECTIONS.map((section) => (
-            <NavLink key={section.id} to={section.path}>
-              {t(section.label)}
-            </NavLink>
-          ))}
-        </nav>
+        <>
+          <div className="configuration-mobile-navigation configuration-field">
+            <label htmlFor="configuration-section">{t('center.section')}</label>
+            <select
+              id="configuration-section"
+              className="configuration-control"
+              value={pathname}
+              onChange={(event) => void navigate(event.target.value)}
+            >
+              {SETTINGS_SECTIONS.map((section) => (
+                <option key={section.id} value={section.path}>
+                  {t(section.label)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <nav className="configuration-navigation" aria-label={t('center.title')}>
+            {SETTINGS_SECTIONS.map((section) => (
+              <NavLink key={section.id} to={section.path}>
+                {t(section.label)}
+              </NavLink>
+            ))}
+          </nav>
+        </>
       ) : null}
       {runtime.catalog.isPending ? (
         <p role="status">{t('center.catalogLoading')}</p>

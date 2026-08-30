@@ -3,7 +3,24 @@ import { beforeEach, expect, it } from 'vitest';
 import i18n from '@/lib/i18n';
 import { workflowHarness } from '@/test/configuration-workflow';
 import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
+import userEvent from '@testing-library/user-event';
 beforeEach(() => i18n.changeLanguage('zh-CN'));
+it('routes from the labelled compact selector and keeps drafts when navigating by keyboard', async () => {
+  const user = userEvent.setup();
+  const h = workflowHarness('/settings/models');
+  fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'compact-nav-draft' } });
+  const selector = screen.getByRole('combobox', { name: '配置分区' });
+  expect(selector).toHaveValue('/settings/models');
+  expect(selector.querySelectorAll('option')).toHaveLength(8);
+  selector.focus();
+  expect(selector).toHaveFocus();
+  await user.selectOptions(selector, '/settings/risk');
+  expect(await screen.findByLabelText('最大回撤（%）')).toBeInTheDocument();
+  expect(selector).toHaveValue('/settings/risk');
+  await user.selectOptions(selector, '/settings/models');
+  expect(await screen.findByLabelText('综合分析模型')).toHaveValue('compact-nav-draft');
+  expect(h.writes).toHaveLength(0);
+});
 it('retains cross-section drafts through venue refresh and saves only the current section', async () => {
   const h = workflowHarness('/settings/models');
   fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'new-analysis' } });

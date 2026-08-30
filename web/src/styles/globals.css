@@ -189,6 +189,7 @@
 .configuration-workbench { max-width: 76rem; margin-inline: auto; padding-bottom: 2rem; min-width: 0; }
 .configuration-center-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; padding-bottom: 1rem; font-size: .875rem; color: hsl(var(--muted-foreground)); }
 .configuration-navigation { display: flex; flex-wrap: wrap; gap: .25rem .5rem; margin-bottom: 1.5rem; border-bottom: 1px solid hsl(var(--border)); padding-bottom: .75rem; }
+.configuration-mobile-navigation { display: none; }
 .configuration-navigation a, .configuration-center-header a, .configuration-checklist a { min-height: 2.5rem; display: inline-flex; align-items: center; white-space: nowrap; border-radius: .375rem; padding: .5rem .75rem; font-size: .875rem; }
 .configuration-navigation a[aria-current="page"] { background: hsl(var(--muted)); color: hsl(var(--foreground)); font-weight: 600; }
 .configuration-navigation a:focus-visible, .configuration-center-header a:focus-visible, .configuration-checklist a:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
@@ -199,5 +200,7 @@
 .configuration-allocation-preview { display: grid; gap: .5rem; padding-block: .75rem; }
 .configuration-allocation-preview > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 1rem; font-size: .875rem; }
 @media (max-width: 40rem) {
+  .configuration-navigation { display: none; }
+  .configuration-mobile-navigation { display: block; margin-bottom: 1.5rem; }
   .configuration-navigation a, .configuration-center-header a, .configuration-checklist a { min-height: 2.75rem; }
 }

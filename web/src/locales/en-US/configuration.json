@@ -272,6 +272,7 @@
     "loading": "Verifying…"
   },
   "center": {
+    "section": "Settings section",
     "title": "Configuration",
     "systemTitle": "System & notifications",
     "checklist": "Setup checklist",

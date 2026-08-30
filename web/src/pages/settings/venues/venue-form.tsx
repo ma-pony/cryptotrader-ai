@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatDateTime } from '@/lib/format';
 import {
   BooleanField,
   ChoiceField,
@@ -359,7 +360,8 @@ export function VenueForm({
           {dirty ? <p className="configuration-help">{t('connection.saveBeforeCheck')}</p> : null}
           {currentCheck?.health.healthy ? (
             <p role="status">
-              {t('connection.verified')} · {currentCheck.health.checked_at}
+              {t('connection.verified')} ·{' '}
+              <time dateTime={currentCheck.health.checked_at}>{formatDateTime(currentCheck.health.checked_at)}</time>
             </p>
           ) : null}
         </div>

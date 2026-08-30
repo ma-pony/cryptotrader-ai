@@ -64,3 +64,11 @@ Use the existing modern-minimal utilitarian console as an app workbench: section
 7. Existing valid credentials remain encrypted and neither tests nor errors print their values.
 8. Keyboard and four mobile widths verified; default/empty/loading/error/success/dirty states make the next action clear.
 9. Run backend tests, frontend tests, typecheck, lint/build, and real browser walkthrough. Real provider calls require separately confirmed credentials/environment; no order canaries in this UI refactor.
+
+## Implementation finish checklist (2026-08-30)
+
+- [x] Shared typed configuration center, installed metadata/validation, venue/book workflows and consumed settings implemented in Tasks 1–5.
+- [x] Task 6 complete backend/frontend/type/lint/build verification and isolated browser/API evidence recorded in [the durable acceptance report](../../verification/configuration-center/README.md).
+- [x] Required viewport sizes, visible errors/focus, mobile dirty actions, light/dark and English inspected; native dialog/select/date tool limitations explicitly recorded.
+- [ ] Independent final review of the complete configuration change set closed.
+- [ ] Separately authorized existing-database cleanup and deployment, if requested. No activation, merge or push is part of this implementation handoff.

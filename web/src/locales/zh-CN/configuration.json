@@ -272,6 +272,7 @@
     "loading": "正在验证…"
   },
   "center": {
+    "section": "配置分区",
     "title": "配置中心",
     "systemTitle": "系统与通知",
     "checklist": "初始化检查清单",

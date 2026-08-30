@@ -48,7 +48,9 @@ it('hides old check success on draft changes and credential timestamp refresh', 
   ];
   const h = workflowHarness('/settings/venues', config);
   fireEvent.click(await screen.findByRole('button', { name: '只读检查' }));
-  await screen.findByText(/账户读取已验证/);
+  const verified = await screen.findByText(/账户读取已验证/);
+  expect(verified.querySelector('time')).toHaveAttribute('dateTime', '2026-08-30T12:00:00Z');
+  expect(verified).not.toHaveTextContent('T12:00:00Z');
   fireEvent.change(screen.getByLabelText('名称'), { target: { value: 'changed' } });
   expect(screen.queryByText(/账户读取已验证/)).not.toBeInTheDocument();
   expect(screen.getByRole('button', { name: '只读检查' })).toBeDisabled();

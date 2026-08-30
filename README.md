@@ -6,7 +6,7 @@ CryptoTrader AI 是一个可插拔的加密资产信号融合与多平台执行�
 
 运行配置唯一保存在数据库 `runtime_config` 中。进程只接受两个启动参数：`DATABASE_URL` 和 `CONFIG_MASTER_KEY`；后者用于加密平台凭据。没有 TOML、`.env` 合并或单平台模式开关。
 
-每次网页保存都是整份严格校验的配置替换，并递增全局 revision。周期与 HITL 提案会冻结其 revision；保存失败时页面保留当前运行状态并显示错误，revision 变化会使待审批计划失效。
+网页按分区保存；服务端执行整份严格校验的配置替换，并递增全局 revision。周期与 HITL 提案冻结其 revision。保存与运行时应用是两个状态：发布失败可能已经保存新 revision，运行时会关闭执行入口；页面保留编辑并提供重新加载。revision 变化会使待审批计划失效。
 
 ```text
 市场数据 → Kronos / 四智能体内部辩论 / 自定义组件 → 信号融合 → 目标仓位
@@ -34,7 +34,7 @@ pnpm install
 pnpm dev
 ```
 
-打开 `http://localhost:5173`。未配置时网页会自动进入初始化向导，按顺序配置：LLM、信号组件、市场数据、平台连接、执行资金池、风控、调度和通知；全部通过校验后才能激活运行时。
+打开 `http://localhost:5173`。未启用时进入初始化检查清单，八个配置分区均可访问、保存和回访，与日常配置使用同一组表单。Paper 新连接默认显示可编辑的 10000 USDT，无需凭据。保存配置、只读连接检查、启用运行时这几个操作相互独立；保存不会启用交易。
 
 平台连接可同时使用 Paper、OKX、Bybit 或以后安装的适配器。Paper、Demo、Testnet 只能分配给 `simulated` 资金池；Live 连接只能分配给 `real` 资金池。一个连接最多属于一个启用资金池。每个资金池可分别打开 HITL，审批的是含保护价格和配置 revision 的完整计划。
 
@@ -84,4 +84,4 @@ uv run python scripts/import_smoke.py
 cd web && pnpm test && pnpm typecheck && pnpm lint
 ```
 
-架构约束与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。
+架构约束与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。配置、类型化插件安装和旧字段清理说明见 [配置指南](docs/CONFIGURATION.md)；本次离线验收与可复现预览见 [验收记录](docs/verification/configuration-center/README.md)。现有数据库含已移除字段时，需要另行授权的一次性清理，不能直接当作空库启动。
