@@ -128,6 +128,46 @@ it('reloads latest saved values while retaining edits unless discard is explicit
   expect(result.current.document!.hitl.approval_ttl_minutes).toBe(15);
 });
 
+it('uses a refreshed baseline after an edit is restored while preserving another dirty section', async () => {
+  const { result } = harness();
+  const originalRisk = result.current.document!.risk;
+  act(() => {
+    result.current.update('risk', {
+      ...originalRisk,
+      loss: { ...originalRisk.loss, max_drawdown_pct: 0.05 },
+    });
+    result.current.update('llm', { ...result.current.document!.llm, base_url: 'https://pending.example' });
+  });
+  expect(result.current.isDirty('risk')).toBe(true);
+  act(() => result.current.update('risk', structuredClone(originalRisk)));
+  expect(result.current.isDirty('risk')).toBe(false);
+  const base = runtimeConfigFixture();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify(
+          runtimeConfigFixture({
+            revision: 2,
+            document: {
+              ...base.document,
+              risk: { ...base.document.risk, loss: { ...base.document.risk.loss, max_drawdown_pct: 0.2 } },
+            },
+          }),
+        ),
+        { status: 200 },
+      ),
+    ),
+  );
+  await act(async () => {
+    await result.current.reload();
+  });
+  expect(result.current.document!.risk.loss.max_drawdown_pct).toBe(0.2);
+  expect(result.current.isDirty('risk')).toBe(false);
+  expect(result.current.document!.llm.base_url).toBe('https://pending.example');
+  expect(result.current.isDirty('models')).toBe(true);
+});
+
 it('keeps edits and reports a failed explicit reload', async () => {
   const { result } = harness();
   act(() => result.current.update('hitl', { approval_ttl_minutes: 45 }));
@@ -146,7 +186,7 @@ it('keeps edits and reports a failed explicit reload', async () => {
   expect(result.current.failure).toBeTruthy();
 });
 
-it('does not discard an edit made while an earlier version of the section is saving', async () => {
+it.each([90, 15])('does not discard an edit to %s made while an earlier version is saving', async (minutes) => {
   const { result } = harness();
   let finish: (response: Response) => void = () => undefined;
   vi.stubGlobal(
@@ -164,7 +204,7 @@ it('does not discard an edit made while an earlier version of the section is sav
     saving = result.current.save('risk');
   });
   await waitFor(() => expect(result.current.isSaving).toBe(true));
-  act(() => result.current.update('hitl', { approval_ttl_minutes: 90 }));
+  act(() => result.current.update('hitl', { approval_ttl_minutes: minutes }));
   const base = runtimeConfigFixture();
   await act(async () => {
     finish(
@@ -177,9 +217,44 @@ it('does not discard an edit made while an earlier version of the section is sav
     );
     await saving;
   });
-  expect(result.current.document!.hitl.approval_ttl_minutes).toBe(90);
+  expect(result.current.document!.hitl.approval_ttl_minutes).toBe(minutes);
   expect(result.current.isDirty('risk')).toBe(true);
   expect(result.current.status.risk).toBeUndefined();
+});
+
+it('releases a restored baseline edit when the in-flight save fails', async () => {
+  const { result, client } = harness();
+  let finish: (response: Response) => void = () => undefined;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation(
+      () =>
+        new Promise<Response>((resolve) => {
+          finish = resolve;
+        }),
+    ),
+  );
+  act(() => result.current.update('hitl', { approval_ttl_minutes: 45 }));
+  let saving: Promise<boolean>;
+  act(() => {
+    saving = result.current.save('risk');
+  });
+  await waitFor(() => expect(result.current.isSaving).toBe(true));
+  act(() => result.current.update('hitl', { approval_ttl_minutes: 15 }));
+  await act(async () => {
+    finish(new Response(JSON.stringify({ detail: 'Unavailable' }), { status: 503 }));
+    expect(await saving).toBe(false);
+  });
+  expect(result.current.isDirty('risk')).toBe(false);
+  const base = runtimeConfigFixture();
+  act(() => {
+    client.setQueryData(
+      RUNTIME_CONFIG_QUERY_KEY,
+      runtimeConfigFixture({ revision: 2, document: { ...base.document, hitl: { approval_ttl_minutes: 30 } } }),
+    );
+  });
+  await waitFor(() => expect(result.current.document!.hitl.approval_ttl_minutes).toBe(30));
+  expect(result.current.isDirty('risk')).toBe(false);
 });
 
 it('leaves optional factory-default lists sparse but rejects an explicitly blank numeric parameter', () => {

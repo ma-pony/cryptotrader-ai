@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -153,6 +153,7 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
   const client = useQueryClient();
   const { t } = useTranslation('configuration');
   const [overlay, setOverlay] = useState<DraftOverlay>({});
+  const savingKeys = useRef<readonly ConfigurationKey[]>([]);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [status, setStatus] = useState<Partial<Record<ConfigurationSection, SaveStatus>>>({});
   const [failure, setFailure] = useState<string>();
@@ -163,7 +164,13 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
       (key) => overlay[key] !== undefined && JSON.stringify(overlay[key]) !== JSON.stringify(runtime.document?.[key]),
     );
   const update = <K extends ConfigurationKey>(key: K, value: DraftDocument[K]) => {
-    setOverlay((current) => ({ ...current, [key]: value }));
+    // An in-flight write may replace this baseline, so retain a restore until it settles.
+    const restored = !savingKeys.current.includes(key) && JSON.stringify(value) === JSON.stringify(runtime.document?.[key]);
+    setOverlay((current) => {
+      const next = { ...current, [key]: value };
+      if (restored) delete next[key];
+      return next;
+    });
     const section = (Object.keys(CONFIGURATION_SECTION_KEYS) as ConfigurationSection[]).find((candidate) =>
       (CONFIGURATION_SECTION_KEYS[candidate] as readonly string[]).includes(key),
     );
@@ -213,6 +220,7 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
     // Only selected document keys are overlaid. Other drafts are deliberately not sent.
     const patch = Object.fromEntries(keys.map((key) => [key, currentDocument[key]]));
     const submitted = { ...baseline, ...patch } as RuntimeDocument;
+    savingKeys.current = keys;
     setStatus((current) => ({ ...current, [section]: 'saving' }));
     try {
       await runtime.replace(submitted, latest.revision);
@@ -234,6 +242,16 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
         focusFirstError(serverErrors, form);
       }
       return false;
+    } finally {
+      savingKeys.current = [];
+      const latest = client.getQueryData<RuntimeConfig>(RUNTIME_CONFIG_QUERY_KEY);
+      const settledBaseline = latest ? toRuntimeDocument(latest.document) : undefined;
+      setOverlay((current) => {
+        const next = { ...current };
+        for (const key of keys)
+          if (JSON.stringify(current[key]) === JSON.stringify(settledBaseline?.[key])) delete next[key];
+        return next;
+      });
     }
   };
   const reload = async () => {

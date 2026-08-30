@@ -137,3 +137,38 @@ Status: DONE for Task 3; route wiring, backend consumer repairs and final browse
 ## Commit-hook note
 
 The first commit attempt was stopped by `detect-secrets` because the new English translation status key `secretFailed` matched its keyword heuristic. No credential value was present. Renamed the three status keys to `accessWriteFailed` / `accessConfigured` / `accessMissing` and updated their field consumer. Hooks remain enabled; no allowlist or scanner bypass was added. Directly affected configuration tests and TypeScript were rerun after this naming-only fix.
+
+## Review fix round 1 — restored drafts must release their overlay
+
+Base: `4c8b4d91416f6a83d70323bf0dbde7ba3d48ad6f`.
+
+Confirmed the Important finding: editing drawdown from 0.15 to 0.05 and back to 0.15 left an overlay, despite a clean dirty indicator. Reloading server drawdown 0.20 then exposed the stale 0.15 again. `update` now removes only the restored top-level key. Other dirty sections remain untouched.
+
+The selected keys of an in-flight save remain tracked until settlement: restoring the previous baseline while a different value is saving is still a pending user edit. On settlement, keys equal to the current saved baseline are released, including after a failed save. This preserves the existing in-flight edit contract without adding merging or new public APIs. React state updates remain functional and event-driven.
+
+Regression coverage checks edit → restore → explicit reload with an unrelated dirty model section, restoration during a successful save, and restoration during a failed save followed by a new baseline. Existing exact-revision/selected-section payload and blank numeric tests still pass.
+
+Commands ran from `web/` unless noted:
+
+```text
+RED:
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/vitest/vitest.mjs run src/hooks/use-configuration-draft.test.tsx
+Tests 2 failed | 7 passed (9); exit 1
+Expected refreshed drawdown 0.20, received stale 0.15.
+Expected refreshed approval TTL 30 after failed save, received stale 15.
+
+GREEN (same command):
+Test Files 1 passed (1); Tests 9 passed (9)
+Duration 1.88s; exit 0; no warnings
+
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/typescript/bin/tsc --noEmit
+no output; exit 0
+
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/eslint/bin/eslint.js src/hooks/use-configuration-draft.ts src/hooks/use-configuration-draft.test.tsx
+no output; exit 0
+
+rtk git diff --check (repository root)
+no output; exit 0
+```
+
+Scoped files: the draft hook, its test, and this report. Full frontend suite/build were not rerun for this scoped fix, as directed by the controller. No runtime/user database changes; commit hooks remain enabled.
