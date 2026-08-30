@@ -4,6 +4,23 @@ import i18n from '@/lib/i18n';
 import { useSettingsStore } from '@/stores/use-settings-store';
 import { workflowHarness } from '@/test/configuration-workflow';
 
+it('reports a committed credential with failed public refresh, clears the input and preserves drafts', async () => {
+  const h = workflowHarness('/settings/models');
+  fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'pending-model' } });
+  h.failReload(true);
+  fireEvent.change(screen.getByLabelText('LLM 网关密钥'), { target: { value: 'refresh-failure-marker' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
+  expect(await screen.findByText('凭据已保存，但未能刷新配置状态。请重新加载后再操作。')).toBeInTheDocument();
+  expect(screen.getByLabelText('LLM 网关密钥')).toHaveValue('');
+  expect(screen.getByLabelText('综合分析模型')).toHaveValue('pending-model');
+  expect(screen.getByRole('button', { name: '保存配置' })).toBeDisabled();
+  h.failReload(false);
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: '保存配置' })).toBeEnabled());
+  expect(screen.queryByText('凭据已保存，但未能刷新配置状态。请重新加载后再操作。')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('综合分析模型')).toHaveValue('pending-model');
+});
+
 beforeEach(async () => {
   await i18n.changeLanguage('zh-CN');
   useSettingsStore.getState().reset();

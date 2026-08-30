@@ -4,6 +4,36 @@ import i18n from '@/lib/i18n';
 import { workflowConfig, workflowHarness } from '@/test/configuration-workflow';
 import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
 beforeEach(() => i18n.changeLanguage('zh-CN'));
+it('rejects zero Paper capital locally with an associated error and accepts a small positive amount', async () => {
+  const h = workflowHarness('/settings/venues');
+  const amount = await screen.findByLabelText('模拟初始资金（USDT）');
+  fireEvent.change(amount, { target: { value: '0' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }));
+  expect(amount).toHaveAttribute('aria-invalid', 'true');
+  expect(amount).toHaveAccessibleDescription(/数字/);
+  expect(amount).toHaveFocus();
+  expect(h.fetchMock.mock.calls.filter(([, init]) => init?.method === 'PUT')).toHaveLength(0);
+  fireEvent.change(amount, { target: { value: '0.00001' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存连接' }));
+  await waitFor(() => expect(h.saved().revision).toBe(2));
+  expect(h.saved().document.execution.connections[0]!.parameters[0]!.value.number_value).toBe('0.00001');
+});
+
+it('describes fixed shared margin for Paper while keeping leverage and external mode choices', async () => {
+  workflowHarness('/settings/venues');
+  fireEvent.click(await screen.findByRole('button', { name: '新增连接' }));
+  const form = screen.getByRole('form', { name: '新增平台连接' });
+  expect(within(form).queryByLabelText('保证金模式')).not.toBeInTheDocument();
+  expect(within(form).getByText(/全仓.*共享账户权益/)).toBeInTheDocument();
+  expect(within(form).getByLabelText('杠杆（倍）')).toHaveValue(1);
+  for (const adapter of ['okx', 'bybit']) {
+    fireEvent.change(within(form).getByLabelText('交易平台'), { target: { value: adapter } });
+    const mode = within(form).getByLabelText('保证金模式');
+    expect(within(mode).getAllByRole('option').map((option) => (option as HTMLOptionElement).value)).toEqual(['cross', 'isolated']);
+    fireEvent.change(mode, { target: { value: 'isolated' } });
+    expect(mode).toHaveValue('isolated');
+  }
+});
 it('starts Paper at editable 10000 USDT with generated identity and no credentials', async () => {
   const h = workflowHarness('/settings/venues');
   fireEvent.click(await screen.findByRole('button', { name: '新增连接' }, { timeout: 5000 }));

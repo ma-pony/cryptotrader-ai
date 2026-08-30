@@ -4,6 +4,15 @@ import type { ConfigurationField, RuntimeJsonObject, RuntimeJsonValue } from '@/
 import { BooleanField, ChoiceField, NumberField, StringListField, TextField, type FieldErrors } from './field';
 import { AdvancedSection } from './section';
 
+export function isValidParameterNumber(value: unknown, field: ConfigurationField): boolean {
+  return typeof value === 'number' && Number.isFinite(value) &&
+    (field.minimum === null || value >= field.minimum) &&
+    (field.maximum === null || value <= field.maximum) &&
+    (field.exclusive_minimum === null || value > field.exclusive_minimum) &&
+    (field.exclusive_maximum === null || value < field.exclusive_maximum) &&
+    (field.kind !== 'integer' || Number.isInteger(value));
+}
+
 export function getParameter(value: RuntimeJsonObject, path: string): RuntimeJsonValue | undefined {
   let current: RuntimeJsonValue | undefined = value;
   for (const key of path.split('.'))

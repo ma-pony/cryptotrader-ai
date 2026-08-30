@@ -255,6 +255,8 @@ class PluginFieldOut(StrictOut):
     required: bool
     minimum: float | int | None
     maximum: float | int | None
+    exclusive_minimum: float | int | None
+    exclusive_maximum: float | int | None
     step: float | int | None
     unit: str | None
     advanced: bool
@@ -268,6 +270,7 @@ class PluginDefinitionOut(StrictOut):
     fields: list[PluginFieldOut]
     environments: list[str]
     credential_fields: list[str]
+    margin_modes: list[str]
 
 
 class ConfigurationCatalogOut(StrictOut):
@@ -374,6 +377,8 @@ def _plugin_field_out(value: ConfigurationField) -> PluginFieldOut:
         required=value.required,
         minimum=value.minimum,
         maximum=value.maximum,
+        exclusive_minimum=value.exclusive_minimum,
+        exclusive_maximum=value.exclusive_maximum,
         step=value.step,
         unit=value.unit,
         advanced=value.advanced,
@@ -389,6 +394,7 @@ def _plugin_definition_out(value) -> PluginDefinitionOut:
         fields=[_plugin_field_out(field) for field in value.fields],
         environments=list(value.environments),
         credential_fields=list(value.credential_fields),
+        margin_modes=list(value.margin_modes),
     )
 
 

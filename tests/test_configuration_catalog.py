@@ -54,9 +54,12 @@ async def test_catalog_exposes_paper_funding_field(api_harness):
     paper = next(item for item in response.json()["venues"] if item["id"] == "paper")
     assert paper["environments"] == ["paper"]
     assert paper["credential_fields"] == []
+    assert paper["margin_modes"] == ["cross"]
     initial_equity = next(field for field in paper["fields"] if field["key"] == "initial_equity")
     assert initial_equity["kind"] == "number"
     assert initial_equity["unit"] == "USDT"
+    assert initial_equity["minimum"] is None
+    assert initial_equity["exclusive_minimum"] == 0
     assert initial_equity["default_value"] == {
         "kind": "number",
         "boolean_value": None,
@@ -67,6 +70,38 @@ async def test_catalog_exposes_paper_funding_field(api_harness):
         "items": [],
         "entries": [],
     }
+
+
+async def test_catalog_keeps_consumed_external_margin_modes(api_harness):
+    response = await api_harness.client.get("/api/config/catalog")
+    venues = {item["id"]: item for item in response.json()["venues"]}
+    for adapter in ("okx", "bybit"):
+        assert venues[adapter]["margin_modes"] == ["cross", "isolated"]
+
+
+@pytest.mark.parametrize("constraint", ["gt", "ge", "lt", "le"])
+def test_catalog_preserves_numeric_bound_semantics(constraint):
+    from api.routes.config import _plugin_field_out
+    from cryptotrader.configuration.fields import configuration_fields
+
+    class Parameters(BaseModel):
+        amount: float = Field(**{constraint: 1})
+
+    field = _plugin_field_out(configuration_fields(Parameters)[0]).model_dump()
+    expected = {"minimum": None, "maximum": None, "exclusive_minimum": None, "exclusive_maximum": None}
+    expected[{"gt": "exclusive_minimum", "ge": "minimum", "lt": "exclusive_maximum", "le": "maximum"}[constraint]] = 1
+    assert {key: field[key] for key in expected} == expected
+
+
+async def test_config_write_rejects_zero_paper_equity_before_persistence(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    document["execution"]["connections"][-1]["parameters"] = {"initial_equity": 0}
+    response = await api_harness.client.put(
+        "/api/config", json={"expected_revision": current.json()["revision"], "document": document}
+    )
+    assert response.status_code == 422
+    assert (await api_harness.client.get("/api/config")).json()["revision"] == current.json()["revision"]
 
 
 def test_catalog_lists_unconfigured_installed_factory_without_calling_it(monkeypatch):

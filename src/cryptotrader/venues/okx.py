@@ -272,6 +272,7 @@ class OkxVenueAdapter:
         parameter_model=EmptyParameters,
         environments=("demo", "live"),
         credential_fields=("api_key", "secret", "passphrase"),
+        margin_modes=("cross", "isolated"),
     )
 )
 def create_adapter() -> OkxVenueAdapter:

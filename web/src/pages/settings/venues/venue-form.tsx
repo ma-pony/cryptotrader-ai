@@ -10,7 +10,7 @@ import {
   type FieldErrors,
 } from '@/components/configuration/field';
 import { AdvancedSection } from '@/components/configuration/section';
-import { ParameterFields, parameterDefaults, getParameter } from '@/components/configuration/parameter-fields';
+import { ParameterFields, parameterDefaults, getParameter, isValidParameterNumber } from '@/components/configuration/parameter-fields';
 import { useVenueConnections } from '@/hooks/use-venue-connections';
 import { decodeJsonValue } from '@/hooks/use-runtime-config';
 import { ApiError } from '@/lib/api-client';
@@ -27,7 +27,7 @@ export const newVenue = (catalog: ConfigurationCatalog): VenueDraft => {
     environment: (adapter?.environments[0] ?? 'paper') as Connection['environment'],
     enabled: true,
     leverage: 1,
-    margin_mode: 'cross',
+    margin_mode: adapter?.margin_modes[0] ?? 'cross',
     canary_only: false,
     parameters: parameterDefaults(adapter?.fields ?? []),
   };
@@ -136,13 +136,7 @@ export function VenueForm({
       const candidate = getParameter(value.parameters, field.key) ?? decodeJsonValue(field.default_value);
       const name = prefix + '.parameters.' + field.key;
       if (field.kind === 'number' || field.kind === 'integer') {
-        if (
-          typeof candidate !== 'number' ||
-          !Number.isFinite(candidate) ||
-          candidate < (field.minimum ?? -Infinity) ||
-          candidate > (field.maximum ?? Infinity) ||
-          (field.kind === 'integer' && !Number.isInteger(candidate))
-        )
+        if (!isValidParameterNumber(candidate, field))
           invalid[name] = t('forms.validation.numberInvalid');
       } else if (field.required && (candidate === null || candidate === ''))
         invalid[name] = t('forms.validation.required');
@@ -156,7 +150,12 @@ export function VenueForm({
     }
     try {
       setFailure('');
-      const body = { ...value, leverage: value.leverage as number, expected_revision: revision };
+      const body = {
+        ...value,
+        margin_mode: plugin?.margin_modes.length === 1 ? plugin.margin_modes[0]! : value.margin_mode,
+        leverage: value.leverage as number,
+        expected_revision: revision,
+      };
       const saved = connection
         ? await venues.update.mutateAsync({ id: connection.id, body })
         : await venues.create.mutateAsync(body);
@@ -233,6 +232,7 @@ export function VenueForm({
                 ...value,
                 adapter_id,
                 environment: adapter.environments[0] as Connection['environment'],
+                margin_mode: adapter.margin_modes[0] ?? 'cross',
                 parameters: parameterDefaults(adapter.fields),
               });
             }}
@@ -283,13 +283,18 @@ export function VenueForm({
             onChange={(leverage) => change({ ...value, leverage })}
             error={errors[prefix + '.leverage']}
           />
-          <ChoiceField
+          {plugin && plugin.margin_modes.length > 1 ? <ChoiceField
             name={prefix + '.margin_mode'}
             label={t('connection.marginMode')}
             value={value.margin_mode}
-            options={['cross', 'isolated'].map((mode) => ({ value: mode, label: t('connection.modes.' + mode) }))}
+            options={plugin.margin_modes.map((mode) => ({ value: mode, label: t('connection.modes.' + mode) }))}
             onChange={(margin_mode) => change({ ...value, margin_mode: margin_mode as Connection['margin_mode'] })}
-          />
+          /> : plugin?.margin_modes.length === 1 ? (
+            <p className="configuration-help">
+              {t('connection.fixedMargin', { mode: t('connection.modes.' + plugin.margin_modes[0]) })}
+              {' '}{t('connection.marginHelp.' + plugin.margin_modes[0])}
+            </p>
+          ) : null}
           <BooleanField
             name={prefix + '.canary_only'}
             label={t('connection.canaryOnly')}

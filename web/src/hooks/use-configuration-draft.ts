@@ -12,7 +12,7 @@ import type {
 import { ApiError } from '@/lib/api-client';
 import { bookErrors } from '@/lib/configuration-readiness';
 import { focusFirstError, type FieldErrors } from '@/components/configuration/field';
-import { getParameter } from '@/components/configuration/parameter-fields';
+import { getParameter, isValidParameterNumber } from '@/components/configuration/parameter-fields';
 import { decodeJsonValue, RUNTIME_CONFIG_QUERY_KEY, toRuntimeDocument, useRuntimeConfig } from './use-runtime-config';
 
 export const CONFIGURATION_SECTION_KEYS = {
@@ -83,8 +83,8 @@ export function validateConfigurationSection(
       if (current === null && getParameter(value, field.key) === undefined && !field.required) continue;
       const name = `${path}.${field.key}`;
       if (field.kind === 'number' || field.kind === 'integer') {
-        if (current !== null || field.required)
-          number(name, current, field.minimum ?? -Infinity, field.maximum ?? Infinity, field.kind === 'integer');
+        if ((current !== null || field.required) && !isValidParameterNumber(current, field))
+          errors[name] = message(field.kind === 'integer' ? 'integerInvalid' : 'numberInvalid');
       } else if (field.kind === 'text' && field.required && (typeof current !== 'string' || !current.trim()))
         errors[name] = message('required');
       else if (field.kind === 'select' && !field.options.some((option) => option.value === current))
@@ -160,6 +160,7 @@ export function validateConfigurationSection(
   }
   if (section === 'system') {
     number('notifications.webhook_timeout', document.notifications.webhook_timeout, 1, Infinity, true);
+    if (document.system.active) required('infrastructure.redis_url', document.infrastructure.redis_url);
     url('infrastructure.redis_url', document.infrastructure.redis_url, ['redis:', 'rediss:']);
     url('notifications.webhook_url', document.notifications.webhook_url, ['https:', 'http:']);
     url('observability.otlp_endpoint', document.observability.otlp_endpoint, ['https:', 'http:']);

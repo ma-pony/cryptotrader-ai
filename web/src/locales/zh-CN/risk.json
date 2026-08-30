@@ -21,7 +21,7 @@
     "title": "实际风控限制",
     "concentration": "连接集中度上限",
     "exposure": "总敞口上限",
-    "margin": "保证金使用上限",
+    "margin": "连接名义敞口上限",
     "drawdown": "最大回撤"
   },
   "redis_warning": "Redis 不可达：风控状态可能不准确",

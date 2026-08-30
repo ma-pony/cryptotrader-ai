@@ -536,6 +536,7 @@ class PaperVenueAdapter:
         ),
         parameter_model=PaperParameters,
         environments=("paper",),
+        margin_modes=("cross",),
     )
 )
 def create_adapter() -> PaperVenueAdapter:

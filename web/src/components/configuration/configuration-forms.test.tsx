@@ -168,10 +168,13 @@ it('writes a gateway key outside the ordinary document and clears its input', as
     'fetch',
     vi
       .fn()
-      .mockResolvedValue(
+      .mockResolvedValueOnce(
         new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), {
           status: 200,
         }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify(runtimeConfigFixture({ revision: 2, applied_revision: 2 })), { status: 200 }),
       ),
   );
   const llm = toRuntimeDocument(runtimeConfigFixture().document).llm;
@@ -187,6 +190,7 @@ it('writes a gateway key outside the ordinary document and clears its input', as
   fireEvent.change(screen.getByLabelText('LLM 网关密钥'), { target: { value: 'fixture-only-key' } });
   fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
   await waitFor(() => expect(screen.getByLabelText('LLM 网关密钥')).toHaveValue(''));
+  expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   expect(JSON.stringify(client.getMutationCache().getAll())).not.toContain('fixture-only-key');
 });
 

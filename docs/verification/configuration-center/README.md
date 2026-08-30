@@ -1,24 +1,45 @@
 # 配置中心验收记录
 
-日期：2026-08-30。范围为已批准配置中心重构的 Task 6 集成验收。代码提交之后仍需独立最终评审；本记录不表示已合并、部署或启用交易。
+日期：2026-08-30。记录 Task 6 集成验收及最终评审修复。本轮修复的限定范围复审仍待控制任务确认；未合并、部署或启用交易。
 
 ## 最终检查
 
 | 检查 | 实际结果 |
 | --- | --- |
-| `.venv/bin/pytest --no-cov -q` | 2113 passed，1 skipped，8 warnings，76.85 秒，exit 0 |
-| `node node_modules/vitest/vitest.mjs run` | 45 files，237 passed，10.78 秒，exit 0 |
+| `.venv/bin/pytest --no-cov -q` | 2119 passed，1 skipped，8 warnings，50.99 秒，exit 0 |
+| `node node_modules/vitest/vitest.mjs run` | 45 files，251 passed，14.64 秒，exit 0 |
 | `node node_modules/typescript/bin/tsc --noEmit` | exit 0 |
 | `node node_modules/eslint/bin/eslint.js .` | exit 0 |
-| `node node_modules/vite/bin/vite.js build` | 2226 modules，1.40 秒，exit 0 |
-| 新增 Python 示例/预览/测试 Ruff | exit 0 |
+| `node node_modules/vite/bin/vite.js build` | 2226 modules，1.75 秒，exit 0 |
+| 本轮 7 个 Python 文件 Ruff check / format --check | exit 0 |
 | `git diff --check` | exit 0 |
 
-Node 使用 `/Users/rccpony/.nvm/versions/node/v24.19.0/bin/node`。所有长检查等待到实际进程退出。
+Node 使用 `/Users/rccpony/.nvm/versions/node/v24.19.0/bin/node`。以上为最终修复后的检查，后端、前端、类型、lint、构建按顺序运行，所有长检查等待到实际进程退出。此前 Task 6 的完整结果为后端 2113 passed / 1 skipped / 8 warnings（76.85 秒），前端 237 passed（10.78 秒）。
 
 后端八条警告与此前相同：一个未注册的 benchmark mark，一个 LangGraph pending deprecation，以及两个既有 Redis mock 测试中的六条 AsyncMock 未 await 警告。未隐藏警告。
 
 首次完整前端检查与后端、ESLint、TypeScript 和浏览器同时运行，出现七个失败：forms 全字段测试、books 跨写入测试超时；strategy 保存、两个 setup 测试、venue draft reload 和 books identity 测试在等待懒加载页面/字段时失败。共 230 passed、7 failed，28.90 秒。停止并发重负载后同一完整命令通过，期间没有修改代码、断言或超时。结果符合负载相关时序问题，但单次复跑不证明每项失败的唯一原因；保留该限制供 CI 复核。
+
+## 最终评审修复
+
+基线：`bbf62059a303f6fd23f638c08f9cbb3d3a158449`。六项发现同一轮处理，以下为自动化证据；本轮未重新做浏览器走查。
+
+| 发现 | 修复及验证 |
+| --- | --- |
+| 成功轮换凭据后应用状态陈旧 | 写入确认后刷新公共配置。活跃系统轮换后仍显示正确激活状态，其他分区草稿保留；API 密钥在确认后仅内存交接并用于刷新认证。刷新失败明确显示已保存但需重新加载，缓存不含凭据。 |
+| 首次启用遗漏 Redis | 检查清单校验待启用状态，系统行说明 Redis 前提并链接配置表单。空 Redis 禁用激活；仍允许未启用时保存其他系统字段。 |
+| Paper 无实际逐仓行为 | 现有目录新增代码定义的 `margin_modes`，表单据此展示。Paper 固定全仓、共享账户权益，保留杠杆；OKX/Bybit 的 Cross/Isolated 可选项保留。 |
+| gt/lt 丢失独占语义 | 目录独立传输独占上下界，ge/le 仍为包含边界；参数表单共用数值校验。零 Paper 资金显示字段错误并聚焦，0.00001 可保存，服务端零资金落库前拒绝不变。 |
+| 风控监控术语错误 | 中英文改为连接名义敞口上限；风险计算没有变化。 |
+| 测试名称夸大键盘覆盖 | 改名为带标签选择器路由、焦点和草稿保留。下文原生键盘工具限制保留。 |
+
+凭据状态自查还覆盖发布失败：后端可能保存新版本后返回 503，此时旧缓存不能证明系统当前激活。页面要求显式重新加载，再显示服务端失败状态；没有推断回滚，也没有使用未经确认的新 API 密钥。
+
+TDD 实际结果：后端目录 RED 6 failed / 10 passed（缺少能力和独占边界），hooks RED 5 failed / 14 passed（旧应用版本和独占边界误放行），页面 RED 5 failed / 14 passed。初始 GREEN 为前端 7 files / 48 passed、后端契约 104 passed。发布失败补充 RED 1 failed（503 后仍声称已激活），对应 GREEN 4 files / 24 passed。最终完整结果见上表；未修改超时或隐藏警告。
+
+- [x] 六项修复及失败发布状态回归完成，最终串行检查通过。
+- [ ] 控制任务关闭本轮限定范围独立复审，并刷新隔离预览复核。
+- [ ] 另行授权的部署与旧数据清理。
 
 ## 真实路径证据
 

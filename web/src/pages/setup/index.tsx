@@ -21,11 +21,13 @@ export default function SetupPage() {
   const document = runtime.baseline;
   if (!document) return null;
   const confirmedActive =
-    document.system.active && runtime.applyStatus === 'applied' && runtime.appliedRevision === runtime.revision;
+    !runtime.conflict && document.system.active && runtime.applyStatus === 'applied' && runtime.appliedRevision === runtime.revision;
+  // Readiness validates the intended active state; inactive section saves remain partial.
+  const activationDocument = { ...document, system: { ...document.system, active: true } };
+  const errors = (section: ConfigurationSection) =>
+    validateConfigurationSection(section, activationDocument, runtime.catalog.data, (key) => t('forms.validation.' + key));
   const valid = (section: ConfigurationSection) =>
-    !Object.keys(
-      validateConfigurationSection(section, document, runtime.catalog.data, (key) => t('forms.validation.' + key)),
-    ).length;
+    !Object.keys(errors(section)).length;
   const checked = connectionChecksReady(document, runtime.checks, runtime.credentialStates);
   const accessReady =
     (!document.security.enabled || runtime.secretStates.apiAccess.configured) &&
@@ -70,6 +72,9 @@ export default function SetupPage() {
                 <span className="configuration-help">
                   {t(sectionReady ? 'center.savedReady' : 'center.reviewRequired')}
                 </span>
+                {section.id === 'system' && errors('system')['infrastructure.redis_url'] ? (
+                  <p className="configuration-error">{t('center.redisRequired')}</p>
+                ) : null}
               </li>
             );
           })}
@@ -89,7 +94,7 @@ export default function SetupPage() {
         <div className="space-y-3">
           {document.system.active ? (
             <p role="status" className="configuration-help">
-              {t(runtime.applyStatus === 'failed' ? 'center.activationApplyFailed' : 'center.activationPending')}
+              {t(runtime.conflict ? 'center.activationUnconfirmed' : runtime.applyStatus === 'failed' ? 'center.activationApplyFailed' : 'center.activationPending')}
             </p>
           ) : null}
           <div className="configuration-actions">

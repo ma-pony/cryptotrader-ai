@@ -4,6 +4,67 @@ import i18n from '@/lib/i18n';
 import { workflowConfig, workflowHarness } from '@/test/configuration-workflow';
 
 beforeEach(() => i18n.changeLanguage('zh-CN'));
+it('associates missing Redis with system readiness without blocking incomplete inactive saves', async () => {
+  const config = workflowConfig();
+  config.document.infrastructure.redis_url = '';
+  const h = workflowHarness('/settings/venues', config);
+  fireEvent.click(await screen.findByRole('button', { name: '只读检查' }));
+  await screen.findByText(/账户读取已验证/);
+  fireEvent.click(screen.getByRole('link', { name: '初始化检查清单' }));
+  expect(await screen.findByRole('button', { name: '激活交易系统' })).toBeDisabled();
+  const system = screen.getByRole('link', { name: '系统与通知' }).closest('li')!;
+  expect(system).toHaveTextContent('需要检查');
+  expect(within(system).getByText(/Redis/)).toBeInTheDocument();
+  fireEvent.click(within(system).getByRole('link'));
+  fireEvent.change(await screen.findByLabelText('通知请求超时（秒）'), { target: { value: '15' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  await waitFor(() => expect(h.writes).toHaveLength(1));
+  expect(h.writes[0]!.document).toMatchObject({ infrastructure: { redis_url: '' }, system: { active: false } });
+  fireEvent.change(screen.getByLabelText('Redis 地址'), { target: { value: 'redis://localhost:6379/0' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  await waitFor(() => expect(h.writes).toHaveLength(2));
+  fireEvent.click(screen.getByRole('link', { name: '初始化检查清单' }));
+  expect(await screen.findByRole('button', { name: '激活交易系统' })).toBeEnabled();
+});
+
+it('keeps an active system confirmed after gateway rotation without losing an unrelated draft', async () => {
+  const config = workflowConfig();
+  config.document.system.active = true;
+  config.setup_required = false;
+  const h = workflowHarness('/settings/risk', config);
+  fireEvent.change(await screen.findByLabelText('最大回撤（%）'), { target: { value: '7' } });
+  fireEvent.click(screen.getByRole('link', { name: '模型与网关' }));
+  fireEvent.change(await screen.findByLabelText('LLM 网关密钥'), { target: { value: 'rotation-marker' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
+  await waitFor(() => expect(screen.getByLabelText('LLM 网关密钥')).toHaveValue(''));
+  fireEvent.click(screen.getByRole('link', { name: '初始化检查清单' }));
+  expect(await screen.findByText('交易系统已激活。')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '重试激活当前配置' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('link', { name: '风控与审批' }));
+  expect(await screen.findByLabelText('最大回撤（%）')).toHaveValue(7);
+  expect(h.writes).toHaveLength(0);
+});
+
+it('requires authoritative reload after an uncertain credential write instead of claiming the old revision is active', async () => {
+  const config = workflowConfig();
+  config.document.system.active = true;
+  config.setup_required = false;
+  const h = workflowHarness('/settings/models', config);
+  h.fail(503, 'Runtime configuration cannot be applied');
+  fireEvent.change(await screen.findByLabelText('LLM 网关密钥'), { target: { value: 'failed-rotation-marker' } });
+  fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
+  await waitFor(() => expect(screen.getByLabelText('LLM 网关密钥')).toHaveValue(''));
+  fireEvent.click(screen.getByRole('link', { name: '初始化检查清单' }));
+  await screen.findByRole('heading', { name: '初始化交易系统' });
+  expect(screen.queryByText('交易系统已激活。')).not.toBeInTheDocument();
+  expect(screen.getByText('当前激活状态尚未确认，请重新加载。')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '重试激活当前配置' })).toBeDisabled();
+  h.clearFailure();
+  h.setSaved({ ...h.saved(), revision: 2, apply_status: 'failed', applied_revision: 1 });
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  await screen.findByText('当前配置激活失败，请检查服务状态后重试。');
+  expect(screen.queryByText('交易系统已激活。')).not.toBeInTheDocument();
+});
 it('lets an inactive user reach all eight sections through the shared checklist', async () => {
   workflowHarness('/');
   expect(await screen.findByRole('heading', { name: '初始化交易系统' })).toBeInTheDocument();

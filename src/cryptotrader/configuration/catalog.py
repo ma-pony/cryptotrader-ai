@@ -26,6 +26,7 @@ class PluginConfiguration:
     parameter_model: type[BaseModel]
     environments: tuple[str, ...] = ()
     credential_fields: tuple[str, ...] = ()
+    margin_modes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.parameter_model, type) or not issubclass(self.parameter_model, BaseModel):

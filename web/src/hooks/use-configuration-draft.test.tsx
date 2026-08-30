@@ -9,6 +9,25 @@ import { RUNTIME_CONFIG_QUERY_KEY, toRuntimeDocument } from './use-runtime-confi
 
 afterEach(() => vi.unstubAllGlobals());
 
+it.each([
+  ['exclusive_minimum', 0, false],
+  ['exclusive_minimum', 0.00001, true],
+  ['minimum', 0, true],
+  ['exclusive_maximum', 0, false],
+  ['exclusive_maximum', -0.00001, true],
+  ['maximum', 0, true],
+] as const)('validates %s against %s with inclusive and exclusive semantics', (bound, value, valid) => {
+  const source = configurationCatalogFixture.market_sources[0]!;
+  const catalog = { ...configurationCatalogFixture, market_sources: [{ ...source, fields: [{
+    ...source.fields[0]!, minimum: null, maximum: null, exclusive_minimum: null, exclusive_maximum: null, [bound]: 0,
+  }] }] };
+  const document = toRuntimeDocument(runtimeConfigFixture().document);
+  document.market_data = { source_id: 'default', parameters: { threshold: value } };
+  expect(validateConfigurationSection('market', document, catalog, (key) => key)).toEqual(
+    valid ? {} : { 'market_data.parameters.threshold': 'numberInvalid' },
+  );
+});
+
 function harness() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, runtimeConfigFixture());

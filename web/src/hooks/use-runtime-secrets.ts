@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query';
 
 import { ApiError, apiClient } from '@/lib/api-client';
-import { RuntimeTokenMutationSchema } from '@/types/api.schema';
+import { RuntimeConfigSchema, RuntimeTokenMutationSchema } from '@/types/api.schema';
 import type { RuntimeConfig } from '@/types/api';
 import { setRuntimeConfigConflict } from './runtime-config-conflict';
 import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
@@ -47,9 +47,25 @@ export const useRuntimeSecrets = () => {
           document: { ...current.document, llm, security, market_data: kind === 'news-provider' ? { ...current.document.market_data, news_credential_configured: saved.configured, news_credential_updated_at: saved.updated_at } : current.document.market_data },
         };
       });
-      return saved;
+      // The public document owns application status. Acknowledged credentials
+      // are committed even if this follow-up read fails; never retry blindly.
+      try {
+        await client.fetchQuery({
+          queryKey: RUNTIME_CONFIG_QUERY_KEY,
+          queryFn: () => apiClient.get('/api/config', RuntimeConfigSchema),
+          staleTime: 0,
+          retry: false,
+        });
+        return { ...saved, savedNeedsReload: false };
+      } catch {
+        setRuntimeConfigConflict(client);
+        return { ...saved, savedNeedsReload: true };
+      }
     } catch (error) {
-      if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
+      // Failed publication or a lost response can follow persistence. Require
+      // an authoritative reload instead of treating cached application as current.
+      if (!(error instanceof ApiError) || error.status === 409 || error.status >= 500)
+        setRuntimeConfigConflict(client);
       throw error;
     }
   };

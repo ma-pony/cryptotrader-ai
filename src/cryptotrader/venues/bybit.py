@@ -290,6 +290,7 @@ class BybitVenueAdapter:
         parameter_model=EmptyParameters,
         environments=("testnet", "demo", "live"),
         credential_fields=("api_key", "secret"),
+        margin_modes=("cross", "isolated"),
     )
 )
 def create_adapter() -> BybitVenueAdapter:

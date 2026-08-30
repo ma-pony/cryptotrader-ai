@@ -291,11 +291,13 @@ export const ConfigurationFieldSchema = z.object({
   kind: z.enum(['text', 'number', 'integer', 'boolean', 'select', 'string_list']),
   default_value: JsonValueSchema, required: z.boolean(), minimum: z.number().nullable(),
   maximum: z.number().nullable(), step: z.number().nullable(), unit: z.string().nullable(),
+  exclusive_minimum: z.number().nullable(), exclusive_maximum: z.number().nullable(),
   advanced: z.boolean(), options: z.array(z.object({ value: z.string(), label: LocalizedTextSchema }).strict()),
 }).strict();
 export const PluginDefinitionSchema = z.object({
   id: z.string(), label: LocalizedTextSchema, description: LocalizedTextSchema,
   fields: z.array(ConfigurationFieldSchema), environments: z.array(z.string()), credential_fields: z.array(z.string()),
+  margin_modes: z.array(z.enum(['cross', 'isolated'])),
 }).strict();
 export const ConfigurationCatalogSchema = z.object({
   components: z.array(PluginDefinitionSchema), venues: z.array(PluginDefinitionSchema), market_sources: z.array(PluginDefinitionSchema),

@@ -21,7 +21,7 @@
     "title": "Enforced risk limits",
     "concentration": "Connection concentration limit",
     "exposure": "Total exposure limit",
-    "margin": "Margin usage limit",
+    "margin": "Connection notional cap",
     "drawdown": "Maximum drawdown"
   },
   "redis_warning": "Redis unavailable: risk state may be inaccurate",

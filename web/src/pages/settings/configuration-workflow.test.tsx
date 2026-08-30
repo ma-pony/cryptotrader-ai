@@ -5,7 +5,7 @@ import { workflowHarness } from '@/test/configuration-workflow';
 import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
 import userEvent from '@testing-library/user-event';
 beforeEach(() => i18n.changeLanguage('zh-CN'));
-it('routes from the labelled compact selector and keeps drafts when navigating by keyboard', async () => {
+it('routes from the labelled compact selector, exposes focus and preserves drafts', async () => {
   const user = userEvent.setup();
   const h = workflowHarness('/settings/models');
   fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'compact-nav-draft' } });

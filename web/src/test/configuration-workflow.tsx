@@ -32,13 +32,15 @@ export const workflowCatalog: ConfigurationCatalog = {
       description: { zh_CN: '', en_US: '' },
       environments: ['paper'],
       credential_fields: [],
+      margin_modes: ['cross'],
       fields: [
         {
           ...pluginFields[0]!,
           key: 'initial_equity',
           label: { zh_CN: '模拟初始资金', en_US: 'Initial simulated equity' },
           default_value: { ...pluginFields[0]!.default_value, number_value: '10000' },
-          minimum: 0.01,
+          minimum: null,
+          exclusive_minimum: 0,
           maximum: null,
           unit: 'USDT',
         },
@@ -51,6 +53,7 @@ export const workflowCatalog: ConfigurationCatalog = {
       fields: [],
       environments: id === 'okx' ? ['demo', 'live'] : ['demo', 'testnet', 'live'],
       credential_fields: id === 'okx' ? ['api_key', 'secret', 'passphrase'] : ['api_key', 'secret'],
+      margin_modes: ['cross', 'isolated'] as ('cross' | 'isolated')[],
     })),
   ],
 };
@@ -139,6 +142,8 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
       saved = {
         ...saved,
         revision: saved.revision + 1,
+        applied_revision: saved.revision + 1,
+        apply_status: 'applied',
         document: {
           ...saved.document,
           market_data: { ...saved.document.market_data, ...(news ? { news_credential_configured: true, news_credential_updated_at: '2026-08-30T13:00:00Z' } : {}) },

@@ -31,6 +31,8 @@ class ConfigurationField:
     required: bool
     minimum: float | int | None = None
     maximum: float | int | None = None
+    exclusive_minimum: float | int | None = None
+    exclusive_maximum: float | int | None = None
     step: float | int | None = None
     unit: str | None = None
     advanced: bool = False
@@ -46,20 +48,20 @@ def _localized(value: Any, fallback: str) -> LocalizedText:
     return LocalizedText(zh_CN=text, en_US=text)
 
 
-def _constraints(field) -> tuple[float | int | None, float | int | None, float | int | None]:
-    minimum = maximum = step = None
+def _constraints(field) -> dict[str, float | int | None]:
+    constraints = dict.fromkeys(("minimum", "maximum", "exclusive_minimum", "exclusive_maximum", "step"))
     for metadata in field.metadata:
-        if getattr(metadata, "ge", None) is not None:
-            minimum = metadata.ge
-        if getattr(metadata, "gt", None) is not None:
-            minimum = metadata.gt
-        if getattr(metadata, "le", None) is not None:
-            maximum = metadata.le
-        if getattr(metadata, "lt", None) is not None:
-            maximum = metadata.lt
-        if getattr(metadata, "multiple_of", None) is not None:
-            step = metadata.multiple_of
-    return minimum, maximum, step
+        for attribute, key in (
+            ("ge", "minimum"),
+            ("le", "maximum"),
+            ("gt", "exclusive_minimum"),
+            ("lt", "exclusive_maximum"),
+            ("multiple_of", "step"),
+        ):
+            value = getattr(metadata, attribute, None)
+            if value is not None:
+                constraints[key] = value
+    return constraints
 
 
 def _field_kind(annotation: Any) -> tuple[str, tuple[FieldOption, ...]]:
@@ -118,7 +120,6 @@ def configuration_fields(parameter_model: type[BaseModel], *, prefix: str = "") 
             else FieldOption(str(option["value"]), _localized(option["label"], ""))
             for option in options
         )
-        minimum, maximum, step = _constraints(field)
         label = getattr(parameter_model, "field_labels", {}).get(
             name, _localized(extra.get("label"), field.title or name.replace("_", " ").title())
         )
@@ -134,9 +135,7 @@ def configuration_fields(parameter_model: type[BaseModel], *, prefix: str = "") 
                 kind=kind,
                 default_value=_static_default(field),
                 required=field.is_required(),
-                minimum=minimum,
-                maximum=maximum,
-                step=step,
+                **_constraints(field),
                 unit=extra.get("unit"),
                 advanced=bool(extra.get("advanced", False)),
                 options=normalized_options,

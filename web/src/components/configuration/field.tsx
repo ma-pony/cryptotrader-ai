@@ -219,7 +219,7 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
   const conflict = useRuntimeConfigConflict();
   const [token, setToken] = useState('');
   const [pending, setPending] = useState(false);
-  const [saved, setSaved] = useState<{ revision: number; updated_at: string }>();
+  const [saved, setSaved] = useState<{ revision: number; updated_at: string; savedNeedsReload: boolean }>();
   const [failed, setFailed] = useState(false);
   const gateway = kind === 'llm-gateway';
   const news = kind === 'news-provider';
@@ -235,7 +235,7 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
           setToken(next);
           setFailed(false);
         }}
-        error={failed ? t('forms.accessWriteFailed') : undefined}
+        error={failed ? t(conflict ? 'forms.accessWriteUnconfirmed' : 'forms.accessWriteFailed') : undefined}
       />
       <button
         type="button"
@@ -273,6 +273,9 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
         {conflict ? t('conflict') : saved || state.configured ? t('forms.accessConfigured') : t('forms.accessMissing')}
         {saved?.updated_at || state.updatedAt ? ` · ${saved?.updated_at ?? state.updatedAt}` : ''}
       </p>
+      {saved?.savedNeedsReload && conflict ? (
+        <p role="alert" className="configuration-error">{t('forms.accessSavedNeedsReload')}</p>
+      ) : null}
     </div>
   );
 }
