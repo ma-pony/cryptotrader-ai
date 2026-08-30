@@ -4,12 +4,17 @@ import { useConfigurationDraft } from '@/hooks/use-configuration-draft';
 import type { Connection, ConnectionCheck } from '@/lib/configuration-readiness';
 import type { ConfigurationDraft } from '@/types/api';
 
+type BookRow = { key: string; persistedId?: string };
+
 function useOwner() {
   const catalog = useConfigurationCatalog();
   const draft = useConfigurationDraft(catalog.data);
   const [checks, setChecks] = useState<Record<string, ConnectionCheck>>({});
-  // Presentation identity is independent from the editable persistent book ID.
-  const [bookKeys, setBookKeys] = useState(() => draft.document?.execution.books.map(() => crypto.randomUUID()) ?? []);
+  // Dirty rows retain their original persisted identity, never the text being edited.
+  const [draftBookRows, setBookRows] = useState<BookRow[]>([]);
+  const bookRows = draft.isDirty('books')
+    ? draftBookRows
+    : (draft.baseline?.execution.books.map((book) => ({ key: book.id, persistedId: book.id })) ?? []);
   const [venueDrafts, setVenueDrafts] = useState<Record<string, ConfigurationDraft<Connection>>>({});
   const dirty = draft.dirty || Object.keys(venueDrafts).length > 0;
   useEffect(() => {
@@ -26,8 +31,8 @@ function useOwner() {
     catalog,
     checks,
     setChecks,
-    bookKeys,
-    setBookKeys,
+    bookRows,
+    setBookRows,
     venueDrafts,
     setVenueDrafts,
     hasUnsaved: dirty,

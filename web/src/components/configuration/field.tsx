@@ -15,17 +15,18 @@ export const percentToRatio = (percent: number) => percent / 100;
 
 type FieldProps = {
   name: string;
+  id?: string;
   label: string;
   help?: string | undefined;
   error?: string | undefined;
   children: ReactNode;
 };
-export function Field({ name, label, help, error, children }: FieldProps) {
+export function Field({ name, id = name, label, help, error, children }: FieldProps) {
   return (
     <div className="configuration-field">
-      <label htmlFor={name}>{label}</label>
+      <label htmlFor={id}>{label}</label>
       {children}
-      <p id={`${name}-help`} className={error ? 'configuration-error' : 'configuration-help'}>
+      <p id={`${id}-help`} className={error ? 'configuration-error' : 'configuration-help'}>
         {error || help}
       </p>
     </div>
@@ -69,6 +70,7 @@ export function TextField(
 export function NumberField(
   props: CommonFieldProps & {
     value: number | '';
+    id?: string;
     onChange: (value: number | '') => void;
     min?: number;
     max?: number;
@@ -81,6 +83,8 @@ export function NumberField(
     <Field {...props}>
       <input
         {...attributes({ ...props, required: props.required ?? true })}
+        id={props.id ?? props.name}
+        aria-describedby={`${props.id ?? props.name}-help`}
         type="number"
         min={props.min}
         max={props.max}

@@ -1,7 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it } from 'vitest';
 import i18n from '@/lib/i18n';
-import { workflowHarness } from '@/test/configuration-workflow';
+import { workflowConfig, workflowHarness } from '@/test/configuration-workflow';
 
 beforeEach(() => i18n.changeLanguage('zh-CN'));
 it('lets an inactive user reach all eight sections through the shared checklist', async () => {
@@ -63,3 +63,51 @@ it('invalidates readiness when a repeated account check fails', async () => {
   expect(await screen.findByRole('button', { name: '激活交易系统' })).toBeDisabled();
   expect(h.writes).toHaveLength(0);
 });
+
+it('does not call a persisted active revision activated after application fails and recovers explicitly', async () => {
+  const h = workflowHarness('/settings/venues');
+  fireEvent.click(await screen.findByRole('button', { name: '只读检查' }));
+  await screen.findByText(/账户读取已验证/);
+  fireEvent.click(screen.getByRole('link', { name: '初始化检查清单' }));
+  h.failApply(true);
+  fireEvent.click(await screen.findByRole('button', { name: '激活交易系统' }));
+  await screen.findByRole('alert');
+  expect(h.saved()).toMatchObject({
+    revision: 2,
+    apply_status: 'failed',
+    applied_revision: 1,
+    document: { system: { active: true } },
+  });
+  expect(screen.queryByText('交易系统已激活。')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+  await screen.findByText('当前配置激活失败，请检查服务状态后重试。');
+  fireEvent.click(screen.getByRole('link', { name: '模型与网关' }));
+  await screen.findByRole('heading', { name: '模型与网关' });
+  fireEvent.click(screen.getByRole('link', { name: '初始化检查清单' }));
+  await screen.findByText('当前配置激活失败，请检查服务状态后重试。');
+  expect(screen.queryByText('交易系统已激活。')).not.toBeInTheDocument();
+  expect(h.writes).toHaveLength(1);
+  h.failApply(false);
+  fireEvent.click(screen.getByRole('button', { name: '重试激活当前配置' }));
+  await screen.findByText('交易系统已激活。');
+  expect(h.writes[1]).toMatchObject({
+    expected_revision: 2,
+    document: { system: { active: true }, execution: { live_order_execution_enabled: false } },
+  });
+  expect(h.saved()).toMatchObject({ revision: 3, apply_status: 'applied', applied_revision: 3 });
+});
+
+it.each(['failed', 'pending', 'applied'] as const)(
+  'requires the current revision to be confirmed on a fresh %s visit',
+  async (apply_status) => {
+    const config = workflowConfig();
+    config.document.system.active = true;
+    config.setup_required = false;
+    config.apply_status = apply_status;
+    config.applied_revision = 0;
+    const h = workflowHarness('/setup', config);
+    expect(await screen.findByRole('button', { name: '重试激活当前配置' })).toBeDisabled();
+    expect(screen.queryByText('交易系统已激活。')).not.toBeInTheDocument();
+    expect(h.writes).toHaveLength(0);
+  },
+);

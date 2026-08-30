@@ -20,6 +20,8 @@ export default function SetupPage() {
   const [failure, setFailure] = useState(false);
   const document = runtime.baseline;
   if (!document) return null;
+  const confirmedActive =
+    document.system.active && runtime.applyStatus === 'applied' && runtime.appliedRevision === runtime.revision;
   const valid = (section: ConfigurationSection) =>
     !Object.keys(
       validateConfigurationSection(section, document, runtime.catalog.data, (key) => t('forms.validation.' + key)),
@@ -37,7 +39,7 @@ export default function SetupPage() {
     !runtime.hasUnsaved &&
     !runtime.conflict;
   const activate = async () => {
-    if (!ready || runtime.isSaving) return;
+    if (!ready || runtime.isSaving || runtime.isReloading || failure) return;
     const latest = client.getQueryData<RuntimeConfig>(RUNTIME_CONFIG_QUERY_KEY);
     if (!latest || latest.revision !== runtime.revision) return;
     const saved = toRuntimeDocument(latest.document);
@@ -47,6 +49,10 @@ export default function SetupPage() {
     } catch {
       setFailure(true);
     }
+  };
+  const reload = async () => {
+    const result = await runtime.reload();
+    if (!result.error) setFailure(false);
   };
   return (
     <section className="space-y-6">
@@ -77,16 +83,32 @@ export default function SetupPage() {
           {t(runtime.conflict ? 'forms.conflictHelp' : 'center.activationFailed')}
         </p>
       ) : null}
-      {document.system.active ? (
+      {confirmedActive ? (
         <p role="status">{t('center.active')}</p>
       ) : (
-        <button
-          className="configuration-button configuration-primary"
-          disabled={!ready || runtime.isSaving}
-          onClick={() => void activate()}
-        >
-          {t('center.activate')}
-        </button>
+        <div className="space-y-3">
+          {document.system.active ? (
+            <p role="status" className="configuration-help">
+              {t(runtime.applyStatus === 'failed' ? 'center.activationApplyFailed' : 'center.activationPending')}
+            </p>
+          ) : null}
+          <div className="configuration-actions">
+            <button
+              className="configuration-button configuration-primary"
+              disabled={!ready || runtime.isSaving || runtime.isReloading || failure}
+              onClick={() => void activate()}
+            >
+              {t(document.system.active ? 'center.retryActivation' : 'center.activate')}
+            </button>
+            <button
+              className="configuration-button"
+              disabled={runtime.isSaving || runtime.isReloading}
+              onClick={() => void reload()}
+            >
+              {t('reload')}
+            </button>
+          </div>
+        </div>
       )}
     </section>
   );

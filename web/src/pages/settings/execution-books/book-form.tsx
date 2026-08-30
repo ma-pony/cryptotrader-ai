@@ -114,7 +114,12 @@ export function BookForm({
                 }
               />
               <NumberField
-                name={prefix + '.allocations.' + row + '.weight'}
+                id={prefix + '.connection.' + connection.id + '.weight'}
+                name={
+                  row < 0
+                    ? prefix + '.connection.' + connection.id + '.weight'
+                    : prefix + '.allocations.' + row + '.weight'
+                }
                 label={t('book.weight', { name: connection.label })}
                 percent
                 min={0}

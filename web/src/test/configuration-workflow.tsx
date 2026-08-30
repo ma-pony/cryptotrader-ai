@@ -123,6 +123,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
   const writes: { expected_revision: number; document: RuntimeDocument }[] = [];
   let failure: { status: number; detail: unknown } | undefined;
   let failReload = false;
+  let failApply = false;
   const response = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }));
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
     if (requiredAccess && new Headers(init?.headers).get('X-API-Key') !== requiredAccess) {
@@ -164,6 +165,8 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
         ...saved,
         revision: saved.revision + 1,
         setup_required: !doc.system.active,
+        apply_status: failApply ? 'failed' : 'applied',
+        applied_revision: failApply ? saved.applied_revision : saved.revision + 1,
         document: {
           ...doc,
           security: {
@@ -197,7 +200,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
           },
         },
       });
-      return response(saved);
+      return failApply ? response({ detail: 'Runtime configuration cannot be applied' }, 503) : response(saved);
     }
     if (url.endsWith('/test')) {
       const id = url.split('/').at(-2)!;
@@ -299,6 +302,9 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
     },
     failReload: (value: boolean) => {
       failReload = value;
+    },
+    failApply: (value: boolean) => {
+      failApply = value;
     },
   };
 }

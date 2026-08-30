@@ -131,3 +131,43 @@ Two commit hook attempts stopped on detect-secrets false positives: public crede
 Frontend-design/Hallmark follow the approved existing app workbench, theme, system fonts, Tailwind 3 tokens and restrained form dividers. No marketing surfaces, generated images or new visual dependency. New navigation has named routes, instant focus outlines, non-wrapping labels and mobile hit targets; forms reuse Task 3 field/error controls. Source-level critique: P4 H4 E4 S5 R5 V4. This is not a rendered viewport/contrast acceptance claim.
 
 Task 6 owns fixture-backed browser acceptance at the specified mobile/desktop widths; no writes or browser experiments were performed against the user's old localhost:5173 deployment. Task 5 owns dead backend consumer/type cleanup (including unused `allocation_policy`), actual HITL expiry enforcement, optional news credential vertical integration and operational scheduler/backtest consumer cleanup. No allocation policy selector, disconnected news control, or Task 5 operational form edit was introduced.
+
+## Review round 1 — activation confirmation and book identity
+
+Reviewed HEAD: `3a4b74d5cd7da8b23c6f77e82d3a88b9b72a0bd9`. This appendix accompanies the follow-up fix commit; its final HEAD is included in the completion handoff. Scope is the two Important and one Minor findings only, with no backend production changes or Task 5/6 work.
+
+1. **Activation is confirmed applied state, not desired state.** Verified `apply_document`/`publish_pending_snapshot` and `test_owner_failure_marks_desired_revision_failed_then_a_later_revision_recovers`: the server may persist `active=true`, fail publication with 503, and report a failed newer desired revision on GET. Setup now requires `active=true`, `apply_status=applied` and `applied_revision=revision` before reporting activation. Pending/failed or stale applied revisions show truthful status plus explicit reload/retry. A failed request blocks retry until reload succeeds. Retry still requires current checks, no dirty/conflicting state, and the latest matching CAS revision; nothing activates automatically. The real App HTTP-boundary fixture now simulates persisted desired state followed by failed application, and successful responses mark the new revision applied.
+2. **Persisted book identity is separate from editable text.** The single owner exposes `bookRows` (`key`, optional `persistedId`) instead of `bookKeys`. Dirty rows preserve their persisted identity metadata; clean/successfully saved rows derive it from the latest baseline. A new ID may equal or pass through a saved ID without locking. Duplicate validation remains repairable; newly saved IDs/scopes become immutable. The book fieldset disables edits while its save is pending so a row cannot change identity across acknowledgement.
+3. **Allocation labels target unique stable controls.** `Field`/`NumberField` accept an optional presentation `id` independently of the submission `name`. Book weight IDs use connection identity; unallocated names are also unique, while allocated names retain indexed server-validation paths. Label/help associations remain stable when allocation is enabled. After pending controls re-enable, the book form focuses the invalid server field. The regression asserts separate label targets, stable IDs, unique names and focus for `execution.books.0.allocations.1.weight`.
+
+### Review RED and GREEN
+
+Frontend commands below ran from `web/`:
+
+```sh
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/vitest/vitest.mjs run src/pages/setup/setup-page.test.tsx
+```
+
+RED: exit 1, **4 failed / 4 passed**. Missing reload/retry and incorrect success for failed, pending or stale-applied desired-active revisions. GREEN: exit 0, **8 passed**, 4.18s. Covers failed persistence → explicit reload → settings revisit → explicit retry at revision 2 → confirmed applied revision 3; the independent live execution gate stays false.
+
+```sh
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/vitest/vitest.mjs run src/pages/settings/execution-books/execution-books-page.test.tsx
+```
+
+RED: exit 1, **2 failed / 3 passed**. Real typing of `sim-two` stopped at `sim`; the Second and Third weight labels resolved to the same input. After identity/ID changes an intermediate run was **1 failed / 4 passed**, revealing that a pending disabled fieldset prevented server-error focus. Added post-pending focus synchronization; no validation-path rewrite or relaxed assertion. Final same-command rerun: exit 0, **5 passed**.
+
+```sh
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/vitest/vitest.mjs run src/pages/settings/execution-books/execution-books-page.test.tsx src/components/configuration
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/vitest/vitest.mjs run src/pages/setup/setup-page.test.tsx src/pages/settings src/pages/configuration-i18n.test.tsx src/components/configuration src/hooks/use-configuration-draft.test.tsx src/lib/configuration-readiness.test.ts
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/typescript/bin/tsc --noEmit
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/eslint/bin/eslint.js .
+rtk proxy /Users/rccpony/.nvm/versions/node/v24.19.0/bin/node node_modules/vite/bin/vite.js build
+```
+
+- Book/shared-control GREEN: exit 0, **3 files / 15 passed**, 4.71s.
+- Final focused integration GREEN: exit 0, **11 files / 51 passed**, 7.05s; no stderr warnings.
+- TypeScript: exit 0, no diagnostics. ESLint: exit 0 after replacing two redundant test type assertions with typed queries. Both rerun after that test-only cleanup.
+- Build: exit 0, **2226 modules**, 2.74s, no warnings.
+- `rtk git diff --check`: exit 0. No full frontend/backend suite rerun in this focused review round, as directed. All prior full-suite evidence remains recorded above.
+
+No real API writes, user database/environment reads, deployments or pushes were performed. Local commit hooks remain enabled.

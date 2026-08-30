@@ -20,6 +20,63 @@ it('keeps saved book identity immutable and new book ID input focused while typi
   fireEvent.click(screen.getAllByRole('button', { name: '移除' })[1]!);
   expect(screen.getAllByLabelText('资金池 ID')).toHaveLength(1);
 });
+it('keeps a new book editable through an existing ID prefix and duplicate validation, then locks it after save', async () => {
+  const h = workflowHarness('/settings/execution-books');
+  fireEvent.click(await screen.findByRole('button', { name: '新增资金池' }));
+  const id = screen.getAllByLabelText('资金池 ID')[1]!;
+  const user = userEvent.setup();
+  await user.clear(id);
+  await user.type(id, 'sim-two');
+  expect(id).toHaveValue('sim-two');
+  expect(id).toHaveFocus();
+  const scope = screen.getAllByLabelText('资金作用域')[1]!;
+  expect(scope).toBeEnabled();
+  await user.clear(id);
+  await user.type(id, 'sim');
+  fireEvent.change(screen.getAllByLabelText('名称')[1]!, { target: { value: 'Second book' } });
+  fireEvent.click(screen.getAllByLabelText('启用资金池')[1]!);
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  expect(id).toBeEnabled();
+  expect(id).toHaveAttribute('aria-invalid', 'true');
+  expect(h.writes).toHaveLength(0);
+  await user.type(id, '-two');
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  await waitFor(() => expect(h.saved().document.execution.books).toHaveLength(2));
+  await waitFor(() => expect(screen.getAllByLabelText('资金池 ID')[1]!).toHaveAttribute('disabled'));
+  expect(screen.getAllByLabelText('资金作用域')[1]!).toHaveAttribute('disabled');
+});
+
+it('maps unallocated weights to unique stable controls and focuses indexed server errors', async () => {
+  const config = workflowConfig();
+  const paper = config.document.execution.connections[0]!;
+  config.document.execution.connections.push(
+    { ...paper, id: 'second', label: 'Second' },
+    { ...paper, id: 'third', label: 'Third' },
+  );
+  const h = workflowHarness('/settings/execution-books', config);
+  const second = await screen.findByLabelText<HTMLInputElement>('Second 权重（%）');
+  const third = screen.getByLabelText<HTMLInputElement>('Third 权重（%）');
+  expect(second).not.toBe(third);
+  expect(second.id).not.toBe(third.id);
+  expect(second.name).not.toBe(third.name);
+  const secondId = second.id;
+  fireEvent.click(screen.getByRole('checkbox', { name: '启用 Paper' }));
+  fireEvent.click(screen.getByRole('checkbox', { name: '启用 Second' }));
+  expect(screen.getByLabelText('Second 权重（%）')).toBe(second);
+  expect(second.id).toBe(secondId);
+  h.fail(422, [
+    {
+      loc: ['body', 'document', 'execution', 'books', 0, 'allocations', 1, 'weight'],
+      msg: 'invalid',
+      type: 'value_error',
+    },
+  ]);
+  fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
+  await waitFor(() => expect(second).toHaveAttribute('aria-invalid', 'true'));
+  expect(second).toHaveFocus();
+  expect(second.labels?.[0]?.control).toBe(second);
+  expect(third.labels?.[0]?.control).toBe(third);
+});
 it('excludes disabled, canary and wrong-scope connections and shows exact percentage remainder', async () => {
   const config = workflowConfig();
   const paper = config.document.execution.connections[0]!;
