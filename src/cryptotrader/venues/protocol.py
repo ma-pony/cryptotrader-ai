@@ -26,6 +26,10 @@ if TYPE_CHECKING:
 class VenueOperationError(RuntimeError):
     """A credential-safe failure raised by a normalized venue operation."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 @runtime_checkable
 class VenueAdapter(Protocol):
@@ -50,6 +54,8 @@ class VenueSession(Protocol):
 
     @property
     def capabilities(self) -> VenueCapabilities: ...
+
+    async def check_connection(self) -> None: ...
 
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot: ...
 

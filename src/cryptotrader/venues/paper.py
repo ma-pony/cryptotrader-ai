@@ -80,6 +80,17 @@ class PaperVenueSession:
     def capabilities(self) -> VenueCapabilities:
         return self._capabilities
 
+    async def check_connection(self) -> None:
+        """Validate the deterministic local account without requiring market data."""
+        self._require_open()
+        if (
+            not self._account.initial_equity.is_finite()
+            or self._account.initial_equity <= 0
+            or not self._account.balances
+            or any(not balance.is_finite() for balance in self._account.balances.values())
+        ):
+            raise VenueOperationError(f"{self.connection_id}: invalid Paper account")
+
     async def set_quote(self, pair: Pair, price: Decimal) -> VenueQuote:
         """Install the latest deterministic Paper quote for one pair."""
         self._require_open()

@@ -85,6 +85,16 @@ async def test_paper_connection_uses_declared_equity_default_when_parameter_is_a
     assert (await session.fetch_portfolio(PAIR)).equity == Decimal("10000")
 
 
+async def test_paper_connection_check_validates_the_local_account_without_a_quote_or_order():
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    session = await PaperVenueAdapter().connect(paper_connection(), None)
+
+    await session.check_connection()
+
+    assert session._account.orders == {}
+
+
 async def test_paper_connection_rejects_wrong_adapter_id():
     from cryptotrader.venues.paper import PaperVenueAdapter
 

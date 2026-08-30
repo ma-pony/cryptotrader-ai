@@ -122,6 +122,8 @@ class FakeSession:
             frozenset({"market"}),
         )
         self.capabilities_error: Exception | None = None
+        self.check_error: Exception | None = None
+        self.check_calls = 0
         self.closed = 0
         self.close_started = asyncio.Event()
         self.close_finished = asyncio.Event()
@@ -141,6 +143,11 @@ class FakeSession:
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
         return self.snapshot
 
+    async def check_connection(self) -> None:
+        self.check_calls += 1
+        if self.check_error is not None:
+            raise self.check_error
+
     async def close(self) -> None:
         self.close_started.set()
         if self.close_release is not None:
@@ -156,6 +163,7 @@ class FakeAdapter:
         self.opened_sessions: list[FakeSession] = []
         self.error: Exception | None = None
         self.session_capabilities_error: Exception | None = None
+        self.session_check_error: Exception | None = None
         self.block_close = False
         self.session_opened = asyncio.Event()
 
@@ -175,6 +183,7 @@ class FakeAdapter:
         session = FakeSession(_portfolio(connection.id, "1", "0"))
         session.capabilities = self.capabilities(connection.environment)
         session.capabilities_error = self.session_capabilities_error
+        session.check_error = self.session_check_error
         session.close_release = asyncio.Event() if self.block_close else None
         self.opened_sessions.append(session)
         self.session_opened.set()

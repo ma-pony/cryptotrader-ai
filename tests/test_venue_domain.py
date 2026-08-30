@@ -195,6 +195,9 @@ def test_venue_protocols_are_structural_and_contract_helper_checks_capabilities(
         connection_id = "paper-local"
         capabilities = VenueCapabilities(frozenset({"spot", "swap"}), True, False, True, frozenset({"market"}))
 
+        async def check_connection(self):
+            return None
+
         async def fetch_portfolio(self, pair):
             return None
 

@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC, datetime
 from unittest.mock import ANY, AsyncMock
 
 import pytest
 
 from cryptotrader.pair import Pair
+from cryptotrader.venues.protocol import VenueOperationError
 from tests.test_runtime_config_api import ApiHarness, active_payload, api_harness, put_fixture_credentials
 
 PAIR = Pair.parse("BTC/USDT:USDT")
@@ -201,6 +203,7 @@ async def test_connection_test_requires_configured_credentials(api_harness):
     response = await api_harness.client.post("/api/venue-connections/bybit-testnet/test")
 
     assert response.status_code == 503
+    assert response.json() == {"detail": {"code": "credentials_missing"}}
     assert "bybit-testnet-credentials" not in response.text
 
 
@@ -217,7 +220,8 @@ async def test_explicit_canary_only_connection_test_still_reveals_connects_reads
     response = await api_harness.client.post("/api/venue-connections/bybit-canary/test")
 
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+    assert body == {
         "connection_id": "bybit-canary",
         "healthy": True,
         "environment": "testnet",
@@ -229,9 +233,44 @@ async def test_explicit_canary_only_connection_test_still_reveals_connects_reads
             "supported_order_types": ["limit", "market"],
         },
         "credential_configured": True,
+        "checked_at": ANY,
     }
+    assert datetime.fromisoformat(body["checked_at"].replace("Z", "+00:00")).tzinfo is UTC
     adapter = api_harness.adapters["bybit"]
     assert len(adapter.connect_calls) == 1
+    assert adapter.opened_sessions[0].check_calls == 1
+    assert adapter.opened_sessions[0].closed == 1
+
+
+async def test_connection_test_rejects_failed_account_read_without_writing_or_leaking(api_harness):
+    marker = "private-account-read-marker"
+    assert (await put_fixture_credentials(api_harness, "okx-demo")).status_code == 200
+    revision = (await api_harness.client.get("/api/config")).json()["revision"]
+    adapter = api_harness.adapters["okx"]
+    adapter.session_check_error = RuntimeError(marker)
+
+    response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
+
+    assert response.status_code == 502
+    assert response.json() == {"detail": {"code": "account_unavailable"}}
+    assert marker not in response.text
+    assert (await api_harness.client.get("/api/config")).json()["revision"] == revision
+    session = adapter.opened_sessions[0]
+    assert session.check_calls == 1
+    assert session.closed == 1
+    assert session.order_calls == 0
+
+
+async def test_connection_test_maps_a_safe_authentication_failure_code(api_harness):
+    assert (await put_fixture_credentials(api_harness, "okx-demo")).status_code == 200
+    adapter = api_harness.adapters["okx"]
+    adapter.session_check_error = VenueOperationError("safe failure", code="authentication_failed")
+
+    response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": {"code": "authentication_failed"}}
+    assert adapter.opened_sessions[0].check_calls == 1
     assert adapter.opened_sessions[0].closed == 1
 
 

@@ -2,6 +2,7 @@
 
 import importlib
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -13,6 +14,72 @@ from cryptotrader.venues.models import OrderIntent
 from tests.contracts.venue_adapter import assert_ccxt_session_contract, assert_venue_contract
 from tests.factories.runtime_config import connection
 from tests.fakes.ccxt_client import FakeCcxtFactory
+
+
+@pytest.mark.asyncio
+async def test_ccxt_connection_check_reads_an_account_without_trade_side_effects():
+    from cryptotrader.venues.okx import OkxVenueAdapter
+
+    fake_factory = FakeCcxtFactory("okx")
+    session = await OkxVenueAdapter(client_factory=fake_factory).connect(
+        connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+    client = fake_factory.clients[-1]
+    client.fetch_balance = AsyncMock(return_value={"total": {"USDT": "100"}})
+
+    await session.check_connection()
+
+    client.fetch_balance.assert_awaited_once()
+    assert not any(
+        name in {"create_order", "cancel_order", "set_leverage", "set_margin_mode"} for name, _ in client.calls
+    )
+
+
+@pytest.mark.asyncio
+async def test_ccxt_connection_check_hides_failed_account_read_payload():
+    from cryptotrader.venues.okx import OkxVenueAdapter
+
+    marker = "private-key-marker"
+    fake_factory = FakeCcxtFactory("okx")
+    session = await OkxVenueAdapter(client_factory=fake_factory).connect(
+        connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+    client = fake_factory.clients[-1]
+    client.fetch_balance = AsyncMock(side_effect=RuntimeError(marker))
+
+    with pytest.raises(VenueOperationError) as caught:
+        await session.check_connection()
+
+    assert str(caught.value) == "okx-demo: check account failed"
+    assert caught.value.code == "account_unavailable"
+    assert marker not in str(caught.value)
+    assert caught.value.__cause__ is None
+    client.fetch_balance.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_ccxt_connection_check_classifies_authentication_failures_without_payloads():
+    from ccxt.base.errors import AuthenticationError
+
+    from cryptotrader.venues.okx import OkxVenueAdapter
+
+    marker = "provider-authentication-payload"
+    fake_factory = FakeCcxtFactory("okx")
+    session = await OkxVenueAdapter(client_factory=fake_factory).connect(
+        connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
+        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+    )
+    client = fake_factory.clients[-1]
+    client.fetch_balance = AsyncMock(side_effect=AuthenticationError(marker))
+
+    with pytest.raises(VenueOperationError) as caught:
+        await session.check_connection()
+
+    assert caught.value.code == "authentication_failed"
+    assert marker not in str(caught.value)
+    assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize(

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from datetime import datetime  # noqa: TC003 - Pydantic resolves this response field at runtime.
+from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -30,6 +30,7 @@ from cryptotrader.venues.models import (
     VenueCapabilities,
     VenueConnection,
 )
+from cryptotrader.venues.protocol import VenueOperationError
 
 router = APIRouter(prefix="/api/venue-connections", tags=["venue-connections"])
 
@@ -109,6 +110,7 @@ class ConnectionHealthOut(BaseModel):
     environment: ConnectionEnvironment
     capabilities: VenueCapabilitiesOut
     credential_configured: bool
+    checked_at: datetime
 
 
 def _connection_from_create(body: CreateConnectionIn) -> VenueConnection:
@@ -279,6 +281,11 @@ async def _close_session(session) -> None:
         raise cancellation
 
 
+def _connection_test_failure(code: str) -> HTTPException:
+    status_code = status.HTTP_401_UNAUTHORIZED if code == "authentication_failed" else status.HTTP_502_BAD_GATEWAY
+    return HTTPException(status_code=status_code, detail={"code": code})
+
+
 @router.post("/{connection_id}/test", response_model=ConnectionHealthOut)
 async def test_connection(connection_id: str, request: Request) -> ConnectionHealthOut:
     runtime = require_runtime(request)
@@ -286,6 +293,7 @@ async def test_connection(connection_id: str, request: Request) -> ConnectionHea
     connection = _find_connection(snapshot, connection_id)
     credential_state = None
     session = None
+    checked_at = None
     try:
         credentials = None
         if connection.credential_ref is not None:
@@ -296,22 +304,28 @@ async def test_connection(connection_id: str, request: Request) -> ConnectionHea
         adapter = runtime.venue_registry.require(connection.adapter_id)
         session = await adapter.connect(connection, credentials)
         capabilities = session.capabilities
+        await session.check_connection()
+        checked_at = datetime.now(UTC)
     except CredentialNotConfigured:
-        raise HTTPException(status_code=503, detail="Connection credentials are not configured") from None
+        raise HTTPException(status_code=503, detail={"code": "credentials_missing"}) from None
+    except VenueOperationError as error:
+        code = "authentication_failed" if error.code == "authentication_failed" else "account_unavailable"
+        raise _connection_test_failure(code) from None
     except HTTPException:
         raise
     except Exception:
-        raise HTTPException(status_code=502, detail="Venue connection test failed") from None
+        raise _connection_test_failure("account_unavailable") from None
     finally:
         if session is not None:
             try:
                 await _close_session(session)
             except Exception:
-                raise HTTPException(status_code=502, detail="Venue connection test failed") from None
+                raise _connection_test_failure("account_unavailable") from None
     return ConnectionHealthOut(
         connection_id=connection.id,
         healthy=True,
         environment=connection.environment,
         capabilities=_capabilities_out(capabilities),
         credential_configured=bool(credential_state and credential_state.configured),
+        checked_at=checked_at,
     )

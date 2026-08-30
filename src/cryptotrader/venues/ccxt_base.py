@@ -65,13 +65,25 @@ class CcxtVenueBase:
                 await self._call("load markets", self._client.load_markets)
                 self._markets_loaded = True
 
-    async def _call(self, operation: str, method: Callable, *args: Any) -> Any:
+    async def _call(
+        self,
+        operation: str,
+        method: Callable,
+        *args: Any,
+        failure_code: str | None = None,
+        classify_authentication: bool = False,
+    ) -> Any:
         try:
             return await method(*args)
         except VenueOperationError:
             raise
-        except Exception:
-            raise VenueOperationError(f"{self.connection_id}: {operation} failed") from None
+        except Exception as error:
+            code = (
+                "authentication_failed"
+                if classify_authentication and _is_ccxt_authentication_error(error)
+                else failure_code
+            )
+            raise VenueOperationError(f"{self.connection_id}: {operation} failed", code=code) from None
 
     def _sync(self, operation: str, method: Callable, *args: Any) -> Any:
         try:
@@ -192,6 +204,15 @@ class CcxtVenueBase:
     async def fetch_balances(self) -> Mapping[str, Decimal]:
         raw = await self._call("fetch balance", self._client.fetch_balance)
         return self._normalize_balances(raw)
+
+    async def check_connection(self) -> None:
+        """Authenticate with one account read and never alter venue state."""
+        await self._call(
+            "check account",
+            self._client.fetch_balance,
+            failure_code="account_unavailable",
+            classify_authentication=True,
+        )
 
     def _normalize_balances(self, raw: Any) -> Mapping[str, Decimal]:
         totals = raw.get("total") if isinstance(raw, dict) else None
@@ -441,3 +462,12 @@ class CcxtVenueBase:
                 return
             await self._call("close session", self._client.close)
             self._closed = True
+
+
+def _is_ccxt_authentication_error(error: Exception) -> bool:
+    """Keep the CCXT-specific classification at the account-read boundary."""
+    try:
+        from ccxt.base.errors import AuthenticationError
+    except ImportError:
+        return False
+    return isinstance(error, AuthenticationError)
