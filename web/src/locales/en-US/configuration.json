@@ -15,6 +15,7 @@
   "venuesSubtitle": "An environment is immutable after creation; access details remain only in this form.",
   "booksSubtitle": "Fixed weights distribute one target exposure across connections by scope.",
   "nextStage": "Next stage",
+  "previousStage": "Previous stage",
   "setupIntro": "Complete the eight commissioning stages in order before entering the workspace.",
   "steps": ["LLM", "Signal components", "Market data", "Venue connections", "Execution books", "Risk and approval", "Scheduler", "Test and activate"],
   "stage": "Stage {{number}}",

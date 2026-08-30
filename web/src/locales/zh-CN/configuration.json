@@ -15,6 +15,7 @@
   "venuesSubtitle": "连接环境创建后固定；凭据只保留在当前输入框，永不回显。",
   "booksSubtitle": "固定权重将一个目标敞口按作用域分配到多个连接。",
   "nextStage": "下一阶段",
+  "previousStage": "上一阶段",
   "setupIntro": "依次完成八个 commissioning 阶段；激活后才进入操作台。",
   "steps": ["LLM", "信号组件", "行情来源", "平台连接", "执行资金池", "风控与审批", "调度器", "测试并激活"],
   "stage": "阶段 {{number}}",

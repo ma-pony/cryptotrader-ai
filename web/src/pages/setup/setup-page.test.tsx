@@ -48,6 +48,50 @@ describe('SetupPage', () => {
     expect(await screen.findByRole('button', { name: '测试并激活' })).toBeDisabled();
   });
 
+  it('returns through setup stages without discarding drafts or writing configuration', async () => {
+    await i18n.changeLanguage('zh-CN');
+    const base = runtimeConfigFixture();
+    const initial = runtimeConfigFixture({
+      setup_required: true,
+      document: {
+        ...base.document,
+        system: { active: false },
+        signals: {
+          ...base.document.signals,
+          components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }],
+        },
+      },
+    });
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(initial), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(<QueryClientProvider client={client}><SetupPage /></QueryClientProvider>);
+    expect(await screen.findByRole('heading', { name: 'LLM' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '上一阶段' })).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('LLM analysis'), { target: { value: 'draft-analysis' } });
+    fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
+    fireEvent.change(await screen.findByLabelText('kronos 权重'), { target: { value: '75' } });
+    for (let stage = 1; stage < 7; stage += 1) {
+      fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
+    }
+
+    expect(await screen.findByRole('heading', { name: '测试并激活' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '下一阶段' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '测试并激活' })).toBeDisabled();
+    for (const stage of ['调度器', '风控与审批', '执行资金池', '平台连接', '行情来源', '信号组件', 'LLM']) {
+      fireEvent.click(screen.getByRole('button', { name: '上一阶段' }));
+      expect(await screen.findByRole('heading', { name: stage })).toBeInTheDocument();
+    }
+
+    expect(screen.queryByRole('button', { name: '上一阶段' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('LLM analysis')).toHaveValue('draft-analysis');
+    fireEvent.click(screen.getByRole('button', { name: '下一阶段' }));
+    expect(await screen.findByLabelText('kronos 权重')).toHaveValue(75);
+    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === 'POST' || init?.method === 'PUT')).toHaveLength(0);
+  });
+
   it('invalidates a connection test fingerprint when label, config, or credential state changes', () => {
     const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper' as const, enabled: true, canary_only: false, leverage: 1, margin_mode: 'cross' as const, parameters: { sandbox: true } };
     const fingerprint = testFingerprint(connection, '2026-08-29T00:00:00Z');
