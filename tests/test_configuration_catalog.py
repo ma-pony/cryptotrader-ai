@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import metadata
 
 import pytest
+from pydantic import BaseModel, Field
 
 from cryptotrader.runtime_config.models import SignalComponentConfig
 from tests.factories.runtime_config import runtime_document
@@ -53,6 +54,39 @@ def test_catalog_lists_unconfigured_installed_factory_without_calling_it(monkeyp
 
     definition = catalog.require_component("unconfigured")
     assert definition.parameter_model.model_validate({"window": 12, "debate": {"enabled": True}}).window == 12
+
+
+def test_catalog_does_not_call_parameter_default_factory_while_describing_an_installed_plugin():
+    from cryptotrader.configuration.catalog import PluginConfiguration
+    from cryptotrader.configuration.fields import LocalizedText
+
+    class FactoryDefaultParameters(BaseModel):
+        value: int = Field(default_factory=lambda: (_ for _ in ()).throw(AssertionError("must not be called")))
+
+    definition = PluginConfiguration(
+        id="factory-default",
+        label=LocalizedText("默认工厂", "Factory default"),
+        description=LocalizedText("测试。", "Test."),
+        parameter_model=FactoryDefaultParameters,
+    )
+
+    field = definition.fields[0]
+
+    assert field.key == "value"
+    assert field.default_value is None
+
+
+def test_plugin_configuration_rejects_a_non_pydantic_parameter_model():
+    from cryptotrader.configuration.catalog import PluginConfiguration
+    from cryptotrader.configuration.fields import LocalizedText
+
+    with pytest.raises(TypeError, match="parameter_model must be a BaseModel subclass"):
+        PluginConfiguration(
+            id="malformed",
+            label=LocalizedText("错误", "Malformed"),
+            description=LocalizedText("错误。", "Malformed."),
+            parameter_model=object,
+        )
 
 
 def test_validation_rejects_unknown_parameters_and_accepts_nested_typed_plugin(monkeypatch):
@@ -107,6 +141,24 @@ async def test_config_write_rejects_negative_paper_equity_without_echo_or_revisi
     document["execution"]["connections"][-1]["parameters"] = {
         "initial_equity": -1,
         "raw_secret_marker": "must-not-echo",  # pragma: allowlist secret - redaction regression marker.
+    }
+
+    response = await api_harness.client.put(
+        "/api/config",
+        json={"expected_revision": current.json()["revision"], "document": document},
+    )
+
+    assert response.status_code == 422
+    assert "must-not-echo" not in response.text
+    assert (await api_harness.client.get("/api/config")).json()["revision"] == current.json()["revision"]
+
+
+async def test_config_write_rejects_only_unknown_paper_parameter_without_echo_or_revision_change(api_harness):
+    current = await api_harness.client.get("/api/config")
+    document = active_payload()
+    document["execution"]["connections"][-1]["parameters"] = {
+        "initial_equity": 10_000,
+        "unknown": "must-not-echo",  # pragma: allowlist secret - redaction regression marker.
     }
 
     response = await api_harness.client.put(

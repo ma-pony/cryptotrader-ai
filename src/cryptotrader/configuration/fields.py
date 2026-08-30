@@ -82,6 +82,12 @@ def _field_kind(annotation: Any) -> tuple[str, tuple[FieldOption, ...]]:
     return "text", ()
 
 
+def _static_default(field) -> Any:
+    if field.is_required() or field.default_factory is not None:
+        return None
+    return field.get_default()
+
+
 def configuration_fields(parameter_model: type[BaseModel], *, prefix: str = "") -> tuple[ConfigurationField, ...]:
     """Flatten a parameter model into the stable dot-path fields consumed by forms."""
     descriptors: list[ConfigurationField] = []
@@ -114,7 +120,7 @@ def configuration_fields(parameter_model: type[BaseModel], *, prefix: str = "") 
                 label=label,
                 description=description,
                 kind=kind,
-                default_value=field.get_default(call_default_factory=True),
+                default_value=_static_default(field),
                 required=field.is_required(),
                 minimum=minimum,
                 maximum=maximum,

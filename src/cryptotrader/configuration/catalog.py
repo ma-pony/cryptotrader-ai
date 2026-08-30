@@ -27,6 +27,10 @@ class PluginConfiguration:
     environments: tuple[str, ...] = ()
     credential_fields: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if not isinstance(self.parameter_model, type) or not issubclass(self.parameter_model, BaseModel):
+            raise TypeError("parameter_model must be a BaseModel subclass")
+
     @property
     def fields(self) -> tuple[ConfigurationField, ...]:
         return configuration_fields(self.parameter_model)
