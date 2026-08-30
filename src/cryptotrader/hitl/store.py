@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import uuid4
 
@@ -69,7 +69,7 @@ class ApprovalAlreadyClaimed(ApprovalStateError):  # noqa: N818 - 公共契约�
 
 
 class ApprovalInvalidated(ApprovalStateError):  # noqa: N818 - 公共契约名称由任务规范锁定
-    """审批因配置 revision 变化而失效。"""
+    """审批因过期或配置 revision 变化而失效。"""
 
 
 def _utc(value: datetime) -> datetime:
@@ -145,8 +145,11 @@ def _book_record(row: _BookApprovalRow) -> BookApproval:
 class BookApprovalStore:
     """只访问 ``book_approvals`` 的 revision-bound 审批存储。"""
 
-    def __init__(self, database_url: str | None = None) -> None:
+    def __init__(self, database_url: str | None = None, *, approval_ttl_minutes: int = 60) -> None:
+        if type(approval_ttl_minutes) is not int or approval_ttl_minutes <= 0:
+            raise ValueError("approval_ttl_minutes must be a positive integer")
         self.database_url = database_url
+        self._ttl = timedelta(minutes=approval_ttl_minutes)
         self.records: list[BookApproval] = []
         self._lock = asyncio.Lock()
 
@@ -224,16 +227,18 @@ class BookApprovalStore:
         return _book_record(row) if row is not None else None
 
     async def list_pending(self) -> list[BookApproval]:
+        cutoff = datetime.now(UTC) - self._ttl
         if self.database_url is None:
-            return sorted(
-                (item for item in self.records if item.status == "pending"),
-                key=lambda item: item.created_at,
-                reverse=True,
-            )
+            async with self._lock:
+                return sorted(
+                    (item for item in self.records if item.status == "pending" and item.created_at > cutoff),
+                    key=lambda item: item.created_at,
+                    reverse=True,
+                )
         await self.ensure_table()
         query = (
             select(_BookApprovalRow)
-            .where(_BookApprovalRow.status == "pending")
+            .where(_BookApprovalRow.status == "pending", _BookApprovalRow.created_at > cutoff)
             .order_by(_BookApprovalRow.created_at.desc())
         )
         session = await get_async_session(self.database_url)
@@ -314,24 +319,36 @@ class BookApprovalStore:
         approval_id: str,
         status: Literal["approved", "rejected"],
     ) -> BookApproval:
-        decided_at = datetime.now(UTC)
         if self.database_url is None:
-            async with self._lock:
-                for index, record in enumerate(self.records):
-                    if record.approval_id != approval_id:
-                        continue
-                    if record.status != "pending":
-                        raise ApprovalStateError("approval is not pending")
-                    decided = replace(record, status=status, decided_at=decided_at)
-                    self.records[index] = decided
-                    return decided
-            raise ApprovalNotFound("approval was not found")
+            return await self._decide_memory(approval_id, status)
+        return await self._decide_database(approval_id, status)
 
+    async def _decide_memory(self, approval_id: str, status: Literal["approved", "rejected"]) -> BookApproval:
+        async with self._lock:
+            decided_at = datetime.now(UTC)
+            for index, record in enumerate(self.records):
+                if record.approval_id != approval_id:
+                    continue
+                if record.status != "pending":
+                    raise ApprovalStateError("approval is not pending")
+                if record.created_at <= decided_at - self._ttl:
+                    self.records[index] = replace(record, status="invalidated", decided_at=decided_at)
+                    raise ApprovalInvalidated("approval has expired")
+                decided = replace(record, status=status, decided_at=decided_at)
+                self.records[index] = decided
+                return decided
+        raise ApprovalNotFound("approval was not found")
+
+    async def _decide_database(self, approval_id: str, status: Literal["approved", "rejected"]) -> BookApproval:
+        decided_at = datetime.now(UTC)
         await self.ensure_table()
         statement = (
             update(_BookApprovalRow)
             .where(_BookApprovalRow.approval_id == approval_id, _BookApprovalRow.status == "pending")
-            .values(status=status, decided_at=decided_at)
+            .values(
+                status=case((_BookApprovalRow.created_at <= decided_at - self._ttl, "invalidated"), else_=status),
+                decided_at=decided_at,
+            )
             .returning(_BookApprovalRow)
         )
         session = await get_async_session(self.database_url)
@@ -352,6 +369,8 @@ class BookApprovalStore:
         if invalid_payload:
             raise ValueError("stored approval payload is invalid")
         if transitioned is not None:
+            if transitioned.status == "invalidated":
+                raise ApprovalInvalidated("approval has expired")
             return transitioned
         record = await self.get(approval_id)
         if record is None:
@@ -376,9 +395,11 @@ class BookApprovalStore:
             for index, record in enumerate(self.records):
                 if record.approval_id != approval_id:
                     continue
-                if record.status in {"pending", "approved"} and record.config_revision != current_revision:
+                if record.status in {"pending", "approved"} and (
+                    record.config_revision != current_revision or record.created_at <= now - self._ttl
+                ):
                     self.records[index] = replace(record, status="invalidated", decided_at=now)
-                    raise ApprovalInvalidated("approval revision is invalid")
+                    raise ApprovalInvalidated("approval has expired or its revision is invalid")
                 if record.status == "approved":
                     claimed = replace(record, status="executed", claimed_at=now)
                     self.records[index] = claimed
@@ -389,7 +410,10 @@ class BookApprovalStore:
     async def _claim_database(self, approval_id: str, current_revision: int) -> BookExecutionProposal:
         await self.ensure_table()
         now = datetime.now(UTC)
-        revision_changed = _BookApprovalRow.config_revision != current_revision
+        invalid = or_(
+            _BookApprovalRow.config_revision != current_revision,
+            _BookApprovalRow.created_at <= now - self._ttl,
+        )
         approved_at_current_revision = and_(
             _BookApprovalRow.status == "approved",
             _BookApprovalRow.config_revision == current_revision,
@@ -400,12 +424,12 @@ class BookApprovalStore:
             .where(
                 _BookApprovalRow.approval_id == approval_id,
                 _BookApprovalRow.status.in_(("pending", "approved")),
-                or_(revision_changed, approved_at_current_revision),
+                or_(invalid, approved_at_current_revision),
             )
             .values(
-                status=case((revision_changed, "invalidated"), else_="executed"),
-                decided_at=case((revision_changed, now), else_=_BookApprovalRow.decided_at),
-                claimed_at=case((revision_changed, _BookApprovalRow.claimed_at), else_=now),
+                status=case((invalid, "invalidated"), else_="executed"),
+                decided_at=case((invalid, now), else_=_BookApprovalRow.decided_at),
+                claimed_at=case((invalid, _BookApprovalRow.claimed_at), else_=now),
             )
             .returning(_BookApprovalRow)
         )
@@ -428,7 +452,7 @@ class BookApprovalStore:
             raise ValueError("stored approval payload is invalid")
         if transitioned is not None:
             if transitioned.status == "invalidated":
-                raise ApprovalInvalidated("approval revision is invalid")
+                raise ApprovalInvalidated("approval has expired or its revision is invalid")
             return transitioned.proposal
         record = await self.get(approval_id)
         if record is None:
@@ -441,7 +465,7 @@ class BookApprovalStore:
         if record.status == "rejected":
             raise ApprovalRejected("approval was rejected")
         if record.status == "invalidated":
-            raise ApprovalInvalidated("approval revision is invalid")
+            raise ApprovalInvalidated("approval has expired or its revision is invalid")
         if record.status == "executed":
             raise ApprovalAlreadyClaimed("approval was already claimed")
         raise ApprovalNotApproved("approval is not approved")

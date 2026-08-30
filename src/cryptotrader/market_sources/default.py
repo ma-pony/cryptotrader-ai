@@ -51,6 +51,7 @@ class DefaultMarketDataSource:
         config: MarketDataConfig,
         *,
         aggregator=None,
+        news_provider_key: str = "",
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.config = config
@@ -59,7 +60,7 @@ class DefaultMarketDataSource:
         if not self.market_adapter_id:
             raise ValueError("default market source requires market_adapter_id")
         self.kronos_aux_symbol = parameters.kronos_aux_symbol
-        self.aggregator = aggregator or SnapshotAggregator()
+        self.aggregator = aggregator or SnapshotAggregator(coindesk_api_key=news_provider_key)
         self.market = self.aggregator.market
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -124,5 +125,5 @@ class DefaultMarketDataSource:
         parameter_model=DefaultMarketSourceParameters,
     )
 )
-def create_source(config: MarketDataConfig) -> DefaultMarketDataSource:
-    return DefaultMarketDataSource(config)
+def create_source(config: MarketDataConfig, *, news_provider_key: str = "") -> DefaultMarketDataSource:
+    return DefaultMarketDataSource(config, news_provider_key=news_provider_key)

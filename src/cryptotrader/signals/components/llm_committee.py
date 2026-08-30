@@ -43,7 +43,6 @@ class CommitteeState(TypedDict):
 class DebateSettings:
     max_rounds: int = 3
     convergence_threshold: float = 0.1
-    divergence_hold_threshold: float = 0.7
     skip_debate: bool = True
     consensus_skip_threshold: float = 0.5
     confusion_skip_threshold: float = 0.05

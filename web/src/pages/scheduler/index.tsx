@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -62,6 +63,7 @@ const SchedulerContent = () => {
         title={t('title')}
         actions={
           <>
+            <Link to="/settings/scheduler" className="text-sm text-primary underline underline-offset-4">{t('settings_link')}</Link>
             <Button variant="outline" size="sm" onClick={() => setTemplateOpen(true)}>
               {t('actions.from_template')}
             </Button>

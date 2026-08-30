@@ -13,10 +13,9 @@ import type { CircuitBreakerStatus } from '@/types/api';
 interface Props {
   cb: CircuitBreakerStatus;
   redisAvailable: boolean;
-  checksOnline: number;
 }
 
-export const CircuitBreakerHero = ({ cb, redisAvailable, checksOnline }: Props) => {
+export const CircuitBreakerHero = ({ cb, redisAvailable }: Props) => {
   const { t } = useTranslation('risk');
   const resetMutation = useResetCircuitBreaker();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -50,7 +49,7 @@ export const CircuitBreakerHero = ({ cb, redisAvailable, checksOnline }: Props) 
             <div className="text-xl font-semibold tracking-tight mt-0.5">
               {tripped
                 ? t('circuit_breaker.tripped', { defaultValue: '已触发 — 交易暂停' })
-                : t('circuit_breaker.normal', { defaultValue: '正常 · 所有闸门开放' })}
+                : t('circuit_breaker.normal', { defaultValue: '未触发' })}
             </div>
             <div className="mt-1.5 flex items-center gap-3 text-xs text-muted-foreground">
               <span>
@@ -59,8 +58,6 @@ export const CircuitBreakerHero = ({ cb, redisAvailable, checksOnline }: Props) 
                   {redisAvailable ? 'healthy' : 'unavailable'}
                 </span>
               </span>
-              <span className="h-3 w-px bg-border" />
-              <span>{checksOnline} 项检查在线</span>
               {tripped && cb.reason ? (
                 <>
                   <span className="h-3 w-px bg-border" />
@@ -83,7 +80,7 @@ export const CircuitBreakerHero = ({ cb, redisAvailable, checksOnline }: Props) 
             </Button>
           ) : (
             <StatusPill tone="success" live>
-              运行中
+              {t('circuit_breaker.INACTIVE')}
             </StatusPill>
           )}
         </CardContent>

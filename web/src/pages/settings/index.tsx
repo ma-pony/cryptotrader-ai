@@ -80,7 +80,7 @@ export default function SettingsPage({ section }: { section: Exclude<Configurati
   const catalog = runtime.catalog.data;
   if (!document || !catalog) return null;
   const errors = runtime.errors;
-  const secret = (kind: 'llmGateway' | 'apiAccess') => ({
+  const secret = (kind: 'llmGateway' | 'apiAccess' | 'newsProvider') => ({
     ...runtime.secretStates[kind],
     revision: runtime.revision ?? 0,
   });
@@ -112,6 +112,7 @@ export default function SettingsPage({ section }: { section: Exclude<Configurati
       {section === 'market' ? (
         <MarketSettings
           value={document.market_data}
+          secrets={secret('newsProvider')}
           onChange={(value) => runtime.update('market_data', value)}
           errors={errors}
           catalog={catalog}

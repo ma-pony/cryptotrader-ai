@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 if TYPE_CHECKING:
     from cryptotrader.scheduler import Scheduler
@@ -253,14 +253,51 @@ async def scheduler_status_v2(request: Request) -> SchedulerContractStatus:
 # ---------------------------------------------------------------------------
 
 
+class _TriggerParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False, str_strip_whitespace=True)
+
+
+class _PriceParameters(_TriggerParameters):
+    direction: Literal["above", "below"]
+    price: float = Field(gt=0)
+
+
+class _ChangeParameters(_TriggerParameters):
+    window_minutes: int = Field(ge=1)
+    threshold_pct: float = Field(gt=0)
+
+
+class _CandleParameters(_TriggerParameters):
+    interval: str = Field(min_length=1)
+    consecutive_count: int = Field(ge=1)
+    direction: Literal["bearish", "bullish"]
+
+
+class _FundingParameters(_TriggerParameters):
+    threshold_pct: float = Field(gt=0)
+
+
 class ScheduleRuleIn(BaseModel):
     """Create/update request body for a trigger rule."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
 
     name: str = Field(..., min_length=1, max_length=255)
     trigger_type: str = Field(..., pattern=r"^(price_threshold|pct_change|candle_pattern|funding_rate)$")
     pair: str = Field(..., min_length=3, max_length=20)
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, Any]
     cooldown_minutes: int = Field(default=30, ge=1, le=1440)
+
+    @field_validator("parameters")
+    @classmethod
+    def validate_active_parameters(cls, value: dict[str, Any], info: ValidationInfo) -> dict[str, Any]:
+        parameter_model = {
+            "price_threshold": _PriceParameters,
+            "pct_change": _ChangeParameters,
+            "candle_pattern": _CandleParameters,
+            "funding_rate": _FundingParameters,
+        }.get(info.data.get("trigger_type"))
+        return parameter_model.model_validate(value).model_dump() if parameter_model else value
 
 
 class ScheduleRuleOut(BaseModel):

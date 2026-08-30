@@ -10,32 +10,6 @@ import pytest
 from cryptotrader.runtime_config.models import LlmConfig, LlmModelsConfig
 
 
-def test_chart_context_uses_explicit_runtime_llm_vision_settings():
-    from api.context_builder import build_multimodal_messages
-
-    messages, degraded = build_multimodal_messages(
-        [{"timeframe": "1h", "description": "Bullish", "dataUrl": "data:image/png;base64,abc"}],
-        "vision-model",
-        LlmConfig(vision_models=("vision-model",), max_image_bytes=128),
-    )
-
-    assert not degraded
-    assert [block["type"] for block in messages[0].content] == ["image_url", "text"]
-
-
-def test_chart_context_degrades_oversized_image_from_explicit_runtime_limit():
-    from api.context_builder import build_multimodal_messages
-
-    messages, degraded = build_multimodal_messages(
-        [{"description": "text", "dataUrl": "data:image/png;base64," + "x" * 200}],
-        "vision-model",
-        LlmConfig(vision_models=("vision-model",), max_image_bytes=16),
-    )
-
-    assert degraded
-    assert [block["type"] for block in messages[0].content] == ["text"]
-
-
 @pytest.mark.asyncio
 async def test_credentialed_agent_tools_are_unavailable_without_a_key_and_use_only_explicit_key():
     from cryptotrader.agents.data_tools import get_exchange_netflow, get_liquidation_data, get_whale_transfers

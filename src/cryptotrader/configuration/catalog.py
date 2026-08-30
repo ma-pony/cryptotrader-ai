@@ -30,6 +30,7 @@ class PluginConfiguration:
     def __post_init__(self) -> None:
         if not isinstance(self.parameter_model, type) or not issubclass(self.parameter_model, BaseModel):
             raise TypeError("parameter_model must be a BaseModel subclass")
+        configuration_fields(self.parameter_model)
 
     @property
     def fields(self) -> tuple[ConfigurationField, ...]:

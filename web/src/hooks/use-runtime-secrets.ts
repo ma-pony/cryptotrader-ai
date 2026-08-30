@@ -7,7 +7,7 @@ import { setRuntimeConfigConflict } from './runtime-config-conflict';
 import { RUNTIME_CONFIG_QUERY_KEY } from './use-runtime-config';
 import { useSettingsStore } from '@/stores/use-settings-store';
 
-type SecretKind = 'llm-gateway' | 'api-access'; // pragma: allowlist secret
+type SecretKind = 'llm-gateway' | 'api-access' | 'news-provider'; // pragma: allowlist secret
 
 /** Direct writes deliberately bypass TanStack mutations so tokens never enter its cache. */
 export const useRuntimeSecrets = () => {
@@ -44,7 +44,7 @@ export const useRuntimeSecrets = () => {
           ...current,
           revision: saved.revision,
           updated_at: saved.updated_at,
-          document: { ...current.document, llm, security },
+          document: { ...current.document, llm, security, market_data: kind === 'news-provider' ? { ...current.document.market_data, news_credential_configured: saved.configured, news_credential_updated_at: saved.updated_at } : current.document.market_data },
         };
       });
       return saved;
@@ -55,6 +55,7 @@ export const useRuntimeSecrets = () => {
   };
   return {
     writeLlmGateway: (revision: number, token: string) => write('llm-gateway', revision, token),
+    writeNewsProvider: (revision: number, token: string) => write('news-provider', revision, token),
     writeApiAccess: (revision: number, token: string) => write('api-access', revision, token),
   };
 };

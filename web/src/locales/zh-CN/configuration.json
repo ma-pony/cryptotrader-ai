@@ -252,7 +252,11 @@
     "saveGateway": "保存网关密钥",
     "rotateGateway": "轮换网关密钥",
     "saveApi": "保存 API 访问密钥",
-    "rotateApi": "轮换 API 访问密钥"
+    "rotateApi": "轮换 API 访问密钥",
+    "news": "CoinDesk 新闻密钥（可选）",
+    "newsHint": "默认行情来源用于 CoinDesk 新闻请求；未配置时使用公开新闻源。密钥只写入加密凭据库，保存后清空。",
+    "saveNews": "保存新闻密钥",
+    "rotateNews": "更新新闻密钥"
   },
   "apply": {
     "pending": "配置已保存，尚未实际生效。",

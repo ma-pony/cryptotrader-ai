@@ -65,8 +65,12 @@ def _constraints(field) -> tuple[float | int | None, float | int | None, float |
 def _field_kind(annotation: Any) -> tuple[str, tuple[FieldOption, ...]]:
     origin = get_origin(annotation)
     if origin is Literal:
+        if not all(type(value) is str for value in get_args(annotation)):
+            raise TypeError("Unsupported configuration field: select values must be strings")
         return "select", tuple(FieldOption(str(value), _localized(None, str(value))) for value in get_args(annotation))
     if isinstance(annotation, type) and issubclass(annotation, Enum):
+        if not all(type(member.value) is str for member in annotation):
+            raise TypeError("Unsupported configuration field: enum values must be strings")
         return "select", tuple(
             FieldOption(str(member.value), _localized(None, member.name.replace("_", " ").title()))
             for member in annotation
@@ -77,9 +81,13 @@ def _field_kind(annotation: Any) -> tuple[str, tuple[FieldOption, ...]]:
         return "integer", ()
     if annotation is float:
         return "number", ()
-    if origin in {list, tuple}:
+    if (origin is list and get_args(annotation) == (str,)) or (
+        origin is tuple and get_args(annotation) == (str, Ellipsis)
+    ):
         return "string_list", ()
-    return "text", ()
+    if annotation is str:
+        return "text", ()
+    raise TypeError(f"Unsupported configuration field annotation: {annotation!r}")
 
 
 def _static_default(field) -> Any:
@@ -100,6 +108,10 @@ def configuration_fields(parameter_model: type[BaseModel], *, prefix: str = "") 
         extra = field.json_schema_extra or {}
         kind, inferred_options = _field_kind(annotation)
         options = extra.get("options", inferred_options)
+        if any(
+            type(option.value if isinstance(option, FieldOption) else option["value"]) is not str for option in options
+        ):
+            raise TypeError("Unsupported configuration field: select values must be strings")
         normalized_options = tuple(
             option
             if isinstance(option, FieldOption)

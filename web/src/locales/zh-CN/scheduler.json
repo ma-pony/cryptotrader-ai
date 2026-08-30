@@ -66,7 +66,11 @@
     },
     "funding_rate": {
       "threshold_pct": "费率阈值 (%)"
-    }
+    },
+    "invalid": "请填写有效值。",
+    "help": "填写当前触发条件的全部参数；涨跌幅和费率直接填写百分数。",
+    "save_failed": "规则保存失败，修改已保留，请重试。",
+    "mutation_failed": "规则操作失败，请重试。"
   },
   "table": {
     "name": "名称",
@@ -101,5 +105,6 @@
     "confirm_title": "确认删除规则？",
     "confirm_body": "删除后将无法恢复，相关触发历史仍会保留。",
     "confirm_action": "确认删除"
-  }
+  },
+  "settings_link": "修改调度配置"
 }

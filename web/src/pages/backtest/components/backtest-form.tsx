@@ -1,28 +1,42 @@
-import { Play } from 'lucide-react';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-
-import { useBacktestSessions, useStartBacktest } from '@/hooks/use-backtest';
+import { Button } from '@/components/ui/button';
+import { Field, NumberField, ChoiceField, focusFirstError, type FieldErrors } from '@/components/configuration/field';
+import { useBacktestSessions, useLoadBacktestSession, useStartBacktest } from '@/hooks/use-backtest';
 
 interface Props {
   onRunStarted: (runId: string) => void;
 }
-
 const PAIRS = ['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT'];
 
 export const BacktestForm = ({ onRunStarted }: Props) => {
   const { t } = useTranslation('backtest');
   const sessions = useBacktestSessions();
+  const loadSession = useLoadBacktestSession();
   const startMutation = useStartBacktest();
-
+  const form = useRef<HTMLFormElement>(null);
   const [pair, setPair] = useState('BTC/USDT');
   const [start, setStart] = useState('');
   const [end, setEnd] = useState('');
-  const [capital, setCapital] = useState(10000);
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!start || !end) return;
+  const [capital, setCapital] = useState<number | ''>(10000);
+  const [session, setSession] = useState('');
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const today = new Date().toISOString().slice(0, 10);
+  const busy = startMutation.isPending || loadSession.isPending;
+  const pairOptions = PAIRS.includes(pair) ? PAIRS : [...PAIRS, pair];
+  const handleSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    const next: FieldErrors = {};
+    if (!start) next.start = t('errors.start_required');
+    if (!end) next.end = t('errors.end_required');
+    else if (start && start >= end) next.end = t('errors.range');
+    else if (end > today) next.end = t('errors.future');
+    if (capital === '' || !Number.isFinite(capital) || capital < 100) next.initial_capital = t('errors.capital');
+    setErrors(next);
+    if (Object.keys(next).length || capital === '') {
+      focusFirstError(next, form.current ?? undefined);
+      return;
+    }
     startMutation.mutate(
       { pair, start, end, initial_capital: capital },
       { onSuccess: (data) => onRunStarted(data.run_id) },
@@ -30,52 +44,102 @@ export const BacktestForm = ({ onRunStarted }: Props) => {
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t('form.pair')}</span>
-          <select className="block h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={pair} onChange={(e) => setPair(e.target.value)}>
-            {PAIRS.map((p) => <option key={p} value={p}>{p}</option>)}
-          </select>
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t('form.start_date')}</span>
-          <input type="date" required className="block h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={start} onChange={(e) => setStart(e.target.value)} />
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t('form.end_date')}</span>
-          <input type="date" required className="block h-8 w-full rounded-md border border-input bg-background px-2 text-sm" value={end} onChange={(e) => setEnd(e.target.value)} />
-        </label>
-        <label className="space-y-1 text-xs">
-          <span className="text-muted-foreground">{t('form.initial_capital')}</span>
-          <input type="number" min={100} step={100} className="block h-8 w-full rounded-md border border-input bg-background px-2 text-sm tabular-nums" value={capital} onChange={(e) => setCapital(Number(e.target.value))} />
-        </label>
-      </div>
-
-      <div className="flex items-center gap-4">
-        {sessions.data && sessions.data.sessions.length > 0 && (
-          <label className="space-y-1 text-xs">
-            <span className="text-muted-foreground">{t('sessions.title')}</span>
-            <select className="ml-2 h-8 rounded-md border border-input bg-background px-2 text-sm">
-              <option value="">{t('sessions.select')}</option>
-              {sessions.data.sessions.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-        )}
-
-        <button
-          type="submit"
-          disabled={startMutation.isPending || !start || !end}
-          className="ml-auto inline-flex items-center gap-1.5 rounded-md px-4 py-2 text-xs font-semibold shadow-glow-amber transition-opacity disabled:opacity-50"
-          style={{
-            background: 'linear-gradient(135deg, var(--amber-500), var(--amber-600))',
-            color: 'hsl(var(--primary-foreground))',
+    <form ref={form} noValidate onSubmit={handleSubmit} className="space-y-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <ChoiceField
+          name="pair"
+          label={t('form.pair')}
+          value={pair}
+          onChange={setPair}
+          options={pairOptions.map((value) => ({ value, label: value }))}
+          disabled={loadSession.isPending}
+        />
+        {(['start', 'end'] as const).map((name) => (
+          <Field
+            key={name}
+            name={name}
+            label={t(name === 'start' ? 'form.start_date' : 'form.end_date')}
+            error={errors[name]}
+          >
+            <input
+              id={name}
+              name={name}
+              type="date"
+              required
+              aria-required
+              className="configuration-control"
+              value={name === 'start' ? start : end}
+              max={today}
+              aria-invalid={Boolean(errors[name])}
+              aria-describedby={`${name}-help`}
+              disabled={loadSession.isPending}
+              onChange={(event) => {
+                (name === 'start' ? setStart : setEnd)(event.target.value);
+                startMutation.reset();
+              }}
+            />
+          </Field>
+        ))}
+        <NumberField
+          name="initial_capital"
+          label={t('form.initial_capital')}
+          min={100}
+          value={capital}
+          onChange={(value) => {
+            setCapital(value);
+            startMutation.reset();
           }}
-        >
-          <Play size={12} strokeWidth={2.5} />
-          {startMutation.isPending ? '...' : t('form.submit', { defaultValue: '启动回测' })}
-        </button>
+          error={errors.initial_capital}
+          disabled={loadSession.isPending}
+        />
       </div>
+      {sessions.data?.sessions.length ? (
+        <ChoiceField
+          name="reuse-session"
+          label={t('sessions.title')}
+          help={t('sessions.help')}
+          value={session}
+          placeholder={t('sessions.select')}
+          disabled={busy}
+          options={sessions.data.sessions.map((value) => ({ value, label: value }))}
+          onChange={(name) => {
+            setSession(name);
+            if (!name) {
+              loadSession.reset();
+              return;
+            }
+            loadSession.mutate(name, {
+              onSuccess: ({ params }) => {
+                setPair(params.pair);
+                setStart(params.start);
+                setEnd(params.end);
+                setCapital(params.initial_capital);
+                setErrors({});
+                startMutation.reset();
+              },
+            });
+          }}
+        />
+      ) : null}
+      {Object.keys(errors).length ? (
+        <p role="alert" className="configuration-error">
+          {Object.values(errors)[0]}
+        </p>
+      ) : null}
+      {startMutation.isError ? (
+        <p role="alert" className="configuration-error">
+          {t('errors.start_failed')}
+        </p>
+      ) : null}
+      {loadSession.isError || sessions.isError ? (
+        <p role="alert" className="configuration-error">
+          {t('errors.load_failed')}
+        </p>
+      ) : null}
+      {loadSession.isPending ? <p role="status">{t('sessions.loading')}</p> : null}
+      <Button type="submit" disabled={busy}>
+        {startMutation.isPending ? t('form.starting') : t('form.submit')}
+      </Button>
     </form>
   );
 };

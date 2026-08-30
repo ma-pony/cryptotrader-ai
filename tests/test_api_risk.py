@@ -93,12 +93,10 @@ class TestRiskStatusShape:
 
         t = body["thresholds"]
         for key in (
-            "max_position_pct",
-            "max_daily_loss_pct",
-            "max_stop_loss_pct",
-            "max_trades_per_hour",
-            "max_trades_per_day",
-            "post_loss_cooldown_seconds",
+            "max_single_pct",
+            "max_total_exposure_pct",
+            "max_margin_used_pct",
+            "max_drawdown_pct",
         ):
             assert key in t
 

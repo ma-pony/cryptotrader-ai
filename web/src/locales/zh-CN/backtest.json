@@ -6,12 +6,15 @@
     "end_date": "结束日期",
     "initial_capital": "初始资金（USDT）",
     "submit": "运行回测",
-    "cancel": "取消运行"
+    "cancel": "取消运行",
+    "starting": "正在启动…"
   },
   "sessions": {
-    "title": "历史会话",
-    "select": "选择历史会话",
-    "empty": "暂无历史会话"
+    "title": "复用历史参数",
+    "select": "选择已保存的参数",
+    "empty": "暂无历史会话",
+    "help": "仅加载日期、交易对和初始资金；新回测不会覆盖原会话。",
+    "loading": "正在加载参数…"
   },
   "metrics": {
     "total_return": "总收益",
@@ -30,5 +33,14 @@
     "COMPLETED": "已完成",
     "FAILED": "失败",
     "CANCELLED": "已取消"
+  },
+  "errors": {
+    "start_required": "请填写起始日期。",
+    "end_required": "请填写结束日期。",
+    "range": "结束日期必须晚于起始日期。",
+    "future": "结束日期不能晚于今天（UTC）。",
+    "capital": "初始资金至少为 100 USDT，请填写有效数字。",
+    "start_failed": "回测启动失败，参数已保留，请重试。",
+    "load_failed": "历史参数加载失败，当前参数已保留，请重试。"
   }
 }

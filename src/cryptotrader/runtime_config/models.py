@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime  # noqa: TC003
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
@@ -95,8 +95,6 @@ class LlmConfig(_FrozenConfigModel):
     default_temperature: float = 0.2
     timeout: int = 120
     prompt_caching: bool = True
-    vision_models: tuple[str, ...] = ()
-    max_image_bytes: int = 4_000_000
     retry: LlmRetryConfig = Field(default_factory=LlmRetryConfig)
     model_costs: tuple[LlmModelCostConfig, ...] = ()
     models: LlmModelsConfig = Field(default_factory=LlmModelsConfig)
@@ -135,53 +133,20 @@ class PositionConfig(_FrozenConfigModel):
     max_single_pct: float = 0.50
     max_total_exposure_pct: float = 1.00
     max_margin_used_pct: float = 0.40
-    max_correlated_positions: int = 2
-    max_same_direction_positions: int = 3
 
 
 class LossConfig(_FrozenConfigModel):
-    max_daily_loss_pct: float = 0.03
     max_drawdown_pct: float = 0.10
-    max_cvar_95: float = 0.05
-    cvar_min_returns: int = 20
-
-
-class CooldownConfig(_FrozenConfigModel):
-    same_pair_minutes: int = 60
-    post_loss_minutes: int = 120
-
-
-class VolatilityConfig(_FrozenConfigModel):
-    flash_crash_threshold: float = 0.05
-    funding_rate_threshold: float = 0.005
-    flash_crash_lookback: int = 10
-
-
-class ExchangeCheckConfig(_FrozenConfigModel):
-    max_api_latency_ms: int = 2000
-    health_check_interval_s: int = 30
-
-
-class RateLimitConfig(_FrozenConfigModel):
-    max_trades_per_hour: int = 6
-    max_trades_per_day: int = 20
 
 
 class RiskConfig(_FrozenConfigModel):
-    max_stop_loss_pct: float = 0.05
-    token_tax_threshold: float = 10.0
     position: PositionConfig = Field(default_factory=PositionConfig)
     loss: LossConfig = Field(default_factory=LossConfig)
-    cooldown: CooldownConfig = Field(default_factory=CooldownConfig)
-    volatility: VolatilityConfig = Field(default_factory=VolatilityConfig)
-    exchange: ExchangeCheckConfig = Field(default_factory=ExchangeCheckConfig)
-    rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
 
 class ExecutionConfig(_FrozenConfigModel):
     connections: tuple[VenueConnection, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
-    allocation_policy: str = "weighted"
     # This is deliberately a runtime-document switch rather than an adapter
     # setting: a live credential must never be enough to make writes possible.
     live_order_execution_enabled: bool = False
@@ -251,17 +216,11 @@ class TriggerConfig(_FrozenConfigModel):
     funding_rate_poll_interval_minutes: int = 5
 
 
-class TelegramConfig(_FrozenConfigModel):
-    enabled: bool = False
-    chat_id: str = ""
-
-
 class NotificationConfig(_FrozenConfigModel):
     webhook_url: str = ""
     enabled: bool = True
     webhook_timeout: int = 5
-    events: tuple[str, ...] = ("trade", "rejection", "circuit_breaker", "reconcile_mismatch", "daily_summary")
-    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    events: tuple[Literal["daily_summary"], ...] = ("daily_summary",)
 
 
 class InfrastructureConfig(_FrozenConfigModel):

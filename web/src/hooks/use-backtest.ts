@@ -7,6 +7,7 @@ import {
   BacktestRunResponseSchema,
   BacktestRunStatusSchema,
   BacktestSessionsListSchema,
+  BacktestSessionDetailSchema,
 } from '@/types/api.schema';
 
 export const useBacktestSessions = () =>
@@ -14,6 +15,10 @@ export const useBacktestSessions = () =>
     queryKey: ['backtest-sessions'],
     queryFn: () => apiClient.get('/api/backtest/sessions', BacktestSessionsListSchema),
   });
+
+export const useLoadBacktestSession = () => useMutation({
+  mutationFn: (name: string) => apiClient.get(`/api/backtest/sessions/${encodeURIComponent(name)}`, BacktestSessionDetailSchema),
+});
 
 export const useBacktestRun = (runId: string | undefined) =>
   useQuery({

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import fields, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from importlib import import_module
 
 import pytest
@@ -345,6 +345,58 @@ async def test_execute_approved_uses_original_proposal_once_and_replaces_same_cy
     assert completed.book("live").status == "completed"
     assert len(journal.records) == 1
     assert journal.records[0].cycle_id == awaiting.cycle_id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_expired_approved_cycle_never_reaches_coordinator(tmp_path, monkeypatch, database):
+    import cryptotrader.hitl.store as stores
+
+    book = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=True)
+    cycle, _, coordinator, _, _ = _cycle(_snapshot(book))
+    approvals = stores.BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'cycle-expiry.db'}" if database else None)
+    cycle.approvals = approvals
+    awaiting = await cycle.run(CycleRequest(PAIR))
+    approval_id = awaiting.book("simulation").hitl.approval_id
+    await approvals.approve(approval_id)
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return NOW + timedelta(minutes=61)
+
+    monkeypatch.setattr(stores, "datetime", Later)
+    outcome = await cycle.execute_approved(approval_id)
+    assert outcome.book("simulation").status == "approval_rejected"
+    assert coordinator.proposals == []
+    assert (await approvals.get(approval_id)).claimed_at is None
+
+
+@pytest.mark.asyncio
+async def test_assembled_cycle_uses_snapshot_approval_ttl_and_market_candles():
+    from cryptotrader.runtime import _assemble_cycle
+    from cryptotrader.runtime_config.models import HitlConfig, MarketDataConfig
+
+    snapshot = _snapshot()
+    document = snapshot.document.model_copy(
+        update={
+            "hitl": HitlConfig(approval_ttl_minutes=5),
+            "market_data": MarketDataConfig(parameters={"timeframe": "15m", "limit": 55}),
+        }
+    )
+    snapshot = replace(snapshot, document=document)
+
+    class Markets:
+        def require(self, source_id):
+            return _MarketSource()
+
+    cycle = _assemble_cycle(snapshot, _Repository(snapshot), {}, _Registry(), Markets(), NullCycleEventSink())
+    from tests.test_book_hitl_store import _book_proposal
+
+    await cycle.approvals.create(_book_proposal(), created_at=datetime.now(UTC) - timedelta(minutes=6))
+    assert await cycle.approvals.list_pending() == []
+    assert cycle.exit_requirement.candles[0].timeframe == "15m"
+    assert cycle.exit_requirement.candles[0].limit == 55
 
 
 @pytest.mark.asyncio

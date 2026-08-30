@@ -428,9 +428,9 @@ class Scheduler:
             config = self.runtime.snapshot.document
             notifier = Notifier(
                 webhook_url=config.notifications.webhook_url,
+                enabled=config.notifications.enabled,
                 events=config.notifications.events,
                 webhook_timeout=config.notifications.webhook_timeout,
-                telegram_config=config.notifications.telegram,
             )
             summary = {
                 "date": datetime.now(UTC).strftime("%Y-%m-%d"),

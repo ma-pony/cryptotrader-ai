@@ -18,6 +18,7 @@ def _commissioning_route_kind(request: Request) -> str | None:
         ("PUT", "/api/config"),
         ("PUT", "/api/config/credentials/llm-gateway"),
         ("PUT", "/api/config/credentials/api-access"),
+        ("PUT", "/api/config/credentials/news-provider"),
         ("POST", "/api/venue-connections"),
     }:
         return "mutation"

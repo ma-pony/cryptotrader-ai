@@ -31,18 +31,15 @@ class CircuitBreakerStatus(BaseModel):
 
 
 class RiskThresholds(BaseModel):
-    max_position_pct: float
-    max_daily_loss_pct: float
-    max_stop_loss_pct: float
-    max_trades_per_hour: int
-    max_trades_per_day: int
-    post_loss_cooldown_seconds: int
+    max_single_pct: float
+    max_total_exposure_pct: float
+    max_margin_used_pct: float
+    max_drawdown_pct: float
 
 
 class CorrelationGroupOut(BaseModel):
     name: str
     open: int
-    max: int
     pairs: list[str]
 
 
@@ -89,8 +86,6 @@ _CORR_GROUPS: dict[str, list[str]] = {
     "meme": ["DOGE/USDT", "PEPE/USDT", "SHIB/USDT"],
 }
 
-_CORR_GROUP_MAX = 2
-
 
 async def _build_correlation_groups(
     database_url: str | None,
@@ -116,7 +111,7 @@ async def _build_correlation_groups(
     out: list[CorrelationGroupOut] = []
     for name, pairs in _CORR_GROUPS.items():
         open_count = sum(1 for p in pairs if p in open_pairs)
-        out.append(CorrelationGroupOut(name=name, open=open_count, max=_CORR_GROUP_MAX, pairs=pairs))
+        out.append(CorrelationGroupOut(name=name, open=open_count, pairs=pairs))
     return out
 
 
@@ -366,20 +361,13 @@ async def _compute_cvar_95(
 
 
 def _build_thresholds(config: object) -> RiskThresholds:
-    """Translate ``RiskConfig`` (internal) → data-model §4 ``RiskThresholds``.
-
-    Field name mapping handles two divergences from the spec:
-    - ``cooldown.post_loss_minutes`` (config) -> ``post_loss_cooldown_seconds`` (x 60)
-    - ``rate_limit.max_trades_per_*`` (config) → ``max_trades_per_*`` (alias only)
-    """
+    """Expose only the four ratio limits enforced by runtime risk gates."""
     risk = config.risk  # type: ignore[attr-defined]
     return RiskThresholds(
-        max_position_pct=float(risk.position.max_single_pct),
-        max_daily_loss_pct=float(risk.loss.max_daily_loss_pct),
-        max_stop_loss_pct=float(risk.max_stop_loss_pct),
-        max_trades_per_hour=int(risk.rate_limit.max_trades_per_hour),
-        max_trades_per_day=int(risk.rate_limit.max_trades_per_day),
-        post_loss_cooldown_seconds=int(risk.cooldown.post_loss_minutes) * 60,
+        max_single_pct=float(risk.position.max_single_pct),
+        max_total_exposure_pct=float(risk.position.max_total_exposure_pct),
+        max_margin_used_pct=float(risk.position.max_margin_used_pct),
+        max_drawdown_pct=float(risk.loss.max_drawdown_pct),
     )
 
 

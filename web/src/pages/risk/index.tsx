@@ -14,10 +14,6 @@ import { CircuitBreakerHero } from './components/circuit-breaker-hero';
 import { RiskMeter } from './components/risk-meter';
 import { ThresholdsCard } from './components/thresholds-card';
 
-// Mirrors the 11 checks registered in ``src/cryptotrader/risk/gate.py``.
-// TODO(contract): expose ``checks_total`` via /api/risk/status so this stays in sync.
-const RISK_CHECK_COUNT = 11;
-
 const RiskContent = () => {
   const { t } = useTranslation('risk');
   const { data } = useRiskStatus();
@@ -50,39 +46,28 @@ const RiskContent = () => {
           })}
         />
 
-        <CircuitBreakerHero
-          cb={data.circuit_breaker}
-          redisAvailable={data.redis_available}
-          // FE-m7: The 11 risk checks are statically registered in src/cryptotrader/risk/gate.py;
-          // backend does not expose a count, so we mirror the static value here. Changes to
-          // risk gate registration must update this literal (or expose checks_total via API).
-          checksOnline={RISK_CHECK_COUNT}
-        />
+        <CircuitBreakerHero cb={data.circuit_breaker} redisAvailable={data.redis_available} />
 
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <RiskMeter
-          label={t('meters.daily_loss', { defaultValue: '当日亏损' })}
-          value={data.daily_loss_pct ?? null}
-          limit={thresholds.max_daily_loss_pct * 100}
-          unit="%"
-        />
-        <RiskMeter
-          label={t('meters.drawdown', { defaultValue: '当前回撤' })}
-          value={data.drawdown_pct ?? null}
-          limit={10}
-          unit="%"
-        />
-        <RiskMeter
-          label={t('meters.exposure', { defaultValue: '总敞口' })}
-          value={data.total_exposure_pct ?? null}
-          limit={100}
-          unit="%"
-          precision={0}
-        />
+          <RiskMeter
+            label={t('meters.daily_loss', { defaultValue: '当日亏损' })}
+            value={data.daily_loss_pct ?? null}
+            unit="%"
+          />
+          <RiskMeter
+            label={t('meters.drawdown', { defaultValue: '当前回撤' })}
+            value={data.drawdown_pct ?? null}
+            unit="%"
+          />
+          <RiskMeter
+            label={t('meters.exposure', { defaultValue: '总敞口' })}
+            value={data.total_exposure_pct ?? null}
+            unit="%"
+            precision={0}
+          />
           <RiskMeter
             label={t('meters.cvar', { defaultValue: '95% CVaR' })}
             value={data.cvar_95 ?? null}
-            limit={5}
             unit="%"
             precision={2}
           />
@@ -93,111 +78,78 @@ const RiskContent = () => {
       <section aria-labelledby="risk-section-limits" className="space-y-4">
         <SectionHeader
           id="risk-section-limits"
-          label={t('section.limits', { defaultValue: '限制配置' })}
+          label={t('section.limits', { defaultValue: '观察与配置' })}
           description={t('section.limits_hint', {
-            defaultValue: '相关性、冷却、阈值',
+            defaultValue: '统计仅供观察，实际限制见下方配置',
           })}
         />
 
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader className="p-4 pb-2">
-            <CardTitle className="text-sm">
-              {t('corr.title', { defaultValue: '相关性分组' })}
-            </CardTitle>
-            <div className="text-[11px] text-muted-foreground">
-              {t('corr.subtitle', { defaultValue: '每组最多 {{n}} 仓位', n: 2 })}
-            </div>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-2.5 p-4 pt-0">
-            {data.correlation_groups.length === 0 ? (
-              <EmptyState
-                size="compact"
-                title={t('corr.empty', { defaultValue: '暂无相关性数据' })}
-              />
-            ) : (
-              data.correlation_groups.map((g) => (
-                <div key={g.name} className="flex items-center gap-2.5">
-                  <div className="w-28 text-xs font-medium">{g.name}</div>
-                  <div className="flex flex-1 gap-1">
-                    {Array.from({ length: g.max }).map((_, i) => (
-                      <div
-                        key={i}
-                        className="h-5 flex-1 rounded border border-border"
-                        style={{
-                          background: i < g.open ? 'var(--amber-500)' : 'hsl(var(--muted))',
-                        }}
-                      />
-                    ))}
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="text-sm">{t('corr.title', { defaultValue: '相关性分组' })}</CardTitle>
+              <div className="text-[11px] text-muted-foreground">{t('reporting_only')}</div>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-2.5 p-4 pt-0">
+              {data.correlation_groups.length === 0 ? (
+                <EmptyState size="compact" title={t('corr.empty', { defaultValue: '暂无相关性数据' })} />
+              ) : (
+                data.correlation_groups.map((g) => (
+                  <div key={g.name} className="flex items-center gap-2.5">
+                    <div className="w-28 text-xs font-medium">{g.name}</div>
+                    <div className="flex-1 text-right font-mono text-xs">{g.open}</div>
                   </div>
-                  <div className="w-12 text-right font-mono text-[11px] text-muted-foreground">
-                    {g.open}/{g.max}
-                  </div>
-                </div>
-              ))
-            )}
-          </CardContent>
-        </Card>
+                ))
+              )}
+            </CardContent>
+          </Card>
 
-        <Card>
-          <CardHeader className="p-4 pb-2">
-            <CardTitle className="flex items-center gap-2 text-sm">
-              <Clock size={14} />
-              {t('cooldown.title', { defaultValue: '冷却 · 频率限制' })}
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-col gap-3 p-4 pt-0">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-md bg-muted p-2.5">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {t('rate.hourly', { defaultValue: '本小时' })}
-                </div>
-                <div className="font-mono text-base tabular-nums">
-                  {data.trade_count_hour ?? 0}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    / {thresholds.max_trades_per_hour}
-                  </span>
-                </div>
-              </div>
-              <div className="rounded-md bg-muted p-2.5">
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
-                  {t('rate.daily', { defaultValue: '今日' })}
-                </div>
-                <div className="font-mono text-base tabular-nums">
-                  {data.trade_count_day ?? 0}
-                  <span className="text-xs text-muted-foreground ml-1">
-                    / {thresholds.max_trades_per_day}
-                  </span>
-                </div>
-              </div>
-            </div>
-            {data.cooldowns.length === 0 ? (
-              <EmptyState
-                size="compact"
-                title={t('cooldown.empty', { defaultValue: '所有交易对均可交易' })}
-              />
-            ) : (
-              <div className="space-y-1.5">
-                {data.cooldowns.map((c) => (
-                  <div key={c.pair} className="flex items-center gap-2 text-xs">
-                    <span className="font-mono font-medium w-24">{c.pair}</span>
-                    {c.until_seconds === 0 ? (
-                      <StatusPill tone="success">可交易</StatusPill>
-                    ) : (
-                      <>
-                        <StatusPill tone="warning">冷却中</StatusPill>
-                        <span className="font-mono text-amber-500">
-                          {Math.floor(c.until_seconds / 60)}m {c.until_seconds % 60}s
-                        </span>
-                      </>
-                    )}
+          <Card>
+            <CardHeader className="p-4 pb-2">
+              <CardTitle className="flex items-center gap-2 text-sm">
+                <Clock size={14} />
+                {t('cooldown.title', { defaultValue: '交易计数与冷却记录' })}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-3 p-4 pt-0">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-md bg-muted p-2.5">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {t('rate.hourly', { defaultValue: '本小时' })}
                   </div>
-                ))}
+                  <div className="font-mono text-base tabular-nums">{data.trade_count_hour ?? '—'}</div>
+                </div>
+                <div className="rounded-md bg-muted p-2.5">
+                  <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                    {t('rate.daily', { defaultValue: '今日' })}
+                  </div>
+                  <div className="font-mono text-base tabular-nums">{data.trade_count_day ?? '—'}</div>
+                </div>
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+              {data.cooldowns.length === 0 ? (
+                <EmptyState size="compact" title={t('cooldown.empty', { defaultValue: '暂无冷却记录' })} />
+              ) : (
+                <div className="space-y-1.5">
+                  {data.cooldowns.map((c) => (
+                    <div key={c.pair} className="flex items-center gap-2 text-xs">
+                      <span className="font-mono font-medium w-24">{c.pair}</span>
+                      {c.until_seconds === 0 ? (
+                        <span className="text-muted-foreground">{t('cooldown.clear')}</span>
+                      ) : (
+                        <>
+                          <StatusPill tone="warning">冷却中</StatusPill>
+                          <span className="font-mono text-amber-500">
+                            {Math.floor(c.until_seconds / 60)}m {c.until_seconds % 60}s
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
 
         <ThresholdsCard thresholds={thresholds} />
       </section>
@@ -225,21 +177,14 @@ const RiskContent = () => {
                 size="compact"
                 icon={<ShieldAlert className="h-5 w-5" />}
                 title={t('blocks.empty', { defaultValue: '近期无拦截记录' })}
-                description={t('blocks.empty_hint', { defaultValue: '风控引擎运行正常' })}
+                description={t('blocks.empty_hint', { defaultValue: '此处仅展示已记录的风控拦截' })}
               />
             ) : (
               <div className="divide-y divide-border">
                 {data.recent_blocks.map((b) => (
-                  <div
-                    key={b.cycle_id}
-                    className="flex items-center gap-3 py-2.5 text-xs"
-                  >
-                    <span className="w-20 font-mono text-muted-foreground">
-                      {formatDateTime(b.ts).slice(-8)}
-                    </span>
-                    <span className="w-20 font-mono text-muted-foreground">
-                      {b.cycle_id.slice(0, 8)}
-                    </span>
+                  <div key={b.cycle_id} className="flex items-center gap-3 py-2.5 text-xs">
+                    <span className="w-20 font-mono text-muted-foreground">{formatDateTime(b.ts).slice(-8)}</span>
+                    <span className="w-20 font-mono text-muted-foreground">{b.cycle_id.slice(0, 8)}</span>
                     <StatusPill tone="danger">{b.rule}</StatusPill>
                     <span className="flex-1 truncate text-muted-foreground">{b.detail}</span>
                   </div>
@@ -264,15 +209,10 @@ interface SectionHeaderProps {
 /** Subtle section divider for grouping risk page content. */
 const SectionHeader = ({ id, label, description }: SectionHeaderProps) => (
   <div className="flex items-baseline gap-3 border-b border-border pb-1.5">
-    <h2
-      id={id}
-      className="text-[11px] font-semibold uppercase tracking-wider text-foreground"
-    >
+    <h2 id={id} className="text-[11px] font-semibold uppercase tracking-wider text-foreground">
       {label}
     </h2>
-    {description ? (
-      <span className="text-[11px] text-muted-foreground">{description}</span>
-    ) : null}
+    {description ? <span className="text-[11px] text-muted-foreground">{description}</span> : null}
   </div>
 );
 
@@ -280,12 +220,7 @@ const RiskPage = () => {
   const { t } = useTranslation('risk');
   const { isLoading, isError, refetch } = useRiskStatus();
   return (
-    <PageBoundary
-      loading={isLoading}
-      isError={isError}
-      onRetry={() => void refetch()}
-      errorTitle={t('title')}
-    >
+    <PageBoundary loading={isLoading} isError={isError} onRetry={() => void refetch()} errorTitle={t('title')}>
       <RiskContent />
     </PageBoundary>
   );

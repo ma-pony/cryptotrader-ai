@@ -130,6 +130,74 @@ def _config_and_redis_patch(max_rules: int = 50, in_cooldown: bool = False):
     )
 
 
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+@pytest.mark.parametrize(
+    ("trigger_type", "parameters"),
+    [
+        ("price_threshold", {}),
+        ("price_threshold", {"direction": "below", "price": 0}),
+        ("price_threshold", {"direction": "sideways", "price": 50000}),
+        ("pct_change", {"window_minutes": 0, "threshold_pct": 3}),
+        ("pct_change", {"window_minutes": 15, "threshold_pct": 0}),
+        ("candle_pattern", {"interval": "", "consecutive_count": 3, "direction": "bearish"}),
+        ("candle_pattern", {"interval": "1h", "consecutive_count": 0, "direction": "bearish"}),
+        ("candle_pattern", {"interval": "1h", "consecutive_count": 1.5, "direction": "bearish"}),
+        ("funding_rate", {"threshold_pct": 0}),
+        ("funding_rate", {"threshold_pct": True}),
+    ],
+)
+def test_invalid_active_parameters_never_reach_rule_store(client, store, method, trigger_type, parameters):
+    store.count_rules.return_value = 0
+    store.create_rule.return_value = _mock_rule()
+    store.update_rule.return_value = _mock_rule()
+    path = "/api/scheduler/rules" + ("/rule-1" if method == "PUT" else "")
+    with _config_and_redis_patch()[1]:
+        response = client.request(
+            method,
+            path,
+            json={
+                "name": "Valid",
+                "pair": "BTC/USDT",
+                "trigger_type": trigger_type,
+                "parameters": parameters,
+            },
+        )
+    assert response.status_code == 422
+    store.create_rule.assert_not_awaited()
+    store.update_rule.assert_not_awaited()
+    assert response.json()["detail"][0]["loc"][:2] == ["body", "parameters"]
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT"])
+@pytest.mark.parametrize(
+    ("trigger_type", "parameters"),
+    [
+        ("price_threshold", {"direction": "below", "price": 50000}),
+        ("pct_change", {"window_minutes": 15, "threshold_pct": 3}),
+        ("candle_pattern", {"interval": "1h", "consecutive_count": 11, "direction": "bullish"}),
+        ("funding_rate", {"threshold_pct": 0.1}),
+    ],
+)
+def test_valid_trigger_parameters_preserve_units(client, store, method, trigger_type, parameters):
+    store.count_rules.return_value = 0
+    store.create_rule.return_value = _mock_rule(trigger_type=trigger_type, parameters=parameters)
+    store.update_rule.return_value = _mock_rule(trigger_type=trigger_type, parameters=parameters)
+    path = "/api/scheduler/rules" + ("/rule-1" if method == "PUT" else "")
+    with _config_and_redis_patch()[1]:
+        response = client.request(
+            method,
+            path,
+            json={
+                "name": "Valid",
+                "pair": "BTC/USDT",
+                "trigger_type": trigger_type,
+                "parameters": parameters,
+            },
+        )
+    assert response.status_code == (201 if method == "POST" else 200)
+    assert response.json()["parameters"] == parameters
+
+
 # ---------------------------------------------------------------------------
 # GET /api/scheduler/rules
 # ---------------------------------------------------------------------------
@@ -284,7 +352,7 @@ class TestUpdateRule:
             "name": "Ghost",
             "trigger_type": "funding_rate",
             "pair": "BTC/USDT",
-            "parameters": {},
+            "parameters": {"threshold_pct": 0.1},
             "cooldown_minutes": 30,
         }
         resp = client.put("/api/scheduler/rules/no-such-rule", json=body)

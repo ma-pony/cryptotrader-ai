@@ -39,6 +39,7 @@ from cryptotrader.runtime_config.models import (
 from cryptotrader.runtime_config.repository import (
     API_ACCESS_CREDENTIAL_REF,
     LLM_GATEWAY_CREDENTIAL_REF,
+    NEWS_PROVIDER_CREDENTIAL_REF,
     CredentialState,
     RevisionConflict,
 )
@@ -87,7 +88,6 @@ class VenueConnectionOut(StrictOut):
 class ExecutionConfigOut(StrictOut):
     connections: list[VenueConnectionOut]
     books: list[ExecutionBookOut]
-    allocation_policy: str
     live_order_execution_enabled: bool
 
 
@@ -98,6 +98,8 @@ class SystemConfigOut(StrictOut):
 class MarketDataConfigOut(StrictOut):
     source_id: str
     parameters: list[JsonEntryOut]
+    news_credential_configured: bool
+    news_credential_updated_at: datetime | None
 
 
 class LlmRetryConfigOut(StrictOut):
@@ -158,46 +160,15 @@ class PositionConfigOut(StrictOut):
     max_single_pct: float
     max_total_exposure_pct: float
     max_margin_used_pct: float
-    max_correlated_positions: int
-    max_same_direction_positions: int
 
 
 class LossConfigOut(StrictOut):
-    max_daily_loss_pct: float
     max_drawdown_pct: float
-    max_cvar_95: float
-    cvar_min_returns: int
-
-
-class CooldownConfigOut(StrictOut):
-    same_pair_minutes: int
-    post_loss_minutes: int
-
-
-class VolatilityConfigOut(StrictOut):
-    flash_crash_threshold: float
-    funding_rate_threshold: float
-    flash_crash_lookback: int
-
-
-class ExchangeCheckConfigOut(StrictOut):
-    max_api_latency_ms: int
-    health_check_interval_s: int
-
-
-class RateLimitConfigOut(StrictOut):
-    max_trades_per_hour: int
-    max_trades_per_day: int
 
 
 class RiskConfigOut(StrictOut):
-    max_stop_loss_pct: float
     position: PositionConfigOut
     loss: LossConfigOut
-    cooldown: CooldownConfigOut
-    volatility: VolatilityConfigOut
-    exchange: ExchangeCheckConfigOut
-    rate_limit: RateLimitConfigOut
 
 
 class HitlConfigOut(StrictOut):
@@ -218,17 +189,11 @@ class TriggerConfigOut(StrictOut):
     funding_rate_poll_interval_minutes: int
 
 
-class TelegramConfigOut(StrictOut):
-    enabled: bool
-    chat_id: str
-
-
 class NotificationConfigOut(StrictOut):
     webhook_url: str
     enabled: bool
     webhook_timeout: int
     events: list[str]
-    telegram: TelegramConfigOut
 
 
 class InfrastructureConfigOut(StrictOut):
@@ -350,7 +315,6 @@ class ExecutionConfigIn(BaseModel):
 
     connections: tuple[VenueConnectionDocumentIn, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
-    allocation_policy: str = "weighted"
     live_order_execution_enabled: bool = False
 
 
@@ -472,7 +436,6 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
             execution=ExecutionConfig(
                 connections=connections,
                 books=body.execution.books,
-                allocation_policy=body.execution.allocation_policy,
                 live_order_execution_enabled=body.execution.live_order_execution_enabled,
             ),
             hitl=body.hitl,
@@ -538,9 +501,10 @@ async def connection_out(repository, connection: VenueConnection) -> VenueConnec
 
 async def config_out(repository, snapshot) -> RuntimeConfigOut:
     document = snapshot.document
-    llm_credential, api_credential = await asyncio.gather(
+    llm_credential, api_credential, news_credential = await asyncio.gather(
         repository.token_state(LLM_GATEWAY_CREDENTIAL_REF),
         repository.token_state(API_ACCESS_CREDENTIAL_REF),
+        repository.token_state(NEWS_PROVIDER_CREDENTIAL_REF),
     )
     connections = await asyncio.gather(
         *(connection_out(repository, connection) for connection in document.execution.connections)
@@ -580,6 +544,8 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
             market_data=MarketDataConfigOut(
                 source_id=document.market_data.source_id,
                 parameters=json_entries_out(document.market_data.parameters),
+                news_credential_configured=news_credential.configured,
+                news_credential_updated_at=news_credential.updated_at,
             ),
             llm=LlmConfigOut(
                 base_url=document.llm.base_url,
@@ -632,42 +598,18 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                 hitl_required=document.signals.hitl_required,
             ),
             risk=RiskConfigOut(
-                max_stop_loss_pct=document.risk.max_stop_loss_pct,
                 position=PositionConfigOut(
                     max_single_pct=document.risk.position.max_single_pct,
                     max_total_exposure_pct=document.risk.position.max_total_exposure_pct,
                     max_margin_used_pct=document.risk.position.max_margin_used_pct,
-                    max_correlated_positions=document.risk.position.max_correlated_positions,
-                    max_same_direction_positions=document.risk.position.max_same_direction_positions,
                 ),
                 loss=LossConfigOut(
-                    max_daily_loss_pct=document.risk.loss.max_daily_loss_pct,
                     max_drawdown_pct=document.risk.loss.max_drawdown_pct,
-                    max_cvar_95=document.risk.loss.max_cvar_95,
-                    cvar_min_returns=document.risk.loss.cvar_min_returns,
-                ),
-                cooldown=CooldownConfigOut(
-                    same_pair_minutes=document.risk.cooldown.same_pair_minutes,
-                    post_loss_minutes=document.risk.cooldown.post_loss_minutes,
-                ),
-                volatility=VolatilityConfigOut(
-                    flash_crash_threshold=document.risk.volatility.flash_crash_threshold,
-                    funding_rate_threshold=document.risk.volatility.funding_rate_threshold,
-                    flash_crash_lookback=document.risk.volatility.flash_crash_lookback,
-                ),
-                exchange=ExchangeCheckConfigOut(
-                    max_api_latency_ms=document.risk.exchange.max_api_latency_ms,
-                    health_check_interval_s=document.risk.exchange.health_check_interval_s,
-                ),
-                rate_limit=RateLimitConfigOut(
-                    max_trades_per_hour=document.risk.rate_limit.max_trades_per_hour,
-                    max_trades_per_day=document.risk.rate_limit.max_trades_per_day,
                 ),
             ),
             execution=ExecutionConfigOut(
                 connections=list(connections),
                 books=books,
-                allocation_policy=document.execution.allocation_policy,
                 live_order_execution_enabled=document.execution.live_order_execution_enabled,
             ),
             hitl=HitlConfigOut(approval_ttl_minutes=document.hitl.approval_ttl_minutes),
@@ -688,10 +630,6 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                 enabled=document.notifications.enabled,
                 webhook_timeout=document.notifications.webhook_timeout,
                 events=list(document.notifications.events),
-                telegram=TelegramConfigOut(
-                    enabled=document.notifications.telegram.enabled,
-                    chat_id=document.notifications.telegram.chat_id,
-                ),
             ),
             infrastructure=InfrastructureConfigOut(redis_url=document.infrastructure.redis_url),
             observability=ObservabilityConfigOut(otlp_endpoint=document.observability.otlp_endpoint),
@@ -902,3 +840,8 @@ async def put_llm_gateway_token(body: PutTokenIn, request: Request) -> TokenMuta
 @router.put("/credentials/api-access", response_model=TokenMutationOut)
 async def put_api_access_token(body: PutTokenIn, request: Request) -> TokenMutationOut:
     return await _put_runtime_token(body, request, API_ACCESS_CREDENTIAL_REF)
+
+
+@router.put("/credentials/news-provider", response_model=TokenMutationOut)
+async def put_news_provider_token(body: PutTokenIn, request: Request) -> TokenMutationOut:
+    return await _put_runtime_token(body, request, NEWS_PROVIDER_CREDENTIAL_REF)

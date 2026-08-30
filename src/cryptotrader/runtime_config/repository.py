@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 _GLOBAL_ID = "global"
 LLM_GATEWAY_CREDENTIAL_REF = "llm-gateway"
+NEWS_PROVIDER_CREDENTIAL_REF = "news-provider"
 API_ACCESS_CREDENTIAL_REF = "api-access"
 
 

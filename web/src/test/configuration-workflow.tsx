@@ -74,7 +74,7 @@ export function workflowConfig() {
     document: {
       ...base.document,
       system: { active: false },
-      market_data: { source_id: 'default', parameters: [] },
+      market_data: { news_credential_configured: false, news_credential_updated_at: null, source_id: 'default', parameters: [] },
       signals: {
         ...base.document.signals,
         components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }],
@@ -135,11 +135,13 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
     if (url.includes('/api/config/credentials/')) {
       if (failure) return response({ detail: failure.detail }, failure.status);
       const gateway = url.endsWith('/llm-gateway');
+      const news = url.endsWith('/news-provider');
       saved = {
         ...saved,
         revision: saved.revision + 1,
         document: {
           ...saved.document,
+          market_data: { ...saved.document.market_data, ...(news ? { news_credential_configured: true, news_credential_updated_at: '2026-08-30T13:00:00Z' } : {}) },
           llm: {
             ...saved.document.llm,
             ...(gateway
@@ -148,7 +150,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
           },
           security: {
             ...saved.document.security,
-            ...(!gateway
+            ...(!gateway && !news
               ? { access_credential_configured: true, access_credential_updated_at: '2026-08-30T13:00:00Z' }
               : {}),
           },
@@ -186,7 +188,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
               parameters: encode(item.parameters).entries,
             })),
           },
-          market_data: { ...doc.market_data, parameters: encode(doc.market_data.parameters).entries },
+          market_data: { ...saved.document.market_data, ...doc.market_data, parameters: encode(doc.market_data.parameters).entries },
           execution: {
             ...doc.execution,
             connections: doc.execution.connections.map((item) => ({

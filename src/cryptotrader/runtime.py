@@ -472,14 +472,20 @@ async def build_runtime(
 
 
 async def _discover_registry_graph(document, events, repository):
+    from cryptotrader.runtime_config.repository import NEWS_PROVIDER_CREDENTIAL_REF
+
     try:
         llm_gateway_key = (await repository.reveal_token(LLM_GATEWAY_CREDENTIAL_REF)).token
     except CredentialNotConfigured:
         llm_gateway_key = ""
+    try:
+        news_provider_key = (await repository.reveal_token(NEWS_PROVIDER_CREDENTIAL_REF)).token
+    except CredentialNotConfigured:
+        news_provider_key = ""
     return (
         SignalComponentRegistry.discover(document, events, llm_gateway_key=llm_gateway_key),
         VenueAdapterRegistry.discover(connection.adapter_id for connection in document.execution.connections),
-        MarketSourceRegistry.discover(document.market_data),
+        MarketSourceRegistry.discover(document.market_data, news_provider_key=news_provider_key),
     )
 
 
@@ -517,8 +523,13 @@ def _assemble_cycle(snapshot, repository, sessions, signals, markets, event_sink
     planner = ExecutionPlanner(book_risk_gate=book_risk, connection_risk_gate=connection_risk)
     database_url = getattr(runtime_repository, "database_url", None)
     market_source = markets.require(frozen.document.market_data.source_id)
-    timeframe = str(frozen.document.market_data.parameters.get("timeframe", "1h"))
-    limit = int(frozen.document.market_data.parameters.get("limit", 100))
+    from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
+
+    market_parameters = (
+        DefaultMarketSourceParameters.model_validate(dict(frozen.document.market_data.parameters))
+        if frozen.document.market_data.source_id == "default"
+        else DefaultMarketSourceParameters()
+    )
     return TradingCycle(
         snapshot=frozen,
         repository=runtime_repository,
@@ -534,11 +545,13 @@ def _assemble_cycle(snapshot, repository, sessions, signals, markets, event_sink
         book_risk=book_risk,
         connection_risk=connection_risk,
         planner=planner,
-        approvals=BookApprovalStore(database_url),
+        approvals=BookApprovalStore(database_url, approval_ttl_minutes=frozen.document.hitl.approval_ttl_minutes),
         coordinator=ExecutionCoordinator(services),
         journal=MultiVenueCycleStore(database_url),
         events=event_sink,
-        exit_requirement=DataRequirements(candles=(CandleRequirement(timeframe, max(20, limit)),)),
+        exit_requirement=DataRequirements(
+            candles=(CandleRequirement(market_parameters.timeframe, market_parameters.limit),)
+        ),
     )
 
 

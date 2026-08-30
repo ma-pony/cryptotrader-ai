@@ -1,6 +1,9 @@
 {
   "title": "Risk",
-  "trade_count": { "today": "Trades today", "window": "Trades in window" },
+  "trade_count": {
+    "today": "Trades today",
+    "window": "Trades in window"
+  },
   "circuit_breaker": {
     "title": "Circuit Breaker",
     "ACTIVE": "Active",
@@ -9,19 +12,16 @@
     "remaining": "Remaining",
     "reset": "Reset Circuit Breaker",
     "confirm_title": "Reset Circuit Breaker?",
-    "confirm_body": "This will immediately disable the breaker and resume trading. Confirm root cause first.",
-    "confirm_action": "Yes, reset now"
+    "confirm_body": "Reset clears this circuit breaker only. Other risk checks and trading switches remain unchanged. Confirm the cause first.",
+    "confirm_action": "Yes, reset now",
+    "normal": "Not triggered"
   },
   "thresholds": {
-    "title": "Thresholds",
-    "max_position": "Max position %",
-    "max_drawdown": "Max drawdown %",
-    "daily_loss_limit": "Daily loss limit %",
-    "per_trade_risk": "Per-trade risk %",
-    "max_correlated": "Max correlated positions",
-    "max_trades_hour": "Max trades/hour",
-    "max_trades_day": "Max trades/day",
-    "cooldown": "Post-loss cooldown"
+    "title": "Enforced risk limits",
+    "concentration": "Connection concentration limit",
+    "exposure": "Total exposure limit",
+    "margin": "Margin usage limit",
+    "drawdown": "Maximum drawdown"
   },
   "redis_warning": "Redis unavailable: risk state may be inaccurate",
   "hitl": {
@@ -64,6 +64,27 @@
     "dismiss": "Dismiss",
     "requires_attention": "Requires attention",
     "response_error": "Approval response failed. The request remains pending.",
-    "outcome_status": { "approved": "Approved", "rejected": "Rejected", "partial": "Partial", "completed": "Completed", "failed": "Failed" }
+    "outcome_status": {
+      "approved": "Approved",
+      "rejected": "Rejected",
+      "partial": "Partial",
+      "completed": "Completed",
+      "failed": "Failed"
+    }
+  },
+  "reporting_only": "Reporting only",
+  "settings_link": "Edit risk configuration",
+  "cooldown": {
+    "clear": "No cooldown record",
+    "title": "Trade counts and cooldown records",
+    "empty": "No cooldown records"
+  },
+  "section": {
+    "live": "Live status",
+    "live_hint": "Circuit breaker and reporting metrics",
+    "limits": "Reporting and configuration",
+    "limits_hint": "Diagnostics are reporting only; enforced limits are below",
+    "events": "Events",
+    "events_hint": "Recent blocks and pending approvals"
   }
 }

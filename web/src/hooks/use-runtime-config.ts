@@ -115,7 +115,7 @@ export const toRuntimeDocument = (response: RuntimeConfig['document']): RuntimeD
   llm: (({ gateway_credential_configured: _configured, gateway_credential_updated_at: _updatedAt, ...llm }) => llm)(
     response.llm,
   ),
-  market_data: { ...response.market_data, parameters: decodeEntries(response.market_data.parameters) },
+  market_data: { source_id: response.market_data.source_id, parameters: decodeEntries(response.market_data.parameters) },
   signals: {
     ...response.signals,
     components: response.signals.components.map((component) => ({
@@ -179,6 +179,10 @@ export const useRuntimeConfig = () => {
       llmGateway: {
         configured: query.data?.document.llm.gateway_credential_configured ?? false,
         updatedAt: query.data?.document.llm.gateway_credential_updated_at ?? null,
+      },
+      newsProvider: {
+        configured: query.data?.document.market_data.news_credential_configured ?? false,
+        updatedAt: query.data?.document.market_data.news_credential_updated_at ?? null,
       },
       apiAccess: {
         configured: query.data?.document.security.access_credential_configured ?? false,

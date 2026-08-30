@@ -29,6 +29,7 @@ class MarketSourceRegistry:
         config: MarketDataConfig,
         *,
         entry_points=None,
+        news_provider_key: str = "",
     ) -> MarketSourceRegistry:
         from cryptotrader.market_sources.default import create_source as create_default
 
@@ -48,7 +49,11 @@ class MarketSourceRegistry:
 
         if config.source_id not in factories:
             raise ValueError(f"uninstalled market source: {config.source_id}")
-        source = factories[config.source_id](config)
+        source = (
+            factories[config.source_id](config, news_provider_key=news_provider_key)
+            if config.source_id == "default"
+            else factories[config.source_id](config)
+        )
         if not isinstance(source, MarketDataSource):
             raise TypeError(f"factory for {config.source_id} did not return MarketDataSource")
         if source.id != config.source_id:

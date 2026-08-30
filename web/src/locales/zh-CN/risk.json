@@ -12,19 +12,16 @@
     "remaining": "剩余",
     "reset": "重置断路器",
     "confirm_title": "确认重置断路器？",
-    "confirm_body": "重置后断路器将立即失效，交易将恢复。建议确认根因后再操作。",
-    "confirm_action": "我已确认，立即重置"
+    "confirm_body": "重置将清除此断路器状态，其他风控与交易开关保持不变。请先确认触发原因。",
+    "confirm_action": "我已确认，立即重置",
+    "normal": "未触发"
   },
   "thresholds": {
-    "title": "阈值",
-    "max_position": "最大仓位 %",
-    "max_drawdown": "最大回撤 %",
-    "daily_loss_limit": "日损失上限 %",
-    "per_trade_risk": "单笔风险 %",
-    "max_correlated": "最大相关仓位",
-    "max_trades_hour": "每小时最大交易",
-    "max_trades_day": "每日最大交易",
-    "cooldown": "亏损冷却"
+    "title": "实际风控限制",
+    "concentration": "连接集中度上限",
+    "exposure": "总敞口上限",
+    "margin": "保证金使用上限",
+    "drawdown": "最大回撤"
   },
   "redis_warning": "Redis 不可达：风控状态可能不准确",
   "hitl": {
@@ -67,6 +64,27 @@
     "dismiss": "关闭",
     "requires_attention": "需要关注",
     "response_error": "审批响应失败，请求仍处于待处理状态。",
-    "outcome_status": { "approved": "已批准", "rejected": "已拒绝", "partial": "部分完成", "completed": "已完成", "failed": "失败" }
+    "outcome_status": {
+      "approved": "已批准",
+      "rejected": "已拒绝",
+      "partial": "部分完成",
+      "completed": "已完成",
+      "failed": "失败"
+    }
+  },
+  "reporting_only": "仅供观察",
+  "settings_link": "修改风控配置",
+  "cooldown": {
+    "clear": "无冷却记录",
+    "title": "交易计数与冷却记录",
+    "empty": "暂无冷却记录"
+  },
+  "section": {
+    "live": "实时状态",
+    "live_hint": "熔断器与观察指标",
+    "limits": "观察与配置",
+    "limits_hint": "统计仅供观察，实际限制见下方配置",
+    "events": "事件流",
+    "events_hint": "最近拦截与待审批"
   }
 }

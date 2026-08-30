@@ -105,7 +105,7 @@ async def test_memory_and_sqlite_round_trip_the_exact_proposal_and_list_pending(
         proposal,
         cycle_id="cycle-memory",
         approval_id="approval-memory",
-        created_at=datetime(2026, 8, 29, 1, tzinfo=UTC),
+        created_at=datetime.now(UTC),
     )
 
     assert approval.proposal == proposal
@@ -132,6 +132,49 @@ async def test_revision_change_invalidates_unexecuted_approval(tmp_path, initial
     assert invalidated.status == "invalidated"
     assert invalidated.decided_at is not None
     assert invalidated.claimed_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+@pytest.mark.parametrize("operation", ["approve", "claim"])
+async def test_expired_approval_is_atomically_invalidated_before_approval_or_claim(
+    tmp_path, monkeypatch, database, operation
+):
+    import cryptotrader.hitl.store as stores
+
+    store = stores.BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'expiry.db'}" if database else None)
+    now = datetime.now(UTC)
+    approval = await store.create(_book_proposal(), created_at=now)
+    if operation == "claim":
+        await store.approve(approval.id)
+
+    class Later(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now + timedelta(minutes=60)
+
+    monkeypatch.setattr(stores, "datetime", Later)
+    action = (
+        store.approve(approval.id)
+        if operation == "approve"
+        else store.claim_for_execution(approval.id, current_revision=7)
+    )
+    with pytest.raises(stores.ApprovalInvalidated):
+        await action
+    saved = await store.get(approval.id)
+    assert saved.status == "invalidated"
+    assert saved.claimed_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("database", [False, True])
+async def test_pending_list_excludes_expired_requests(tmp_path, database):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'expiry-list.db'}" if database else None)
+    await store.create(_book_proposal(), created_at=datetime.now(UTC) - timedelta(minutes=61))
+    current = await store.create(_book_proposal())
+    assert await store.list_pending() == [current]
 
 
 @pytest.mark.asyncio

@@ -299,10 +299,16 @@ class TradingCycle:
             return self._outcome(replacement)
 
         book = self._validated_execution_book(snapshot, approval.proposal)
-        proposal = await self.approvals.claim_for_execution(
-            approval_id,
-            current_revision=snapshot.revision,
-        )
+        from cryptotrader.hitl.store import ApprovalInvalidated
+
+        try:
+            proposal = await self.approvals.claim_for_execution(
+                approval_id,
+                current_revision=snapshot.revision,
+            )
+        except ApprovalInvalidated:
+            replacement = await self._persist_approval_transition(record, original, "invalidated")
+            return self._outcome(replacement)
         if proposal != approval.proposal:
             raise ValueError("claimed proposal does not match the validated approval")
         terminal = await self._execute_book(

@@ -344,7 +344,7 @@ const RuntimeDocumentSchema = strictRecord({
     access_credential_configured: z.boolean(),
     access_credential_updated_at: z.string().nullable(),
   }),
-  market_data: strictRecord({ source_id: z.string(), parameters: z.array(JsonEntrySchema) }),
+  market_data: strictRecord({ source_id: z.string(), parameters: z.array(JsonEntrySchema), news_credential_configured: z.boolean(), news_credential_updated_at: z.string().nullable() }),
   llm: strictRecord({
     base_url: z.string(),
     streaming_models: z.array(z.string()),
@@ -380,33 +380,16 @@ const RuntimeDocumentSchema = strictRecord({
     hitl_required: z.boolean(),
   }),
   risk: strictRecord({
-    max_stop_loss_pct: z.number(),
     position: strictRecord({
       max_single_pct: z.number(),
       max_total_exposure_pct: z.number(),
       max_margin_used_pct: z.number(),
-      max_correlated_positions: z.number().int(),
-      max_same_direction_positions: z.number().int(),
     }),
-    loss: strictRecord({
-      max_daily_loss_pct: z.number(),
-      max_drawdown_pct: z.number(),
-      max_cvar_95: z.number(),
-      cvar_min_returns: z.number().int(),
-    }),
-    cooldown: strictRecord({ same_pair_minutes: z.number().int(), post_loss_minutes: z.number().int() }),
-    volatility: strictRecord({
-      flash_crash_threshold: z.number(),
-      funding_rate_threshold: z.number(),
-      flash_crash_lookback: z.number().int(),
-    }),
-    exchange: strictRecord({ max_api_latency_ms: z.number().int(), health_check_interval_s: z.number().int() }),
-    rate_limit: strictRecord({ max_trades_per_hour: z.number().int(), max_trades_per_day: z.number().int() }),
+    loss: strictRecord({ max_drawdown_pct: z.number() }),
   }),
   execution: strictRecord({
     connections: z.array(RuntimeConnectionSchema),
     books: z.array(RuntimeBookSchema),
-    allocation_policy: z.string(),
     live_order_execution_enabled: z.boolean(),
   }),
   hitl: strictRecord({ approval_ttl_minutes: z.number().int() }),
@@ -427,7 +410,6 @@ const RuntimeDocumentSchema = strictRecord({
     enabled: z.boolean(),
     webhook_timeout: z.number().int(),
     events: z.array(z.string()),
-    telegram: strictRecord({ enabled: z.boolean(), chat_id: z.string() }),
   }),
   infrastructure: strictRecord({ redis_url: z.string() }),
   observability: strictRecord({ otlp_endpoint: z.string() }),
@@ -480,7 +462,7 @@ export const BacktestSessionsListSchema = z.object({
 
 export const BacktestSessionDetailSchema = z.object({
   name: z.string(),
-  params: z.record(z.unknown()),
+  params: BacktestParamsSchema,
   result: z.record(z.unknown()),
   saved_at: z.string(),
 });
@@ -495,18 +477,15 @@ export const CircuitBreakerStatusSchema = z.object({
 });
 
 export const RiskThresholdsSchema = z.object({
-  max_position_pct: z.number(),
-  max_daily_loss_pct: z.number(),
-  max_stop_loss_pct: z.number(),
-  max_trades_per_hour: z.number(),
-  max_trades_per_day: z.number(),
-  post_loss_cooldown_seconds: z.number(),
+  max_single_pct: z.number(),
+  max_total_exposure_pct: z.number(),
+  max_margin_used_pct: z.number(),
+  max_drawdown_pct: z.number(),
 });
 
 export const CorrelationGroupSchema = z.object({
   name: z.string(),
   open: z.number(),
-  max: z.number(),
   pairs: z.array(z.string()),
 });
 

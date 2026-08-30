@@ -1,3 +1,4 @@
+import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -11,25 +12,26 @@ export const ThresholdsCard = ({ thresholds }: Props) => {
   const { t } = useTranslation('risk');
 
   const items = [
-    { label: t('thresholds.max_position'), value: `${(thresholds.max_position_pct * 100).toFixed(0)}%` },
-    { label: t('thresholds.daily_loss_limit'), value: `${(thresholds.max_daily_loss_pct * 100).toFixed(1)}%` },
-    { label: t('thresholds.per_trade_risk'), value: `${(thresholds.max_stop_loss_pct * 100).toFixed(1)}%` },
-    { label: t('thresholds.max_trades_hour', { defaultValue: '每小时最大交易' }), value: String(thresholds.max_trades_per_hour) },
-    { label: t('thresholds.max_trades_day', { defaultValue: '每日最大交易' }), value: String(thresholds.max_trades_per_day) },
-    { label: t('thresholds.cooldown', { defaultValue: '亏损冷却' }), value: `${Math.round(thresholds.post_loss_cooldown_seconds / 60)} min` },
+    { label: t('thresholds.concentration'), value: thresholds.max_single_pct },
+    { label: t('thresholds.exposure'), value: thresholds.max_total_exposure_pct },
+    { label: t('thresholds.margin'), value: thresholds.max_margin_used_pct },
+    { label: t('thresholds.drawdown'), value: thresholds.max_drawdown_pct },
   ];
 
   return (
     <Card>
       <CardHeader className="p-4 pb-2">
         <CardTitle className="text-sm">{t('thresholds.title')}</CardTitle>
+        <Link to="/settings/risk" className="text-sm text-primary underline underline-offset-4">
+          {t('settings_link')}
+        </Link>
       </CardHeader>
       <CardContent className="p-4 pt-0">
         <div className="grid grid-cols-2 gap-2 text-xs">
           {items.map((item) => (
             <div key={item.label} className="flex justify-between gap-2">
               <span className="text-muted-foreground">{item.label}</span>
-              <span className="font-medium tabular-nums">{item.value}</span>
+              <span className="font-medium tabular-nums">{Number((item.value * 100).toFixed(2))}%</span>
             </div>
           ))}
         </div>

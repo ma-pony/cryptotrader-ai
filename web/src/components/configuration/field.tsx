@@ -213,7 +213,7 @@ export function focusFirstError(errors: FieldErrors, form?: HTMLFormElement) {
 
 export type SecretFieldState = { revision: number; configured: boolean; updatedAt: string | null };
 /** Write-only secret state never enters the shared document or mutation cache. */
-export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api-access'; state: SecretFieldState }) {
+export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api-access' | 'news-provider'; state: SecretFieldState }) {
   const { t } = useTranslation('configuration');
   const writes = useRuntimeSecrets();
   const conflict = useRuntimeConfigConflict();
@@ -222,12 +222,13 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
   const [saved, setSaved] = useState<{ revision: number; updated_at: string }>();
   const [failed, setFailed] = useState(false);
   const gateway = kind === 'llm-gateway';
+  const news = kind === 'news-provider';
   return (
     <div className="configuration-secret">
       <TextField
         name={`credential.${kind}`}
-        label={t(gateway ? 'runtimeSecrets.llm' : 'runtimeSecrets.api')}
-        help={t('runtimeSecrets.hint')}
+        label={t(news ? 'runtimeSecrets.news' : gateway ? 'runtimeSecrets.llm' : 'runtimeSecrets.api')}
+        help={t(news ? 'runtimeSecrets.newsHint' : 'runtimeSecrets.hint')}
         type="password"
         value={token}
         onChange={(next) => {
@@ -243,7 +244,7 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
         onClick={() => {
           setPending(true);
           setFailed(false);
-          const write = gateway ? writes.writeLlmGateway : writes.writeApiAccess;
+          const write = news ? writes.writeNewsProvider : gateway ? writes.writeLlmGateway : writes.writeApiAccess;
           void write(Math.max(state.revision, saved?.revision ?? 0), token)
             .then((result) => {
               setToken('');
@@ -259,7 +260,7 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
         {pending
           ? t('forms.saving')
           : t(
-              gateway
+              news ? (state.configured || saved ? 'runtimeSecrets.rotateNews' : 'runtimeSecrets.saveNews') : gateway
                 ? state.configured || saved
                   ? 'runtimeSecrets.rotateGateway'
                   : 'runtimeSecrets.saveGateway'

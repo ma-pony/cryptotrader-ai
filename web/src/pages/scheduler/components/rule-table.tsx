@@ -78,6 +78,7 @@ const RuleRow = ({ rule, onEdit }: RowProps) => {
             <Trash2 className="h-3.5 w-3.5 text-destructive" />
           </Button>
         </div>
+        {toggleMutation.isError || deleteMutation.isError ? <p role="alert" className="configuration-error">{t('form.mutation_failed')}</p> : null}
         <ConfirmDialog
           open={deleteOpen}
           onOpenChange={setDeleteOpen}
@@ -85,7 +86,7 @@ const RuleRow = ({ rule, onEdit }: RowProps) => {
           body={t('delete.confirm_body')}
           confirmLabel={t('delete.confirm_action')}
           destructive
-          onConfirm={() => { void deleteMutation.mutateAsync(rule.id); }}
+          onConfirm={async () => { try { await deleteMutation.mutateAsync(rule.id); } catch { /* The row displays this mutation error. */ } }}
         />
       </td>
     </tr>

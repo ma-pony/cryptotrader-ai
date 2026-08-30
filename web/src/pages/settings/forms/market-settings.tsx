@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { ConfigurationCatalog, RuntimeDocument } from '@/types/api';
-import { ChoiceField, type DomainFormProps } from '@/components/configuration/field';
+import { ChoiceField, RuntimeSecretField, type SecretFieldState, type DomainFormProps } from '@/components/configuration/field';
 import { ParameterFields, parameterDefaults } from '@/components/configuration/parameter-fields';
 import { Section } from '@/components/configuration/section';
 
@@ -9,7 +9,8 @@ export function MarketSettings({
   onChange,
   errors = {},
   catalog,
-}: DomainFormProps<RuntimeDocument['market_data']> & { catalog: ConfigurationCatalog }) {
+  secrets,
+}: DomainFormProps<RuntimeDocument['market_data']> & { catalog: ConfigurationCatalog; secrets?: SecretFieldState }) {
   const { t, i18n } = useTranslation('configuration');
   const locale = i18n.language.startsWith('zh') ? 'zh_CN' : 'en_US';
   const selected = catalog.market_sources.find((source) => source.id === value.source_id);
@@ -43,6 +44,7 @@ export function MarketSettings({
         ) : (
           <p className="configuration-help">{t('forms.pluginUnavailable')}</p>
         )}
+        {secrets ? <RuntimeSecretField kind="news-provider" state={secrets} /> : null}
       </Section>
     </div>
   );
