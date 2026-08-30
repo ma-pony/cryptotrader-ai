@@ -70,5 +70,5 @@ Use the existing modern-minimal utilitarian console as an app workbench: section
 - [x] Shared typed configuration center, installed metadata/validation, venue/book workflows and consumed settings implemented in Tasks 1–5.
 - [x] Task 6 complete backend/frontend/type/lint/build verification and isolated browser/API evidence recorded in [the durable acceptance report](../../verification/configuration-center/README.md).
 - [x] Required viewport sizes, visible errors/focus, mobile dirty actions, light/dark and English inspected; native dialog/select/date tool limitations explicitly recorded.
-- [ ] Independent final review of the complete configuration change set closed.
+- [x] Independent final review of the complete configuration change set closed; the additional live venue-update acceptance defect is repaired, independently reviewed, and verified through the real isolated UI/API.
 - [ ] Separately authorized existing-database cleanup and deployment, if requested. No activation, merge or push is part of this implementation handoff.

@@ -1,20 +1,20 @@
 # 配置中心验收记录
 
-日期：2026-08-30。记录 Task 6 集成验收及最终评审修复。本轮修复的限定范围复审仍待控制任务确认；未合并、部署或启用交易。
+日期：2026-08-30。记录 Task 6 集成验收、最终评审修复和交付前真实页面回验。独立复审已确认最初六项发现全部修复；真实回验发现的连接更新请求契约问题也已补修、独立复审并通过实际页面验证。未合并、部署或启用交易。
 
 ## 最终检查
 
 | 检查 | 实际结果 |
 | --- | --- |
-| `.venv/bin/pytest --no-cov -q` | 2119 passed，1 skipped，8 warnings，50.99 秒，exit 0 |
-| `node node_modules/vitest/vitest.mjs run` | 45 files，251 passed，14.64 秒，exit 0 |
+| `.venv/bin/pytest --no-cov -q` | 控制任务独立复跑：2119 passed，1 skipped，8 warnings，48.30 秒，exit 0 |
+| `node node_modules/vitest/vitest.mjs run` | 连接更新补修后：45 files，252 passed，exit 0 |
 | `node node_modules/typescript/bin/tsc --noEmit` | exit 0 |
 | `node node_modules/eslint/bin/eslint.js .` | exit 0 |
-| `node node_modules/vite/bin/vite.js build` | 2226 modules，1.75 秒，exit 0 |
+| `node node_modules/vite/bin/vite.js build` | 连接更新补修后：2226 modules，exit 0；同源隔离预览构建 2.02 秒，exit 0 |
 | 本轮 7 个 Python 文件 Ruff check / format --check | exit 0 |
 | `git diff --check` | exit 0 |
 
-Node 使用 `/Users/rccpony/.nvm/versions/node/v24.19.0/bin/node`。以上为最终修复后的检查，后端、前端、类型、lint、构建按顺序运行，所有长检查等待到实际进程退出。此前 Task 6 的完整结果为后端 2113 passed / 1 skipped / 8 warnings（76.85 秒），前端 237 passed（10.78 秒）。
+Node 使用 `/Users/rccpony/.nvm/versions/node/v24.19.0/bin/node`。最终六项修复提交为 `94bb61427f47803950cc4aaec1d45766d11d7e57`。实现任务串行检查为后端 2119 passed / 1 skipped / 8 warnings（50.99 秒）、前端 251 passed（14.64 秒）；控制任务另行独立复跑得到相同计数（后端 48.30 秒、前端 18.88 秒），TypeScript、ESLint 和差异检查均 exit 0。隔离预览构建 2226 modules / 1.67 秒 / exit 0。所有长检查等待到实际进程退出。此前 Task 6 的完整结果为后端 2113 passed / 1 skipped / 8 warnings（76.85 秒），前端 237 passed（10.78 秒）。
 
 后端八条警告与此前相同：一个未注册的 benchmark mark，一个 LangGraph pending deprecation，以及两个既有 Redis mock 测试中的六条 AsyncMock 未 await 警告。未隐藏警告。
 
@@ -22,7 +22,7 @@ Node 使用 `/Users/rccpony/.nvm/versions/node/v24.19.0/bin/node`。以上为最
 
 ## 最终评审修复
 
-基线：`bbf62059a303f6fd23f638c08f9cbb3d3a158449`。六项发现同一轮处理，以下为自动化证据；本轮未重新做浏览器走查。
+基线：`bbf62059a303f6fd23f638c08f9cbb3d3a158449`。六项发现同一轮处理；限定范围独立复审确认全部 ADDRESSED，无新增 Critical/Important 或范围外发现。以下为自动化证据，页面补充回验见后文。
 
 | 发现 | 修复及验证 |
 | --- | --- |
@@ -38,8 +38,22 @@ Node 使用 `/Users/rccpony/.nvm/versions/node/v24.19.0/bin/node`。以上为最
 TDD 实际结果：后端目录 RED 6 failed / 10 passed（缺少能力和独占边界），hooks RED 5 failed / 14 passed（旧应用版本和独占边界误放行），页面 RED 5 failed / 14 passed。初始 GREEN 为前端 7 files / 48 passed、后端契约 104 passed。发布失败补充 RED 1 failed（503 后仍声称已激活），对应 GREEN 4 files / 24 passed。最终完整结果见上表；未修改超时或隐藏警告。
 
 - [x] 六项修复及失败发布状态回归完成，最终串行检查通过。
-- [ ] 控制任务关闭本轮限定范围独立复审，并刷新隔离预览复核。
+- [x] 控制任务关闭六项发现的限定范围独立复审，并刷新隔离预览复核。
+- [x] 交付前连接更新契约补修、定点复审及真实页面回验完成。
 - [ ] 另行授权的部署与旧数据清理。
+
+## 交付前真实回验
+
+最终构建以独立临时目录提供。旧验收标签页因未保存草稿仍停留在旧文档；新建自有验收标签页后，实际 DOM 的脚本地址与服务端最终构建一致，再继续检查。没有改动产品来绕过浏览器行为，也未操作用户的 5173 页面。
+
+- 初始化清单实际显示 Redis 必需说明与系统配置入口，激活按钮不可用。
+- Paper 实际显示固定全仓和共享账户权益说明，保留杠杆；资金 0 显示关联错误并聚焦输入，`aria-invalid=true`；0.00001 创建成功，配置版本从 1 到 2。
+- OKX 的未保存表单仍提供 Demo/Live、全仓/逐仓、Key/Secret/Passphrase 及对应说明。没有保存外部连接或凭据。
+- 随后把已创建 Paper 改为 10000 保存时，真实 API 拒绝了请求中的只读 `id`；原值与版本保持不变，页面保留草稿并禁用检查。后端模型独立复现 `id: extra_forbidden`，移除该字段的同一请求合法。未以此前全绿的宽松模拟测试代替真实验收。
+- 补修提交 `3314425351a67e15573b9e742ae7017f45ea14ab` 明确区分创建和更新请求：创建携带 ID，更新只在路径携带 ID，请求体仅含可写字段；后端严格校验不变。严格模拟 API 的测试先 RED 2 failed / 5 passed（版本未递增），再 GREEN 7 passed。最终相关前端 12 passed、真实 venue API 17 passed（1 条既有第三方警告）、完整前端 252 passed；TypeScript、ESLint、构建和差异检查通过。后端生产代码未改，完整后端结果沿用上方控制任务的独立检查。
+- 独立限定范围复审确认该项 ADDRESSED、spec/quality PASS，没有新增缺陷。控制任务重新构建并核对浏览器实际脚本版本后，重走真实路径：0.00001 改为 10000 保存成功，配置版本 2 → 3；整页重载后金额与版本保留，连接 ID 不变且不可编辑，保存按钮在无修改时禁用，只读检查成功（18:53:44）。所有写入仅影响临时 fixture。
+
+执行裁定：在原六项最终修复已复审通过后，追加一次限定范围的连接更新修复与独立差异复审。原因是实测证明它违反已批准的第二次访问编辑要求；误判代价是额外一轮有限验证和请求契约返工。没有重开全项目审查、放宽后端校验或扩大外部操作权限。
 
 ## 真实路径证据
 
@@ -72,6 +86,7 @@ TDD 实际结果：后端目录 RED 6 failed / 10 passed（缺少能力和独占
 - [414px English 深色风控字段](mobile-414-dark-en.png)
 - [桌面回测字段关联错误](desktop-backtest-error.png)
 - [桌面未启用配置预览](desktop-inactive-dark.png)，默认 viewport 重置后为 1280×720。
+- [最终中文初始化清单](desktop-final-setup-zh.png)：最终补修构建，1280×720，临时配置版本 3；黄色隔离标识和 Redis 前提可见，底部内容可正常滚动查看。
 
 移动导航原先在 414px 换成 4/3/1 行；本次改为带标签的原生 selector，保留同样八个路由，桌面 N3 导航不变。连接检查成功时间改用既有 locale-aware formatter，API 原始时间保留在 `<time dateTime>`。
 
