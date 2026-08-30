@@ -67,13 +67,22 @@ async def test_paper_connection_rejects_credential_reference():
 
 @pytest.mark.parametrize(
     "initial_equity",
-    [None, 0, -1, "0", "-0.01", "NaN", "Infinity", "not-a-number", True],
+    [0, -1, "0", "-0.01", "NaN", "Infinity", "not-a-number", True],
 )
 async def test_paper_connection_requires_finite_positive_decimal_compatible_initial_equity(initial_equity):
     from cryptotrader.venues.paper import PaperVenueAdapter
 
     with pytest.raises(ValueError, match="initial_equity"):
         await PaperVenueAdapter().connect(paper_connection(initial_equity=initial_equity), None)
+
+
+async def test_paper_connection_uses_declared_equity_default_when_parameter_is_absent():
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    session = await PaperVenueAdapter().connect(paper_connection(initial_equity=None), None)
+    await session.set_quote(PAIR, Decimal("50000"))
+
+    assert (await session.fetch_portfolio(PAIR)).equity == Decimal("10000")
 
 
 async def test_paper_connection_rejects_wrong_adapter_id():

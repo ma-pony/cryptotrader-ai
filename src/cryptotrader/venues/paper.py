@@ -7,6 +7,9 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal, InvalidOperation
 from typing import TYPE_CHECKING
 
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import PaperParameters
 from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
 from cryptotrader.venues.ccxt_base import VenueOperationError
 from cryptotrader.venues.models import (
@@ -497,9 +500,7 @@ class PaperVenueAdapter:
 
     @staticmethod
     def _initial_equity(connection: VenueConnection) -> Decimal:
-        value = connection.parameters.get("initial_equity")
-        if value is None or type(value) is bool:
-            raise ValueError("Paper connection requires initial_equity parameter")
+        value = PaperParameters.model_validate(dict(connection.parameters)).initial_equity
         try:
             initial_equity = Decimal(str(value))
         except (InvalidOperation, TypeError, ValueError):
@@ -514,5 +515,17 @@ class PaperVenueAdapter:
             raise ValueError(f"unsupported Paper environment: {environment}")
 
 
+@configured_factory(
+    PluginConfiguration(
+        id="paper",
+        label=LocalizedText(zh_CN="模拟交易", en_US="Paper trading"),
+        description=LocalizedText(
+            zh_CN="在独立的模拟账户中验证交易策略; 不会向交易所提交订单。",
+            en_US="Validates strategies in an isolated simulated account without submitting exchange orders.",
+        ),
+        parameter_model=PaperParameters,
+        environments=("paper",),
+    )
+)
 def create_adapter() -> PaperVenueAdapter:
     return PaperVenueAdapter()

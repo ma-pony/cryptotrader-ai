@@ -4,6 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from pydantic import BaseModel, ConfigDict, Field
+
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import EmptyParameters
 from cryptotrader.signals.models import ComponentSignal, DataRequirements, SignalContext
 
 
@@ -47,3 +52,64 @@ def create_conflicting_kronos(document, sink) -> FactoryComponent:
     component = FactoryComponent()
     component.id = "kronos"
     return component
+
+
+class FixtureDebateParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    enabled: bool = Field(default=False, title="Enable debate")
+    rounds: int = Field(default=1, ge=1, le=3, title="Debate rounds")
+
+
+class UnconfiguredSignalParameters(BaseModel):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    window: int = Field(default=10, ge=1, title="Window")
+    debate: FixtureDebateParameters = Field(default_factory=FixtureDebateParameters, title="Debate")
+
+
+@configured_factory(
+    PluginConfiguration(
+        id="unconfigured",
+        label=LocalizedText(zh_CN="未配置测试信号", en_US="Unconfigured test signal"),
+        description=LocalizedText(zh_CN="目录加载测试。", en_US="Catalog loading test."),
+        parameter_model=UnconfiguredSignalParameters,
+    )
+)
+def create_unconfigured_signal(document, sink) -> FactoryComponent:
+    del document, sink
+    raise AssertionError("catalog must never invoke an unconfigured factory")
+
+
+create_component = configured_factory(
+    PluginConfiguration(
+        id="factory_component",
+        label=LocalizedText(zh_CN="工厂组件", en_US="Factory component"),
+        description=LocalizedText(zh_CN="测试组件。", en_US="Test component."),
+        parameter_model=EmptyParameters,
+    )
+)(create_component)
+create_invalid_component = configured_factory(
+    PluginConfiguration(
+        id="invalid_component",
+        label=LocalizedText(zh_CN="无效组件", en_US="Invalid component"),
+        description=LocalizedText(zh_CN="测试组件。", en_US="Test component."),
+        parameter_model=EmptyParameters,
+    )
+)(create_invalid_component)
+create_fixture_signal = configured_factory(
+    PluginConfiguration(
+        id="fixture_signal",
+        label=LocalizedText(zh_CN="测试信号", en_US="Fixture signal"),
+        description=LocalizedText(zh_CN="测试组件。", en_US="Test component."),
+        parameter_model=EmptyParameters,
+    )
+)(create_fixture_signal)
+create_conflicting_kronos = configured_factory(
+    PluginConfiguration(
+        id="kronos",
+        label=LocalizedText(zh_CN="冲突信号", en_US="Conflicting signal"),
+        description=LocalizedText(zh_CN="测试组件。", en_US="Test component."),
+        parameter_model=EmptyParameters,
+    )
+)(create_conflicting_kronos)

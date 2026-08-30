@@ -7,6 +7,9 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from cryptotrader.agents._indicators import atr
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
 from cryptotrader.data.market import clip_ohlcv_at
 from cryptotrader.data.snapshot import SnapshotAggregator
 from cryptotrader.signals.models import DataRequirements, SignalContext
@@ -51,13 +54,12 @@ class DefaultMarketDataSource:
         clock: Callable[[], datetime] | None = None,
     ) -> None:
         self.config = config
-        self.market_adapter_id = str(config.parameters.get("market_adapter_id", "binance")).strip()
+        parameters = DefaultMarketSourceParameters.model_validate(dict(config.parameters))
+        self.market_adapter_id = parameters.market_adapter_id
         if not self.market_adapter_id:
             raise ValueError("default market source requires market_adapter_id")
-        self.kronos_aux_symbol = str(config.parameters.get("kronos_aux_symbol", "BTCUSDT")).strip()
-        self.aggregator = aggregator or SnapshotAggregator(
-            coindesk_api_key=str(config.parameters.get("coindesk_api_key", "")),
-        )
+        self.kronos_aux_symbol = parameters.kronos_aux_symbol
+        self.aggregator = aggregator or SnapshotAggregator()
         self.market = self.aggregator.market
         self._clock = clock or (lambda: datetime.now(UTC))
 
@@ -111,5 +113,16 @@ class DefaultMarketDataSource:
         )
 
 
+@configured_factory(
+    PluginConfiguration(
+        id="default",
+        label=LocalizedText(zh_CN="默认市场数据", en_US="Default market data"),
+        description=LocalizedText(
+            zh_CN="采集公开市场、链上和宏观数据以构建交易上下文。",
+            en_US="Collects public market, on-chain, and macro data for the trading context.",
+        ),
+        parameter_model=DefaultMarketSourceParameters,
+    )
+)
 def create_source(config: MarketDataConfig) -> DefaultMarketDataSource:
     return DefaultMarketDataSource(config)

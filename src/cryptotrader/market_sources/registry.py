@@ -5,6 +5,7 @@ from __future__ import annotations
 from importlib import metadata
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.configuration.catalog import require_factory_configuration
 from cryptotrader.market_sources.protocol import MarketDataSource
 
 if TYPE_CHECKING:
@@ -41,6 +42,9 @@ class MarketSourceRegistry:
                     continue
                 raise ValueError(f"duplicate market source id: {entry_point.name}")
             factories[entry_point.name] = factory
+
+        for source_id, factory in factories.items():
+            require_factory_configuration(source_id, factory)
 
         if config.source_id not in factories:
             raise ValueError(f"uninstalled market source: {config.source_id}")

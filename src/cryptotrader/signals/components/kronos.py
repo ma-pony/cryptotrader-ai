@@ -14,6 +14,9 @@ import numpy as np
 import pandas as pd
 
 from cryptotrader.agents._kronos_features import compute_kronos_features
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import KronosParameters
 from cryptotrader.signals.component import ComponentExecutionError
 from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements
 
@@ -270,8 +273,20 @@ class KronosComponent:
         return ComponentExecutionError(self.id, RuntimeError(f"{stage}: {cause}"))
 
 
+@configured_factory(
+    PluginConfiguration(
+        id="kronos",
+        label=LocalizedText(zh_CN="Kronos 时序模型", en_US="Kronos time-series model"),
+        description=LocalizedText(
+            zh_CN="使用市场时序基础模型和状态门控给出方向信号。",
+            en_US="Produces directional signals with a time-series foundation model and regime gate.",
+        ),
+        parameter_model=KronosParameters,
+    )
+)
 def create_component(document: RuntimeConfigDocument, sink) -> KronosComponent:
     """Build Kronos from its database-owned component parameters."""
     del sink
     configured = next(item for item in document.signals.components if item.component_id == KronosComponent.id)
-    return KronosComponent(KronosSettings(**dict(configured.parameters)))
+    parameters = KronosParameters.model_validate(dict(configured.parameters))
+    return KronosComponent(KronosSettings(**parameters.model_dump()))

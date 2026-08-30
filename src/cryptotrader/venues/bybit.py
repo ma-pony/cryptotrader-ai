@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import EmptyParameters
 from cryptotrader.venues.ccxt_base import CcxtVenueBase, VenueOperationError, create_async_client
 from cryptotrader.venues.models import ProtectionState, VenueCapabilities
 
@@ -276,5 +279,18 @@ class BybitVenueAdapter:
             raise ValueError(f"unsupported Bybit environment: {environment}")
 
 
+@configured_factory(
+    PluginConfiguration(
+        id="bybit",
+        label=LocalizedText(zh_CN="Bybit", en_US="Bybit"),
+        description=LocalizedText(
+            zh_CN="连接 Bybit 测试网、模拟或真实交易账户。",
+            en_US="Connects a Bybit testnet, demo, or live account.",
+        ),
+        parameter_model=EmptyParameters,
+        environments=("testnet", "demo", "live"),
+        credential_fields=("api_key", "secret"),
+    )
+)
 def create_adapter() -> BybitVenueAdapter:
     return BybitVenueAdapter()

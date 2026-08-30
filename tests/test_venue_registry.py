@@ -6,6 +6,10 @@ from importlib import metadata
 
 import pytest
 
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import EmptyParameters
+
 
 class FakeAdapter:
     def __init__(self, adapter_id: str) -> None:
@@ -39,6 +43,26 @@ def create_alpha_adapter():
 
 def create_mismatched_adapter():
     return FakeAdapter("other")
+
+
+create_alpha_adapter = configured_factory(
+    PluginConfiguration(
+        id="alpha",
+        label=LocalizedText(zh_CN="Alpha", en_US="Alpha"),
+        description=LocalizedText(zh_CN="测试适配器。", en_US="Test adapter."),
+        parameter_model=EmptyParameters,
+        environments=("paper",),
+    )
+)(create_alpha_adapter)
+create_mismatched_adapter = configured_factory(
+    PluginConfiguration(
+        id="alpha",
+        label=LocalizedText(zh_CN="Alpha", en_US="Alpha"),
+        description=LocalizedText(zh_CN="测试适配器。", en_US="Test adapter."),
+        parameter_model=EmptyParameters,
+        environments=("paper",),
+    )
+)(create_mismatched_adapter)
 
 
 def test_registry_resolves_by_adapter_id_without_brand_conditionals():

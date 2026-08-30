@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
 from cryptotrader.signals.models import DataRequirements, SignalContext
 
 
@@ -35,3 +38,21 @@ def create_conflicting_default(config) -> FixtureMarketSource:
     source = FixtureMarketSource(config)
     source.id = "default"
     return source
+
+
+create_source = configured_factory(
+    PluginConfiguration(
+        id="fixture-market",
+        label=LocalizedText(zh_CN="测试市场", en_US="Fixture market"),
+        description=LocalizedText(zh_CN="测试数据源。", en_US="Test source."),
+        parameter_model=DefaultMarketSourceParameters,
+    )
+)(create_source)
+create_conflicting_default = configured_factory(
+    PluginConfiguration(
+        id="default",
+        label=LocalizedText(zh_CN="冲突市场", en_US="Conflicting market"),
+        description=LocalizedText(zh_CN="测试数据源。", en_US="Test source."),
+        parameter_model=DefaultMarketSourceParameters,
+    )
+)(create_conflicting_default)

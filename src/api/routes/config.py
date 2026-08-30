@@ -5,12 +5,17 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
-from api.routes.response_dto import JsonEntryOut, StrictOut, json_entries_out
+from api.routes.response_dto import JsonEntryOut, JsonValueOut, StrictOut, json_entries_out, json_value_out
+from cryptotrader.configuration.catalog import (
+    ConfigurationCatalog,
+    configuration_catalog,
+    validate_configuration_parameters,
+)
 from cryptotrader.execution.models import ExecutionBook  # noqa: TC001
 from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.runtime_config.models import (
@@ -43,6 +48,9 @@ from cryptotrader.venues.models import (
     MarginMode,
     VenueConnection,
 )
+
+if TYPE_CHECKING:
+    from cryptotrader.configuration.fields import ConfigurationField, FieldOption, LocalizedText
 
 router = APIRouter(prefix="/api/config", tags=["config"])
 
@@ -263,6 +271,46 @@ class RuntimeConfigOut(StrictOut):
     document: RuntimeDocumentOut
 
 
+class LocalizedTextOut(StrictOut):
+    zh_CN: str  # noqa: N815 - transport contract preserves locale code spelling.
+    en_US: str  # noqa: N815 - transport contract preserves locale code spelling.
+
+
+class FieldOptionOut(StrictOut):
+    value: str
+    label: LocalizedTextOut
+
+
+class PluginFieldOut(StrictOut):
+    key: str
+    label: LocalizedTextOut
+    description: LocalizedTextOut
+    kind: Literal["text", "number", "integer", "boolean", "select", "string_list"]
+    default_value: JsonValueOut
+    required: bool
+    minimum: float | int | None
+    maximum: float | int | None
+    step: float | int | None
+    unit: str | None
+    advanced: bool
+    options: list[FieldOptionOut]
+
+
+class PluginDefinitionOut(StrictOut):
+    id: str
+    label: LocalizedTextOut
+    description: LocalizedTextOut
+    fields: list[PluginFieldOut]
+    environments: list[str]
+    credential_fields: list[str]
+
+
+class ConfigurationCatalogOut(StrictOut):
+    components: list[PluginDefinitionOut]
+    venues: list[PluginDefinitionOut]
+    market_sources: list[PluginDefinitionOut]
+
+
 class PutRuntimeConfigIn(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
@@ -339,8 +387,53 @@ def validate_document(runtime, document: RuntimeConfigDocument) -> None:
             set(runtime.venue_registry.installed_ids()),
             set(runtime.market_registry.installed_ids()),
         )
+        validate_configuration_parameters(document)
     except (TypeError, ValueError) as error:
         raise HTTPException(status_code=422, detail="Runtime configuration is invalid") from error
+
+
+def _localized_text_out(value: LocalizedText) -> LocalizedTextOut:
+    return LocalizedTextOut(zh_CN=value.zh_CN, en_US=value.en_US)
+
+
+def _field_option_out(value: FieldOption) -> FieldOptionOut:
+    return FieldOptionOut(value=value.value, label=_localized_text_out(value.label))
+
+
+def _plugin_field_out(value: ConfigurationField) -> PluginFieldOut:
+    return PluginFieldOut(
+        key=value.key,
+        label=_localized_text_out(value.label),
+        description=_localized_text_out(value.description),
+        kind=value.kind,
+        default_value=json_value_out(value.default_value),
+        required=value.required,
+        minimum=value.minimum,
+        maximum=value.maximum,
+        step=value.step,
+        unit=value.unit,
+        advanced=value.advanced,
+        options=[_field_option_out(option) for option in value.options],
+    )
+
+
+def _plugin_definition_out(value) -> PluginDefinitionOut:
+    return PluginDefinitionOut(
+        id=value.id,
+        label=_localized_text_out(value.label),
+        description=_localized_text_out(value.description),
+        fields=[_plugin_field_out(field) for field in value.fields],
+        environments=list(value.environments),
+        credential_fields=list(value.credential_fields),
+    )
+
+
+def configuration_catalog_out(catalog: ConfigurationCatalog) -> ConfigurationCatalogOut:
+    return ConfigurationCatalogOut(
+        components=[_plugin_definition_out(item) for _, item in sorted(catalog.components.items())],
+        venues=[_plugin_definition_out(item) for _, item in sorted(catalog.venues.items())],
+        market_sources=[_plugin_definition_out(item) for _, item in sorted(catalog.market_sources.items())],
+    )
 
 
 def server_credential_ref(connection_id: str, environment: ConnectionEnvironment) -> str | None:
@@ -746,6 +839,14 @@ async def get_config(request: Request) -> RuntimeConfigOut:
     runtime = require_runtime(request)
     snapshot = await runtime.repository.get_or_create()
     return await config_out(runtime.repository, snapshot)
+
+
+@router.get("/catalog", response_model=ConfigurationCatalogOut)
+async def get_configuration_catalog() -> ConfigurationCatalogOut:
+    try:
+        return configuration_catalog_out(configuration_catalog())
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=503, detail="Installed plugin configuration is unavailable") from None
 
 
 @router.put("", response_model=RuntimeConfigOut)

@@ -11,6 +11,9 @@ from typing import TYPE_CHECKING, Any, TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import LlmCommitteeParameters
 from cryptotrader.cycle_events import CycleEvent, NullCycleEventSink
 from cryptotrader.debate.challenge import challenge_agent
 from cryptotrader.debate.convergence import check_convergence, compute_divergence, debate_gate_decision
@@ -420,6 +423,17 @@ class LLMCommitteeComponent:
         return ComponentExecutionError(self.id, RuntimeError(f"{identity}:{type(cause).__name__}"))
 
 
+@configured_factory(
+    PluginConfiguration(
+        id="llm_committee",
+        label=LocalizedText(zh_CN="LLM 四智能体委员会", en_US="LLM four-agent committee"),
+        description=LocalizedText(
+            zh_CN="由技术、链上、新闻和宏观智能体进行内部辩论后汇总信号。",
+            en_US="Synthesizes technical, on-chain, news, and macro analysis through an internal debate.",
+        ),
+        parameter_model=LlmCommitteeParameters,
+    )
+)
 def create_component(
     document: RuntimeConfigDocument,
     sink: CycleEventSink,
@@ -431,13 +445,10 @@ def create_component(
     from cryptotrader.agents.base import create_runtime_llm_factory
 
     configured = next(item for item in document.signals.components if item.component_id == LLMCommitteeComponent.id)
-    parameters = dict(configured.parameters)
-    default_timeframe = str(parameters.pop("default_timeframe", "1h"))
-    ohlcv_limit = int(parameters.pop("ohlcv_limit", 100))
-    debate = DebateSettings(**dict(parameters.pop("debate", {})))
-    if parameters:
-        unknown = ", ".join(sorted(parameters))
-        raise ValueError(f"unsupported llm_committee parameters: {unknown}")
+    parameters = LlmCommitteeParameters.model_validate(dict(configured.parameters))
+    default_timeframe = parameters.default_timeframe
+    ohlcv_limit = parameters.ohlcv_limit
+    debate = DebateSettings(**parameters.debate.model_dump())
     builder = llm_factory_builder or (lambda config: create_runtime_llm_factory(config, api_key=llm_gateway_key))
     return LLMCommitteeComponent(
         None,

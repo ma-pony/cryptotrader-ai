@@ -5,6 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.parameters import EmptyParameters
 from cryptotrader.venues.ccxt_base import CcxtVenueBase, VenueOperationError, create_async_client
 from cryptotrader.venues.models import ProtectionState, VenueCapabilities
 
@@ -259,5 +262,17 @@ class OkxVenueAdapter:
             raise ValueError(f"unsupported OKX environment: {environment}")
 
 
+@configured_factory(
+    PluginConfiguration(
+        id="okx",
+        label=LocalizedText(zh_CN="OKX", en_US="OKX"),
+        description=LocalizedText(
+            zh_CN="连接 OKX 的模拟或真实交易账户。", en_US="Connects an OKX demo or live account."
+        ),
+        parameter_model=EmptyParameters,
+        environments=("demo", "live"),
+        credential_fields=("api_key", "secret", "passphrase"),
+    )
+)
 def create_adapter() -> OkxVenueAdapter:
     return OkxVenueAdapter()

@@ -6,6 +6,7 @@ from importlib import metadata
 from inspect import iscoroutinefunction
 from typing import TYPE_CHECKING, Any
 
+from cryptotrader.configuration.catalog import require_factory_configuration
 from cryptotrader.venues.protocol import VenueAdapter
 
 if TYPE_CHECKING:
@@ -41,6 +42,9 @@ class VenueAdapterRegistry:
             if entry_point.name in factories:
                 raise ValueError(f"duplicate venue adapter id: {entry_point.name}")
             factories[entry_point.name] = entry_point.load()
+
+        for adapter_id, factory in factories.items():
+            require_factory_configuration(adapter_id, factory)
 
         missing = sorted(configured_ids - set(factories))
         if missing:
