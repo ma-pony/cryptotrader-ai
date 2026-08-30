@@ -13,6 +13,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 COPY src/ src/
 COPY artifacts/ artifacts/
 COPY vendor/ vendor/
+COPY config/agents/ config/agents/
 
 ENV PYTHONPATH=/app/src
 ENV PYTHONUNBUFFERED=1

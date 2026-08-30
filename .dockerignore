@@ -16,5 +16,9 @@ scripts/
 docs/
 *.md
 !README.md
+!config/agents/tech.md
+!config/agents/chain.md
+!config/agents/news.md
+!config/agents/macro.md
 .pre-commit-config.yaml
 .claude/
