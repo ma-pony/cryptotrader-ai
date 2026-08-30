@@ -110,8 +110,8 @@ describe('SetupPage', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'FAILED', message: marker }), { status: 500 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: marker }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: marker }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: marker }), { status: 409 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(reloaded), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -146,8 +146,8 @@ describe('SetupPage', () => {
       .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'FAILED', message: marker }), { status: 500 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: marker }), { status: 409 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: marker }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: marker }), { status: 409 }))
       .mockResolvedValueOnce(new Response(JSON.stringify(runtimeConfigFixture({ revision: 4, setup_required: true, document: { ...base.document, security: { enabled: false, access_credential_configured: true, access_credential_updated_at: '2026-08-30T00:00:00Z' } } })), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -189,7 +189,7 @@ describe('SetupPage', () => {
     const initial = runtimeConfigFixture({ setup_required: true, document });
     const saved = runtimeConfigFixture({ revision: 3, setup_required: false, document: { ...document, system: { active: true }, security: { enabled: true, access_credential_configured: true, access_credential_updated_at: '2026-08-30T00:00:00Z' }, execution: { ...document.execution, live_order_execution_enabled: true } } });
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
-      if (url.includes('/test')) return Promise.resolve(new Response(JSON.stringify({ connection_id: 'paper', healthy: true, environment: 'paper', credential_configured: false, capabilities: { market_types: [], native_protection: false, hedge_mode: false, reduce_only: true, supported_order_types: [] } }), { status: 200 }));
+      if (url.includes('/test')) return Promise.resolve(new Response(JSON.stringify({ connection_id: 'paper', checked_at: '2026-08-30T00:00:00Z', healthy: true, environment: 'paper', credential_configured: false, capabilities: { market_types: [], native_protection: false, hedge_mode: false, reduce_only: true, supported_order_types: [] } }), { status: 200 }));
       if (url.includes('/credentials/api-access')) return Promise.resolve(new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), { status: 200 }));
       if (init?.method === 'PUT') return Promise.resolve(new Response(JSON.stringify(saved), { status: 200 }));
       return Promise.resolve(new Response(JSON.stringify(initial), { status: 200 }));

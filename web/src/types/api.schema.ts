@@ -285,6 +285,21 @@ export const JsonValueSchema: z.ZodType<JsonValueOut> = z.lazy(() =>
 export const JsonEntrySchema: z.ZodType<{ key: string; value: JsonValueOut }> = z.lazy(() =>
   z.object({ key: z.string(), value: JsonValueSchema }).strict(),
 );
+const LocalizedTextSchema = z.object({ zh_CN: z.string(), en_US: z.string() }).strict();
+export const ConfigurationFieldSchema = z.object({
+  key: z.string(), label: LocalizedTextSchema, description: LocalizedTextSchema,
+  kind: z.enum(['text', 'number', 'integer', 'boolean', 'select', 'string_list']),
+  default_value: JsonValueSchema, required: z.boolean(), minimum: z.number().nullable(),
+  maximum: z.number().nullable(), step: z.number().nullable(), unit: z.string().nullable(),
+  advanced: z.boolean(), options: z.array(z.object({ value: z.string(), label: LocalizedTextSchema }).strict()),
+}).strict();
+export const PluginDefinitionSchema = z.object({
+  id: z.string(), label: LocalizedTextSchema, description: LocalizedTextSchema,
+  fields: z.array(ConfigurationFieldSchema), environments: z.array(z.string()), credential_fields: z.array(z.string()),
+}).strict();
+export const ConfigurationCatalogSchema = z.object({
+  components: z.array(PluginDefinitionSchema), venues: z.array(PluginDefinitionSchema), market_sources: z.array(PluginDefinitionSchema),
+}).strict();
 export const RuntimeConnectionSchema = z
   .object({
     id: z.string(),
@@ -438,6 +453,7 @@ export const RuntimeTokenMutationSchema = strictRecord({
 });
 export const ConnectionHealthSchema = strictRecord({
   connection_id: z.string(),
+  checked_at: z.string(),
   healthy: z.boolean(),
   environment: z.enum(['paper', 'demo', 'testnet', 'live']),
   credential_configured: z.boolean(),

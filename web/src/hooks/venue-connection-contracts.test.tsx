@@ -52,8 +52,8 @@ describe('venue connection write recovery', () => {
   it('clears venue credentials after a failure or conflict and leaves the conflict recoverable', async () => {
     const marker = 'venue-rotation-secret-marker';
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'FAILED', message: marker }), { status: 500 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: marker }), { status: 409 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: marker }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: marker }), { status: 409 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(

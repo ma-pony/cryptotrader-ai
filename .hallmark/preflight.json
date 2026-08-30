@@ -1,0 +1,15 @@
+{
+  "date": "2026-08-30",
+  "scope": "configuration center",
+  "framework": "React 19, Vite 8, TypeScript 5.9, Tailwind 3",
+  "genre": "modern-minimal",
+  "structure": "existing application workbench",
+  "fonts": "system-ui, -apple-system, PingFang SC, Microsoft YaHei; existing mono stack",
+  "palette": "existing semantic HSL and CryptoTrader OKLCH tokens; light/dark preserved",
+  "motion": "no added motion",
+  "control_height": "40px desktop; 44px mobile",
+  "help_text": "14px",
+  "sources": ["web/package.json", "web/tailwind.config.ts", "web/src/styles/globals.css", ".superpowers/sdd/2026-08-30-configuration-center/ui-direction.md"],
+  "browser_baseline": "controller verified 1280x720 inactive revision 2 before implementation",
+  "responsive_acceptance": "pending integrated routes in Task6"
+}

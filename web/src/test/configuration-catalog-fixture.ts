@@ -1,0 +1,97 @@
+import type { ConfigurationCatalog, ConfigurationField } from '@/types/api';
+
+const nullValue = {
+  kind: 'null' as const,
+  boolean_value: null,
+  number_value: null,
+  string_value: null,
+  datetime_value: null,
+  pair_value: null,
+  items: [],
+  entries: [],
+};
+export const pluginFields: ConfigurationField[] = [
+  {
+    key: 'threshold',
+    label: { zh_CN: '触发阈值', en_US: 'Threshold' },
+    description: { zh_CN: '达到阈值后触发', en_US: 'Trigger at this threshold' },
+    kind: 'number',
+    default_value: { ...nullValue, kind: 'number', number_value: '0.5' },
+    required: false,
+    minimum: 0,
+    maximum: 1,
+    step: 0.1,
+    unit: null,
+    advanced: false,
+    options: [],
+  },
+  {
+    key: 'mode',
+    label: { zh_CN: '运行模式', en_US: 'Mode' },
+    description: { zh_CN: '', en_US: '' },
+    kind: 'select',
+    default_value: { ...nullValue, kind: 'string', string_value: 'strict' },
+    required: false,
+    minimum: null,
+    maximum: null,
+    step: null,
+    unit: null,
+    advanced: false,
+    options: [
+      { value: 'strict', label: { zh_CN: '严格', en_US: 'Strict' } },
+      { value: 'relaxed', label: { zh_CN: '宽松', en_US: 'Relaxed' } },
+    ],
+  },
+  {
+    key: 'enabled',
+    label: { zh_CN: '启用交叉检查', en_US: 'Cross-check' },
+    description: { zh_CN: '', en_US: '' },
+    kind: 'boolean',
+    default_value: { ...nullValue, kind: 'boolean', boolean_value: false },
+    required: false,
+    minimum: null,
+    maximum: null,
+    step: null,
+    unit: null,
+    advanced: false,
+    options: [],
+  },
+  {
+    key: 'debate.max_rounds',
+    label: { zh_CN: '最大辩论轮数', en_US: 'Maximum debate rounds' },
+    description: { zh_CN: '', en_US: '' },
+    kind: 'integer',
+    default_value: { ...nullValue, kind: 'number', number_value: '3' },
+    required: false,
+    minimum: 1,
+    maximum: 10,
+    step: 1,
+    unit: null,
+    advanced: true,
+    options: [],
+  },
+];
+
+export const configurationCatalogFixture: ConfigurationCatalog = {
+  components: [
+    {
+      id: 'fixture-plugin',
+      label: { zh_CN: '测试信号组件', en_US: 'Fixture signal' },
+      description: { zh_CN: '本地安装的测试组件', en_US: 'Installed fixture component' },
+      fields: pluginFields,
+      environments: [],
+      credential_fields: [],
+    },
+  ],
+  market_sources: [
+    {
+      id: 'default',
+      label: { zh_CN: '默认行情', en_US: 'Default market' },
+      description: { zh_CN: '', en_US: '' },
+      fields: [pluginFields[0]!],
+      environments: [],
+      credential_fields: [],
+    },
+  ],
+  venues: [],
+};

@@ -121,10 +121,10 @@ export const useRuntimeConfig = () => {
     queryFn: () => apiClient.get('/api/config', RuntimeConfigSchema),
   });
   const mutation = useMutation({
-    mutationFn: (document: RuntimeDocument) => {
-      if (query.data?.revision === undefined)
+    mutationFn: ({ document, expectedRevision }: { document: RuntimeDocument; expectedRevision: number | undefined }) => {
+      if (expectedRevision === undefined)
         return Promise.reject(new Error('Runtime config revision is unavailable'));
-      return apiClient.put('/api/config', { expected_revision: query.data.revision, document: assertRuntimeJsonDocument(document) }, RuntimeConfigSchema);
+      return apiClient.put('/api/config', { expected_revision: expectedRevision, document: assertRuntimeJsonDocument(document) }, RuntimeConfigSchema);
     },
     onSuccess: (saved) => {
       client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, saved);
@@ -172,7 +172,7 @@ export const useRuntimeConfig = () => {
     appliedRevision: query.data?.applied_revision,
     applyError: query.data?.apply_error,
     updatedAt: query.data?.updated_at,
-    replace: mutation.mutateAsync,
+    replace: (document: RuntimeDocument, expectedRevision = query.data?.revision) => mutation.mutateAsync({ document, expectedRevision }),
     reload,
     conflict,
     isLoading: query.isLoading,

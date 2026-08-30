@@ -135,3 +135,52 @@
 .animate-ct-pulse {
   animation: ct-pulse 2s ease-in-out infinite;
 }
+
+/* Hallmark · Workbench · modern-minimal · existing CryptoTrader theme.
+ * Configuration is a working form, without decorative chrome or motion.
+ * Pre-emit critique: philosophy 5, hierarchy 4, execution 4, specificity 5, restraint 5, variety 4.
+ */
+@layer components {
+  .configuration-form { @apply min-w-0 space-y-8 pb-6; }
+  .configuration-section { @apply min-w-0 space-y-5; }
+  .configuration-section + .configuration-section { @apply border-t pt-6; }
+  .configuration-section h2 { @apply text-base font-semibold; }
+  .configuration-form h3 { @apply text-sm font-semibold; }
+  .configuration-section header { @apply space-y-2; }
+  .configuration-grid { @apply grid min-w-0 grid-cols-1 gap-x-6 gap-y-4 md:grid-cols-2; }
+  .configuration-wide, .configuration-parameters { @apply col-span-full min-w-0; }
+  .configuration-field { @apply min-w-0 space-y-2 text-sm; }
+  .configuration-field label { @apply block font-medium; overflow-wrap: anywhere; }
+  .configuration-control { @apply block h-11 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm text-foreground md:h-10; font-variant-numeric: tabular-nums; }
+  .configuration-control[aria-invalid='true'] { @apply border-destructive; }
+  .configuration-help { @apply text-sm leading-relaxed text-muted-foreground; min-height: 1.5em; overflow-wrap: anywhere; }
+  .configuration-error { @apply text-sm leading-relaxed text-trade-short; min-height: 1.5em; overflow-wrap: anywhere; }
+  .configuration-total { @apply text-sm font-medium; font-variant-numeric: tabular-nums; }
+  .configuration-checkbox label { @apply flex min-h-11 items-center gap-3 md:min-h-10; }
+  .configuration-checkbox input { @apply h-4 w-4 shrink-0; accent-color: hsl(var(--primary)); }
+  .configuration-button { @apply inline-flex min-h-11 shrink-0 items-center justify-center whitespace-nowrap rounded-md border border-input bg-background px-3 text-sm font-medium text-foreground md:min-h-10; }
+  .configuration-primary { @apply border-primary bg-primary text-primary-foreground; }
+  .configuration-button:disabled, .configuration-control:disabled { @apply cursor-not-allowed opacity-50; }
+  .configuration-button:active:not(:disabled) { @apply bg-muted text-foreground; }
+  .configuration-control:focus-visible, .configuration-button:focus-visible,
+  .configuration-checkbox input:focus-visible, .configuration-advanced summary:focus-visible {
+    outline: 2px solid hsl(var(--ring)); outline-offset: 2px;
+  }
+  .configuration-inline { @apply flex min-w-0 flex-wrap items-start gap-2; }
+  .configuration-inline .configuration-control { flex: 1 1 8rem; }
+  .configuration-list { @apply mt-2 space-y-2; }
+  .configuration-list li { @apply flex min-w-0 items-center justify-between gap-3 border-b pb-2; }
+  .configuration-list li span { @apply min-w-0 text-sm; overflow-wrap: anywhere; }
+  .configuration-advanced { @apply col-span-full min-w-0 border-t pt-4; }
+  .configuration-advanced summary { @apply min-h-11 cursor-pointer text-sm font-medium md:min-h-10; }
+  .configuration-advanced[open] > .configuration-grid { @apply pt-3; }
+  .configuration-plugin { @apply space-y-3 border-t pt-5; }
+  .configuration-cost-row { @apply my-4 grid min-w-0 grid-cols-1 items-start gap-3 lg:grid-cols-3; }
+  .configuration-cost-row > button { @apply justify-self-start; }
+  .configuration-secret { @apply min-w-0 space-y-2; }
+  .configuration-save-bar { @apply sticky bottom-0 z-10 mt-6 flex min-w-0 flex-wrap items-center justify-between gap-4 border-t bg-background py-4 text-sm; padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+  .configuration-actions { @apply flex min-w-0 flex-wrap gap-2; }
+}
+@media (hover: hover) {
+  .configuration-control:hover:not(:disabled), .configuration-button:hover:not(:disabled) { background-color: hsl(var(--muted)); color: hsl(var(--foreground)); }
+}

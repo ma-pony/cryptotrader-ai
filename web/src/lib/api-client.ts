@@ -3,7 +3,7 @@ import type { z } from 'zod';
 import { env } from './env';
 import { buildApiUrl } from './api-url';
 import { useSettingsStore } from '@/stores/use-settings-store';
-import { ApiErrorSchema, type ApiError as ApiErrorShape } from '@/types/api.schema';
+import type { ApiError as ApiErrorShape } from '@/types/api.schema';
 
 export class ApiError extends Error {
   readonly code: string;
@@ -33,8 +33,22 @@ async function parseError(res: Response): Promise<ApiError> {
   let payload: ApiErrorShape = { code: `HTTP_${res.status}`, message: res.statusText || 'Request failed' };
   try {
     const json: unknown = await res.json();
-    const parsed = ApiErrorSchema.safeParse(json);
-    if (parsed.success) payload = parsed.data;
+    const detail = json && typeof json === 'object' && 'detail' in json ? json.detail : undefined;
+    if (typeof detail === 'string') payload.message = detail;
+    else if (Array.isArray(detail)) {
+      const fieldErrors: Record<string, string> = {};
+      for (const issue of detail as unknown[]) {
+        if (!issue || typeof issue !== 'object' || !('loc' in issue) || !Array.isArray(issue.loc)) continue;
+        const path = issue.loc.filter((part: unknown) => typeof part === 'string' || typeof part === 'number');
+        if (path[0] === 'body') path.shift();
+        if (path[0] === 'document') path.shift();
+        if (path.length) fieldErrors[path.join('.')] = 'Invalid value';
+      }
+      // Never copy input, ctx, or provider payloads into a client-side error.
+      payload = { code: 'validation_error', message: 'Invalid request fields', details: { fieldErrors } };
+    } else if (detail && typeof detail === 'object' && 'code' in detail && typeof detail.code === 'string') {
+      payload = { code: detail.code, message: detail.code };
+    }
   } catch {
     // Body not JSON; keep default payload.
   }

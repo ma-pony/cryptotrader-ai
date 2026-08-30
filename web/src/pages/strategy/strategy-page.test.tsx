@@ -78,7 +78,7 @@ describe('StrategyPage', () => {
     const initial = runtimeConfigFixture({ document: { ...base.document, signals: { ...base.document.signals, components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }] } } });
     vi.stubGlobal('fetch', vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(initial), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: 'stale revision' }), { status: 409 })));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: 'Runtime configuration changed; reload and retry' }), { status: 409 })));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><StrategyPage/></QueryClientProvider>);
     const model = await screen.findByLabelText('tech_agent');
@@ -95,8 +95,8 @@ describe('StrategyPage', () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify(base), { status: 200 }))
       .mockResolvedValueOnce(new Response(JSON.stringify({ revision: 2, configured: true, updated_at: '2026-08-30T00:00:00Z' }), { status: 200 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'FAILED', message: token }), { status: 500 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({ code: 'REVISION_CONFLICT', message: token }), { status: 409 }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: token }), { status: 500 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ detail: token }), { status: 409 }));
     vi.stubGlobal('fetch', fetchMock);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(<QueryClientProvider client={client}><StrategyPage/></QueryClientProvider>);

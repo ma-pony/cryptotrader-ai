@@ -4,6 +4,9 @@ import type { z } from 'zod';
 // instead of z.infer (input type where .default() fields are optional).
 
 import type {
+  ConfigurationCatalogSchema,
+  ConfigurationFieldSchema,
+  PluginDefinitionSchema,
   ApprovalRequestSchema,
   PortfolioBooksSchema,
   CycleSchema,
@@ -85,6 +88,11 @@ export type BacktestSessionDetail = z.output<typeof BacktestSessionDetailSchema>
 export type SignalProfile = z.output<typeof SignalProfileSchema>;
 export type SignalProfileUpdate = Omit<SignalProfile, 'installed_components' | 'revision' | 'updated_at'>;
 export type RuntimeConfig = z.output<typeof RuntimeConfigSchema>;
+export type ConfigurationCatalog = z.output<typeof ConfigurationCatalogSchema>;
+export type ConfigurationField = z.output<typeof ConfigurationFieldSchema>;
+export type PluginDefinition = z.output<typeof PluginDefinitionSchema>;
+/** A cleared number is a real local draft, never coerced to zero. Not an API document. */
+export type ConfigurationDraft<T> = T extends number ? number | '' : T extends Array<infer U> ? ConfigurationDraft<U>[] : T extends object ? { [K in keyof T]: ConfigurationDraft<T[K]> } : T;
 export type RuntimeConnection = z.output<typeof RuntimeConnectionSchema>;
 export type RuntimeBook = z.output<typeof RuntimeBookSchema>;
 export type RuntimeJsonPrimitive = null | boolean | number | string;

@@ -42,7 +42,7 @@ describe('decisions canonical cycles projection', () => {
 
   it.each([
     ['loading', new Promise<Response>(() => undefined), 'Loading cycles…'],
-    ['error', response({ code: 'HTTP_500', message: 'failed' }, 500), 'Unable to load cycles.'],
+    ['error', response({ detail: 'Internal server error' }, 500), 'Unable to load cycles.'],
     ['empty', response({ items: [], total: 0, page: 1, size: 20, has_next: false }), 'No cycles recorded.'],
   ])('renders a localized %s state', async (_state, result, expected) => {
     vi.stubGlobal('fetch', vi.fn().mockReturnValue(result));
