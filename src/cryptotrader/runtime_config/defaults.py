@@ -8,7 +8,6 @@ from cryptotrader.runtime_config.models import (
     RuntimeConfigDocument,
     SignalComponentConfig,
     SignalConfig,
-    SystemConfig,
 )
 
 
@@ -16,7 +15,6 @@ def minimal_runtime_document() -> RuntimeConfigDocument:
     """Return the inactive setup document with no executable capital configured."""
 
     return RuntimeConfigDocument(
-        system=SystemConfig(active=False),
         market_data=MarketDataConfig(source_id="default"),
         signals=SignalConfig(
             components=(
@@ -36,7 +34,6 @@ def minimal_runtime_document() -> RuntimeConfigDocument:
             max_target_ratio=1.0,
             atr_stop_multiplier=2.0,
             reward_ratio=2.0,
-            hitl_required=False,
         ),
         execution=ExecutionConfig(),
     )

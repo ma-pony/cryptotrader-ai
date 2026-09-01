@@ -19,6 +19,8 @@ export const useRuntimeSecrets = () => {
         { expected_revision: expectedRevision, token },
         RuntimeTokenMutationSchema,
       );
+      void client.invalidateQueries({ queryKey: ['runtime-status'] });
+      void client.invalidateQueries({ queryKey: ['trading-scope'] });
       // Subsequent authenticated requests must use the acknowledged key. The
       // settings store intentionally keeps it in memory only, never storage.
       if (kind === 'api-access') useSettingsStore.getState().setApiKey(token);
@@ -44,7 +46,19 @@ export const useRuntimeSecrets = () => {
           ...current,
           revision: saved.revision,
           updated_at: saved.updated_at,
-          document: { ...current.document, llm, security, market_data: kind === 'news-provider' ? { ...current.document.market_data, news_credential_configured: saved.configured, news_credential_updated_at: saved.updated_at } : current.document.market_data },
+          document: {
+            ...current.document,
+            llm,
+            security,
+            market_data:
+              kind === 'news-provider'
+                ? {
+                    ...current.document.market_data,
+                    news_credential_configured: saved.configured,
+                    news_credential_updated_at: saved.updated_at,
+                  }
+                : current.document.market_data,
+          },
         };
       });
       // The public document owns application status. Acknowledged credentials
@@ -64,8 +78,7 @@ export const useRuntimeSecrets = () => {
     } catch (error) {
       // Failed publication or a lost response can follow persistence. Require
       // an authoritative reload instead of treating cached application as current.
-      if (!(error instanceof ApiError) || error.status === 409 || error.status >= 500)
-        setRuntimeConfigConflict(client);
+      if (!(error instanceof ApiError) || error.status === 409 || error.status >= 500) setRuntimeConfigConflict(client);
       throw error;
     }
   };

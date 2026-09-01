@@ -29,7 +29,8 @@ from cryptotrader._compat import UTC
 
 
 @pytest.fixture
-def client() -> TestClient:
+def client(monkeypatch) -> TestClient:
+    monkeypatch.setattr("api.main._get_redis_for_rate_limit", lambda: None)
     return TestClient(app, raise_server_exceptions=False)
 
 
@@ -37,7 +38,7 @@ def _mock_config(scheduler_enabled: bool = True, pairs: list[str] | None = None)
     cfg = MagicMock()
     cfg.security.enabled = False
     cfg.scheduler.enabled = scheduler_enabled
-    cfg.scheduler.pairs = pairs if pairs is not None else ["BTC/USDT", "ETH/USDT"]
+    cfg.execution.pairs = pairs if pairs is not None else ["BTC/USDT", "ETH/USDT"]
     cfg.scheduler.interval_minutes = 240
     cfg.infrastructure.redis_url = "redis://localhost:6379"
     cfg.execution.books = (
@@ -48,7 +49,7 @@ def _mock_config(scheduler_enabled: bool = True, pairs: list[str] | None = None)
 
 
 def _use_runtime(config) -> None:
-    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(revision=21, document=config, setup_required=False))
+    app.state.runtime = SimpleNamespace(snapshot=SimpleNamespace(revision=21, document=config))
 
 
 class TestSchedulerStatusV2:

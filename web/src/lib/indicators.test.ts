@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { OHLCVBar } from '@/types/chart-analysis';
+import type { OHLCVBar } from '@/types/market-chart';
 import { calcMACD, calcRSI, calcSMA, calcVolumeRatio, generateDescription } from './indicators';
 
 function makeBars(closes: number[]): OHLCVBar[] {

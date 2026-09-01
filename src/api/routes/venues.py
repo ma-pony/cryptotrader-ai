@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from contextlib import suppress
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict
+from fastapi import APIRouter, HTTPException, Query, Request, status
+from pydantic import BaseModel, ConfigDict, SecretStr
 
 from api.routes.config import (
     VenueConnectionOut,
@@ -20,10 +23,9 @@ from api.routes.config import (
     require_runtime,
     server_credential_ref,
 )
+from cryptotrader.configuration.catalog import CredentialValidationError, validate_venue_credentials
+from cryptotrader.runtime_config.models import ExecutionConfig
 from cryptotrader.runtime_config.repository import CredentialNotConfigured, RevisionConflict
-from cryptotrader.runtime_config.secrets import (  # noqa: TC001 - Pydantic resolves this request field at runtime.
-    CredentialPayload,
-)
 from cryptotrader.venues.models import (
     ConnectionEnvironment,
     MarginMode,
@@ -62,6 +64,7 @@ class UpdateConnectionIn(BaseModel):
     margin_mode: MarginMode
     canary_only: bool
     parameters: dict[str, Any]
+    confirm_stop: bool = False
 
 
 class ConnectionMutationOut(BaseModel):
@@ -71,11 +74,47 @@ class ConnectionMutationOut(BaseModel):
     connection: VenueConnectionOut
 
 
+class ConnectionRemovedOut(BaseModel):
+    revision: int
+    connection_id: str
+
+
+@router.delete("/{connection_id}", response_model=ConnectionRemovedOut)
+async def remove_connection(connection_id: str, request: Request, expected_revision: int = Query(ge=1)):
+    runtime = require_runtime(request)
+    current = await runtime.repository.get_existing()
+    ensure_expected_revision(current, expected_revision)
+    _find_connection(current, connection_id)
+    execution = current.document.execution
+    document = current.document.model_copy(
+        update={
+            "execution": execution.model_copy(
+                update={
+                    "connections": tuple(c for c in execution.connections if c.id != connection_id),
+                    "books": tuple(
+                        replace(b, allocations=tuple(a for a in b.allocations if a.connection_id != connection_id))
+                        for b in execution.books
+                    ),
+                }
+            )
+        }
+    )
+    saved = await apply_document(
+        runtime,
+        current,
+        expected_revision,
+        document,
+        getattr(request.app.state, "refresh_runtime_owners", None),
+        getattr(request.app.state, "clear_runtime_owners", None),
+    )
+    return ConnectionRemovedOut(revision=saved.revision, connection_id=connection_id)
+
+
 class PutCredentialsIn(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     expected_revision: int
-    credentials: CredentialPayload
+    values: dict[str, SecretStr]
 
 
 class CredentialStateOut(BaseModel):
@@ -100,6 +139,10 @@ class VenueCapabilitiesOut(BaseModel):
     hedge_mode: bool
     reduce_only: bool
     supported_order_types: list[str]
+    account_reads: list[str]
+    exit_operations: list[str]
+    history_initial_days: int | None
+    unknown_fields: list[str]
 
 
 class ConnectionHealthOut(BaseModel):
@@ -108,13 +151,18 @@ class ConnectionHealthOut(BaseModel):
     connection_id: str
     healthy: bool
     environment: ConnectionEnvironment
-    capabilities: VenueCapabilitiesOut
+    capabilities: VenueCapabilitiesOut | None
     credential_configured: bool
     checked_at: datetime
+    error_code: str | None
 
 
 def _connection_from_create(body: CreateConnectionIn) -> VenueConnection:
-    return _build_connection(body.id, body, server_credential_ref(body.id, body.environment))
+    try:
+        credential_ref = server_credential_ref(body.id, body.adapter_id, body.environment)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Venue connection is invalid") from None
+    return _build_connection(body.id, body, credential_ref)
 
 
 def _build_connection(
@@ -197,13 +245,28 @@ async def update_connection(
     current = _find_connection(snapshot, connection_id)
     if body.environment != current.environment:
         raise HTTPException(status_code=422, detail="Connection environment cannot be changed")
-    if not body.enabled and _is_referenced_by_enabled_book(snapshot, connection_id):
+    if not body.enabled and _is_referenced_by_enabled_book(snapshot, connection_id) and not body.confirm_stop:
         raise HTTPException(status_code=422, detail="Enabled book still references this connection")
     replacement = _build_connection(connection_id, body, current.credential_ref)
     connections = tuple(
         replacement if item.id == connection_id else item for item in snapshot.document.execution.connections
     )
     document = _document_with_connections(snapshot, connections)
+    if not body.enabled and body.confirm_stop:
+        document = document.model_copy(
+            update={
+                "execution": document.execution.model_copy(
+                    update={
+                        "books": tuple(
+                            replace(book, enabled=False)
+                            if any(a.enabled and a.connection_id == connection_id for a in book.allocations)
+                            else book
+                            for book in document.execution.books
+                        ),
+                    }
+                )
+            }
+        )
     saved = await apply_document(
         runtime,
         snapshot,
@@ -228,14 +291,22 @@ async def put_credentials(
     snapshot = await runtime.repository.get_or_create()
     ensure_expected_revision(snapshot, body.expected_revision)
     connection = _find_connection(snapshot, connection_id)
-    if connection.environment == "paper" or connection.credential_ref is None:
+    if connection.credential_ref is None:
         raise HTTPException(status_code=422, detail="Connection does not accept credentials")
+    try:
+        payload = validate_venue_credentials(
+            connection.adapter_id,
+            connection.environment,
+            {key: value.get_secret_value() for key, value in body.values.items()},
+        )
+    except CredentialValidationError as error:
+        raise HTTPException(status_code=422, detail=error.errors) from None
     async with application_barrier(runtime):
         try:
             saved = await runtime.repository.put_credentials(
                 body.expected_revision,
                 connection.credential_ref,
-                body.credentials,
+                payload,
             )
         except RevisionConflict as error:
             raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
@@ -257,6 +328,37 @@ async def put_credentials(
     )
 
 
+@router.delete("/{connection_id}/credentials", response_model=CredentialMutationOut)
+async def delete_credentials(
+    connection_id: str,
+    request: Request,
+    expected_revision: int = Query(),
+) -> CredentialMutationOut:
+    runtime = require_runtime(request)
+    snapshot = await runtime.repository.get_or_create()
+    ensure_expected_revision(snapshot, expected_revision)
+    connection = _find_connection(snapshot, connection_id)
+    if connection.credential_ref is None:
+        raise HTTPException(status_code=422, detail="Connection does not accept credentials")
+    async with application_barrier(runtime):
+        try:
+            saved = await runtime.repository.delete_credentials(expected_revision, connection.credential_ref)
+        except RevisionConflict as error:
+            raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+        except Exception:
+            raise HTTPException(status_code=503, detail="Credential storage is unavailable") from None
+        await publish_pending_snapshot(
+            runtime,
+            saved,
+            getattr(request.app.state, "refresh_runtime_owners", None),
+            clear_owners=getattr(request.app.state, "clear_runtime_owners", None),
+        )
+    return CredentialMutationOut(
+        revision=saved.revision,
+        credential=CredentialStateOut(configured=False, updated_at=None),
+    )
+
+
 def _capabilities_out(capabilities: VenueCapabilities) -> VenueCapabilitiesOut:
     return VenueCapabilitiesOut(
         market_types=sorted(capabilities.market_types),
@@ -264,6 +366,10 @@ def _capabilities_out(capabilities: VenueCapabilities) -> VenueCapabilitiesOut:
         hedge_mode=capabilities.hedge_mode,
         reduce_only=capabilities.reduce_only,
         supported_order_types=sorted(capabilities.supported_order_types),
+        account_reads=sorted(capabilities.account_reads),
+        exit_operations=sorted(capabilities.exit_operations),
+        history_initial_days=capabilities.history_initial_days,
+        unknown_fields=sorted(capabilities.unknown_fields),
     )
 
 
@@ -281,9 +387,26 @@ async def _close_session(session) -> None:
         raise cancellation
 
 
-def _connection_test_failure(code: str) -> HTTPException:
-    status_code = status.HTTP_401_UNAUTHORIZED if code == "authentication_failed" else status.HTTP_502_BAD_GATEWAY
-    return HTTPException(status_code=status_code, detail={"code": code})
+def _check_fingerprint(connection: VenueConnection, credential_state) -> str:
+    payload = {
+        "connection": ExecutionConfig(connections=(connection,)).model_dump(mode="json")["connections"][0],
+        "credential_updated_at": credential_state.updated_at.isoformat()
+        if credential_state and credential_state.updated_at
+        else None,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+@router.get("/{connection_id}/check", response_model=ConnectionHealthOut | None)
+async def get_connection_check(connection_id: str, request: Request) -> ConnectionHealthOut | None:
+    runtime = require_runtime(request)
+    snapshot = await runtime.repository.get_or_create()
+    connection = _find_connection(snapshot, connection_id)
+    credential_state = (
+        await runtime.repository.credential_state(connection.credential_ref) if connection.credential_ref else None
+    )
+    saved = await runtime.repository.connection_check(connection_id, _check_fingerprint(connection, credential_state))
+    return ConnectionHealthOut.model_validate(saved) if saved is not None else None
 
 
 @router.post("/{connection_id}/test", response_model=ConnectionHealthOut)
@@ -291,41 +414,43 @@ async def test_connection(connection_id: str, request: Request) -> ConnectionHea
     runtime = require_runtime(request)
     snapshot = await runtime.repository.get_or_create()
     connection = _find_connection(snapshot, connection_id)
-    credential_state = None
+    credential_state = (
+        await runtime.repository.credential_state(connection.credential_ref) if connection.credential_ref else None
+    )
+    fingerprint = _check_fingerprint(connection, credential_state)
     session = None
-    checked_at = None
+    capabilities = None
+    error_code = None
     try:
         credentials = None
         if connection.credential_ref is not None:
-            credential_state = await runtime.repository.credential_state(connection.credential_ref)
-            if not credential_state.configured:
+            if not credential_state or not credential_state.configured:
                 raise CredentialNotConfigured(connection.credential_ref)
             credentials = await runtime.repository.reveal_credentials(connection.credential_ref)
         adapter = runtime.venue_registry.require(connection.adapter_id)
         session = await adapter.connect(connection, credentials)
         capabilities = session.capabilities
         await session.check_connection()
-        checked_at = datetime.now(UTC)
     except CredentialNotConfigured:
-        raise HTTPException(status_code=503, detail={"code": "credentials_missing"}) from None
+        error_code = "credentials_missing"
     except VenueOperationError as error:
-        code = "authentication_failed" if error.code == "authentication_failed" else "account_unavailable"
-        raise _connection_test_failure(code) from None
-    except HTTPException:
-        raise
+        error_code = "authentication_failed" if error.code == "authentication_failed" else "account_unavailable"
     except Exception:
-        raise _connection_test_failure("account_unavailable") from None
+        error_code = "account_unavailable"
     finally:
         if session is not None:
             try:
                 await _close_session(session)
             except Exception:
-                raise _connection_test_failure("account_unavailable") from None
-    return ConnectionHealthOut(
+                error_code = "account_unavailable"
+    result = ConnectionHealthOut(
         connection_id=connection.id,
-        healthy=True,
+        healthy=error_code is None,
         environment=connection.environment,
-        capabilities=_capabilities_out(capabilities),
+        capabilities=_capabilities_out(capabilities) if capabilities is not None else None,
         credential_configured=bool(credential_state and credential_state.configured),
-        checked_at=checked_at,
+        checked_at=datetime.now(UTC),
+        error_code=error_code,
     )
+    await runtime.repository.save_connection_check(connection_id, fingerprint, result.model_dump(mode="json"))
+    return result

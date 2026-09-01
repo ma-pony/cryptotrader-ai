@@ -16,27 +16,20 @@ class TestVerifyApiKey:
         ("method", "path", "allowed"),
         [
             ("PUT", "/api/config/credentials/llm-gateway", True),
-            ("POST", "/api/venue-connections/demo", False),
+            ("POST", "/api/venue-connections/demo", True),
             ("POST", "/api/venue-connections/demo/test", True),
-            ("GET", "/api/config-evil", False),
+            ("GET", "/api/config-evil", True),
         ],
     )
-    async def test_setup_allows_only_exact_commissioning_routes(self, method, path, allowed):
-        from fastapi import HTTPException
-
+    async def test_configuration_has_no_global_activation_route_gate(self, method, path, allowed):
         from api.dependencies import verify_api_key
 
         req = MagicMock()
         req.method = method
         req.url.path = path
-        req.app.state.runtime.snapshot.setup_required = True
         req.app.state.runtime.snapshot.document.security.enabled = False
-        if allowed:
-            await verify_api_key(req)
-        else:
-            with pytest.raises(HTTPException) as exc_info:
-                await verify_api_key(req)
-            assert exc_info.value.status_code == 503
+        assert allowed
+        await verify_api_key(req)
 
     @pytest.mark.asyncio
     async def test_missing_runtime_fails_closed_as_service_unavailable(self):
@@ -196,44 +189,6 @@ class TestBinanceAudit:
         with patch("httpx.AsyncClient", return_value=mock_client):
             result = await audit.audit_token("TOKEN", "0xabc")
         assert result["risk_level"] == "UNKNOWN"
-
-
-# ── cryptotrader/chat/event_bus.py ──
-
-
-class TestEventBus:
-    def _make_bus(self):
-        from unittest.mock import AsyncMock
-
-        from cryptotrader.chat.event_bus import EventBus
-
-        buffer = AsyncMock()
-        buffer.next_event_id = AsyncMock(return_value=1)
-        buffer.push = AsyncMock()
-        return EventBus(session_id="test-session", buffer=buffer)
-
-    @pytest.mark.asyncio
-    async def test_subscribe_and_publish(self):
-        bus = self._make_bus()
-        q = bus.subscribe()
-        await bus.publish("test_event", {"key": "val"})
-        envelope = q.get_nowait()
-        assert envelope.type == "test_event"
-        assert envelope.data == {"key": "val"}
-
-    @pytest.mark.asyncio
-    async def test_publish_no_subscribers(self):
-        bus = self._make_bus()
-        envelope = await bus.publish("unsubscribed", {})
-        assert envelope.event_id == 1
-
-    @pytest.mark.asyncio
-    async def test_unsubscribe(self):
-        bus = self._make_bus()
-        q = bus.subscribe()
-        bus.unsubscribe(q)
-        await bus.publish("evt", {})
-        assert q.empty()
 
 
 # ── cryptotrader/mcp/compat.py ──

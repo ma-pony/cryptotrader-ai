@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import type {
@@ -21,25 +21,42 @@ export const CONFIGURATION_SECTION_KEYS = {
   market: ['market_data'],
   risk: ['risk', 'hitl'],
   scheduler: ['scheduler', 'triggers'],
-  system: ['security', 'infrastructure', 'notifications', 'observability'],
+  system: ['security', 'accounts', 'infrastructure', 'observability'],
+  notifications: ['notifications'],
   books: ['execution'],
 } as const;
 export type ConfigurationSection = keyof typeof CONFIGURATION_SECTION_KEYS;
 export type ConfigurationKey = (typeof CONFIGURATION_SECTION_KEYS)[ConfigurationSection][number];
 export type SaveStatus = 'saving' | 'saved' | 'failed';
 type DraftDocument = ConfigurationDraft<RuntimeDocument>;
-type BookSettings = Pick<DraftDocument['execution'], 'books' | 'live_order_execution_enabled'>;
-type DraftOverlay = Partial<Omit<Pick<DraftDocument, ConfigurationKey>, 'execution'> & { execution: BookSettings }>;
+type BookSettings = Pick<DraftDocument['execution'], 'books' | 'live_order_execution_enabled' | 'pairs'>;
+type SchedulerRules = Pick<DraftDocument['scheduler'], 'enabled' | 'interval_minutes' | 'daily_summary_hour'>;
+type DraftOverlay = Partial<
+  Omit<Pick<DraftDocument, ConfigurationKey>, 'execution' | 'scheduler'> & {
+    execution: BookSettings;
+    scheduler: SchedulerRules;
+  }
+>;
 const bookSettings = (execution: DraftDocument['execution']): BookSettings => ({
+  pairs: execution.pairs,
   books: execution.books,
   live_order_execution_enabled: execution.live_order_execution_enabled,
 });
-const ownedValue = (key: ConfigurationKey, document: DraftDocument | undefined) =>
-  key === 'execution' && document ? bookSettings(document.execution) : document?.[key];
+const schedulerRules = (scheduler: DraftDocument['scheduler']): SchedulerRules => ({
+  enabled: scheduler.enabled,
+  interval_minutes: scheduler.interval_minutes,
+  daily_summary_hour: scheduler.daily_summary_hour,
+});
+const ownedValue = (key: ConfigurationKey, document: DraftDocument | undefined) => {
+  if (key === 'execution' && document) return bookSettings(document.execution);
+  if (key === 'scheduler' && document) return schedulerRules(document.scheduler);
+  return document?.[key];
+};
 const composeDraft = (baseline: RuntimeDocument, overlay: DraftOverlay): DraftDocument => ({
   ...baseline,
   ...overlay,
   execution: { ...baseline.execution, ...overlay.execution },
+  scheduler: { ...baseline.scheduler, ...overlay.scheduler },
 });
 
 /** Validates only the selected business section. The server still owns final CAS/validation. */
@@ -50,12 +67,17 @@ export function validateConfigurationSection(
   message: (key: string) => string,
 ): FieldErrors {
   const errors: FieldErrors = {};
-  if (section === 'books')
-    return bookErrors(
+  if (section === 'books') {
+    const errors = bookErrors(
       document.execution.books,
       document.execution.connections as RuntimeDocument['execution']['connections'],
+      catalog,
       message,
     );
+    if (document.execution.pairs.some((pair) => !/^[A-Za-z0-9]+\/[A-Za-z0-9]+(?::[A-Za-z0-9]+)?$/.test(pair.trim())))
+      errors['execution.pairs'] = message('pairInvalid');
+    return errors;
+  }
   const number = (path: string, value: unknown, min = 0, max = Infinity, integer = false) => {
     if (
       typeof value !== 'number' ||
@@ -154,15 +176,10 @@ export function validateConfigurationSection(
     number('scheduler.daily_summary_hour', document.scheduler.daily_summary_hour, 0, 23, true);
     for (const key of ['max_rules', 'ws_reconnect_max_s', 'funding_rate_poll_interval_minutes'] as const)
       number(`triggers.${key}`, document.triggers[key], 1, Infinity, true);
-    if (document.scheduler.enabled && !document.scheduler.pairs.length) errors['scheduler.pairs'] = message('required');
-    if (document.scheduler.pairs.some((pair) => !/^[^/\s]+\/[^/\s]+(?::[^/\s]+)?$/.test(pair)))
-      errors['scheduler.pairs'] = message('pairInvalid');
   }
   if (section === 'system') {
-    number('notifications.webhook_timeout', document.notifications.webhook_timeout, 1, Infinity, true);
-    if (document.system.active) required('infrastructure.redis_url', document.infrastructure.redis_url);
+    number('accounts.sync_interval_seconds', document.accounts.sync_interval_seconds, 1, 86400, true);
     url('infrastructure.redis_url', document.infrastructure.redis_url, ['redis:', 'rediss:']);
-    url('notifications.webhook_url', document.notifications.webhook_url, ['https:', 'http:']);
     url('observability.otlp_endpoint', document.observability.otlp_endpoint, ['https:', 'http:']);
   }
   return errors;
@@ -174,6 +191,29 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
   const client = useQueryClient();
   const { t } = useTranslation('configuration');
   const [overlay, setOverlay] = useState<DraftOverlay>({});
+  const priorBooks = useRef(runtime.document?.execution.books);
+  useEffect(() => {
+    const latest = runtime.document?.execution.books;
+    const prior = priorBooks.current;
+    priorBooks.current = latest;
+    if (!latest || !prior) return;
+    const changed = latest.filter((b) => prior.some((old) => old.id === b.id && old.enabled !== b.enabled));
+    if (!changed.length) return;
+    setOverlay((current) =>
+      !current.execution
+        ? current
+        : {
+            ...current,
+            execution: {
+              ...current.execution,
+              books: current.execution.books.map((b) => {
+                const saved = changed.find((next) => next.id === b.id);
+                return saved ? { ...b, enabled: saved.enabled } : b;
+              }),
+            },
+          },
+    );
+  }, [runtime.document?.execution.books]);
   const savingKeys = useRef<readonly ConfigurationKey[]>([]);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [status, setStatus] = useState<Partial<Record<ConfigurationSection, SaveStatus>>>({});
@@ -188,7 +228,12 @@ export function useConfigurationDraft(catalog?: ConfigurationCatalog) {
     );
   const update = <K extends ConfigurationKey>(key: K, value: DraftDocument[K]) => {
     // An in-flight write may replace this baseline, so retain a restore until it settles.
-    const owned = key === 'execution' ? bookSettings(value as DraftDocument['execution']) : value;
+    const owned =
+      key === 'execution'
+        ? bookSettings(value as DraftDocument['execution'])
+        : key === 'scheduler'
+          ? schedulerRules(value as DraftDocument['scheduler'])
+          : value;
     const restored =
       !savingKeys.current.includes(key) && JSON.stringify(owned) === JSON.stringify(ownedValue(key, runtime.document));
     setOverlay((current) => {

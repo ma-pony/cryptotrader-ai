@@ -36,6 +36,8 @@ def test_run_command_has_no_graph_option() -> None:
 
 @pytest.mark.asyncio
 async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
+    import asyncio
+
     from cli.main import _run
 
     class Cycle:
@@ -61,20 +63,34 @@ async def test_run_reloads_before_each_pair_and_closes_runtime() -> None:
         execution_lease=execution_lease,
         close=AsyncMock(),
     )
+    tasks = {}
+
+    async def start_trading(pair, revision, books):
+        assert revision == 6
+        assert books == ["simulation"]
+        tasks[pair.canonical()] = asyncio.create_task(cycle.run(CycleRequest(pair)))
+        return pair.canonical()
+
+    runtime.run_service = SimpleNamespace(
+        trading_scope=AsyncMock(return_value=SimpleNamespace(saved_revision=6)),
+        start_trading=AsyncMock(side_effect=start_trading),
+    )
+    runtime.task_manager = SimpleNamespace(get=lambda key: SimpleNamespace(task=tasks[key]))
 
     with patch("cryptotrader.runtime.build_runtime", AsyncMock(return_value=runtime)):
-        await _run(["BTC/USDT", "ETH/USDT"])
+        await _run(["BTC/USDT", "ETH/USDT"], ["simulation"])
 
     assert cycle.requests == [
         CycleRequest(Pair.parse("BTC/USDT")),
         CycleRequest(Pair.parse("ETH/USDT")),
     ]
-    assert execution_leases == ["BTC/USDT", "ETH/USDT"]
+    assert runtime.run_service.trading_scope.await_count == 2
+    assert execution_leases == []
     runtime.close.assert_awaited_once_with()
 
 
 @pytest.mark.asyncio
-async def test_run_closes_setup_required_runtime() -> None:
+async def test_run_requires_explicit_books_and_closes_runtime() -> None:
     from cli.main import _run
 
     runtime = SimpleNamespace(cycle=None, close=AsyncMock())

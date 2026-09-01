@@ -3,13 +3,13 @@ import type { z } from 'zod';
 import { env } from './env';
 import { buildApiUrl } from './api-url';
 import { useSettingsStore } from '@/stores/use-settings-store';
-import type { ApiError as ApiErrorShape } from '@/types/api.schema';
+import { ApiErrorSchema, type ApiError as ApiErrorShape } from '@/types/api.schema';
 
 export class ApiError extends Error {
   readonly code: string;
   readonly status: number;
   readonly traceId?: string;
-  readonly details?: Record<string, unknown>;
+  readonly details?: ApiErrorShape['details'];
 
   constructor(status: number, payload: ApiErrorShape) {
     super(payload.message);
@@ -33,8 +33,10 @@ async function parseError(res: Response): Promise<ApiError> {
   let payload: ApiErrorShape = { code: `HTTP_${res.status}`, message: res.statusText || 'Request failed' };
   try {
     const json: unknown = await res.json();
+    const canonical = ApiErrorSchema.safeParse(json);
     const detail = json && typeof json === 'object' && 'detail' in json ? json.detail : undefined;
-    if (typeof detail === 'string') payload.message = detail;
+    if (canonical.success) payload = canonical.data;
+    else if (typeof detail === 'string') payload.message = detail;
     else if (Array.isArray(detail)) {
       const fieldErrors: Record<string, string> = {};
       for (const issue of detail as unknown[]) {

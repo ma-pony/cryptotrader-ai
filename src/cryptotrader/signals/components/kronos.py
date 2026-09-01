@@ -1,4 +1,5 @@
 """Kronos foundation model as a pure directional signal component."""
+# ruff: noqa: RUF001
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import math
 import pickle
 import sys
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,11 +16,18 @@ import numpy as np
 import pandas as pd
 
 from cryptotrader.agents._kronos_features import compute_kronos_features
-from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
-from cryptotrader.configuration.fields import LocalizedText
 from cryptotrader.configuration.parameters import KronosParameters
 from cryptotrader.signals.component import ComponentExecutionError
 from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements
+from cryptotrader.signals.presentation import (
+    Metric,
+    MetricsBlock,
+    Series,
+    SeriesBlock,
+    SeriesPoint,
+    TextBlock,
+    interval_delta,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -102,14 +111,14 @@ def _input_frame(snapshot: DataSnapshot, lookback: int) -> pd.DataFrame:
 def _timestamps(snapshot: DataSnapshot, as_of, lookback: int, pred_len: int, timeframe: str):
     frame = snapshot.market.ohlcv
     if "timestamp" in frame.columns:
-        raw = frame["timestamp"].tail(lookback)
+        raw = frame.dropna(subset=["close"])["timestamp"].tail(lookback)
         unit = "ms" if pd.api.types.is_numeric_dtype(raw) else None
         history = pd.Series(pd.to_datetime(raw, unit=unit, utc=True)).reset_index(drop=True)
     elif isinstance(frame.index, pd.DatetimeIndex):
-        history = pd.Series(pd.to_datetime(frame.index[-lookback:], utc=True))
+        history = pd.Series(pd.to_datetime(frame.dropna(subset=["close"]).index[-lookback:], utc=True))
     else:
-        history = pd.Series(pd.date_range(end=as_of, periods=lookback, freq=timeframe, tz="UTC"))
-    offset = pd.tseries.frequencies.to_offset(timeframe)
+        raise ValueError("missing candle timestamps")
+    offset = interval_delta(timeframe)
     future = pd.Series([history.iloc[-1] + offset * (index + 1) for index in range(pred_len)])
     return history, future
 
@@ -182,7 +191,9 @@ class KronosComponent:
 
         if gate_proba < 0.5:
             return self._neutral(
-                f"Kronos regime gate rejected at {gate_proba:.4f}",
+                f"市场状态门控未通过（{gate_proba:.4f}），本次未执行预测。",
+                status="skipped",
+                reference=context.evaluation_reference,
                 gate_proba=gate_proba,
             )
 
@@ -203,11 +214,29 @@ class KronosComponent:
             "h30_50": h30_50,
             "predictor_executed": True,
         }
-        if raw_signal == 0.0 or (raw_signal < 0.0 and abs(raw_signal) < self.config.step2_short_threshold):
-            return self._neutral("Kronos weak short filtered by Step 2", **details)
-
+        curve = self._stage(
+            "prediction output", lambda: self._curve(frame, prediction, history_timestamps, future_timestamps)
+        )
         confidence, dimensions = _confidence(gate_proba, raw_signal, annual_volatility, h10_20, h30_50)
         details.update(dimensions)
+        labels = {
+            "c_gate": "门控分项",
+            "c_signal": "信号分项",
+            "c_volatility": "波动分项",
+            "c_drift": "漂移分项",
+            "c_horizon": "周期一致性",
+        }
+        metrics = MetricsBlock(
+            title="置信度分项", metrics=tuple(Metric(key=labels[key], value=value) for key, value in dimensions.items())
+        )
+        if raw_signal == 0.0 or (raw_signal < 0.0 and abs(raw_signal) < self.config.step2_short_threshold):
+            return self._neutral(
+                "本次已完成预测；零信号或弱空头信号被过滤，方向设为中性。",
+                blocks=(curve, metrics),
+                reference=context.evaluation_reference,
+                **details,
+            )
+
         direction = "long" if raw_signal > 0.0 else "short"
         return ComponentSignal(
             component_id=self.id,
@@ -218,10 +247,42 @@ class KronosComponent:
                 f"h10_20={h10_20:.6f}, h30_50={h30_50:.6f}"
             ),
             details=details,
+            blocks=(curve, metrics),
+            evaluation_reference=context.evaluation_reference,
         )
 
-    def _neutral(self, reasoning: str, **details) -> ComponentSignal:
-        return ComponentSignal(self.id, "neutral", 0.0, reasoning, details)
+    def _neutral(self, reasoning: str, *, blocks=(), status="completed", reference=None, **details) -> ComponentSignal:
+        return ComponentSignal(
+            self.id,
+            "neutral",
+            0.0,
+            reasoning,
+            details,
+            blocks=(TextBlock(title="运行说明", body=reasoning), *blocks),
+            status=status,
+            evaluation_reference=reference,
+        )
+
+    @staticmethod
+    def _curve(frame, prediction, history, future) -> SeriesBlock:
+        if len(prediction) != len(future):
+            raise ValueError("prediction length differs from requested timestamps")
+
+        def points(timestamps, values):
+            return tuple(
+                SeriesPoint(time=time.to_pydatetime(), value=Decimal(str(value)))
+                for time, value in zip(timestamps, values, strict=True)
+            )
+
+        return SeriesBlock(
+            title="历史价格与当次预测",
+            forecast_start=future.iloc[0].to_pydatetime(),
+            evaluation_target="candle_close",
+            series=(
+                Series(name="历史收盘价", points=points(history, frame["close"])),
+                Series(name="预测收盘价", points=points(future, prediction["close"])),
+            ),
+        )
 
     def _features(self, snapshot: DataSnapshot, gate: dict) -> tuple[dict[str, float], float]:
         features = dict(self._feature_computer(snapshot, gate["feat_cols"], gate["medians"]))
@@ -270,20 +331,9 @@ class KronosComponent:
             raise self._error(stage, error) from error
 
     def _error(self, stage: str, cause: BaseException) -> ComponentExecutionError:
-        return ComponentExecutionError(self.id, RuntimeError(f"{stage}: {cause}"))
+        return ComponentExecutionError(self.id, RuntimeError(type(cause).__name__), stage=stage.replace(" ", "_"))
 
 
-@configured_factory(
-    PluginConfiguration(
-        id="kronos",
-        label=LocalizedText(zh_CN="Kronos 时序模型", en_US="Kronos time-series model"),
-        description=LocalizedText(
-            zh_CN="使用市场时序基础模型和状态门控给出方向信号。",
-            en_US="Produces directional signals with a time-series foundation model and regime gate.",
-        ),
-        parameter_model=KronosParameters,
-    )
-)
 def create_component(document: RuntimeConfigDocument, sink) -> KronosComponent:
     """Build Kronos from its database-owned component parameters."""
     del sink

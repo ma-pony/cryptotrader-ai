@@ -18,7 +18,13 @@ async def _connect(environment: str = "demo"):
     adapter = OkxVenueAdapter(client_factory=factory)
     session = await adapter.connect(
         connection("okx", environment, adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     return adapter, session, factory
 
@@ -66,7 +72,53 @@ async def test_okx_protection_is_returned_only_after_pending_algo_query_confirms
     create_index = names.index("private_post_trade_order_algo")
     assert "private_get_trade_orders_algo_pending" in names[create_index + 1 :]
     assert protection.protection_ids == ("algo-1",)
+    assert protection.actual_order_ids == ()
     assert protection.active is True
+
+
+@pytest.mark.parametrize(
+    ("identity", "expected"),
+    [
+        ({"ordId": "actual-17"}, ("actual-17",)),
+        ({"ordIdList": ["actual-17", "actual-18"]}, ("actual-17", "actual-18")),
+        ({"ordId": "", "ordIdList": []}, ()),
+    ],
+)
+async def test_okx_protection_actual_identity_comes_only_from_explicit_order_fields(identity, expected, tmp_path):
+    from dataclasses import replace
+
+    from cryptotrader.accounts.store import AccountStore
+    from cryptotrader.execution.service import VenueExecutionService
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+    from tests.fakes.account_session import END
+    from tests.test_execution_service import _venue_plan
+
+    _, session, factory = await _connect()
+    spec = ProtectionSpec(Pair.parse("BTC/USDT:USDT"), "long", Decimal("0.02"), Decimal("48000"), Decimal("55000"))
+    await session.replace_protection(spec)
+    factory.clients[-1]._okx_algos[0].update(identity)
+    state = await session.list_open_state(spec.pair)
+    assert state.protections[0].protection_ids == ("algo-1",)
+    assert state.protections[0].actual_order_ids == expected
+    # Exercise the real audit consumer; only the adapter response is the offline boundary.
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'okx-identity.db'}"
+    await migrate_workbench_schema(database_url)
+    store = AccountStore(database_url)
+    from unittest.mock import AsyncMock
+
+    session.replace_protection = AsyncMock(return_value=state.protections[0])
+    executor = VenueExecutionService(session, connection=session.connection, account_store=store)
+    await executor._replace_protection(
+        replace(_venue_plan("0", "1"), connection_id="okx", decision_id="decision-okx"), spec, []
+    )
+    assert (await store.attribution("okx", "algo-1", None, END))["decision_id"] is None
+    for order_id in expected:
+        assert (await store.attribution("okx", order_id, None, END))["decision_id"] == "decision-okx"
+    await session.cancel_protection(("algo-1",))
+    assert any(
+        name == "private_post_trade_cancel_algos" and payload == [{"algoId": "algo-1", "instId": "BTC-USDT-SWAP"}]
+        for name, payload in factory.clients[-1].calls
+    )
 
 
 @pytest.mark.asyncio
@@ -267,3 +319,137 @@ async def test_okx_active_protection_never_fabricates_trigger_event():
 
     assert protection.active is True
     assert protection.triggered is False
+
+
+@pytest.mark.asyncio
+async def test_okx_funding_accepts_formatted_zero_balance_change_without_losing_isolated_income():
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("okx")
+    original = client.private_get_account_bills_archive
+
+    async def formatted_zero(params):
+        response = await original(params)
+        for row in response["data"]:
+            if row["billId"] == "fund2":
+                row["balChg"] = "0.00000000"
+        return response
+
+    client.private_get_account_bills_archive = formatted_zero
+    page = await session.fetch_funding(None)
+    assert page.items[1].amount.amount == Decimal("0.1")
+    assert page.items[1].amount.currency == "ETH"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("position_currency", "signed_amount"), [("USDT", "-1"), ("BTC", "1")])
+async def test_okx_margin_direction_and_identity_are_not_spot_execution(position_currency, signed_amount):
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("okx")
+
+    async def margin_positions(_params):
+        return {
+            "code": "0",
+            "data": [
+                {
+                    "instId": "BTC-USDT",
+                    "instType": "MARGIN",
+                    "pos": "1",
+                    "posSide": "net",
+                    "posCcy": position_currency,
+                    "availPos": "0.5",
+                    "notionalUsd": "100",
+                    "avgPx": "100",
+                    "upl": "2",
+                    "ccy": "USDT",
+                }
+            ],
+        }
+
+    client.private_get_account_positions = margin_positions
+    position = (await session.fetch_account()).positions[0]
+    assert position.signed_amount == Decimal(signed_amount)
+    assert position.signed_notional.amount == Decimal(signed_amount) * 100
+    assert position.available_amount == Decimal("0.5")
+    assert position.instrument.venue_symbol == "BTC-USDT"
+    assert position.instrument.market_type == "margin"
+    assert position.instrument.tradable is False
+    assert position.instrument.reason
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("order_type", ["trigger", "move_order_stop"])
+async def test_okx_non_protective_algo_uses_algo_cancel_endpoint(order_type):
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("okx")
+    pending = {"entry-algo"}
+    writes = []
+
+    async def algo_orders(params):
+        rows = []
+        if params["ordType"] == order_type and not params.get("after"):
+            rows = [
+                {
+                    "algoId": "entry-algo",
+                    "instId": "BTC-USDT",
+                    "instType": "SPOT",
+                    "ordType": order_type,
+                    "side": "buy",
+                    "sz": "1",
+                    "actualSz": "0",
+                    "actualPx": "",
+                    "state": "live",
+                    "reduceOnly": False,
+                }
+            ]
+        return {"code": "0", "data": rows}
+
+    async def ordinary_cancel(order_id, symbol):
+        writes.append(("ordinary", order_id, symbol))
+
+    async def algo_cancel(params):
+        writes.append(("algo", params))
+        assert params == [{"algoId": "entry-algo", "instId": "BTC-USDT"}]
+        pending.remove(params[0]["algoId"])
+        return {"code": "0", "data": [{"algoId": "entry-algo", "sCode": "0"}]}
+
+    client.private_get_trade_orders_algo_pending = algo_orders
+    client.cancel_order = ordinary_cancel
+    client.private_post_trade_cancel_algos = algo_cancel
+    order = next(order for order in (await session.fetch_account()).orders if order.venue_order_id == "entry-algo")
+    assert order.protection is False
+    assert order.instrument.tradable is True
+    assert writes == []
+    await session.cancel_order(order.venue_order_id, order.instrument.pair)
+    assert pending == set()
+    assert writes[0][0] == "algo"
+
+
+@pytest.mark.asyncio
+async def test_okx_algo_cancellation_rejection_preserves_correct_route_for_retry():
+    from cryptotrader.venues.protocol import VenueOperationError
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("okx")
+    pending = {"protect1"}
+
+    async def rejected(_params):
+        return {"code": "1", "msg": "private-fixture-message", "data": []}
+
+    client.private_post_trade_cancel_algos = rejected
+    await session.fetch_account()
+    with pytest.raises(VenueOperationError) as caught:
+        await session.cancel_order("protect1", Pair.parse("BTC/USDT:USDT"))
+    assert "private-fixture-message" not in str(caught.value)
+    assert pending == {"protect1"}
+
+    async def accepted(params):
+        assert params == [{"algoId": "protect1", "instId": "BTC-USDT-SWAP"}]
+        pending.remove("protect1")
+        return {"code": "0", "data": [{"algoId": "protect1", "sCode": "0"}]}
+
+    client.private_post_trade_cancel_algos = accepted
+    await session.cancel_order("protect1", Pair.parse("BTC/USDT:USDT"))
+    assert pending == set()

@@ -93,7 +93,7 @@ class _RecordingRegistry:
     def require(self, adapter_id: str):
         return self.adapters[adapter_id]
 
-    def installed_ids(self):
+    def registered_ids(self):
         return frozenset(self.adapters)
 
 
@@ -204,9 +204,9 @@ async def test_runtime_health_discovers_registries_without_connecting(monkeypatc
         nonlocal calls
         calls += 1
         return (
-            SimpleNamespace(installed_ids=lambda: frozenset({"kronos", "llm_committee"})),
+            SimpleNamespace(registered_ids=lambda: frozenset({"kronos", "llm_committee"})),
             _RecordingRegistry({"paper": adapter}),
-            SimpleNamespace(installed_ids=lambda: frozenset({"default"})),
+            SimpleNamespace(registered_ids=lambda: frozenset({"default"})),
         )
 
     runtime = _Runtime(active_document(), _NoCredentialRepository())
@@ -215,7 +215,7 @@ async def test_runtime_health_discovers_registries_without_connecting(monkeypatc
     await _check_runtime_health(runtime)
 
     assert calls == 1
-    assert runtime.venue_registry.installed_ids() == frozenset({"paper"})
+    assert runtime.venue_registry.registered_ids() == frozenset({"paper"})
     assert adapter.connect_calls == []
 
 
@@ -300,11 +300,13 @@ async def test_close_failure_fails_connection_step_and_preserves_outer_cleanup(m
 
 async def test_loaded_staging_runtime_has_total_cleanup_after_all_steps(monkeypatch, tmp_path):
     from cryptotrader.bootstrap import BootstrapSettings
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
     from cryptotrader.runtime_config.secrets import CredentialVault
     from tests.factories.runtime_config import active_document
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'staging.db'}"
+    await migrate_workbench_schema(url)
     key = "c3Rha2luZy1nYXRlLW1hc3Rlci1rZXktMzItYnl0ZXM="
     repository = RuntimeConfigRepository(url, CredentialVault(key))
     initial = await repository.get_or_create()

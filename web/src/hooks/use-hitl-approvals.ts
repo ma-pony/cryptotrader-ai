@@ -17,6 +17,9 @@ export const useHitlRespond = () => {
       apiClient.post(`/api/hitl/${approvalId}/respond`, { decision }, HitlRespondSchema),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['hitl-pending'] });
+      void qc.invalidateQueries({ queryKey: ['portfolio-books'] });
+      void qc.invalidateQueries({ queryKey: ['accounts'] });
+      void qc.invalidateQueries({ queryKey: ['decisions'] });
     },
   });
 };

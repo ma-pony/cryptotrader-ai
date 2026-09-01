@@ -47,8 +47,16 @@ def _portfolio(*, equity: str = "100", notionals: tuple[str, ...] = ("0", "0")) 
 
 def _request(*, target: str = "0.7", equity: str = "100", peak: str = "100"):
     from cryptotrader.risk.models import BookRiskRequest
+    from tests.fakes.book_risk import state_for, with_accounts
 
-    return BookRiskRequest(_book(0.4, 0.6), _portfolio(equity=equity), Decimal(target), Decimal(peak))
+    portfolio = with_accounts(_portfolio(equity=equity))
+    return BookRiskRequest(
+        _book(0.4, 0.6),
+        portfolio,
+        Decimal(target),
+        portfolio.connections[0].position.pair,
+        state_for(portfolio, Decimal(peak)),
+    )
 
 
 def _limits(**overrides):
@@ -78,6 +86,38 @@ def test_book_cap_scales_whole_target_without_reweighting_connections():
         Decimal("24.00"),
     )
     assert result.cap_source == "max_net_exposure"
+
+
+@pytest.mark.parametrize(
+    ("targets", "incomplete", "limits", "reason"),
+    [
+        (("80", "40"), False, {}, ""),
+        (("80", "40"), True, {}, "incomplete_account"),
+        (("50", "40"), True, {}, ""),
+        (("80", "90"), False, {"max_gross_exposure": Decimal("0.8")}, "max_gross_exposure"),
+        (("80", "40"), False, {"max_net_exposure": Decimal("0.5")}, "max_net_exposure"),
+        (("80", "40"), False, {"max_connection_concentration": Decimal("0.35")}, "max_connection_concentration"),
+    ],
+)
+def test_exact_member_targets_share_risk_checks_without_reallocation(targets, incomplete, limits, reason):
+    from dataclasses import replace
+
+    from cryptotrader.risk.book_state import BookRiskState
+    from cryptotrader.risk.gate import BookRiskGate
+    from cryptotrader.risk.models import BookRiskRequest
+    from tests.fakes.book_risk import with_accounts
+
+    portfolio = with_accounts(_portfolio(equity="200", notionals=("60", "90")))
+    first, second = portfolio.connections
+    first = replace(
+        first,
+        account_snapshot=replace(first.account_snapshot, completeness=("orders:unavailable",) if incomplete else ()),
+    )
+    portfolio = replace(portfolio, connections=(first, second))
+    state = BookRiskState.from_snapshots("simulation", (first.account_snapshot, second.account_snapshot))
+    request = BookRiskRequest(_book(0.5, 0.5), portfolio, Decimal("0.4"), first.position.pair, state)
+    actual = dict(zip(("connection-0", "connection-1"), map(Decimal, targets), strict=True))
+    assert BookRiskGate(_limits(**limits)).validate_targets(request, actual) == reason
 
 
 def test_book_cap_preserves_high_precision_decimal_exposure_exactly():
@@ -136,4 +176,4 @@ def test_book_risk_models_are_frozen_and_reject_binary_float_inputs():
     with pytest.raises(FrozenInstanceError):
         request.target_exposure = Decimal("0")
     with pytest.raises(ValueError, match="Decimal"):
-        BookRiskRequest(request.book, request.portfolio, 0.5, request.peak_equity)
+        BookRiskRequest(request.book, request.portfolio, 0.5, request.pair, request.state)

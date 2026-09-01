@@ -6,12 +6,12 @@ import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
 
 beforeEach(() => i18n.changeLanguage('zh-CN'));
 it('writes optional news credentials without exposing them or erasing ordinary drafts', async () => {
-  const h = workflowHarness('/settings/market');
+  const h = workflowHarness('/engine');
   const input = await screen.findByLabelText('CoinDesk 新闻密钥（可选）');
   expect(input).toHaveAttribute('type', 'password');
   fireEvent.change(input, { target: { value: 'fixture-news-secret' } });
   fireEvent.click(screen.getByRole('button', { name: '保存新闻密钥' }));
-  await waitFor(() => expect(input).toHaveValue(''));
+  await waitFor(() => expect(screen.queryByLabelText('CoinDesk 新闻密钥（可选）')).not.toBeInTheDocument());
   expect(
     h.fetchMock.mock.calls.some(
       ([url, init]) =>
@@ -32,17 +32,18 @@ it('writes optional news credentials without exposing them or erasing ordinary d
     ),
   ).not.toContain('fixture-news-secret');
   expect(JSON.stringify(h.client.getMutationCache().getAll())).not.toContain('fixture-news-secret');
-  fireEvent.click(screen.getByRole('link', { name: '模型与网关' }));
+  fireEvent.click(screen.getByRole('link', { name: '系统' }));
   fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'retained-draft' } });
-  fireEvent.click(screen.getByRole('link', { name: '行情数据' }));
+  fireEvent.click(screen.getByRole('link', { name: '引擎' }));
+  fireEvent.click(await screen.findByRole('button', { name: '更换凭据' }));
   fireEvent.change(await screen.findByLabelText('CoinDesk 新闻密钥（可选）'), {
     target: { value: 'rotated-news-secret' },
   });
   fireEvent.click(screen.getByRole('button', { name: '更新新闻密钥' }));
-  await waitFor(() => expect(screen.getByLabelText('CoinDesk 新闻密钥（可选）')).toHaveValue(''));
-  fireEvent.click(screen.getByRole('link', { name: '模型与网关' }));
+  await waitFor(() => expect(screen.queryByLabelText('CoinDesk 新闻密钥（可选）')).not.toBeInTheDocument());
+  fireEvent.click(screen.getByRole('link', { name: '系统' }));
   expect(await screen.findByLabelText('综合分析模型')).toHaveValue('retained-draft');
   fireEvent.click(screen.getByRole('button', { name: '保存配置' }));
   await waitFor(() => expect(h.writes).toHaveLength(1));
-  expect(h.writes[0]!.document.market_data).toEqual({ source_id: 'default', parameters: {} });
+  expect(h.writes[0]!.document.market_data).toEqual({ source_id: 'default', timeframe: '1h', parameters: {} });
 });

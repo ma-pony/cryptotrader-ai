@@ -15,10 +15,10 @@ from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.runtime import RuntimeLeaseUnavailableError, build_runtime
 from cryptotrader.runtime_config.models import (
     ExecutionConfig,
+    HitlConfig,
     InfrastructureConfig,
     RuntimeConfigSnapshot,
     SchedulerConfig,
-    SystemConfig,
     TriggerConfig,
 )
 from cryptotrader.runtime_config.repository import CredentialState
@@ -26,6 +26,27 @@ from cryptotrader.venues.models import VenueConnection
 from tests.factories.runtime_config import runtime_document
 
 NOW = datetime(2026, 8, 29, tzinfo=UTC)
+
+
+@pytest.fixture(autouse=True)
+def _register_recording_venue(monkeypatch):
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import EnvironmentDefinition
+    from cryptotrader.configuration.fields import LocalizedText
+    from cryptotrader.configuration.registry import ApiCredentials, ExtensionRegistration
+
+    extensions = registry.get_extension_registry()
+    definition = replace(
+        extensions.venues["paper"].configuration,
+        id="recording",
+        margin_modes=("cross", "isolated"),
+        environments=(
+            EnvironmentDefinition("paper", LocalizedText("模拟", "Paper"), "simulated"),
+            EnvironmentDefinition("demo", LocalizedText("演示", "Demo"), "simulated", credential_model=ApiCredentials),
+        ),
+    )
+    extensions.venues["recording"] = ExtensionRegistration(definition, _Adapter)
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
 
 
 class _Repository:
@@ -112,10 +133,13 @@ class _Adapter:
 
 
 class _VenueRegistry:
+    def bind_account_store(self, store):
+        self.account_store = store
+
     def __init__(self, adapter: _Adapter) -> None:
         self.adapter = adapter
 
-    def installed_ids(self):
+    def registered_ids(self):
         return frozenset({"recording"})
 
     def require(self, adapter_id):
@@ -127,7 +151,7 @@ class _InstalledRegistry:
     def __init__(self, installed: set[str]) -> None:
         self._installed = frozenset(installed)
 
-    def installed_ids(self):
+    def registered_ids(self):
         return self._installed
 
 
@@ -196,7 +220,6 @@ def _document(
     return runtime_document(
         connections=connections,
         books=books,
-        system=SystemConfig(active=active),
         execution=ExecutionConfig(connections=connections, books=books),
         infrastructure=InfrastructureConfig(redis_url="redis://runtime-test"),
         market_data=MarketDataConfig(source_id=market_source),
@@ -215,7 +238,39 @@ async def _build(document, *, adapter=None, repository=None, markets=None, snaps
         venue_registry=_VenueRegistry(adapter),
         market_registry=markets,
     )
+    # These lifecycle fixtures explicitly request account synchronization;
+    # build_runtime itself is covered by the zero-account analysis tests.
+    if snapshot.operational and any(book.enabled for book in snapshot.document.execution.books):
+        await runtime.reload_for_cycle()
     return runtime, repository, adapter, markets
+
+
+async def test_manual_account_lease_allows_other_cycle_and_releases_after_cancellation():
+    runtime, _, _, _ = await _build(_document(_connection("paper-a")))
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def manual():
+        async with runtime.account_operation_lease():
+            entered.set()
+            await release.wait()
+
+    task = asyncio.create_task(manual())
+    await entered.wait()
+    assert runtime._active_leases == 1
+    async with runtime.cycle_lease() as cycle:
+        assert cycle is not None
+        assert runtime._active_leases == 2
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert runtime._active_leases == 0
+    assert runtime._leases_drained.is_set()
+    async with runtime.application_barrier():
+        with pytest.raises(RuntimeLeaseUnavailableError):
+            async with runtime.account_operation_lease():
+                pytest.fail("manual work admitted while configuration is being applied")
+    await runtime.close()
 
 
 @pytest.mark.asyncio
@@ -232,6 +287,69 @@ async def test_active_runtime_opens_each_enabled_connection_once_and_closes_all(
     assert all(session.close_calls == 1 for session in sessions)
 
 
+async def test_revision_reload_binds_persisted_paper_before_first_execution_session(tmp_path):
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+    from cryptotrader.pair import Pair
+    from cryptotrader.runtime_config.repository import RuntimeConfigRepository
+    from cryptotrader.runtime_config.secrets import CredentialVault
+    from cryptotrader.venues.models import OrderIntent
+    from cryptotrader.venues.paper import PaperVenueAdapter
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+    from tests.factories.runtime_config import allocation, book, connection
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'reload-paper.db'}"
+    await migrate_workbench_schema(url)
+    config = connection("paper-a", parameters={"initial_equity": "1000"})
+    initial_adapter = PaperVenueAdapter()
+    initial_adapter.database_url = url
+    original = await initial_adapter.connect(config, None)
+    pair = Pair.parse("BTC/USDT")
+    await original.set_quote(pair, Decimal("100"))
+    await original.place_order(OrderIntent(pair, "buy", Decimal("2"), "market", None, False))
+    before = await original.fetch_account()
+    history = await original.fetch_fills(None)
+    await original.close()
+    document = runtime_document(
+        connections=(config,),
+        books=(book("simulation", "simulated", allocation("paper-a")),),
+        infrastructure=InfrastructureConfig(redis_url="redis://runtime-test"),
+    )
+    repository = RuntimeConfigRepository(
+        url, CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode()), lambda: document
+    )
+    signals, markets = _InstalledRegistry({"kronos", "llm_committee"}), _MarketRegistry()
+    runtime = await build_runtime(
+        repository=repository,
+        signal_registry=signals,
+        market_registry=markets,
+        venue_registry=VenueAdapterRegistry.discover(("paper",)),
+    )
+    assert runtime.sessions == {}
+    new_registry = VenueAdapterRegistry((PaperVenueAdapter(),))
+
+    async def discover(_document):
+        return signals, new_registry, markets
+
+    runtime._registry_discoverer = discover
+    current = await repository.get_existing()
+    updated = document.model_copy(
+        update={
+            "execution": document.execution.model_copy(update={"connections": (replace(config, label="改名后的账户"),)})
+        }
+    )
+    saved = await repository.replace(current.revision, updated)
+    await repository.mark_applied(saved.revision)
+    await runtime.reload_for_cycle()
+    restored = runtime.sessions["paper-a"]
+    after = await restored.fetch_account()
+    assert after.balances == before.balances
+    assert after.positions == before.positions
+    assert (await restored.fetch_fills(None)).coverage_start == history.coverage_start
+    assert (await restored.fetch_fills(None)).items == history.items
+    assert new_registry.require("paper").account_store is repository.account_store
+    await runtime.close()
+
+
 @pytest.mark.asyncio
 async def test_runtime_never_reveals_or_connects_an_enabled_canary_only_connection():
     ordinary = _connection("paper-a")
@@ -240,7 +358,6 @@ async def test_runtime_never_reveals_or_connects_an_enabled_canary_only_connecti
     document = runtime_document(
         connections=(ordinary, dedicated),
         books=document.execution.books,
-        system=SystemConfig(active=True),
         infrastructure=InfrastructureConfig(redis_url="redis://runtime-test"),
     )
     snapshot = RuntimeConfigSnapshot(7, document, NOW)
@@ -747,8 +864,36 @@ async def test_application_protocol_starts_real_owner_factories_for_pending_grap
     assert transitions == ["activate", "mark_applied"]
     assert applied.apply_status == "applied"
     assert runtime.snapshot == applied
-    assert runtime.cycle is not None
-    assert runtime.cycle.snapshot.revision == 8
+    assert runtime.cycle is None
+    async with runtime.cycle_lease() as cycle:
+        assert cycle.snapshot.revision == 8
+    await runtime.close()
+
+
+@pytest.mark.asyncio
+async def test_published_revision_updates_the_api_approval_store_ttl() -> None:
+    from tests.test_book_hitl_store import _book_proposal
+
+    old = _connection("paper-a", parameters={"initial_equity": "10000"})
+    initial = _document(old).model_copy(update={"hitl": HitlConfig(approval_ttl_minutes=60)})
+    runtime, repository, _, _ = await _build(initial)
+    changed = initial.model_copy(update={"hitl": HitlConfig(approval_ttl_minutes=10_080)})
+    pending = RuntimeConfigSnapshot(8, changed, NOW + timedelta(seconds=1), "pending", 7)
+    repository.snapshot = pending
+    candidate = await runtime.prepare_candidate(pending)
+
+    async with runtime.application_barrier():
+        await runtime.publish_candidate(candidate, pending)
+        await runtime.activate_applied(replace(pending, apply_status="applied", applied_revision=8))
+
+    approval = await runtime.approvals.create(
+        _book_proposal(config_revision=8),
+        created_at=datetime.now(UTC) - timedelta(hours=2),
+    )
+    assert await runtime.approvals.list_pending() == [approval]
+    await runtime.approvals.approve(approval.approval_id)
+    claimed = await runtime.approvals.claim_for_execution(approval.approval_id, current_revision=8)
+    assert claimed == approval.proposal
     await runtime.close()
 
 
@@ -764,7 +909,6 @@ async def test_published_revision_replaces_api_scheduler_with_its_new_runtime_sc
         update={
             "scheduler": SchedulerConfig(
                 enabled=True,
-                pairs=("ETH/USDT:USDT", "SOL/USDT:USDT"),
                 interval_minutes=90,
                 daily_summary_hour=13,
             ),
@@ -773,6 +917,9 @@ async def test_published_revision_replaces_api_scheduler_with_its_new_runtime_sc
                 max_rules=9,
                 ws_reconnect_max_s=17,
                 funding_rate_poll_interval_minutes=11,
+            ),
+            "execution": runtime.snapshot.document.execution.model_copy(
+                update={"pairs": ("ETH/USDT:USDT", "SOL/USDT:USDT")}
             ),
         }
     )
@@ -925,12 +1072,15 @@ async def test_mark_applied_failure_after_runtime_activation_returns_to_failed_o
 async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_failure(tmp_path, monkeypatch):
     """A real persisted failed revision is fail-closed and the next desired revision recovers without restart."""
     from api.routes.config import publish_pending_snapshot
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
     from cryptotrader.runtime_config.secrets import CredentialVault
 
     initial = _document(_connection("paper-a", parameters={"initial_equity": "10000"}))
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'runtime-lifecycle.db'}"
+    await migrate_workbench_schema(database_url)
     repository = RuntimeConfigRepository(
-        f"sqlite+aiosqlite:///{tmp_path / 'runtime-lifecycle.db'}",
+        database_url,
         CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode()),
         default_factory=lambda: initial,
     )
@@ -952,8 +1102,8 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
                 "applied",
                 2,
             )
-            assert runtime.cycle is candidate_cycle
-            assert runtime.sessions == {"paper-a": candidate_session}
+            assert runtime.cycle is None
+            assert runtime.sessions == {}
             assert initial_session.close_calls == 1
             raise RuntimeError("private final write failure")
         return await original_mark_applied(revision)
@@ -962,8 +1112,8 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
     async with runtime.application_barrier():
         pending = await repository.replace(first.revision, failed_document)
         candidate = await runtime.prepare_candidate(pending)
-        candidate_session = candidate.sessions["paper-a"]
-        candidate_cycle = candidate.cycle
+        assert candidate.sessions == {}
+        assert candidate.cycle is None
         with pytest.raises(Exception, match="Runtime configuration cannot be applied"):
             await publish_pending_snapshot(runtime, pending, None, candidate)
 
@@ -977,7 +1127,7 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
     assert runtime.sessions == {}
     assert runtime.cycle is None
     assert initial_session.close_calls == 1
-    assert candidate_session.close_calls == 1
+    assert len(adapter.sessions) == 1
     async with runtime.application_barrier():
         assert runtime.application_in_progress is True
 
@@ -989,7 +1139,8 @@ async def test_real_sqlite_runtime_recovers_in_process_after_final_apply_commit_
 
     stored = await repository.get_or_create()
     assert (applied.revision, stored.apply_status, stored.applied_revision) == (3, "applied", 3)
-    assert runtime.cycle is not None
+    assert runtime.cycle is None
+    await runtime.reload_for_cycle()
     assert set(runtime.sessions) == {"paper-a"}
     recovered_session = runtime.sessions["paper-a"]
     assert recovered_session.close_calls == 0
@@ -1271,7 +1422,7 @@ async def test_setup_runtime_activates_after_configuration_write():
     cycle = await runtime.reload_for_cycle()
 
     assert cycle is runtime.cycle
-    assert runtime.snapshot.setup_required is False
+    assert runtime.snapshot.operational is True
     assert set(runtime.sessions) == {"paper-a"}
     assert [connection.id for connection, _credentials in adapter.connect_calls] == ["paper-a"]
     await runtime.close()

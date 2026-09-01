@@ -22,10 +22,24 @@ class _CancellingRunner:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("origin", ["manual", "scheduled", "trigger"])
+async def test_cycle_persists_request_origin(origin):
+    simulation = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False)
+    cycle, _, _, journal, _ = _cycle(_snapshot(simulation))
+
+    outcome = await cycle.run(CycleRequest(PAIR, origin=origin))
+
+    record = await journal.get(outcome.cycle_id)
+    assert record.run.mode == "trading"
+    assert record.run.origin == origin
+
+
+@pytest.mark.asyncio
 async def test_component_failure_saves_one_empty_non_executing_cycle():
     simulation = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False)
     cycle, _, coordinator, journal, _ = _cycle(_snapshot(simulation))
     cycle.runner = _FailingRunner()
+    cycle.analysis.runner = cycle.runner
 
     outcome = await cycle.run(CycleRequest(PAIR))
 
@@ -42,6 +56,7 @@ async def test_cancellation_is_journaled_then_re_raised_without_execution():
     simulation = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=False)
     cycle, _, coordinator, journal, _ = _cycle(_snapshot(simulation))
     cycle.runner = _CancellingRunner()
+    cycle.analysis.runner = cycle.runner
 
     with pytest.raises(asyncio.CancelledError):
         await cycle.run(CycleRequest(PAIR))

@@ -1,34 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MetricsSummarySchema, RiskStatusSchema } from '@/types/api.schema';
-
-describe('Risk schema contract', () => {
-  it('parses meters, correlation groups, cooldowns, and blocks', () => {
-    const parsed = RiskStatusSchema.parse({
-      trade_count_hour: 2,
-      trade_count_day: 7,
-      circuit_breaker: { state: 'inactive', triggered_at: null, expires_at: null, reason: null },
-      thresholds: {
-        max_single_pct: 0.45,
-        max_total_exposure_pct: 0.8,
-        max_margin_used_pct: 0.35,
-        max_drawdown_pct: 0.12,
-      },
-      redis_available: true,
-      daily_loss_pct: 0.8,
-      drawdown_pct: 2.1,
-      total_exposure_pct: 42,
-      cvar_95: 3.4,
-      correlation_groups: [{ name: 'BTC-correlated', open: 1, pairs: ['BTC/USDT'] }],
-      cooldowns: [{ pair: 'BTC/USDT', until_seconds: 1680, kind: 'same-pair' }],
-      recent_blocks: [
-        { ts: '2026-04-24T04:32:00+00:00', cycle_id: 'cycle-1', rule: 'CooldownCheck', detail: 'active' },
-      ],
-    });
-    expect(parsed.correlation_groups).toHaveLength(1);
-    expect(parsed.cooldowns[0]?.kind).toBe('same-pair');
-  });
-});
+import { MetricsSummarySchema } from '@/types/api.schema';
 
 describe('Metrics schema contract', () => {
   it('parses the histogram and cost series', () => {

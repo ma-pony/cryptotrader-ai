@@ -1,4 +1,5 @@
 """APScheduler-based trading scheduler with interval and cron triggers."""
+# ruff: noqa: RUF001 -- Chinese operator messages retain Chinese punctuation.
 
 from __future__ import annotations
 
@@ -45,7 +46,7 @@ class Scheduler:
         trigger_engine: Any | None = None,
     ) -> None:
         self.config = config
-        self.pairs = tuple(Pair.parse(pair) for pair in config.pairs)
+        self.pairs = tuple(Pair.parse(pair) for pair in runtime.snapshot.document.execution.pairs)
         self.interval_minutes = config.interval_minutes
         self.daily_summary_hour = config.daily_summary_hour
         self._cycle_count = 0
@@ -91,7 +92,6 @@ class Scheduler:
             raise primary_failure
 
     async def _run_until_stopped(self) -> None:
-        self._require_active_cycle()
 
         # Register trading cycle job. Delay the first run by 15s so that:
         #   (a) async HTTP clients (OKX / data providers) finish their TLS
@@ -335,8 +335,7 @@ class Scheduler:
 
     async def run_once(self) -> None:
         """Reload once, then run every configured pair against that exact graph."""
-        cycle = self._require_active_cycle()
-        self.config_revision = cycle.snapshot.revision
+        self.config_revision = self.runtime.snapshot.revision
         await asyncio.gather(*(self._run_pair(pair.canonical()) for pair in self.pairs))
         self._cycle_count += 1
         for pair in self.pairs:
@@ -357,11 +356,6 @@ class Scheduler:
         except Exception:
             logger.info("Failed to write scheduler heartbeat", exc_info=True)
 
-    def _require_active_cycle(self) -> TradingCycle:
-        if self.runtime.cycle is None:
-            raise RuntimeError("runtime configuration is not active")
-        return self.runtime.cycle
-
     async def _run_pair(self, pair: str) -> None:
         from cryptotrader.tracing import set_trace_id
 
@@ -373,8 +367,7 @@ class Scheduler:
         self._status[pair]["last_run"] = datetime.now(UTC).isoformat()
         self._status[pair]["trace_id"] = trace_id
         try:
-            async with self.runtime.execution_lease(pair) as cycle:
-                await self._run_pair_locked(pair, cycle, trace_id)
+            await self._run_pair_locked(pair, trace_id)
         except Exception:
             # Config / Redis init failures must not propagate to gather() — the
             # cycle should continue with the remaining pairs. _run_pair_locked
@@ -383,19 +376,21 @@ class Scheduler:
             logger.warning("Scheduler setup failed for pair %s trace=%s", pair, trace_id)
             self._status[pair]["last_error"] = "cycle_failed"
 
-    async def _run_pair_locked(self, pair: str, cycle: TradingCycle, trace_id: str) -> None:
+    async def _run_pair_locked(self, pair: str, trace_id: str) -> None:
         # Spec 013 FR-203 / T021: bind canonical pair so every log line in this
         # cycle is greppable by ccxt symbol regardless of which node logs.
         _slog.bind(pair=pair, trace_id=trace_id).info("cycle_pair_start")
         try:
-            from cryptotrader.decision.models import CycleRequest
-
             cycle_timeout = 300
             try:
-                outcome = await asyncio.wait_for(
-                    cycle.run(CycleRequest(Pair.parse(pair))),
-                    timeout=cycle_timeout,
-                )
+                decision_id = await self.runtime.run_service.run_automatic(pair, "scheduled")
+                if decision_id is None:
+                    return
+                task = self.runtime.task_manager.get(decision_id)
+                outcome = await asyncio.wait_for(asyncio.shield(task.task), timeout=cycle_timeout)
+                if outcome is None:
+                    self._status[pair]["last_error"] = "cycle_failed"
+                    return
             except TimeoutError:
                 logger.error("Scheduler timed out after %ds for pair %s", cycle_timeout, pair)
                 self._status[pair]["last_error"] = "cycle_timeout"
@@ -423,29 +418,24 @@ class Scheduler:
     async def _emit_daily_summary(self) -> None:
         """Send a safe scheduler/book summary from the current Runtime snapshot."""
         try:
-            from cryptotrader.notifications import Notifier
+            from cryptotrader.alerts.models import BusinessAlertEvent
 
             config = self.runtime.snapshot.document
-            notifier = Notifier(
-                webhook_url=config.notifications.webhook_url,
-                enabled=config.notifications.enabled,
-                events=config.notifications.events,
-                webhook_timeout=config.notifications.webhook_timeout,
+            now = datetime.now(UTC)
+            enabled = sum(book.enabled for book in config.execution.books)
+            await self.runtime.alerts.record(
+                BusinessAlertEvent(
+                    event_key=f"daily_summary:{now.date().isoformat()}",
+                    type="daily_summary",
+                    occurred_at=now,
+                    message=(
+                        f"每日运行摘要：启用资金池 {enabled} 个，"
+                        f"关注交易对 {len(config.execution.pairs)} 个。详情请查看决策与账户账本。"
+                    ),
+                )
             )
-            summary = {
-                "date": datetime.now(UTC).strftime("%Y-%m-%d"),
-                "config_revision": self.runtime.snapshot.revision,
-                "enabled_books": [book.id for book in config.execution.books if book.enabled],
-                "pairs": {
-                    p: {
-                        "last_action": s.get("last_action", "none"),
-                        "risk_passed": s.get("risk_passed"),
-                        "last_error": s.get("last_error"),
-                    }
-                    for p, s in self._status.items()
-                },
-            }
-            await notifier.notify("daily_summary", summary)
+            if self.runtime.alert_owner is not None:
+                self.runtime.alert_owner.refresh()
         except Exception:
             logger.warning("Failed to emit daily summary")
 

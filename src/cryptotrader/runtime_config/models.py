@@ -10,10 +10,11 @@ from types import MappingProxyType
 from typing import Any, Literal
 from urllib.parse import urlparse
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
 
 from cryptotrader.execution.models import ExecutionBook  # noqa: TC001
 from cryptotrader.profiles.models import ComponentWeight, SignalProfile, validate_signal_profile
+from cryptotrader.signals.presentation import interval_delta
 from cryptotrader.venues.models import VenueConnection, _contains_secret_parameter_key
 
 
@@ -52,16 +53,19 @@ class _ParameterConfigModel(_FrozenConfigModel):
         return _thaw_parameters(value)
 
 
-class SystemConfig(_FrozenConfigModel):
-    active: bool = False
-
-
 class SecurityConfig(_FrozenConfigModel):
     enabled: bool = False
 
 
 class MarketDataConfig(_ParameterConfigModel):
     source_id: str = "default"
+    timeframe: str = "1h"
+
+    @field_validator("timeframe")
+    @classmethod
+    def validate_timeframe(cls, value):
+        interval_delta(value)
+        return value
 
 
 class LlmRetryConfig(_FrozenConfigModel):
@@ -112,7 +116,14 @@ class SignalConfig(_FrozenConfigModel):
     max_target_ratio: float
     atr_stop_multiplier: float
     reward_ratio: float
-    hitl_required: bool = False
+    evaluation_interval: str | None = None
+
+    @field_validator("evaluation_interval")
+    @classmethod
+    def validate_interval(cls, value):
+        if value is not None:
+            interval_delta(value)
+        return value
 
     def to_profile(self, revision: int) -> SignalProfile:
         return SignalProfile(
@@ -125,7 +136,6 @@ class SignalConfig(_FrozenConfigModel):
             max_target_ratio=self.max_target_ratio,
             atr_stop_multiplier=self.atr_stop_multiplier,
             reward_ratio=self.reward_ratio,
-            hitl_required=self.hitl_required,
         )
 
 
@@ -145,11 +155,22 @@ class RiskConfig(_FrozenConfigModel):
 
 
 class ExecutionConfig(_FrozenConfigModel):
+    pairs: tuple[str, ...] = ()
     connections: tuple[VenueConnection, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
     # This is deliberately a runtime-document switch rather than an adapter
     # setting: a live credential must never be enough to make writes possible.
     live_order_execution_enabled: bool = False
+
+    @field_validator("pairs")
+    @classmethod
+    def validate_pairs(cls, values):
+        from cryptotrader.pair import Pair
+
+        pairs = tuple(Pair.parse(value).canonical() for value in values)
+        if len(pairs) != len(set(pairs)):
+            raise ValueError("duplicate execution pair")
+        return pairs
 
     @model_validator(mode="before")
     @classmethod
@@ -203,8 +224,8 @@ class HitlConfig(_FrozenConfigModel):
 
 
 class SchedulerConfig(_FrozenConfigModel):
+    automation_enabled: bool = False
     enabled: bool = False
-    pairs: tuple[str, ...] = ()
     interval_minutes: int = 240
     daily_summary_hour: int = 0
 
@@ -220,7 +241,18 @@ class NotificationConfig(_FrozenConfigModel):
     webhook_url: str = ""
     enabled: bool = True
     webhook_timeout: int = 5
-    events: tuple[Literal["daily_summary"], ...] = ("daily_summary",)
+    events: tuple[
+        Literal[
+            "approval_pending",
+            "execution_failed",
+            "protection_failed",
+            "risk_adjusted",
+            "component_failed",
+            "connection_failed",
+            "daily_summary",
+        ],
+        ...,
+    ] = ("daily_summary",)
 
 
 class InfrastructureConfig(_FrozenConfigModel):
@@ -231,8 +263,11 @@ class ObservabilityConfig(_FrozenConfigModel):
     otlp_endpoint: str = ""
 
 
+class AccountsConfig(_FrozenConfigModel):
+    sync_interval_seconds: int = Field(default=60, ge=1, le=86400, strict=True)
+
+
 class RuntimeConfigDocument(_FrozenConfigModel):
-    system: SystemConfig
     security: SecurityConfig = Field(default_factory=SecurityConfig)
     market_data: MarketDataConfig
     llm: LlmConfig = Field(default_factory=LlmConfig)
@@ -240,6 +275,7 @@ class RuntimeConfigDocument(_FrozenConfigModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     execution: ExecutionConfig
     hitl: HitlConfig = Field(default_factory=HitlConfig)
+    accounts: AccountsConfig = Field(default_factory=AccountsConfig)
     scheduler: SchedulerConfig = Field(default_factory=SchedulerConfig)
     triggers: TriggerConfig = Field(default_factory=TriggerConfig)
     notifications: NotificationConfig = Field(default_factory=NotificationConfig)
@@ -261,12 +297,8 @@ class RuntimeConfigSnapshot:
             object.__setattr__(self, "applied_revision", self.revision)
 
     @property
-    def setup_required(self) -> bool:
-        return not self.operational
-
-    @property
     def operational(self) -> bool:
-        return self.document.system.active and self.apply_status == "applied" and self.applied_revision == self.revision
+        return self.apply_status == "applied" and self.applied_revision == self.revision
 
 
 def validate_runtime_document(
@@ -282,7 +314,7 @@ def validate_runtime_document(
     _validate_book_weights(document.execution.books)
     _validate_capital_scopes(document.execution.connections, document.execution.books)
     _validate_unique_enabled_membership(document.execution.books)
-    _validate_active_document(document, installed_market_source_ids)
+    _validate_capabilities(document, installed_market_source_ids)
 
 
 def _validate_connection_ids(connections: tuple[VenueConnection, ...], installed_adapter_ids: set[str]) -> None:
@@ -291,7 +323,11 @@ def _validate_connection_ids(connections: tuple[VenueConnection, ...], installed
         raise ValueError("duplicate venue connection id")
     missing = sorted({connection.adapter_id for connection in connections} - set(installed_adapter_ids))
     if missing:
-        raise ValueError(f"uninstalled adapter ids: {', '.join(missing)}")
+        raise ValueError(f"unregistered adapter ids: {', '.join(missing)}")
+    from cryptotrader.configuration.catalog import require_environment
+
+    for connection in connections:
+        require_environment(connection.adapter_id, connection.environment)
 
 
 def _validate_book_weights(books: tuple[ExecutionBook, ...]) -> None:
@@ -314,7 +350,8 @@ def _validate_book_weights(books: tuple[ExecutionBook, ...]) -> None:
 
 def _validate_capital_scopes(connections: tuple[VenueConnection, ...], books: tuple[ExecutionBook, ...]) -> None:
     by_id = {connection.id: connection for connection in connections}
-    simulated_environments = {"paper", "demo", "testnet"}
+    from cryptotrader.configuration.catalog import require_environment
+
     for book in books:
         for allocation in book.allocations:
             connection = by_id.get(allocation.connection_id)
@@ -322,7 +359,7 @@ def _validate_capital_scopes(connections: tuple[VenueConnection, ...], books: tu
                 raise ValueError(f"unknown connection_id: {allocation.connection_id}")
             if connection.canary_only:
                 raise ValueError(f"canary_only connection {connection.id} cannot be allocated to an execution book")
-            expected_scope = "simulated" if connection.environment in simulated_environments else "real"
+            expected_scope = require_environment(connection.adapter_id, connection.environment).capital_scope
             if book.capital_scope != expected_scope:
                 raise ValueError(
                     f"connection {connection.id} environment {connection.environment} is incompatible with "
@@ -343,26 +380,11 @@ def _validate_unique_enabled_membership(books: tuple[ExecutionBook, ...]) -> Non
             memberships.add(allocation.connection_id)
 
 
-def _validate_active_document(document: RuntimeConfigDocument, installed_market_source_ids: set[str]) -> None:
-    if not document.system.active:
-        return
+def _validate_capabilities(document: RuntimeConfigDocument, installed_market_source_ids: set[str]) -> None:
     if document.market_data.source_id not in installed_market_source_ids:
-        raise ValueError(f"uninstalled market source: {document.market_data.source_id}")
-    if not any(component.enabled for component in document.signals.components):
-        raise ValueError("active document requires an enabled signal component")
-    if not any(book.enabled for book in document.execution.books):
-        raise ValueError("active document requires an enabled execution book")
-    for connection in document.execution.connections:
-        if connection.enabled and connection.environment != "paper" and not connection.credential_ref:
-            raise ValueError(f"enabled {connection.environment} connection {connection.id} requires credential_ref")
-    if (
-        any(book.enabled for book in document.execution.books)
-        or document.scheduler.enabled
-        or document.triggers.enabled
-    ):
-        redis_url = document.infrastructure.redis_url.strip()
+        raise ValueError(f"unregistered market source: {document.market_data.source_id}")
+    redis_url = document.infrastructure.redis_url.strip()
+    if redis_url:
         parsed_redis_url = urlparse(redis_url)
         if parsed_redis_url.scheme not in {"redis", "rediss"} or not parsed_redis_url.hostname:
-            raise ValueError(
-                "active execution, scheduler, or triggers require infrastructure.redis_url using redis:// or rediss://"
-            )
+            raise ValueError("infrastructure.redis_url must use redis:// or rediss://")

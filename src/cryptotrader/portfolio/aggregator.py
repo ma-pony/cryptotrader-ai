@@ -6,7 +6,9 @@ import asyncio
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
+from cryptotrader.accounts.models import AccountSnapshot
 from cryptotrader.portfolio.models import BookPortfolioSnapshot, ConnectionPortfolioSnapshot
+from cryptotrader.venues.models import ConnectionPosition
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -22,6 +24,9 @@ class PortfolioReadError(RuntimeError):
 
 class PortfolioAggregator:
     """Read exactly one book's enabled connections and aggregate their values."""
+
+    def __init__(self, account_store=None):
+        self.account_store = account_store
 
     async def read(
         self,
@@ -57,7 +62,9 @@ class PortfolioAggregator:
         return BookPortfolioSnapshot(
             book_id=book.id,
             capital_scope=book.capital_scope,
-            total_equity=sum((connection.equity for connection in connections), Decimal("0")),
+            total_equity=None
+            if any(c.equity is None for c in connections)
+            else sum((connection.equity for connection in connections), Decimal("0")),
             total_signed_notional=sum(
                 (connection.position.signed_notional for connection in connections),
                 Decimal("0"),
@@ -65,23 +72,50 @@ class PortfolioAggregator:
             connections=connections,
         )
 
-    @staticmethod
     async def _read_connection(
+        self,
         connection_id: str,
         session: VenueSession,
         pair: Pair,
     ) -> ConnectionPortfolioSnapshot:
         read_failed = False
         try:
-            snapshot = await session.fetch_portfolio(pair)
+            snapshot = await session.fetch_account()
         except Exception:
             read_failed = True
         if read_failed:
             raise PortfolioReadError(f"failed to read portfolio for connection {connection_id}")
-        if not isinstance(snapshot, ConnectionPortfolioSnapshot):
+        if not isinstance(snapshot, AccountSnapshot):
             raise PortfolioReadError(f"failed to read portfolio for connection {connection_id}: invalid snapshot type")
         if snapshot.connection_id != connection_id:
             raise PortfolioReadError(
                 f"failed to read portfolio for connection {connection_id}: snapshot connection_id mismatch"
             )
-        return snapshot
+        if self.account_store is not None:
+            await self.account_store.ingest(snapshot)
+        currency = pair.settle or pair.quote
+        equity = snapshot.equity.amount if snapshot.equity.currency == currency else None
+        positions = [
+            item
+            for item in snapshot.positions
+            if item.instrument.pair == pair and item.instrument.market_type == pair.market_type
+        ]
+        if len(positions) > 1:
+            raise PortfolioReadError(f"failed to read portfolio for connection {connection_id}: ambiguous position")
+        if positions:
+            position = positions[0]
+            if position.signed_notional.currency != currency or position.signed_notional.amount is None:
+                quote = await session.fetch_quote(pair)
+                notional = position.signed_amount * quote.last
+            else:
+                notional = position.signed_notional.amount
+            projected = ConnectionPosition(pair, position.signed_amount, notional, position.entry_price)
+        else:
+            projected = ConnectionPosition(pair, Decimal("0"), Decimal("0"), None)
+        return ConnectionPortfolioSnapshot(
+            connection_id,
+            equity,
+            {item.currency: item.amount for item in snapshot.balances if item.amount is not None},
+            projected,
+            snapshot,
+        )

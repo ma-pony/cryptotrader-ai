@@ -12,7 +12,7 @@ import { Section } from '@/components/configuration/section';
 
 export type SystemSettingsValue = Pick<
   RuntimeDocument,
-  'security' | 'infrastructure' | 'notifications' | 'observability'
+  'security' | 'accounts' | 'infrastructure' | 'observability'
 >;
 export function SystemSettings({
   value,
@@ -38,6 +38,17 @@ export function SystemSettings({
         {secrets ? <RuntimeSecretField kind="api-access" state={secrets} /> : null}
       </Section>
       <Section title={t('forms.infrastructureTitle')}>
+        <NumberField
+          name="accounts.sync_interval_seconds"
+          label={t('forms.accountSyncInterval')}
+          help={t('forms.accountSyncIntervalHelp')}
+          min={1}
+          max={86400}
+          step={1}
+          value={value.accounts.sync_interval_seconds}
+          onChange={(sync_interval_seconds) => onChange({ accounts: { sync_interval_seconds } })}
+          error={errors['accounts.sync_interval_seconds']}
+        />
         <TextField
           name="infrastructure.redis_url"
           label={t('forms.redisUrl')}
@@ -53,33 +64,6 @@ export function SystemSettings({
           value={value.observability.otlp_endpoint}
           onChange={(otlp_endpoint) => onChange({ observability: { otlp_endpoint } })}
           error={errors['observability.otlp_endpoint']}
-        />
-      </Section>
-      <Section title={t('forms.notificationsTitle')} description={t('forms.notificationsHelp')}>
-        <BooleanField
-          name="notifications.enabled"
-          label={t('forms.notificationsEnabled')}
-          value={value.notifications.enabled}
-          onChange={(enabled) =>
-            onChange({ notifications: { ...value.notifications, enabled, events: enabled ? ['daily_summary'] : [] } })
-          }
-        />
-        <TextField
-          name="notifications.webhook_url"
-          label={t('forms.webhookUrl')}
-          type="url"
-          value={value.notifications.webhook_url}
-          onChange={(webhook_url) => onChange({ notifications: { ...value.notifications, webhook_url } })}
-          error={errors['notifications.webhook_url']}
-        />
-        <NumberField
-          name="notifications.webhook_timeout"
-          label={t('forms.webhookTimeout')}
-          min={1}
-          step={1}
-          value={value.notifications.webhook_timeout}
-          onChange={(webhook_timeout) => onChange({ notifications: { ...value.notifications, webhook_timeout } })}
-          error={errors['notifications.webhook_timeout']}
         />
       </Section>
     </div>

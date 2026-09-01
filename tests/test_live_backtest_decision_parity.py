@@ -22,7 +22,6 @@ from cryptotrader.runtime_config.models import (
     RuntimeConfigSnapshot,
     SignalComponentConfig,
     SignalConfig,
-    SystemConfig,
 )
 from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements, SignalContext
 from cryptotrader.signals.registry import SignalComponentRegistry
@@ -59,6 +58,9 @@ class _ProductionMarketSource:
 
     def requirements(self) -> DataRequirements:
         return DataRequirements()
+
+    async def read_candles(self, pair, timeframe, start, end, as_of):
+        return ()
 
     async def collect(self, pair, as_of, requirements) -> SignalContext:
         return SignalContext(
@@ -97,7 +99,6 @@ def _snapshot() -> RuntimeConfigSnapshot:
         runtime_document(
             connections=(paper,),
             books=(book,),
-            system=SystemConfig(active=True),
             infrastructure=InfrastructureConfig(redis_url="redis://runtime-test:6379/0"),
             market_data=MarketDataConfig(source_id="default", parameters={"timeframe": "1h", "limit": 20}),
             signals=SignalConfig(
@@ -113,7 +114,9 @@ def _snapshot() -> RuntimeConfigSnapshot:
 
 
 @pytest.mark.asyncio
-async def test_historical_paper_backtest_matches_production_cycle_target_and_one_hundred_percent_target(monkeypatch):
+async def test_historical_paper_backtest_matches_production_cycle_target_and_one_hundred_percent_target(
+    monkeypatch, tmp_path
+):
     snapshot = _snapshot()
     historical_component = _RecordingDeterministicComponent()
     production_component = _RecordingDeterministicComponent()
@@ -138,12 +141,28 @@ async def test_historical_paper_backtest_matches_production_cycle_target_and_one
         engine._candles = engine._candles_by_timeframe[engine.interval]
 
     monkeypatch.setattr(engine, "_fetch_historical_data", historical_bars)
+
+    def reject_redis(*_):
+        raise AssertionError("backtest cannot open Redis")
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", reject_redis)
     backtest = await engine.run()
     historical_record = backtest.cycle_records[0]
     historical_context = historical_component.contexts[0]
 
+    from cryptotrader.accounts.store import AccountStore
+    from tests.test_book_execution_ownership import StrictRedis
+
+    redis = StrictRedis()
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _: redis)
+    repository = _FrozenRepository(snapshot)
+    repository.database_url = f"sqlite+aiosqlite:///{tmp_path / 'parity.db'}"
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+    await migrate_workbench_schema(repository.database_url)
+    repository.account_store = AccountStore(repository.database_url)
     runtime = await build_runtime(
-        repository=_FrozenRepository(snapshot),
+        repository=repository,
         snapshot=snapshot,
         signal_registry=SignalComponentRegistry((production_component,)),
         venue_registry=VenueAdapterRegistry((PaperVenueAdapter(),)),
@@ -166,7 +185,30 @@ async def test_historical_paper_backtest_matches_production_cycle_target_and_one
     assert historical_context.current_price == production_context.current_price
     assert historical_context.atr == production_context.atr
     assert historical_context.snapshots == production_context.snapshots
-    assert historical_record.component_signals == production_record.component_signals
+    assert len(historical_record.component_signals) == len(production_record.component_signals) == 1
+    for historical_signal, production_signal in zip(
+        historical_record.component_signals, production_record.component_signals, strict=True
+    ):
+        assert historical_signal.component_id == production_signal.component_id == "fixture"
+        assert historical_signal.status == production_signal.status == "completed"
+        assert historical_signal.direction == production_signal.direction
+        assert historical_signal.confidence == production_signal.confidence
+        assert historical_signal.reasoning == production_signal.reasoning
+        assert historical_signal.details == production_signal.details
+        assert historical_signal.blocks == production_signal.blocks
+        historical_reference = historical_signal.evaluation_reference
+        production_reference = production_signal.evaluation_reference
+        assert historical_reference is not None
+        assert production_reference is not None
+        assert historical_reference.reference_time == production_reference.reference_time
+        assert historical_reference.reference_price == production_reference.reference_price
+        assert historical_reference.due_at == production_reference.due_at
+        assert historical_reference.interval == production_reference.interval == "1h"
+        assert historical_reference.market_source_id == "default"
+        assert production_reference.market_source_id == "default"
+        for signal in (historical_signal, production_signal):
+            assert type(signal.duration_ms) is int
+            assert signal.duration_ms >= 0
     assert historical_record.config_revision == production_record.config_revision == snapshot.revision
     assert (
         historical_record.book_results[0].portfolio_before.total_equity
@@ -178,3 +220,12 @@ async def test_historical_paper_backtest_matches_production_cycle_target_and_one
     assert proposal.risk.connection_weights == (Decimal("1.0"),)
     assert tuple(item.connection_id for item in proposal.risk.connection_targets) == ("backtest-paper",)
     assert proposal.risk.connection_targets[0].target_signed_notional == proposal.target_exposure * Decimal("10000")
+    production_proposal = production_record.book_results[0].proposal
+    assert production_proposal is not None
+    assert production_proposal.risk.connection_weights == proposal.risk.connection_weights
+    assert tuple(item.connection_id for item in production_proposal.risk.connection_targets) == ("production-paper",)
+    assert (
+        production_proposal.risk.connection_targets[0].target_signed_notional
+        == proposal.risk.connection_targets[0].target_signed_notional
+        == production_proposal.target_exposure * Decimal("10000")
+    )

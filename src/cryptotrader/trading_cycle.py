@@ -11,17 +11,21 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from cryptotrader.cycle_events import CycleEvent
+from cryptotrader.decision.analysis import AnalysisFailure, SignalAnalysisService
 from cryptotrader.decision.models import CycleOutcome, CycleRequest
+from cryptotrader.decision.service import configuration_summary
+from cryptotrader.execution_ownership import ExecutionOwnership
 from cryptotrader.hitl.store import ApprovalNotFound
 from cryptotrader.journal.models import (
     BookCycleResult,
     BookHitlSnapshot,
     BookPreparationFailure,
+    DecisionRun,
     MultiVenueCycleRecord,
 )
+from cryptotrader.risk.book_state import BookRiskStateStore
 from cryptotrader.risk.models import BookRiskRequest
 from cryptotrader.signals.models import DataRequirements
-from cryptotrader.signals.runner import ComponentRunError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -66,6 +70,8 @@ class TradingCycle:
         events,
         exit_requirement: DataRequirements | None = None,
         clock: Callable[[], datetime] | None = None,
+        ownership=None,
+        risk_states=None,
     ) -> None:
         self.snapshot = snapshot
         self.repository = repository
@@ -87,85 +93,168 @@ class TradingCycle:
         self.events = events
         self.exit_requirement = exit_requirement or DataRequirements()
         self.clock = clock or (lambda: datetime.now(UTC))
+        self.ownership = ownership or ExecutionOwnership(snapshot.document.infrastructure.redis_url)
+        self.risk_states = risk_states or BookRiskStateStore(getattr(repository, "account_store", None))
+        self.analysis = SignalAnalysisService(
+            market_source=market_source,
+            registry=registry,
+            runner=runner,
+            fusion=fusion,
+            decisions=decisions,
+            clock=self.clock,
+        )
 
     async def run(self, request: CycleRequest) -> CycleOutcome:
         snapshot = self.snapshot
-        if snapshot.setup_required:
-            raise RuntimeError("runtime configuration is not active")
-        document = snapshot.document
-        profile = document.signals.to_profile(snapshot.revision)
-        books = tuple(book for book in document.execution.books if book.enabled)
-        cycle_id = str(uuid4())
+        if not snapshot.operational:
+            raise RuntimeError("runtime configuration is not applied")
         created_at = self._now()
-
-        context: SignalContext | None = None
-        signals: tuple[ComponentSignal, ...] = ()
-        fused: FusedSignal | None = None
-        target: TargetPosition | None = None
-        created_approval_ids: list[str] = []
-        initial_record_saved = False
-        journal_write_attempted = False
-        durable_record: MultiVenueCycleRecord | None = None
+        cycle_id = request.decision_id or str(uuid4())
+        queued = MultiVenueCycleRecord(
+            cycle_id,
+            snapshot.revision,
+            snapshot.document.market_data.source_id,
+            (),
+            None,
+            None,
+            (),
+            "queued",
+            "not_started",
+            False,
+            created_at,
+            DecisionRun(
+                request.pair.canonical(), request.mode, request.origin, configuration_summary(snapshot), None, None
+            ),
+        )
+        if request.decision_id is None:
+            await self.journal.save(queued)
+        else:
+            queued = await self._required_record(request.decision_id)
+            if queued.cycle_status != "queued" or queued.config_revision != snapshot.revision:
+                raise ValueError("queued decision does not match the execution snapshot")
+            created_at = queued.created_at
+        running = replace(queued, cycle_status="running")
+        await self.journal.replace(running)
         cycle_scope = getattr(self.events, "cycle", None)
         event_scope = cycle_scope(cycle_id, snapshot.revision) if callable(cycle_scope) else nullcontext()
-        event_scope.__enter__()
-        try:
-            await self._publish(
-                "cycle_started",
-                cycle_id=cycle_id,
-                config_revision=snapshot.revision,
-                pair=request.pair.canonical(),
-            )
-            components = self.registry.enabled(profile)
-            requirements = DataRequirements.merge(
-                *(component.requirements() for component in components),
-                self.exit_requirement,
-            )
-            context = await self.market_source.collect(request.pair, created_at, requirements)
-            self._validate_context(context, request.pair, created_at)
-            await self._publish(
-                "context_ready",
-                cycle_id=cycle_id,
-                config_revision=snapshot.revision,
-                market_data_source_id=context.market_data_source_id,
-            )
-            signals = await self.runner.run(components, context)
-            fused = self.fusion.fuse(signals, profile.components)
-            await self._publish(
-                "fusion_completed",
-                cycle_id=cycle_id,
-                config_revision=snapshot.revision,
-                score=fused.score,
-            )
-            target = self.decisions.target_for(fused, profile)
-            plan = self.exits.build_plan(context, target, signals, fused, profile)
-            await self._publish(
-                "decision_created",
-                cycle_id=cycle_id,
-                config_revision=snapshot.revision,
-                side=target.side,
-                size_ratio=target.size_ratio,
-            )
-            prepared = await asyncio.gather(
-                *(
-                    self._prepare_book(
-                        book,
-                        request,
-                        context,
-                        plan,
-                        cycle_id=cycle_id,
-                        config_revision=snapshot.revision,
-                        created_at=created_at,
-                        created_approval_ids=created_approval_ids,
-                    )
-                    for book in books
+        with event_scope:
+            try:
+                await self._publish(
+                    "cycle_started", cycle_id=cycle_id, config_revision=snapshot.revision, pair=request.pair.canonical()
                 )
-            )
-            book_results = await self._execute_ready_books(
-                prepared,
-                request,
-                cycle_id=cycle_id,
-                config_revision=snapshot.revision,
+                result = await self.analysis.analyze(request.pair, snapshot, created_at)
+                if result.failure is not None:
+                    return await self.save_failed_analysis(result, request, created_at, running=running)
+                await self._publish(
+                    "context_ready",
+                    cycle_id=cycle_id,
+                    config_revision=snapshot.revision,
+                    market_data_source_id=result.context.market_data_source_id,
+                )
+                await self._publish(
+                    "fusion_completed",
+                    cycle_id=cycle_id,
+                    config_revision=snapshot.revision,
+                    score=result.fused_signal.score,
+                )
+                await self._publish(
+                    "decision_created",
+                    cycle_id=cycle_id,
+                    config_revision=snapshot.revision,
+                    side=result.target_position.side,
+                    size_ratio=result.target_position.size_ratio,
+                )
+                return await self.prepare_and_execute_books(result, request, created_at, running=running)
+            except asyncio.CancelledError:
+                current = await self.journal.get(cycle_id)
+                if current is not None and current.cycle_status in {"queued", "running"}:
+                    await self.journal.replace(
+                        replace(
+                            current,
+                            cycle_status="cancelled",
+                            run=replace(
+                                current.run,
+                                finished_at=self._now(),
+                                failure=AnalysisFailure(code="cancelled", stage="runtime", message="运行已取消。"),
+                            ),
+                        )
+                    )
+                raise
+            except Exception:
+                current = await self.journal.get(cycle_id)
+                if current is not None and current.cycle_status in {"queued", "running"}:
+                    await self.journal.replace(
+                        replace(
+                            current,
+                            cycle_status="cycle_failed",
+                            run=replace(
+                                current.run,
+                                finished_at=self._now(),
+                                failure=AnalysisFailure(
+                                    code="cycle_failed", stage="runtime", message="交易周期未完成。"
+                                ),
+                            ),
+                        )
+                    )
+                await self._publish(
+                    "cycle_failed", cycle_id=cycle_id, config_revision=snapshot.revision, status="cycle_failed"
+                )
+                raise
+
+    async def save_failed_analysis(self, result, request, created_at, *, running):
+        status = "component_failed" if result.failure.code == "component_failed" else "cycle_failed"
+        record = replace(
+            running,
+            component_signals=result.component_signals,
+            fused_signal=result.fused_signal,
+            target_position=result.target_position,
+            cycle_status=status,
+            run=replace(running.run, finished_at=self._now(), failure=result.failure),
+        )
+        await self.journal.replace(record)
+        await self._publish(
+            "cycle_failed", cycle_id=record.cycle_id, config_revision=record.config_revision, status=status
+        )
+        return self._outcome(record)
+
+    async def prepare_and_execute_books(self, result, request, created_at, *, running):
+        snapshot = self.snapshot
+        document = snapshot.document
+        profile = document.signals.to_profile(snapshot.revision)
+        books = tuple(
+            book
+            for book in document.execution.books
+            if book.enabled and (request.confirmed_book_ids is None or book.id in request.confirmed_book_ids)
+        )
+        cycle_id = running.cycle_id
+        context, signals, fused, target = (
+            result.context,
+            result.component_signals,
+            result.fused_signal,
+            result.target_position,
+        )
+        created_approval_ids = []
+        initial_record_saved = False
+        journal_write_attempted = False
+        durable_record = None
+        try:
+            plan = self.exits.build_plan(context, target, signals, fused, profile)
+            book_results = tuple(
+                await asyncio.gather(
+                    *(
+                        self._process_book(
+                            book,
+                            request,
+                            context,
+                            plan,
+                            cycle_id=cycle_id,
+                            config_revision=snapshot.revision,
+                            created_at=created_at,
+                            created_approval_ids=created_approval_ids,
+                        )
+                        for book in books
+                    )
+                )
             )
             record = self._record(
                 cycle_id=cycle_id,
@@ -176,9 +265,10 @@ class TradingCycle:
                 target=target,
                 book_results=book_results,
                 created_at=created_at,
+                run=replace(running.run, finished_at=self._now()),
             )
             journal_write_attempted = True
-            await self.journal.save(record)
+            await self.journal.replace(record)
             initial_record_saved = True
             durable_record = record
             await self._invalidate_unjournaled_approvals(
@@ -220,33 +310,6 @@ class TradingCycle:
                 status="cancelled",
             )
             raise
-        except ComponentRunError:
-            await self._invalidate_unjournaled_approvals(
-                cycle_id,
-                created_approval_ids,
-                durable_record=durable_record,
-                reconcile_ambiguous_write=journal_write_attempted,
-            )
-            if initial_record_saved:
-                record = await self._required_record(cycle_id)
-            else:
-                record = await self._record_or_save_empty(
-                    cycle_id,
-                    snapshot.revision,
-                    context.market_data_source_id if context is not None else document.market_data.source_id,
-                    (),
-                    None,
-                    None,
-                    created_at,
-                    "component_failed",
-                )
-            await self._publish(
-                "cycle_failed",
-                cycle_id=cycle_id,
-                config_revision=snapshot.revision,
-                status="component_failed",
-            )
-            return self._outcome(record)
         except Exception:
             await self._invalidate_unjournaled_approvals(
                 cycle_id,
@@ -274,10 +337,15 @@ class TradingCycle:
                 status="cycle_failed",
             )
             return self._outcome(record)
-        finally:
-            event_scope.__exit__(None, None, None)
 
     async def execute_approved(self, approval_id: str) -> CycleOutcome:
+        approval = await self.approvals.get(approval_id)
+        if approval is None:
+            raise LookupError("approval was not found")
+        async with self.ownership.book(approval.book_id):
+            return await self._execute_approved_locked(approval_id)
+
+    async def _execute_approved_locked(self, approval_id: str) -> CycleOutcome:
         approval = await self.approvals.get(approval_id)
         if approval is None:
             raise LookupError("approval was not found")
@@ -301,6 +369,19 @@ class TradingCycle:
         book = self._validated_execution_book(snapshot, approval.proposal)
         from cryptotrader.hitl.store import ApprovalInvalidated
 
+        valid = False
+        try:
+            portfolio = await self.portfolios.read(book, self.sessions, approval.proposal.pair)
+            state = await self.risk_states.update(book.id, tuple(c.account_snapshot for c in portfolio.connections))
+            valid = await self.planner.validate_frozen(book, approval.proposal, portfolio, state, self.sessions)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            valid = False
+        if not valid:
+            await self.approvals.invalidate(approval_id)
+            return self._outcome(await self._persist_approval_transition(record, original, "invalidated"))
+
         try:
             proposal = await self.approvals.claim_for_execution(
                 approval_id,
@@ -320,6 +401,20 @@ class TradingCycle:
         )
         replacement = await self._persist_book_transition(record, original, terminal)
         return self._outcome(replacement)
+
+    async def _process_book(self, book, request, context, plan, **kwargs):
+        from cryptotrader.cycle_lock import ExecutionLeaseUnavailableError
+
+        try:
+            async with self.ownership.book(book.id):
+                prepared = await self._prepare_book(book, request, context, plan, **kwargs)
+                if prepared.result.status != "ready":
+                    return prepared.result
+                return await self._execute_book(
+                    prepared, request, cycle_id=kwargs["cycle_id"], config_revision=kwargs["config_revision"]
+                )
+        except ExecutionLeaseUnavailableError:
+            return self._preparation_failure(book, request, kwargs["config_revision"], "portfolio")
 
     async def reject_approval(self, approval_id: str) -> CycleOutcome:
         existing = await self.approvals.get(approval_id)
@@ -346,14 +441,24 @@ class TradingCycle:
         created_approval_ids: list[str],
     ) -> _PreparedBook:
         try:
+            for allocation in book.allocations:
+                if allocation.enabled:
+                    instruments = await self.sessions[allocation.connection_id].list_instruments()
+                    if not any(
+                        i.pair == request.pair and i.market_type == request.pair.market_type and i.tradable
+                        for i in instruments
+                    ):
+                        raise ValueError("member does not support requested instrument")
             portfolio = await self.portfolios.read(book, self.sessions, request.pair)
+            state = await self.risk_states.update(book.id, tuple(c.account_snapshot for c in portfolio.connections))
         except asyncio.CancelledError:
             raise
         except Exception:
             return _PreparedBook(book, self._preparation_failure(book, request, config_revision, "portfolio"))
 
         try:
-            self.allocation_policy.allocate(plan.target, book, portfolio)
+            if portfolio.total_equity is not None or plan.target.signed_ratio == 0:
+                self.allocation_policy.allocate(plan.target, book, portfolio)
         except Exception:
             return _PreparedBook(
                 book,
@@ -370,7 +475,8 @@ class TradingCycle:
                 book,
                 portfolio,
                 Decimal(str(plan.target.signed_ratio)),
-                portfolio.total_equity,
+                request.pair,
+                state,
             )
         except Exception:
             return _PreparedBook(
@@ -391,6 +497,10 @@ class TradingCycle:
                 stop_loss=self._decimal(plan.stop_loss),
                 take_profit=self._decimal(plan.take_profit),
                 config_revision=config_revision,
+            )
+            proposal = replace(
+                proposal,
+                connection_plans=tuple(replace(item, decision_id=cycle_id) for item in proposal.connection_plans),
             )
         except asyncio.CancelledError:
             raise
@@ -489,32 +599,6 @@ class TradingCycle:
             ),
         )
 
-    async def _execute_ready_books(
-        self,
-        prepared: tuple[_PreparedBook, ...] | list[_PreparedBook],
-        request: CycleRequest,
-        *,
-        cycle_id: str,
-        config_revision: int,
-    ) -> tuple[BookCycleResult, ...]:
-        tasks: dict[int, asyncio.Task[BookCycleResult]] = {}
-        for index, item in enumerate(prepared):
-            if item.result.status == "ready":
-                tasks[index] = asyncio.create_task(
-                    self._execute_book(
-                        item,
-                        request,
-                        cycle_id=cycle_id,
-                        config_revision=config_revision,
-                    )
-                )
-        if tasks:
-            values = await asyncio.gather(*tasks.values())
-            completed = dict(zip(tasks, values, strict=True))
-        else:
-            completed = {}
-        return tuple(completed.get(index, item.result) for index, item in enumerate(prepared))
-
     async def _execute_book(
         self,
         prepared: _PreparedBook,
@@ -532,7 +616,7 @@ class TradingCycle:
             book_id=proposal.book_id,
             config_revision=config_revision,
         )
-        execution = await self.coordinator.execute(proposal)
+        execution = await self.coordinator.execute(proposal, frozen=approval_id is not None)
         for result in execution.connection_results:
             await self._publish(
                 "connection_execution_completed",
@@ -545,13 +629,17 @@ class TradingCycle:
             )
         portfolio_after = None
         portfolio_after_available = False
+        reconciliation_required = False
         try:
             portfolio_after = await self.portfolios.read(prepared.book, self.sessions, request.pair)
             portfolio_after_available = True
+            await self.risk_states.update(
+                prepared.book.id, tuple(p.account_snapshot for p in portfolio_after.connections)
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
-            pass
+            reconciliation_required = True
         terminal = BookCycleResult(
             prepared.result.book_id,
             prepared.result.capital_scope,
@@ -569,6 +657,7 @@ class TradingCycle:
             portfolio_after,
             portfolio_after_available,
             execution.status,
+            reconciliation_required,
         )
         await self._publish(
             "book_execution_completed",
@@ -576,7 +665,7 @@ class TradingCycle:
             book_id=proposal.book_id,
             config_revision=config_revision,
             status=execution.status,
-            requires_attention=execution.requires_attention,
+            requires_attention=execution.requires_attention or reconciliation_required,
         )
         return terminal
 
@@ -628,6 +717,7 @@ class TradingCycle:
             "not_started",
             False,
             created_at,
+            DecisionRun(None, "trading", "manual", configuration_summary(self.snapshot), self._now(), None, ("pair",)),
         )
         await self.journal.save(record)
         return record
@@ -645,6 +735,20 @@ class TradingCycle:
     ) -> MultiVenueCycleRecord:
         durable = await self.journal.get(cycle_id)
         if durable is not None:
+            if durable.cycle_status in {"queued", "running"}:
+                durable = replace(
+                    durable,
+                    component_signals=signals,
+                    fused_signal=fused,
+                    target_position=target,
+                    cycle_status=status,
+                    run=replace(
+                        durable.run,
+                        finished_at=self._now(),
+                        failure=AnalysisFailure(code=status, stage="execution", message="交易周期未完成。"),
+                    ),
+                )
+                await self.journal.replace(durable)
             return durable
         return await self._save_empty_record(
             cycle_id,
@@ -668,10 +772,14 @@ class TradingCycle:
         target: TargetPosition,
         book_results: tuple[BookCycleResult, ...],
         created_at: datetime,
+        run: DecisionRun,
     ) -> MultiVenueCycleRecord:
         status = TradingCycle._cycle_status(book_results)
         execution_status = TradingCycle._execution_status(book_results)
-        attention = any(item.execution is not None and item.execution.requires_attention for item in book_results)
+        attention = any(
+            item.reconciliation_required or (item.execution is not None and item.execution.requires_attention)
+            for item in book_results
+        )
         return MultiVenueCycleRecord(
             cycle_id,
             config_revision,
@@ -684,6 +792,7 @@ class TradingCycle:
             execution_status,
             attention,
             created_at,
+            run,
         )
 
     @staticmethod
@@ -733,7 +842,7 @@ class TradingCycle:
         return record
 
     def _validated_execution_book(self, snapshot, proposal):
-        if snapshot.setup_required or snapshot.revision != proposal.config_revision:
+        if not snapshot.operational or snapshot.revision != proposal.config_revision:
             raise ValueError("approved proposal revision is not active")
         book = next(
             (item for item in snapshot.document.execution.books if item.id == proposal.book_id and item.enabled),
@@ -852,7 +961,10 @@ class TradingCycle:
             book_results=books,
             cycle_status=TradingCycle._cycle_status(books),
             execution_status=TradingCycle._execution_status(books),
-            requires_attention=any(item.execution is not None and item.execution.requires_attention for item in books),
+            requires_attention=any(
+                item.reconciliation_required or (item.execution is not None and item.execution.requires_attention)
+                for item in books
+            ),
         )
 
     async def _publish(self, name: str, **data: Any) -> None:

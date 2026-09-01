@@ -1,267 +1,290 @@
-"""Backtest run / status / cancel / sessions endpoints (FR-805/FR-806)."""
+# ruff: noqa: RUF001 -- Chinese user-facing messages use Chinese punctuation.
+"""Durable research runs. GET reads history without invoking a model."""
 
-from __future__ import annotations
+from datetime import datetime
+from decimal import Decimal
+from typing import Literal
 
-import asyncio
-import logging
-import secrets
-from datetime import date, datetime
-from typing import Any, Literal
+from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict
 
-from fastapi import APIRouter, HTTPException, Request
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from cryptotrader._compat import UTC
-
-logger = logging.getLogger(__name__)
+from cryptotrader.accounts.store import payload
+from cryptotrader.backtest.comparison import compare_runs
+from cryptotrader.backtest.models import BacktestParams
+from cryptotrader.cycle_serialization import json_value
+from cryptotrader.decision.read_service import DecisionOut
+from cryptotrader.tasks import TaskManagerClosedError, TooManyTasksError
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
 
-# ── Request / response models ──
+class BacktestRunResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    status: str = "queued"
 
 
-class BacktestParams(BaseModel):
+class StrictOut(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    start: str
-    end: str
+
+type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
+
+
+class BacktestModelEvidenceOut(StrictOut):
+    requested_model: str | None
+    actual_model: str | None
+    actual_model_reason: str | None
+    prompt_hash: str
+    prompt_version: str
+    status: Literal["started", "completed", "failed"]
+
+
+class BacktestMetricsOut(StrictOut):
+    total_return_pct: float
+    sharpe: float
+    max_drawdown_pct: float
+    win_rate: float | None
+    fill_count: int
+    closed_trade_count: int
+
+
+class BacktestEquityPointOut(StrictOut):
+    ts: datetime
+    equity: float
+
+
+class BacktestDecisionSummaryOut(StrictOut):
+    cycle_id: str
+    status: str
+    config_revision: int
+
+
+class BacktestMoneyOut(StrictOut):
+    amount: Decimal | None
+    currency: str
+    unavailable_reason: str | None
+
+
+class BacktestInstrumentOut(StrictOut):
+    venue_symbol: str
+    pair: str | None
+    market_type: str
+    tradable: bool
+    reason: str | None
+
+
+class BacktestFillOut(StrictOut):
+    connection_id: str
+    venue_fill_id: str
+    venue_order_id: str
+    instrument: BacktestInstrumentOut
+    side: str
+    amount: Decimal
+    price: Decimal
+    occurred_at: datetime
+    fee: BacktestMoneyOut
+    realized_pnl: BacktestMoneyOut
+    source: Literal["platform", "local_calculation"]
+    client_order_id: str | None
+
+
+class BacktestClosedTradeOut(StrictOut):
     pair: str
-    initial_capital: float = Field(ge=100)
-    session_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
-
-    @model_validator(mode="after")
-    def _validate_dates(self) -> BacktestParams:
-        try:
-            start_d = date.fromisoformat(self.start)
-            end_d = date.fromisoformat(self.end)
-        except ValueError as exc:
-            raise ValueError(f"start/end must be YYYY-MM-DD: {exc}") from exc
-        if start_d >= end_d:
-            raise ValueError("start must be before end")
-        if end_d > datetime.now(UTC).date():
-            raise ValueError("end must be ≤ today")
-        return self
+    opened_at: datetime
+    closed_at: datetime
+    side: Literal["long", "short"]
+    gross_pnl: Decimal
+    fees: Decimal
+    funding: Decimal
+    net_pnl: Decimal
+    fill_ids: list[str]
 
 
-class BacktestRunResponse(BaseModel):
-    run_id: str
+class BacktestFundingOut(StrictOut):
+    connection_id: str
+    venue_entry_id: str
+    instrument: BacktestInstrumentOut
+    amount: BacktestMoneyOut
+    occurred_at: datetime
 
 
-class BacktestRunStatus(BaseModel):
+class BacktestResultOut(StrictOut):
+    metrics: BacktestMetricsOut
+    equity_curve: list[BacktestEquityPointOut]
+    decisions: list[DecisionOut | BacktestDecisionSummaryOut]
+    decision_ids: list[str]
+    fills: list[BacktestFillOut]
+    closed_trades: list[BacktestClosedTradeOut]
+    fees: Decimal
+    funding: Decimal
+    funding_entries: list[BacktestFundingOut]
+    cost_assumptions: dict[str, JsonValue]
+    unmodeled_costs: list[str]
+    data_coverage: dict[str, JsonValue]
+
+
+class BacktestRunOut(StrictOut):
     run_id: str
     params: BacktestParams
-    status: Literal["queued", "running", "completed", "failed", "canceled"]
+    config_snapshot: dict[str, JsonValue] | None
+    status: Literal["queued", "running", "completed", "failed", "canceled", "interrupted"]
     progress: float
-    started_at: str
-    finished_at: str | None = None
-    error: str | None = None
-    result: dict | None = None
+    started_at: datetime
+    finished_at: datetime | None
+    error: str | None
+    incomplete_fields: list[str]
+    model_evidence: list[BacktestModelEvidenceOut]
+    result: BacktestResultOut | None
 
 
-class BacktestCancelResponse(BaseModel):
-    canceled: bool
+class BacktestRunsOut(StrictOut):
+    items: list[BacktestRunOut]
+    limit: int
+    offset: int
+    has_next: bool
 
 
-class BacktestSessionsList(BaseModel):
-    sessions: list[str]
+class BacktestDifferenceOut(StrictOut):
+    left: JsonValue
+    right: JsonValue
 
 
-# ── In-process run registry ──
-
-_RUNS: dict[str, dict[str, Any]] = {}
-_TASKS: dict[str, asyncio.Task[Any]] = {}
+class BacktestDifferenceReasonOut(BacktestDifferenceOut):
+    reason: str
 
 
-def _new_run_id() -> str:
-    return f"run_{secrets.token_hex(4)}"
+class BacktestComparisonOut(StrictOut):
+    comparable: bool
+    condition_differences: dict[str, BacktestDifferenceOut | BacktestDifferenceReasonOut]
+    configuration_differences: dict[str, BacktestDifferenceOut | BacktestDifferenceReasonOut]
+    left: BacktestRunOut
+    right: BacktestRunOut
 
 
-def _spawn_run(
-    params: BacktestParams,
-    snapshot,
-    signal_registry,
-) -> str:
-    """Schedule a backtest in the background. Returns the new run_id."""
-    from cryptotrader.task_registry import add_background_task
-
-    run_id = _new_run_id()
-    _RUNS[run_id] = {
-        "run_id": run_id,
-        "params": params.model_dump(),
-        "status": "running",
-        "progress": 0.0,
-        "started_at": datetime.now(UTC).isoformat(),
-        "finished_at": None,
-        "error": None,
-        "result": None,
-    }
-
-    task = add_background_task(
-        _execute_backtest(
-            run_id,
-            params,
-            snapshot,
-            signal_registry,
-        ),
-        name=f"backtest:{run_id}",
-    )
-    _TASKS[run_id] = task
-    return run_id
+class BacktestCancelOut(StrictOut):
+    canceled: Literal[True]
 
 
-async def _execute_backtest(
-    run_id: str,
-    params: BacktestParams,
-    snapshot,
-    signal_registry,
-) -> None:
-    from cryptotrader.backtest.engine import BacktestEngine
-
-    def _on_progress(p: float) -> None:
-        # Clamp to (0, 1) — final 1.0 is set by the completed branch below.
-        _RUNS[run_id]["progress"] = max(0.0, min(0.99, p))
-
-    try:
-        engine = BacktestEngine(
-            pair=params.pair,
-            start=params.start,
-            end=params.end,
-            initial_capital=params.initial_capital,
-            progress_callback=_on_progress,
-            snapshot=snapshot,
-            signal_registry=signal_registry,
-        )
-        result = await engine.run()
-        # Persist named session so /api/backtest/sessions can list/load it.
-        if params.session_name:
-            try:
-                from cryptotrader.backtest import session as session_mod
-
-                session_mod.save_session(params.session_name, params.model_dump(), result)
-            except Exception:
-                logger.warning("Failed to save backtest session %s", params.session_name, exc_info=True)
-        _RUNS[run_id].update(
-            {
-                "status": "completed",
-                "progress": 1.0,
-                "finished_at": datetime.now(UTC).isoformat(),
-                "result": _result_to_dict(result),
-            }
-        )
-    except asyncio.CancelledError:
-        _RUNS[run_id].update(
-            {
-                "status": "canceled",
-                "finished_at": datetime.now(UTC).isoformat(),
-            }
-        )
-        raise
-    except Exception as exc:
-        error_type = type(exc).__name__
-        logger.error("Backtest %s failed: %s", run_id, error_type)
-        _RUNS[run_id].update(
-            {
-                "status": "failed",
-                "finished_at": datetime.now(UTC).isoformat(),
-                "error": f"backtest failed ({error_type})",
-            }
-        )
+def _service(request):
+    runtime = getattr(request.app.state, "runtime", None)
+    service = getattr(runtime, "backtest_service", None)
+    if service is None:
+        raise HTTPException(503, "研究服务未初始化")
+    return service
 
 
-def _result_to_dict(result: Any) -> dict:
-    """Translate cryptotrader BacktestResult → contract data-model §3 BacktestResult."""
-    from cryptotrader.cycle_serialization import json_value
+def _equity_curve_to_dicts(curve):
+    return [{"ts": point.time.isoformat(), "equity": float(point.equity)} for point in curve]
 
+
+def _result_to_dict(result):
     return json_value(
         {
             "metrics": {
-                "total_return_pct": float(getattr(result, "total_return", 0.0) or 0.0),
-                "sharpe": float(getattr(result, "sharpe_ratio", 0.0) or 0.0),
-                "max_drawdown_pct": float(getattr(result, "max_drawdown", 0.0) or 0.0),
-                "win_rate": float(getattr(result, "win_rate", 0.0) or 0.0),
-                "trades_count": len(getattr(result, "trades", []) or []),
+                "total_return_pct": result.total_return,
+                "sharpe": result.sharpe_ratio,
+                "max_drawdown_pct": result.max_drawdown,
+                "win_rate": result.win_rate,
+                "fill_count": result.fill_count,
+                "closed_trade_count": result.closed_trade_count,
             },
-            "equity_curve": _equity_curve_to_dicts(getattr(result, "equity_curve", []) or []),
-            "decisions": list(getattr(result, "decisions", []) or []),
+            "equity_curve": _equity_curve_to_dicts(result.equity_curve),
+            "decisions": result.decisions,
+            "decision_ids": result.decision_ids,
+            "fills": payload(result.fills),
+            "closed_trades": payload(result.closed_trades),
+            "fees": str(result.fees),
+            "funding": str(result.funding),
+            "funding_entries": payload(result.funding_entries),
+            "cost_assumptions": result.cost_assumptions,
+            "unmodeled_costs": result.unmodeled_costs,
+            "data_coverage": result.data_coverage,
         }
     )
 
 
-def _equity_curve_to_dicts(curve: list) -> list[dict]:
-    """BacktestResult.equity_curve is list[float]; synthesize ts."""
-    if not curve:
-        return []
-    base = datetime.now(UTC)
-    return [{"ts": base.isoformat(), "equity": float(v)} for v in curve]
+def _run_to_dict(run, *, include_result=True):
+    return {
+        "run_id": run.run_id,
+        "params": run.params.model_dump(mode="json"),
+        "config_snapshot": run.config_snapshot,
+        "status": run.status,
+        "progress": run.progress,
+        "started_at": run.started_at.isoformat(),
+        "finished_at": run.finished_at.isoformat() if run.finished_at else None,
+        "error": run.error,
+        "incomplete_fields": run.incomplete_fields,
+        "model_evidence": run.model_evidence,
+        "result": _result_to_dict(run.result) if include_result and run.result is not None else None,
+    }
 
 
-def _get_run(run_id: str) -> dict | None:
-    return _RUNS.get(run_id)
+async def _get(store, identity):
+    try:
+        run = await store.get(identity)
+    except ValueError as error:
+        if "migrate_backtest_snapshots" in str(error):
+            raise HTTPException(409, "存量回测快照尚未显式迁移，历史记录暂不可读。") from None
+        raise
+    if run is None:
+        raise HTTPException(404, "回测不存在")
+    return run
 
 
-def _cancel_run(run_id: str) -> bool:
-    """Cancel an in-flight run. Returns False if run is missing or already terminated."""
-    info = _RUNS.get(run_id)
-    if info is None:
-        return False
-    if info["status"] not in ("queued", "running"):
-        return False
-    task = _TASKS.get(run_id)
-    if task is not None and not task.done():
-        task.cancel()
-    info["status"] = "canceled"
-    info["finished_at"] = datetime.now(UTC).isoformat()
-    return True
-
-
-# ── Routes ──
-
-
-@router.post("/run", response_model=BacktestRunResponse, status_code=202)
-async def run_backtest(params: BacktestParams, request: Request) -> BacktestRunResponse:
-    runtime = getattr(request.app.state, "runtime", None)
-    if runtime is None:
-        raise HTTPException(status_code=503, detail="Trading runtime is not initialized")
-    run_id = _spawn_run(
-        params,
-        runtime.snapshot,
-        runtime.signal_registry,
-    )
+@router.post("/runs", response_model=BacktestRunResponse, status_code=202)
+async def run_backtest(params: BacktestParams, request: Request):
+    try:
+        run_id = await _service(request).start(params)
+    except LookupError as error:
+        raise HTTPException(404, str(error)) from None
+    except ValueError:
+        raise HTTPException(422, "配置快照不完整或不可复用，请检查已保存配置。") from None
+    except (TaskManagerClosedError, TooManyTasksError):
+        raise HTTPException(409, "任务暂时不可排入，请稍后重试。") from None
     return BacktestRunResponse(run_id=run_id)
 
 
-@router.get("/runs/{run_id}", response_model=BacktestRunStatus)
-async def get_backtest_run(run_id: str) -> BacktestRunStatus:
-    info = _get_run(run_id)
-    if info is None:
-        raise HTTPException(status_code=404, detail=f"Backtest run {run_id} not found")
-    return BacktestRunStatus(**info)
+@router.get("/runs", response_model=BacktestRunsOut)
+async def list_runs(request: Request, limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0)):
+    try:
+        rows = await _service(request).store.list(limit + 1, offset)
+    except ValueError as error:
+        if "migrate_backtest_snapshots" in str(error):
+            raise HTTPException(409, "存量回测快照尚未显式迁移，历史记录暂不可读。") from None
+        raise
+    return {
+        "items": [_run_to_dict(row, include_result=False) for row in rows[:limit]],
+        "limit": limit,
+        "offset": offset,
+        "has_next": len(rows) > limit,
+    }
 
 
-@router.delete("/runs/{run_id}", response_model=BacktestCancelResponse)
-async def cancel_backtest_run(run_id: str) -> BacktestCancelResponse:
-    # Try to cancel first — successful cancel implies the run exists and was active.
-    if _cancel_run(run_id):
-        return BacktestCancelResponse(canceled=True)
-    # Cancel failed: distinguish missing vs already-terminated.
-    if _get_run(run_id) is None:
-        raise HTTPException(status_code=404, detail=f"Backtest run {run_id} not found")
-    raise HTTPException(status_code=409, detail="Backtest run already terminated")
+@router.get("/runs/compare", response_model=BacktestComparisonOut)
+async def compare(request: Request, left: str, right: str):
+    store = _service(request).store
+    comparison = compare_runs(await _get(store, left), await _get(store, right))
+    return {
+        "comparable": comparison.comparable,
+        "condition_differences": comparison.condition_differences,
+        "configuration_differences": comparison.configuration_differences,
+        "left": _run_to_dict(comparison.left),
+        "right": _run_to_dict(comparison.right),
+    }
 
 
-@router.get("/sessions", response_model=BacktestSessionsList)
-async def list_backtest_sessions() -> BacktestSessionsList:
-    from cryptotrader.backtest import session as session_mod
-
-    return BacktestSessionsList(sessions=session_mod.list_sessions())
+@router.get("/runs/{run_id}", response_model=BacktestRunOut)
+async def get_backtest_run(run_id: str, request: Request):
+    return _run_to_dict(await _get(_service(request).store, run_id))
 
 
-@router.get("/sessions/{name}")
-async def get_backtest_session(name: str) -> dict:
-    from cryptotrader.backtest import session as session_mod
-
-    loaded = session_mod.load_session(name)
-    if loaded is None:
-        raise HTTPException(status_code=404, detail=f"Session {name} not found")
-    return loaded
+@router.delete("/runs/{run_id}", response_model=BacktestCancelOut)
+async def cancel_backtest_run(run_id: str, request: Request):
+    try:
+        await _service(request).cancel(run_id)
+    except LookupError:
+        raise HTTPException(404, "回测不存在") from None
+    except ValueError:
+        raise HTTPException(409, "回测已结束或正在停止") from None
+    return {"canceled": True}

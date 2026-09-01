@@ -72,6 +72,45 @@ class _Service:
         return self.result
 
 
+async def test_coordinator_preserves_actual_spot_frozen_receipts_after_price_change():
+    from cryptotrader.execution.coordinator import ExecutionCoordinator
+    from cryptotrader.execution.service import VenueExecutionService
+    from cryptotrader.venues.models import VenueQuote
+
+    original = _proposal()
+    proposal = replace(
+        original,
+        pair=SPOT_PAIR,
+        connection_plans=tuple(
+            replace(
+                plan,
+                pair=SPOT_PAIR,
+                market_type="spot",
+                capabilities=SPOT_CAPABILITIES,
+                quote=replace(plan.quote, pair=SPOT_PAIR),
+                stop_loss=None,
+                take_profit=None,
+            )
+            for plan in original.connection_plans
+        ),
+    )
+    services = {}
+    for plan in proposal.connection_plans:
+        session = _VenueSession("0", quote=VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("99"), Decimal("99")))
+        session.connection_id = plan.connection_id
+        session.connection = replace(session.connection, id=plan.connection_id)
+        session.capabilities = SPOT_CAPABILITIES
+        services[plan.connection_id] = VenueExecutionService(session, connection=session.connection)
+    result = await ExecutionCoordinator(services).execute(proposal, frozen=True)
+    assert result.status == "completed"
+    assert [item.orders[0].amount for item in result.connection_results] == [Decimal("0.4"), Decimal("0.6")]
+    assert all(item.quantity_frozen for item in result.connection_results)
+    assert [item.final_position.position.signed_amount for item in result.connection_results] == [
+        Decimal("0.4"),
+        Decimal("0.6"),
+    ]
+
+
 def _result(proposal: BookExecutionProposal, index: int, status: str) -> ConnectionExecutionResult:
     plan = proposal.connection_plans[index]
     if status == "failed":
@@ -201,7 +240,9 @@ async def test_coordinator_executes_real_spot_service_without_protection_path():
     session = _VenueSession("0", quote=quote)
     session.capabilities = SPOT_CAPABILITIES
 
-    result = await ExecutionCoordinator({"paper-a": VenueExecutionService(session)}).execute(proposal)
+    result = await ExecutionCoordinator(
+        {"paper-a": VenueExecutionService(session, connection=session.connection)}
+    ).execute(proposal)
 
     assert result.status == "completed"
     assert result.connection_results[0].protection is None
@@ -242,15 +283,17 @@ async def test_coordinator_audits_spot_protection_precondition_without_losing_si
     )
     protected = _VenueSession("0", protections=(external_oco,), quote=quote)
     protected.connection_id = "first"
+    protected.connection = replace(protected.connection, id="first")
     protected.capabilities = SPOT_CAPABILITIES
     sibling = _VenueSession("0", quote=quote)
     sibling.connection_id = "second"
+    sibling.connection = replace(sibling.connection, id="second")
     sibling.capabilities = SPOT_CAPABILITIES
 
     result = await ExecutionCoordinator(
         {
-            "first": VenueExecutionService(protected),
-            "second": VenueExecutionService(sibling),
+            "first": VenueExecutionService(protected, connection=protected.connection),
+            "second": VenueExecutionService(sibling, connection=sibling.connection),
         }
     ).execute(proposal)
 

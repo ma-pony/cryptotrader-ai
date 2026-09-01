@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from types import MappingProxyType
 
+from cryptotrader.accounts.models import AccountSnapshot
 from cryptotrader.venues.models import ConnectionPosition
 
 _CAPITAL_SCOPES = {"simulated", "real"}
@@ -17,14 +18,17 @@ class ConnectionPortfolioSnapshot:
     """Normalized equity and position for one venue connection."""
 
     connection_id: str
-    equity: Decimal
+    equity: Decimal | None
     balances: Mapping[str, Decimal]
     position: ConnectionPosition
+    account_snapshot: AccountSnapshot | None = None
 
     def __post_init__(self) -> None:
         if type(self.connection_id) is not str or not self.connection_id.strip():
             raise ValueError("connection_id must be a non-empty string")
-        if not isinstance(self.equity, Decimal) or not self.equity.is_finite() or self.equity < 0:
+        if self.equity is not None and (
+            not isinstance(self.equity, Decimal) or not self.equity.is_finite() or self.equity < 0
+        ):
             raise ValueError("equity must be a non-negative finite Decimal")
         if not isinstance(self.balances, Mapping):
             raise ValueError("balances must be a mapping")
@@ -38,6 +42,11 @@ class ConnectionPortfolioSnapshot:
         object.__setattr__(self, "balances", MappingProxyType(normalized))
         if not isinstance(self.position, ConnectionPosition):
             raise ValueError("position must be a ConnectionPosition")
+        if self.account_snapshot is not None and (
+            not isinstance(self.account_snapshot, AccountSnapshot)
+            or self.account_snapshot.connection_id != self.connection_id
+        ):
+            raise ValueError("account_snapshot must belong to the same connection")
 
 
 @dataclass(frozen=True)
@@ -46,7 +55,7 @@ class BookPortfolioSnapshot:
 
     book_id: str
     capital_scope: str
-    total_equity: Decimal
+    total_equity: Decimal | None
     total_signed_notional: Decimal
     connections: tuple[ConnectionPortfolioSnapshot, ...]
 
@@ -55,9 +64,11 @@ class BookPortfolioSnapshot:
             raise ValueError("book_id must be a non-empty string")
         if type(self.capital_scope) is not str or self.capital_scope not in _CAPITAL_SCOPES:
             raise ValueError("capital_scope must be simulated or real")
-        if not isinstance(self.total_equity, Decimal) or not self.total_equity.is_finite():
+        if self.total_equity is not None and (
+            not isinstance(self.total_equity, Decimal) or not self.total_equity.is_finite()
+        ):
             raise ValueError("total_equity must be a finite Decimal")
-        if self.total_equity < 0:
+        if self.total_equity is not None and self.total_equity < 0:
             raise ValueError("total_equity must be non-negative")
         if not isinstance(self.total_signed_notional, Decimal) or not self.total_signed_notional.is_finite():
             raise ValueError("total_signed_notional must be a finite Decimal")
@@ -68,7 +79,11 @@ class BookPortfolioSnapshot:
         connection_ids = tuple(connection.connection_id for connection in self.connections)
         if len(connection_ids) != len(set(connection_ids)):
             raise ValueError("connections must have unique connection IDs")
-        equity = sum((connection.equity for connection in self.connections), Decimal("0"))
+        equity = (
+            None
+            if any(c.equity is None for c in self.connections)
+            else sum((connection.equity for connection in self.connections), Decimal("0"))
+        )
         if self.total_equity != equity:
             raise ValueError("total_equity must equal the sum of connection equity")
         signed_notional = sum(

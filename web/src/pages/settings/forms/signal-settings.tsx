@@ -1,6 +1,12 @@
 import { useTranslation } from 'react-i18next';
 import type { ConfigurationCatalog, RuntimeDocument } from '@/types/api';
-import { BooleanField, ChoiceField, NumberField, type DomainFormProps } from '@/components/configuration/field';
+import {
+  BooleanField,
+  ChoiceField,
+  NumberField,
+  TextField,
+  type DomainFormProps,
+} from '@/components/configuration/field';
 import { ParameterFields, parameterDefaults } from '@/components/configuration/parameter-fields';
 import { Section } from '@/components/configuration/section';
 
@@ -9,7 +15,8 @@ export function SignalSettings({
   onChange,
   errors = {},
   catalog,
-}: DomainFormProps<RuntimeDocument['signals']> & { catalog: ConfigurationCatalog }) {
+  componentId,
+}: DomainFormProps<RuntimeDocument['signals']> & { catalog: ConfigurationCatalog; componentId?: string }) {
   const { t, i18n } = useTranslation('configuration');
   const locale = i18n.language.startsWith('zh') ? 'zh_CN' : 'en_US';
   const total = value.components
@@ -52,6 +59,7 @@ export function SignalSettings({
           {value.components.length === 0 ? <p className="configuration-help">{t('forms.noSignals')}</p> : null}
         </div>
         {value.components.map((component, index) => {
+          if (componentId && component.component_id !== componentId) return null;
           const plugin = catalog.components.find((item) => item.id === component.component_id);
           const label = plugin?.label[locale] ?? component.component_id;
           const update = (patch: Partial<typeof component>) =>
@@ -102,6 +110,14 @@ export function SignalSettings({
             </div>
           );
         })}
+        <TextField
+          name="signals.evaluation_interval"
+          label="信号评估周期"
+          help="留空跟随全局参考周期，例如 2h。修改仅影响后续运行。"
+          value={value.evaluation_interval ?? ''}
+          onChange={(interval) => onChange({ ...value, evaluation_interval: interval || null })}
+          error={errors['signals.evaluation_interval']}
+        />
         <NumberField
           name="signals.neutral_threshold"
           label={t('forms.neutral')}
@@ -137,13 +153,6 @@ export function SignalSettings({
           min={0.01}
           onChange={(reward_ratio) => onChange({ ...value, reward_ratio })}
           error={errors['signals.reward_ratio']}
-        />
-        <BooleanField
-          name="signals.hitl_required"
-          label={t('forms.signalHitl')}
-          help={t('forms.hitlHelp')}
-          value={value.hitl_required}
-          onChange={(hitl_required) => onChange({ ...value, hitl_required })}
         />
       </Section>
     </div>

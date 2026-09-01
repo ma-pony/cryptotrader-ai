@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from api.routes.response_dto import BookExecutionProposalOut, proposal_out
+from cryptotrader.cycle_lock import ExecutionLeaseUnavailableError
 from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.hitl.store import ApprovalStateError
 from cryptotrader.runtime import RuntimeLeaseUnavailableError
@@ -52,15 +53,12 @@ class HitlRespondOut(BaseModel):
 
 def _cycle(request: Request):
     runtime = _runtime(request)
-    cycle = runtime.cycle
-    if cycle is None:
-        raise HTTPException(status_code=503, detail="Trading runtime is not active")
-    return cycle
+    return runtime.approval_reader()
 
 
 def _runtime(request: Request):
     runtime = getattr(request.app.state, "runtime", None)
-    if runtime is None or runtime.cycle is None:
+    if runtime is None:
         raise HTTPException(status_code=503, detail="Trading runtime is not active")
     return runtime
 
@@ -81,13 +79,13 @@ def _response(record: BookApproval) -> ApprovalRequestOut:
 
 @router.get("/pending")
 async def list_pending(request: Request) -> list[ApprovalRequestOut]:
-    records = await _cycle(request).approvals.list_pending()
+    records = await _runtime(request).approvals.list_pending()
     return [_response(record) for record in records]
 
 
 @router.get("/{approval_id}")
 async def get_approval(approval_id: str, request: Request) -> ApprovalRequestOut:
-    record = await _cycle(request).approvals.get(approval_id)
+    record = await _runtime(request).approvals.get(approval_id)
     if record is None:
         raise HTTPException(status_code=404, detail="Approval request not found")
     return _response(record)
@@ -98,7 +96,7 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
     try:
         operation = asyncio.create_task(_respond_owned(_runtime(request), approval_id, body.decision))
         outcome, final_approval = await wait_for_owned(operation)
-    except RuntimeLeaseUnavailableError:
+    except (RuntimeLeaseUnavailableError, ExecutionLeaseUnavailableError):
         raise HTTPException(status_code=503, detail="Trading runtime is not active") from None
     except ApprovalStateError:
         raise HTTPException(status_code=409, detail="Approval state conflict") from None
@@ -119,16 +117,21 @@ async def respond_approval(approval_id: str, body: HitlRespondIn, request: Reque
 
 
 async def _respond_owned(runtime, approval_id: str, decision: Literal["approve", "reject"]):
-    current = runtime.cycle
-    if current is None:
-        raise RuntimeLeaseUnavailableError("Trading runtime is not active")
-    pending = await current.approvals.get(approval_id)
+    pending = await runtime.approvals.get(approval_id)
     if pending is None:
         raise LookupError("approval request does not exist")
     if decision == "reject":
+        current = runtime.approval_reader()
         outcome = await current.reject_approval(approval_id)
         return outcome, await current.approvals.get(approval_id)
-    async with runtime.execution_lease(str(pending.proposal.pair)) as cycle:
+    snapshot = await runtime.repository.get_or_create()
+    if snapshot.revision != pending.config_revision:
+        current = runtime.approval_reader()
+        outcome = await current.execute_approved(approval_id)
+        return outcome, await current.approvals.get(approval_id)
+    async with runtime.execution_lease(
+        str(pending.proposal.pair), expected_revision=pending.config_revision, confirmed_book_ids=(pending.book_id,)
+    ) as cycle:
         approval = await cycle.approvals.get(approval_id)
         if approval is None:
             raise LookupError("approval request does not exist")

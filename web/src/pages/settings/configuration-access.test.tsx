@@ -8,10 +8,12 @@ it('reports a committed credential with failed public refresh, clears the input 
   const h = workflowHarness('/settings/models');
   fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'pending-model' } });
   h.failReload(true);
-  fireEvent.change(screen.getByLabelText('LLM 网关密钥'), { target: { value: 'refresh-failure-marker' } });
+  fireEvent.change(screen.getByLabelText('模型网关密钥'), { target: { value: 'refresh-failure-marker' } });
   fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
   expect(await screen.findByText('凭据已保存，但未能刷新配置状态。请重新加载后再操作。')).toBeInTheDocument();
-  expect(screen.getByLabelText('LLM 网关密钥')).toHaveValue('');
+  expect(screen.queryByLabelText('模型网关密钥')).not.toBeInTheDocument();
+  expect(screen.getByText('凭据已配置')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '更换凭据' })).toBeDisabled();
   expect(screen.getByLabelText('综合分析模型')).toHaveValue('pending-model');
   expect(screen.getByRole('button', { name: '保存配置' })).toBeDisabled();
   h.failReload(false);
@@ -26,9 +28,9 @@ beforeEach(async () => {
   useSettingsStore.getState().reset();
 });
 
-it('unlocks a fresh settings visit with an existing memory-only key using GET only', async () => {
+it('unlocks with an existing memory-only key without modifying configuration or credentials', async () => {
   const h = workflowHarness('/settings/models', undefined, 'existing-access-marker');
-  const field = await screen.findByLabelText('已有 API 访问密钥');
+  const field = await screen.findByLabelText('已有接口访问密钥');
   expect(field).toHaveAttribute('type', 'password');
   fireEvent.change(field, { target: { value: 'existing-access-marker' } });
   fireEvent.click(screen.getByRole('button', { name: '解锁并重新加载' }));
@@ -36,7 +38,7 @@ it('unlocks a fresh settings visit with an existing memory-only key using GET on
   const reads = h.fetchMock.mock.calls.filter(([url]) => url.endsWith('/api/config'));
   expect(new Headers(reads[0]![1]?.headers).get('X-API-Key')).toBeNull();
   expect(new Headers(reads.at(-1)![1]?.headers).get('X-API-Key')).toBe('existing-access-marker');
-  expect(h.fetchMock.mock.calls.every(([, init]) => init?.method === 'GET')).toBe(true);
+  expect(h.fetchMock.mock.calls.every(([url, init]) => init?.method === 'GET' || url.endsWith('/test'))).toBe(true);
   expect(
     JSON.stringify(
       h.client
@@ -51,13 +53,13 @@ it('unlocks a fresh settings visit with an existing memory-only key using GET on
 
 it('clears a wrong key and allows a safe retry without rotating stored credentials', async () => {
   const h = workflowHarness('/settings/models', undefined, 'existing-access-marker');
-  fireEvent.change(await screen.findByLabelText('已有 API 访问密钥'), { target: { value: 'wrong-access-marker' } });
+  fireEvent.change(await screen.findByLabelText('已有接口访问密钥'), { target: { value: 'wrong-access-marker' } });
   fireEvent.click(screen.getByRole('button', { name: '解锁并重新加载' }));
-  await waitFor(() => expect(screen.getByLabelText('已有 API 访问密钥')).toHaveValue(''));
+  await waitFor(() => expect(screen.getByLabelText('已有接口访问密钥')).toHaveValue(''));
   expect(await screen.findByRole('alert')).toHaveTextContent('验证未通过，请检查访问密钥后重试。');
   expect(useSettingsStore.getState().apiKey).toBe('');
   expect(document.body.textContent).not.toContain('wrong-access-marker');
-  fireEvent.change(screen.getByLabelText('已有 API 访问密钥'), { target: { value: 'existing-access-marker' } });
+  fireEvent.change(screen.getByLabelText('已有接口访问密钥'), { target: { value: 'existing-access-marker' } });
   fireEvent.click(screen.getByRole('button', { name: '解锁并重新加载' }));
   await screen.findByLabelText('综合分析模型');
   expect(h.writes).toHaveLength(0);

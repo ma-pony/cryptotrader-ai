@@ -5,7 +5,13 @@ import { BooleanField, ChoiceField, NumberField, StringListField, TextField, typ
 import { AdvancedSection } from './section';
 
 export function isValidParameterNumber(value: unknown, field: ConfigurationField): boolean {
-  return typeof value === 'number' && Number.isFinite(value) &&
+  if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+  const quotient = field.step === null ? null : value / field.step;
+  // Division roundoff grows with the quotient's magnitude.
+  const stepMultiple =
+    quotient === null ||
+    Math.abs(quotient - Math.round(quotient)) < Number.EPSILON * 16 * Math.max(1, Math.abs(quotient));
+  return stepMultiple &&
     (field.minimum === null || value >= field.minimum) &&
     (field.maximum === null || value <= field.maximum) &&
     (field.exclusive_minimum === null || value > field.exclusive_minimum) &&

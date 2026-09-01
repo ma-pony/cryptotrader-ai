@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { ConfigurationCatalog, RuntimeDocument } from '@/types/api';
-import { ChoiceField, RuntimeSecretField, type SecretFieldState, type DomainFormProps } from '@/components/configuration/field';
+import { ChoiceField, TextField, RuntimeSecretField, type SecretFieldState, type DomainFormProps } from '@/components/configuration/field';
 import { ParameterFields, parameterDefaults } from '@/components/configuration/parameter-fields';
 import { Section } from '@/components/configuration/section';
 
@@ -27,9 +27,10 @@ export function MarketSettings({
           onChange={(source_id) => {
             if (source_id === value.source_id) return;
             const source = catalog.market_sources.find((item) => item.id === source_id);
-            if (source) onChange({ source_id, parameters: parameterDefaults(source.fields) });
+            if (source) onChange({ ...value, source_id, parameters: parameterDefaults(source.fields) });
           }}
         />
+        <TextField name="market_data.timeframe" label="全局参考周期" help="例如 1h。评估参考使用此周期的最新已收盘 K 线。" value={value.timeframe} onChange={(timeframe) => onChange({ ...value, timeframe })} error={errors['market_data.timeframe']} />
         {selected ? (
           <div className="configuration-wide">
             <p className="configuration-help">{selected.description[locale]}</p>

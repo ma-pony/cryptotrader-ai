@@ -24,7 +24,8 @@ class SignalComponent(Protocol):
 class ComponentExecutionError(RuntimeError):
     """一个已识别组件无法产生合法信号。"""
 
-    def __init__(self, component_id: str, cause: BaseException) -> None:
+    def __init__(self, component_id: str, cause: BaseException, *, stage: str = "evaluation") -> None:
         self.component_id = component_id
         self.cause = cause
+        self.stage = stage
         super().__init__(f"signal component {component_id} failed: {type(cause).__name__}: {cause}")

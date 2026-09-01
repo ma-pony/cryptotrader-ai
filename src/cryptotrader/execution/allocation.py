@@ -68,7 +68,11 @@ class WeightedAllocationPolicy:
         target_exposure: Decimal,
     ) -> ConnectionTarget:
         weight = Decimal(str(allocation.weight))
-        target_signed_notional = portfolio.total_equity * target_exposure * weight
+        if portfolio.total_equity is None and target_exposure != 0:
+            raise ValueError("unknown equity only permits a flat target")
+        target_signed_notional = (
+            Decimal("0") if target_exposure == 0 else portfolio.total_equity * target_exposure * weight
+        )
         return ConnectionTarget(
             book_id=book.id,
             connection_id=allocation.connection_id,

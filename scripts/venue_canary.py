@@ -18,15 +18,14 @@ from typing import Any
 from uuid import uuid4
 
 from cryptotrader.bootstrap import BootstrapSettings
-from cryptotrader.cycle_lock import execution_pair_lease
-from cryptotrader.execution_ownership import wait_for_owned
+from cryptotrader.configuration.catalog import require_environment
+from cryptotrader.execution_ownership import ExecutionOwnership, wait_for_owned
 from cryptotrader.pair import Pair
 from cryptotrader.runtime_config.repository import RuntimeConfigRepository
 from cryptotrader.runtime_config.secrets import CredentialVault
 from cryptotrader.venues.models import OrderIntent, ProtectionSpec
 from cryptotrader.venues.registry import VenueAdapterRegistry
 
-_SIMULATED_ENVIRONMENTS = frozenset({"paper", "demo", "testnet"})
 _REDACTED = "[redacted]"
 _CANARY_QUOTE_NOTIONAL = Decimal("10")
 _ORDER_POLL_SECONDS = 0.25
@@ -46,11 +45,11 @@ def parse_venue_canary_args(argv: list[str] | None = None) -> argparse.Namespace
     return parser.parse_args(argv)
 
 
-def require_simulated_environment(environment: str) -> None:
-    if environment == "live":
-        raise CanarySafetyError("live connections are read-only in canary")
-    if environment not in _SIMULATED_ENVIRONMENTS:
-        raise CanarySafetyError("canary requires an explicit paper, demo, or testnet connection")
+def require_simulated_environment(capital_scope: str) -> None:
+    if capital_scope == "real":
+        raise CanarySafetyError("real capital is read-only in canary")
+    if capital_scope != "simulated":
+        raise CanarySafetyError("canary requires a simulated capital scope")
 
 
 def require_canary_only(connection) -> None:
@@ -79,6 +78,7 @@ def safe_json(value: Any) -> str:
 
 async def _open_connection(connection, repository):
     registry = VenueAdapterRegistry.discover((connection.adapter_id,))
+    registry.bind_account_store(repository.account_store)
     credentials = None
     if connection.credential_ref is not None:
         credentials = await repository.reveal_credentials(connection.credential_ref)
@@ -444,10 +444,11 @@ def merge_audit_result(result: dict[str, Any], audit: dict[str, Any]) -> dict[st
 
 async def _main(options: argparse.Namespace) -> dict[str, Any]:
     snapshot, connection, repository = await _load_target(options.connection)
+    capital_scope = require_environment(connection.adapter_id, connection.environment).capital_scope
     pair = Pair.parse(options.pair)
     if options.live_read_only:
-        if connection.environment != "live":
-            raise CanarySafetyError("live read-only mode requires a live connection")
+        if capital_scope != "real":
+            raise CanarySafetyError("live read-only mode requires real capital scope")
         session = await _open_connection(connection, repository)
         try:
             portfolio = await session.fetch_portfolio(pair)
@@ -464,7 +465,7 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
             }
         finally:
             await wait_for_owned(asyncio.create_task(session.close()))
-    require_simulated_environment(connection.environment)
+    require_simulated_environment(capital_scope)
     if options.audit:
         session = await _open_connection(connection, repository)
         try:
@@ -478,7 +479,7 @@ async def _main(options: argparse.Namespace) -> dict[str, Any]:
     result: dict[str, Any] = {"status": "failed", "requires_attention": True}
     cancellation: asyncio.CancelledError | None = None
     try:
-        async with execution_pair_lease(snapshot.document.infrastructure.redis_url, pair.canonical()):
+        async with ExecutionOwnership(snapshot.document.infrastructure.redis_url).connection(connection.id):
             session = await _open_connection(connection, repository)
             result = await run_simulated_canary(session, pair)
     except asyncio.CancelledError as error:

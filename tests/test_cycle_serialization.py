@@ -53,6 +53,10 @@ print(json.dumps(json_value(decision), separators=(",", ":")))
         "hedge_mode": False,
         "reduce_only": True,
         "supported_order_types": ["limit", "market"],
+        "account_reads": [],
+        "exit_operations": [],
+        "history_initial_days": None,
+        "unknown_fields": [],
     }
 
 

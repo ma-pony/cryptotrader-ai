@@ -8,6 +8,7 @@ export type SaveBarProps = {
   applyStatus?: 'pending' | 'applied' | 'failed' | undefined;
   conflict?: boolean;
   loading?: boolean;
+  submit?: boolean;
   onSave: () => void;
   onDiscard: () => void;
   onReload?: () => void;
@@ -19,6 +20,7 @@ export function SaveBar({
   applyStatus,
   conflict,
   loading,
+  submit = false,
   onSave,
   onDiscard,
   onReload,
@@ -65,10 +67,10 @@ export function SaveBar({
           {t('forms.discard')}
         </button>
         <button
-          type="button"
+          type={submit ? 'submit' : 'button'}
           className="configuration-button configuration-primary"
           disabled={pending || conflict || !dirty}
-          onClick={onSave}
+          onClick={submit ? undefined : onSave}
         >
           {pending ? t('forms.saving') : t('forms.saveSection')}
         </button>

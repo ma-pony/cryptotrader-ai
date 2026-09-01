@@ -3,17 +3,40 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import dataclass
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import httpx
 
 from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import CACHE_DB
 
+if TYPE_CHECKING:
+    from decimal import Decimal
+
 # BTC+ETH combined share of total crypto market cap (approximate stable ratio)
 _BTC_ETH_MARKET_SHARE = 0.664
 # Fallback BTC dominance percentage when ETH market cap data is unavailable
 _BTC_DOMINANCE_FALLBACK = 56.0
+
+
+@dataclass(frozen=True)
+class HistoricalFundingSettlement:
+    """An explicitly supplied public settlement, never a daily average."""
+
+    id: str
+    pair: str
+    source_id: str
+    occurred_at: datetime
+    rate: Decimal
+    mark_price: Decimal
+
+    def __post_init__(self):
+        if not self.id or not self.source_id or self.occurred_at.utcoffset() is None:
+            raise ValueError("funding requires source identity and aware settlement time")
+        if not self.rate.is_finite() or not self.mark_price.is_finite() or self.mark_price <= 0:
+            raise ValueError("funding requires finite rate and positive mark price")
 
 
 def _ensure_tables():
@@ -252,7 +275,7 @@ async def fetch_fred_series(series_id: str, start_date: str, end_date: str, api_
     return cached
 
 
-def derive_news_events(candles: list[list], idx: int) -> list[str]:
+def derive_news_events(candles: list[list], idx: int, *, pair: str, timeframe: str) -> list[str]:
     """Derive key market events from recent price action and momentum.
 
     Returns factual event descriptions for the LLM to interpret.
@@ -279,13 +302,17 @@ def derive_news_events(candles: list[list], idx: int) -> list[str]:
 
     events = []
     if abs(ret_7d) > 0.10:
-        events.append(f"BTC {'surged' if ret_7d > 0 else 'crashed'} {ret_7d:.1%} in 7 days")
+        events.append(f"{pair} {'surged' if ret_7d > 0 else 'crashed'} {ret_7d:.1%} over 7 bars ({timeframe} each)")
     if abs(ret_14d) > 0.15:
-        events.append(f"BTC 14d move: {ret_14d:+.1%} ({'accelerating' if accelerating else 'decelerating'})")
+        events.append(
+            f"{pair} 14-bar ({timeframe}) move: {ret_14d:+.1%} ({'accelerating' if accelerating else 'decelerating'})"
+        )
     if today_vol > avg_vol * 2:
         events.append(f"Volatility spike: {today_vol:.2%} vs avg {avg_vol:.2%}")
     if accelerating and abs(ret_7d) > 0.05:
-        events.append(f"Momentum accelerating: 7d {ret_7d:+.1%} vs prior 7d {prior_7d_ret:+.1%}")
+        events.append(
+            f"{pair} momentum accelerating: 7 bars ({timeframe}) {ret_7d:+.1%} vs prior 7 bars {prior_7d_ret:+.1%}"
+        )
 
     return events
 

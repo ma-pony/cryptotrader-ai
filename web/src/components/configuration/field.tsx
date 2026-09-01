@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import type { ConfigurationDraft } from '@/types/api';
 import { useRuntimeSecrets } from '@/hooks/use-runtime-secrets';
 import { useRuntimeConfigConflict } from '@/hooks/runtime-config-conflict';
-import { ApiError } from '@/lib/api-client';
+import { CredentialPanel } from './credential-panel';
 
 export type FieldErrors = Record<string, string>;
 export type DomainFormProps<T> = {
@@ -213,7 +213,13 @@ export function focusFirstError(errors: FieldErrors, form?: HTMLFormElement) {
 
 export type SecretFieldState = { revision: number; configured: boolean; updatedAt: string | null };
 /** Write-only secret state never enters the shared document or mutation cache. */
-export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api-access' | 'news-provider'; state: SecretFieldState }) {
+export function RuntimeSecretField({
+  kind,
+  state,
+}: {
+  kind: 'llm-gateway' | 'api-access' | 'news-provider';
+  state: SecretFieldState;
+}) {
   const { t } = useTranslation('configuration');
   const writes = useRuntimeSecrets();
   const conflict = useRuntimeConfigConflict();
@@ -221,60 +227,88 @@ export function RuntimeSecretField({ kind, state }: { kind: 'llm-gateway' | 'api
   const [pending, setPending] = useState(false);
   const [saved, setSaved] = useState<{ revision: number; updated_at: string; savedNeedsReload: boolean }>();
   const [failed, setFailed] = useState(false);
+  const [editing, setEditing] = useState(false);
   const gateway = kind === 'llm-gateway';
   const news = kind === 'news-provider';
+  const configured = state.configured || Boolean(saved);
+  const title = t(news ? 'runtimeSecrets.news' : gateway ? 'runtimeSecrets.llm' : 'runtimeSecrets.api');
   return (
-    <div className="configuration-secret">
-      <TextField
-        name={`credential.${kind}`}
-        label={t(news ? 'runtimeSecrets.news' : gateway ? 'runtimeSecrets.llm' : 'runtimeSecrets.api')}
-        help={t(news ? 'runtimeSecrets.newsHint' : 'runtimeSecrets.hint')}
-        type="password"
-        value={token}
-        onChange={(next) => {
-          setToken(next);
+    <div className="space-y-3">
+      <CredentialPanel
+        title={title}
+        configured={configured}
+        updatedAt={saved?.updated_at ?? state.updatedAt}
+        editing={editing}
+        pending={pending}
+        disabled={pending || conflict}
+        onEdit={() => {
+          setToken('');
           setFailed(false);
+          setEditing(true);
         }}
-        error={failed ? t(conflict ? 'forms.accessWriteUnconfirmed' : 'forms.accessWriteFailed') : undefined}
-      />
-      <button
-        type="button"
-        className="configuration-button"
-        disabled={pending || conflict || !token.trim()}
-        onClick={() => {
-          setPending(true);
+        onCancel={() => {
+          setToken('');
           setFailed(false);
-          const write = news ? writes.writeNewsProvider : gateway ? writes.writeLlmGateway : writes.writeApiAccess;
-          void write(Math.max(state.revision, saved?.revision ?? 0), token)
-            .then((result) => {
-              setToken('');
-              setSaved(result);
-            })
-            .catch((error: unknown) => {
-              setFailed(true);
-              if (error instanceof ApiError) setToken('');
-            })
-            .finally(() => setPending(false));
+          setEditing(false);
         }}
       >
-        {pending
-          ? t('forms.saving')
-          : t(
-              news ? (state.configured || saved ? 'runtimeSecrets.rotateNews' : 'runtimeSecrets.saveNews') : gateway
-                ? state.configured || saved
-                  ? 'runtimeSecrets.rotateGateway'
-                  : 'runtimeSecrets.saveGateway'
-                : state.configured || saved
-                  ? 'runtimeSecrets.rotateApi'
-                  : 'runtimeSecrets.saveApi',
-            )}
-      </button>
-      <p role="status" className="configuration-help">
-        {conflict ? t('conflict') : saved || state.configured ? t('forms.accessConfigured') : t('forms.accessMissing')}
-        {saved?.updated_at || state.updatedAt ? ` · ${saved?.updated_at ?? state.updatedAt}` : ''}
-      </p>
+        <div role={failed ? 'alert' : undefined}>
+          <TextField
+            name={`credential.${kind}`}
+            label={title}
+            help={t(news ? 'runtimeSecrets.newsHint' : 'runtimeSecrets.hint')}
+            type="password"
+            value={token}
+            disabled={pending || conflict}
+            onChange={(next) => {
+              setToken(next);
+              setFailed(false);
+            }}
+            error={failed ? t(conflict ? 'forms.accessWriteUnconfirmed' : 'forms.accessWriteFailed') : undefined}
+          />
+        </div>
+        <button
+          type="button"
+          className="configuration-button"
+          disabled={pending || conflict || !token.trim()}
+          onClick={() => {
+            setPending(true);
+            setFailed(false);
+            const write = news ? writes.writeNewsProvider : gateway ? writes.writeLlmGateway : writes.writeApiAccess;
+            void write(Math.max(state.revision, saved?.revision ?? 0), token)
+              .then((result) => {
+                setToken('');
+                setSaved(result);
+                setEditing(false);
+              })
+              .catch(() => {
+                setFailed(true);
+                setToken('');
+              })
+              .finally(() => setPending(false));
+          }}
+        >
+          {pending
+            ? t('forms.saving')
+            : t(
+                news
+                  ? configured
+                    ? 'runtimeSecrets.rotateNews'
+                    : 'runtimeSecrets.saveNews'
+                  : gateway
+                    ? configured
+                      ? 'runtimeSecrets.rotateGateway'
+                      : 'runtimeSecrets.saveGateway'
+                    : configured
+                      ? 'runtimeSecrets.rotateApi'
+                      : 'runtimeSecrets.saveApi',
+              )}
+        </button>
+      </CredentialPanel>
       {saved?.savedNeedsReload && conflict ? (
-        <p role="alert" className="configuration-error">{t('forms.accessSavedNeedsReload')}</p>
+        <p role="alert" className="configuration-error">
+          {t('forms.accessSavedNeedsReload')}
+        </p>
       ) : null}
     </div>
   );

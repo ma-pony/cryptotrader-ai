@@ -23,7 +23,13 @@ async def test_ccxt_connection_check_reads_an_account_without_trade_side_effects
     fake_factory = FakeCcxtFactory("okx")
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     client = fake_factory.clients[-1]
     client.fetch_balance = AsyncMock(return_value={"total": {"USDT": "100"}})
@@ -44,7 +50,13 @@ async def test_ccxt_connection_check_hides_failed_account_read_payload():
     fake_factory = FakeCcxtFactory("okx")
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     client = fake_factory.clients[-1]
     client.fetch_balance = AsyncMock(side_effect=RuntimeError(marker))
@@ -69,7 +81,13 @@ async def test_ccxt_connection_check_classifies_authentication_failures_without_
     fake_factory = FakeCcxtFactory("okx")
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     client = fake_factory.clients[-1]
     client.fetch_balance = AsyncMock(side_effect=AuthenticationError(marker))
@@ -122,7 +140,13 @@ async def test_ccxt_error_boundary_does_not_expose_raw_exchange_message_or_cause
     adapter = OkxVenueAdapter(client_factory=fake_factory)
     session = await adapter.connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     async def fail_with_raw_response(*_args):
@@ -156,7 +180,13 @@ async def test_ccxt_rejects_simultaneous_nonzero_hedge_legs_before_flat_executio
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
         connection("dual", environment, adapter_id=adapter_id, credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     client = fake_factory.clients[-1]
     pair = Pair.parse("BTC/USDT:USDT")
@@ -188,7 +218,7 @@ async def test_ccxt_rejects_simultaneous_nonzero_hedge_legs_before_flat_executio
         capabilities=session.capabilities,
     )
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "failed"
     assert result.error_operation == "pre_read"
@@ -213,7 +243,13 @@ async def test_ccxt_keeps_one_nonzero_hedge_leg_supported(adapter_module, adapte
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
         connection("one-leg", environment, adapter_id=adapter_id, credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     position = await session.fetch_position(Pair.parse("BTC/USDT:USDT"))
@@ -229,9 +265,11 @@ async def test_ccxt_session_has_no_public_client_or_plaintext_credential_surface
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
         CredentialPayload(
-            api_key="visible-key",  # pragma: allowlist secret
-            secret="visible-secret",  # pragma: allowlist secret
-            passphrase="visible-passphrase",  # pragma: allowlist secret
+            values={
+                "api_key": "visible-key",  # pragma: allowlist secret
+                "secret": "visible-secret",  # pragma: allowlist secret
+                "passphrase": "visible-passphrase",  # pragma: allowlist secret
+            }
         ),
     )
 
@@ -249,9 +287,11 @@ async def test_precision_and_post_call_shape_failures_are_credential_safe_operat
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
         CredentialPayload(
-            api_key="visible-key",  # pragma: allowlist secret
-            secret="visible-secret",  # pragma: allowlist secret
-            passphrase="visible-passphrase",  # pragma: allowlist secret
+            values={
+                "api_key": "visible-key",  # pragma: allowlist secret
+                "secret": "visible-secret",  # pragma: allowlist secret
+                "passphrase": "visible-passphrase",  # pragma: allowlist secret
+            }
         ),
     )
     client = fake_factory.clients[-1]
@@ -283,7 +323,13 @@ async def test_failed_close_can_be_retried_and_successful_close_is_idempotent():
     fake_factory = FakeCcxtFactory("okx")
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     client = fake_factory.clients[-1]
     client.close_failures = 1
@@ -303,7 +349,13 @@ async def test_malformed_open_orders_top_level_shape_is_a_safe_operation_error()
     fake_factory = FakeCcxtFactory("okx")
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     async def malformed_open_orders(*_args):
@@ -332,7 +384,13 @@ async def test_inverse_contract_is_rejected_before_precision_or_configuration(
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
         connection("inverse", environment, adapter_id=adapter_id, credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     with pytest.raises(VenueOperationError, match="inverse contracts are unsupported"):
@@ -359,7 +417,13 @@ async def test_normalize_amount_round_trips_platform_units_back_to_safe_base_amo
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
         connection("normalize", environment, adapter_id=adapter_id, credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     normalized = await session.normalize_amount(Pair.parse("BTC/USDT:USDT"), Decimal("0.123456"))
@@ -375,7 +439,13 @@ async def test_normalize_amount_rejects_zero_unsafe_rounding_and_inverse_contrac
     fake_factory = FakeCcxtFactory("okx")
     session = await OkxVenueAdapter(client_factory=fake_factory).connect(
         connection("normalize", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     client = fake_factory.clients[-1]
 
@@ -412,7 +482,13 @@ async def test_margin_mode_and_leverage_are_configured_once_before_first_market_
             margin_mode="cross",
             leverage=7,
         ),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     intent = OrderIntent(Pair.parse("BTC/USDT:USDT"), "buy", Decimal("0.1"), "market", None, False)
 
@@ -453,7 +529,13 @@ async def test_portfolio_uses_account_equity_and_marks_spot_at_current_quote(
     adapter_class = getattr(importlib.import_module(adapter_module), adapter_name)
     session = await adapter_class(client_factory=fake_factory).connect(
         connection("portfolio", environment, adapter_id=adapter_id, credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     snapshot = await session.fetch_portfolio(Pair.parse("BTC/USDT"))

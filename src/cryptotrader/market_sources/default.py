@@ -7,8 +7,6 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from cryptotrader.agents._indicators import atr
-from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
-from cryptotrader.configuration.fields import LocalizedText
 from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
 from cryptotrader.data.market import clip_ohlcv_at
 from cryptotrader.data.snapshot import SnapshotAggregator
@@ -67,6 +65,9 @@ class DefaultMarketDataSource:
     def requirements(self) -> DataRequirements:
         return DataRequirements()
 
+    async def read_candles(self, pair, timeframe, start, end, as_of):
+        return await self.market.read_candles(pair.canonical(), self.market_adapter_id, timeframe, start, end, as_of)
+
     async def collect(
         self,
         pair: Pair,
@@ -114,16 +115,5 @@ class DefaultMarketDataSource:
         )
 
 
-@configured_factory(
-    PluginConfiguration(
-        id="default",
-        label=LocalizedText(zh_CN="默认市场数据", en_US="Default market data"),
-        description=LocalizedText(
-            zh_CN="采集公开市场、链上和宏观数据以构建交易上下文。",
-            en_US="Collects public market, on-chain, and macro data for the trading context.",
-        ),
-        parameter_model=DefaultMarketSourceParameters,
-    )
-)
 def create_source(config: MarketDataConfig, *, news_provider_key: str = "") -> DefaultMarketDataSource:
     return DefaultMarketDataSource(config, news_provider_key=news_provider_key)

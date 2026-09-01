@@ -2,31 +2,25 @@ import i18next from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
 import commonZh from '@/locales/zh-CN/common.json';
-import dashboardZh from '@/locales/zh-CN/dashboard.json';
 import decisionsZh from '@/locales/zh-CN/decisions.json';
-import backtestZh from '@/locales/zh-CN/backtest.json';
 import riskZh from '@/locales/zh-CN/risk.json';
 import metricsZh from '@/locales/zh-CN/metrics.json';
 import chatZh from '@/locales/zh-CN/chat.json';
 import marketZh from '@/locales/zh-CN/market.json';
 import memoryZh from '@/locales/zh-CN/memory.json';
 import schedulerZh from '@/locales/zh-CN/scheduler.json';
-import strategyZh from '@/locales/zh-CN/strategy.json';
 import configurationZh from '@/locales/zh-CN/configuration.json';
 import cyclesZh from '@/locales/zh-CN/cycles.json';
 import debateZh from '@/locales/zh-CN/debate.json';
 
 import commonEn from '@/locales/en-US/common.json';
-import dashboardEn from '@/locales/en-US/dashboard.json';
 import decisionsEn from '@/locales/en-US/decisions.json';
-import backtestEn from '@/locales/en-US/backtest.json';
 import riskEn from '@/locales/en-US/risk.json';
 import metricsEn from '@/locales/en-US/metrics.json';
 import chatEn from '@/locales/en-US/chat.json';
 import marketEn from '@/locales/en-US/market.json';
 import memoryEn from '@/locales/en-US/memory.json';
 import schedulerEn from '@/locales/en-US/scheduler.json';
-import strategyEn from '@/locales/en-US/strategy.json';
 import configurationEn from '@/locales/en-US/configuration.json';
 import cyclesEn from '@/locales/en-US/cycles.json';
 import debateEn from '@/locales/en-US/debate.json';
@@ -59,32 +53,26 @@ await i18next.use(initReactI18next).init({
   resources: {
     'zh-CN': {
       common: commonZh,
-      dashboard: dashboardZh,
       decisions: decisionsZh,
-      backtest: backtestZh,
       risk: riskZh,
       metrics: metricsZh,
       chat: chatZh,
       market: marketZh,
       memory: memoryZh,
       scheduler: schedulerZh,
-      strategy: strategyZh,
       configuration: configurationZh,
       cycles: cyclesZh,
       debate: debateZh,
     },
     'en-US': {
       common: commonEn,
-      dashboard: dashboardEn,
       decisions: decisionsEn,
-      backtest: backtestEn,
       risk: riskEn,
       metrics: metricsEn,
       chat: chatEn,
       market: marketEn,
       memory: memoryEn,
       scheduler: schedulerEn,
-      strategy: strategyEn,
       configuration: configurationEn,
       cycles: cyclesEn,
       debate: debateEn,
@@ -95,16 +83,13 @@ await i18next.use(initReactI18next).init({
   defaultNS: 'common',
   ns: [
     'common',
-    'dashboard',
     'decisions',
-    'backtest',
     'risk',
     'metrics',
     'chat',
     'market',
     'memory',
     'scheduler',
-    'strategy',
     'configuration',
     'cycles',
     'debate',

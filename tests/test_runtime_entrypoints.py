@@ -26,11 +26,11 @@ class _Repository:
 
 
 class _Registry:
-    def __init__(self, installed=()) -> None:
-        self._installed = frozenset(installed)
+    def __init__(self, registered=()) -> None:
+        self._registered = frozenset(registered)
 
-    def installed_ids(self):
-        return self._installed
+    def registered_ids(self):
+        return self._registered
 
 
 @pytest.mark.asyncio
@@ -79,9 +79,13 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
             Engine.instance = self
 
     cycle = Cycle()
+
+    async def automatic(pair, source):
+        return await cycle.run(CycleRequest(Pair.parse(pair), origin=source))
+
     document = active_document(
         triggers=TriggerConfig(enabled=True),
-        scheduler=SchedulerConfig(enabled=True, pairs=("BTC/USDT",)),
+        scheduler=SchedulerConfig(automation_enabled=True, enabled=True),
     )
     runtime = SimpleNamespace(
         snapshot=RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC)),
@@ -89,6 +93,7 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
         cycle=cycle,
         cycle_lease=static_cycle_lease(cycle),
         execution_lease=lambda _pair: static_cycle_lease(cycle)(),
+        run_service=SimpleNamespace(run_automatic=automatic),
     )
     application = SimpleNamespace(state=SimpleNamespace(runtime=runtime))
 
@@ -101,15 +106,17 @@ async def test_api_trigger_callback_reloads_and_runs_platform_independent_cycle(
     assert Engine.instance is not None
     await Engine.instance.callback("BTC/USDT", {"trigger_event_id": "event-1"})
 
-    assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT"))]
+    assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT"), origin="trigger")]
 
 
 @pytest.mark.asyncio
-async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lease() -> None:  # noqa: C901
-    """Changing either production source to a graph lease would run two cycles."""
+async def test_scheduler_and_api_trigger_wait_for_same_book_execution_lease(tmp_path) -> None:  # noqa: C901
+    """Both entrypoints retain application ownership while the cycle serializes its book."""
     from api import main
     from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
     from cryptotrader.decision.models import CycleOutcome, CycleRequest
+    from cryptotrader.execution_ownership import ExecutionOwnership
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.pair import Pair
     from cryptotrader.runtime import Runtime
     from cryptotrader.scheduler import Scheduler
@@ -121,10 +128,11 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
             self.release = asyncio.Event()
 
         async def run(self, request: CycleRequest) -> CycleOutcome:
-            self.requests.append(request)
-            self.entered.set()
-            await self.release.wait()
-            return CycleOutcome("shared-cycle", 9, None, (), "no_change", "not_started", False)
+            async with ExecutionOwnership("redis://strict-test").book("simulation"):
+                self.requests.append(request)
+                self.entered.set()
+                await self.release.wait()
+                return CycleOutcome("shared-cycle", 9, None, (), "no_change", "not_started", False)
 
     class Engine:
         instance = None
@@ -138,9 +146,11 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
         def __init__(self) -> None:
             self.values: dict[str, str] = {}
             self.close_count = 0
+            self.contended = asyncio.Event()
 
         async def try_acquire_strict_lock(self, key: str, owner: str, _ttl: int) -> bool:
             if key in self.values:
+                self.contended.set()
                 return False
             self.values[key] = owner
             return True
@@ -155,15 +165,13 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
             self.close_count += 1
 
     class Repository:
-        database_url = "sqlite+aiosqlite://"
-
         async def get_or_create(self):
             return snapshot
 
     cycle = Cycle()
     document = active_document(
         triggers=TriggerConfig(enabled=True),
-        scheduler=SchedulerConfig(enabled=True, pairs=("BTC/USDT:USDT",), interval_minutes=15),
+        scheduler=SchedulerConfig(automation_enabled=True, enabled=True, interval_minutes=15),
     )
     snapshot = RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC))
     document = document.model_copy(
@@ -171,9 +179,13 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
     )
     snapshot = RuntimeConfigSnapshot(9, document, datetime(2026, 8, 29, tzinfo=UTC))
     cycle.snapshot = snapshot
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'runtime-entrypoints.db'}"
+    await migrate_workbench_schema(database_url)
+    repository = Repository()
+    repository.database_url = database_url
     runtime = Runtime(
         snapshot=snapshot,
-        repository=Repository(),
+        repository=repository,
         cycle=cycle,
         sessions={},
         signal_registry=object(),
@@ -182,6 +194,11 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
     runtime._reload_for_cycle_locked = AsyncMock(return_value=cycle)
+    runtime.run_service._scope = AsyncMock(
+        return_value=SimpleNamespace(
+            pair="BTC/USDT:USDT", ready=True, books=(SimpleNamespace(book_id="simulation", eligible=True),)
+        )
+    )
     strict_redis = StrictRedisState()
     application = SimpleNamespace(state=SimpleNamespace(runtime=runtime))
     with (
@@ -195,13 +212,21 @@ async def test_scheduler_and_api_trigger_compete_for_one_canonical_execution_lea
         try:
             await asyncio.wait_for(cycle.entered.wait(), timeout=1)
             scheduler = Scheduler(document.scheduler, runtime)
-            await scheduler._run_pair("BTC/USDT:USDT")
+            scheduler_task = asyncio.create_task(scheduler._run_pair("BTC/USDT:USDT"))
+            await asyncio.wait_for(strict_redis.contended.wait(), timeout=1)
+            assert len(cycle.requests) == 1
         finally:
             cycle.release.set()
             await asyncio.wait_for(trigger_task, timeout=1)
+            await asyncio.wait_for(scheduler_task, timeout=1)
+            await runtime.task_manager.drain()
 
-    assert cycle.requests == [CycleRequest(Pair.parse("BTC/USDT:USDT"))]
-    assert scheduler.status["BTC/USDT:USDT"]["last_error"] == "cycle_failed"
+    assert len(cycle.requests) == 2
+    assert cycle.requests[0].pair == Pair.parse("BTC/USDT:USDT")
+    assert cycle.requests[0].origin == "trigger"
+    assert cycle.requests[0].confirmed_book_ids == ("simulation",)
+    assert cycle.requests[1].origin == "scheduled"
+    assert scheduler.status["BTC/USDT:USDT"]["last_error"] is None
     assert strict_redis.values == {}
     assert strict_redis.close_count == 2
 
@@ -211,7 +236,7 @@ async def test_api_scheduler_receives_fixed_config_and_runtime_owner() -> None:
     from api import main
 
     document = active_document(
-        scheduler=SchedulerConfig(enabled=True, pairs=("BTC/USDT",), interval_minutes=15),
+        scheduler=SchedulerConfig(automation_enabled=True, enabled=True, interval_minutes=15),
     )
     runtime = SimpleNamespace(
         snapshot=RuntimeConfigSnapshot(11, document, datetime(2026, 8, 29, tzinfo=UTC)),

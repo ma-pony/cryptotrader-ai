@@ -9,7 +9,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from cryptotrader.execution.models import BookExecutionProposal, ConnectionExecutionPlan
-from cryptotrader.risk.models import ConnectionRiskDecision, ConnectionRiskRequest
+from cryptotrader.risk.models import ConnectionRiskDecision, ConnectionRiskRequest, risk_increase
 from cryptotrader.venues.models import OpenVenueState, ProtectionSpec, VenueCapabilities, VenueQuote
 from cryptotrader.venues.protocol import VenueOperationError
 
@@ -56,6 +56,81 @@ class ExecutionPlanner:
     ) -> None:
         self._book_risk_gate = book_risk_gate
         self._connection_risk_gate = connection_risk_gate
+
+    async def validate_frozen(self, book, proposal, portfolio, state, sessions):  # noqa: C901 - ordered approval safety checks
+        """Recheck executable facts, never manufacture a replacement approval quantity."""
+        from cryptotrader.risk.models import BookRiskRequest
+
+        current = {p.connection_id: p for p in portfolio.connections}
+        values = {}
+        for plan in proposal.connection_plans:
+            session = sessions[plan.connection_id]
+            instruments = await session.list_instruments()
+            if not any(i.tradable and i.pair == plan.pair and i.market_type == plan.market_type for i in instruments):
+                return False
+            before = current[plan.connection_id]
+            if before.position.signed_amount != plan.current_signed_amount or session.capabilities != plan.capabilities:
+                return False
+            inputs = await self._read_preflight_inputs(plan, before, session, plan.pair)
+            if isinstance(inputs, _PreflightResult):
+                return False
+            if (
+                inputs.quote.pair != plan.pair
+                or inputs.state.position.pair != plan.pair
+                or inputs.state.position.signed_amount != before.position.signed_amount
+            ):
+                return False
+            if (
+                tuple(dict.fromkeys(pid for p in inputs.state.protections if p.active for pid in p.protection_ids))
+                != plan.old_protection_ids
+            ):
+                return False
+            if await session.normalize_amount(plan.pair, plan.amount) != plan.amount:
+                return False
+            if not self._quantity_available(before, plan.post_fill_signed_amount):
+                return False
+            quote = inputs.quote
+            price = quote.ask if plan.side == "buy" else quote.bid
+            if not self._valid_protection(
+                plan.pair, plan.post_fill_signed_amount, price, plan.capabilities, plan.stop_loss, plan.take_profit
+            ):
+                return False
+            values[plan.connection_id] = plan.post_fill_signed_amount * price
+        # A member with no order still consumes its actual current pool budget.
+        targets = {key: values.get(key, item.position.signed_notional) for key, item in current.items()}
+        request = BookRiskRequest(book, portfolio, proposal.requested_target_exposure, proposal.pair, state)
+        if self._book_risk_gate.validate_targets(request, targets):
+            return False
+        return all(
+            self._connection_risk_gate.evaluate_target(
+                current[plan.connection_id], targets[plan.connection_id], plan.capabilities
+            ).passed
+            for plan in proposal.connection_plans
+        )
+
+    @staticmethod
+    def _quantity_available(portfolio, target_amount):
+        current = portfolio.position.signed_amount
+        if current == 0 or (current * target_amount > 0 and abs(target_amount) >= abs(current)):
+            return True
+        reduction = abs(current) if current * target_amount <= 0 else abs(current) - abs(target_amount)
+        account = portfolio.account_snapshot
+        if account is None:
+            return False
+        pair = portfolio.position.pair
+        position = next(
+            (
+                p
+                for p in account.positions
+                if p.instrument.pair == pair and p.instrument.market_type == pair.market_type
+            ),
+            None,
+        )
+        return (
+            position is not None
+            and position.available_amount is not None
+            and abs(position.available_amount) >= reduction
+        )
 
     async def propose(
         self,
@@ -176,6 +251,8 @@ class ExecutionPlanner:
 
         signed_fill = amount if side == "buy" else -amount
         post_fill_amount = current_amount + signed_fill
+        if not self._quantity_available(portfolio, post_fill_amount):
+            return self._failure(target, portfolio, "available_position_quantity", unavailable=False)
         reduce_only = self._reduces_position(current_amount, target_amount)
         target_is_flat = target_amount == 0
         plan = self._build_connection_plan(
@@ -302,7 +379,7 @@ class ExecutionPlanner:
     ) -> _PreflightResult:
         current = portfolio.position.signed_notional
         desired = target.target_signed_notional
-        increase = desired != 0 and (current == 0 or current * desired < 0 or abs(desired) > abs(current))
+        increase = risk_increase(current, desired)
         logger.warning(
             "connection preflight failed",
             extra={"connection_id": target.connection_id, "operation": operation},

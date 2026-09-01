@@ -22,6 +22,7 @@ class _MarketOnlyGuard:
             "current_price",
             "atr",
             "snapshots",
+            "evaluation_reference",
         ):
             setattr(self, name, getattr(context, name))
         self.market_data_source_id = "fixture-market"

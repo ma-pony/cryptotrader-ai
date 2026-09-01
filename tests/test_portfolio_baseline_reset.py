@@ -19,7 +19,11 @@ from cryptotrader._compat import UTC
 
 @pytest.fixture
 def db_url(tmp_path):
-    return f"sqlite+aiosqlite:///{tmp_path}/portfolio.db"
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+    database_url = f"sqlite+aiosqlite:///{tmp_path}/portfolio.db"
+    asyncio.run(migrate_workbench_schema(database_url))
+    return database_url
 
 
 def _run(coro):

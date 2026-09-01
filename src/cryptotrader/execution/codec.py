@@ -75,13 +75,27 @@ def _capabilities_payload(value: VenueCapabilities) -> dict[str, Any]:
         "hedge_mode": value.hedge_mode,
         "reduce_only": value.reduce_only,
         "supported_order_types": sorted(value.supported_order_types),
+        "account_reads": sorted(value.account_reads),
+        "exit_operations": sorted(value.exit_operations),
+        "history_initial_days": value.history_initial_days,
+        "unknown_fields": sorted(value.unknown_fields),
     }
 
 
 def _capabilities_from_payload(value: Any) -> VenueCapabilities:
     payload = _object(
         value,
-        {"market_types", "native_protection", "hedge_mode", "reduce_only", "supported_order_types"},
+        {
+            "market_types",
+            "native_protection",
+            "hedge_mode",
+            "reduce_only",
+            "supported_order_types",
+            "account_reads",
+            "exit_operations",
+            "history_initial_days",
+            "unknown_fields",
+        },
     )
     market_types = _array(payload["market_types"])
     order_types = _array(payload["supported_order_types"])
@@ -91,6 +105,10 @@ def _capabilities_from_payload(value: Any) -> VenueCapabilities:
         payload["hedge_mode"],
         payload["reduce_only"],
         frozenset(order_types),
+        frozenset(_array(payload["account_reads"])),
+        frozenset(_array(payload["exit_operations"])),
+        payload["history_initial_days"],
+        frozenset(_array(payload["unknown_fields"])),
     )
 
 
@@ -118,7 +136,7 @@ def _target_payload(value: ConnectionTarget) -> dict[str, Any]:
         "book_id": value.book_id,
         "connection_id": value.connection_id,
         "weight": str(value.weight),
-        "book_equity": str(value.book_equity),
+        "book_equity": None if value.book_equity is None else str(value.book_equity),
         "target_exposure": str(value.target_exposure),
         "target_signed_notional": str(value.target_signed_notional),
     }
@@ -140,13 +158,15 @@ def _target_from_payload(value: Any) -> ConnectionTarget:
         payload["book_id"],
         payload["connection_id"],
         _decimal(payload["weight"]),
-        _decimal(payload["book_equity"]),
+        _optional_decimal(payload["book_equity"]),
         _decimal(payload["target_exposure"]),
         _decimal(payload["target_signed_notional"]),
     )
 
 
 def _book_risk_payload(value: BookRiskDecision) -> dict[str, Any]:
+    from cryptotrader.accounts.store import payload
+
     return {
         "passed": value.passed,
         "requested_target_exposure": str(value.requested_target_exposure),
@@ -156,6 +176,7 @@ def _book_risk_payload(value: BookRiskDecision) -> dict[str, Any]:
         "rejected_by": value.rejected_by,
         "reason": value.reason,
         "cap_source": value.cap_source,
+        "state": None if value.state is None else payload(value.state),
     }
 
 
@@ -171,8 +192,11 @@ def _book_risk_from_payload(value: Any) -> BookRiskDecision:
             "rejected_by",
             "reason",
             "cap_source",
+            "state",
         },
     )
+    from cryptotrader.risk.book_state import state_from_payload
+
     return BookRiskDecision(
         payload["passed"],
         _decimal(payload["requested_target_exposure"]),
@@ -182,6 +206,7 @@ def _book_risk_from_payload(value: Any) -> BookRiskDecision:
         payload["rejected_by"],
         payload["reason"],
         payload["cap_source"],
+        None if payload["state"] is None else state_from_payload(payload["state"]),
     )
 
 
@@ -234,6 +259,8 @@ def _plan_payload(value: ConnectionExecutionPlan) -> dict[str, Any]:
             "capabilities": _capabilities_payload(value.capabilities),
         }
     )
+    if value.decision_id is not None:
+        payload["decision_id"] = value.decision_id
     return payload
 
 
@@ -262,7 +289,8 @@ _PLAN_KEYS = {
 
 
 def _plan_from_payload(value: Any) -> ConnectionExecutionPlan:
-    payload = _object(value, _PLAN_KEYS)
+    keys = _PLAN_KEYS | ({"decision_id"} if isinstance(value, dict) and "decision_id" in value else set())
+    payload = _object(value, keys)
     return ConnectionExecutionPlan(
         payload["book_id"],
         payload["connection_id"],
@@ -284,6 +312,7 @@ def _plan_from_payload(value: Any) -> ConnectionExecutionPlan:
         _optional_decimal(payload["take_profit"]),
         tuple(_array(payload["old_protection_ids"])),
         _capabilities_from_payload(payload["capabilities"]),
+        payload.get("decision_id"),
     )
 
 
@@ -352,13 +381,25 @@ def _order_payload(value: NormalizedOrder) -> dict[str, Any]:
         "average_price": None if value.average_price is None else str(value.average_price),
         "status": value.status,
         "reduce_only": value.reduce_only,
+        "client_order_id": value.client_order_id,
     }
 
 
 def _order_from_payload(value: Any) -> NormalizedOrder:
     payload = _object(
         value,
-        {"id", "pair", "side", "order_type", "amount", "filled_amount", "average_price", "status", "reduce_only"},
+        {
+            "id",
+            "pair",
+            "side",
+            "order_type",
+            "amount",
+            "filled_amount",
+            "average_price",
+            "status",
+            "reduce_only",
+            "client_order_id",
+        },
     )
     return NormalizedOrder(
         payload["id"],
@@ -370,12 +411,14 @@ def _order_from_payload(value: Any) -> NormalizedOrder:
         _optional_decimal(payload["average_price"]),
         payload["status"],
         payload["reduce_only"],
+        payload["client_order_id"],
     )
 
 
 def _protection_payload(value: ProtectionState) -> dict[str, Any]:
     return {
         "protection_ids": list(value.protection_ids),
+        "actual_order_ids": list(value.actual_order_ids),
         "pair": _pair_payload(value.pair),
         "position_side": value.position_side,
         "amount": str(value.amount),
@@ -389,7 +432,17 @@ def _protection_payload(value: ProtectionState) -> dict[str, Any]:
 def _protection_from_payload(value: Any) -> ProtectionState:
     payload = _object(
         value,
-        {"protection_ids", "pair", "position_side", "amount", "stop_loss", "take_profit", "active", "triggered"},
+        {
+            "protection_ids",
+            "actual_order_ids",
+            "pair",
+            "position_side",
+            "amount",
+            "stop_loss",
+            "take_profit",
+            "active",
+            "triggered",
+        },
     )
     return ProtectionState(
         tuple(_array(payload["protection_ids"])),
@@ -400,6 +453,7 @@ def _protection_from_payload(value: Any) -> ProtectionState:
         _optional_decimal(payload["take_profit"]),
         payload["active"],
         payload["triggered"],
+        tuple(_array(payload["actual_order_ids"])),
     )
 
 
@@ -485,6 +539,7 @@ def _connection_result_payload(value: ConnectionExecutionResult) -> dict[str, An
         "requires_attention": value.requires_attention,
         "trace": list(value.trace),
         "execution_quote": None if value.execution_quote is None else _quote_payload(value.execution_quote),
+        "quantity_frozen": value.quantity_frozen,
     }
 
 
@@ -506,6 +561,7 @@ def _connection_result_from_payload(value: Any) -> ConnectionExecutionResult:
             "requires_attention",
             "trace",
             "execution_quote",
+            "quantity_frozen",
         },
     )
     return ConnectionExecutionResult(
@@ -523,6 +579,7 @@ def _connection_result_from_payload(value: Any) -> ConnectionExecutionResult:
         payload["requires_attention"],
         tuple(_array(payload["trace"])),
         None if payload["execution_quote"] is None else _quote_from_payload(payload["execution_quote"]),
+        payload["quantity_frozen"],
     )
 
 

@@ -12,14 +12,16 @@ from typing import Any, Literal
 
 from cryptotrader.pair import MarketType, Pair
 
-ConnectionEnvironment = Literal["paper", "demo", "testnet", "live"]
+ConnectionEnvironment = str
 MarginMode = Literal["isolated", "cross"]
 OrderSide = Literal["buy", "sell"]
 PositionSide = Literal["long", "short"]
 
-_ENVIRONMENTS = frozenset({"paper", "demo", "testnet", "live"})
 _MARGIN_MODES = frozenset({"isolated", "cross"})
 _MARKET_TYPES = frozenset({"spot", "swap", "future", "option"})
+ACCOUNT_READS = frozenset({"instruments", "balances", "positions", "orders", "fills", "funding"})
+EXIT_OPERATIONS = frozenset({"cancel_order", "cancel_protection", "close_position"})
+UNKNOWN_CAPABILITY_FIELDS = frozenset({"account_reads", "exit_operations", "history_initial_days"})
 _ALWAYS_SECRET_PARAMETER_TOKENS = frozenset({"secret", "password", "passphrase"})
 _EXACT_SECRET_PARAMETER_TOKENS = frozenset(
     {frozenset({"token"}), frozenset({"authorization"}), frozenset({"credential"}), frozenset({"credentials"})}
@@ -117,6 +119,26 @@ def _require_optional_decimal(value: object, field_name: str, *, positive: bool 
 
 
 @dataclass(frozen=True)
+class BacktestCostModel:
+    """Explicit replay assumptions, applied by Paper to actual fills."""
+
+    fee_rate: Decimal = Decimal("0.001")
+    slippage_bps: Decimal = Decimal("0")
+    funding_enabled: bool = True
+
+    def __post_init__(self) -> None:
+        for name in ("fee_rate", "slippage_bps"):
+            value = getattr(self, name)
+            _require_decimal(value, name)
+            if value < 0:
+                raise ValueError(f"{name} must not be negative")
+        if self.fee_rate >= 1 or self.slippage_bps >= 10000:
+            raise ValueError("cost assumption exceeds execution price")
+        if type(self.funding_enabled) is not bool:
+            raise ValueError("funding_enabled must be a boolean")
+
+
+@dataclass(frozen=True)
 class VenueConnection:
     """One independently auditable account on a venue adapter."""
 
@@ -131,14 +153,14 @@ class VenueConnection:
     canary_only: bool
     parameters: Mapping[str, Any] = field(default_factory=dict)
 
-    def __post_init__(self) -> None:  # noqa: C901 - one immutable connection contract validator
+    def __post_init__(self) -> None:
         if type(self.id) is not str or not self.id.strip():
             raise ValueError("venue connection id must be a non-empty string")
         if type(self.label) is not str or not self.label.strip():
             raise ValueError("venue connection label must be a non-empty string")
         if type(self.adapter_id) is not str or not self.adapter_id.strip():
             raise ValueError("venue connection id, label, and adapter_id must not be empty")
-        if type(self.environment) is not str or self.environment not in _ENVIRONMENTS:
+        if type(self.environment) is not str or not self.environment.strip():
             raise ValueError("unsupported connection environment")
         if type(self.enabled) is not bool:
             raise ValueError("enabled must be a boolean")
@@ -146,8 +168,6 @@ class VenueConnection:
             type(self.credential_ref) is not str or not self.credential_ref.strip()
         ):
             raise ValueError("credential_ref must be a non-empty string or None")
-        if self.environment == "live" and self.credential_ref is None:
-            raise ValueError("live connection requires credential_ref")
         if type(self.leverage) is not int or self.leverage < 1:
             raise ValueError("leverage must be at least one")
         if type(self.margin_mode) is not str or self.margin_mode not in _MARGIN_MODES:
@@ -166,10 +186,24 @@ class VenueCapabilities:
     hedge_mode: bool
     reduce_only: bool
     supported_order_types: frozenset[str]
+    account_reads: frozenset[str] = frozenset()
+    exit_operations: frozenset[str] = frozenset()
+    history_initial_days: int | None = None
+    unknown_fields: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if type(self.market_types) is not frozenset or not self.market_types <= _MARKET_TYPES:
             raise ValueError("market_types must be a frozenset of declared market types")
+        if type(self.account_reads) is not frozenset or not self.account_reads <= ACCOUNT_READS:
+            raise ValueError("unsupported account read capability")
+        if type(self.exit_operations) is not frozenset or not self.exit_operations <= EXIT_OPERATIONS:
+            raise ValueError("unsupported account exit capability")
+        if self.history_initial_days is not None and (
+            type(self.history_initial_days) is not int or self.history_initial_days <= 0
+        ):
+            raise ValueError("history_initial_days must be positive or None")
+        if type(self.unknown_fields) is not frozenset or not self.unknown_fields <= UNKNOWN_CAPABILITY_FIELDS:
+            raise ValueError("unsupported unknown capability field")
         if any(type(value) is not bool for value in (self.native_protection, self.hedge_mode, self.reduce_only)):
             raise ValueError("venue capability flags must be booleans")
         if type(self.supported_order_types) is not frozenset or not all(
@@ -335,8 +369,13 @@ class ProtectionState:
     take_profit: Decimal | None
     active: bool
     triggered: bool
+    actual_order_ids: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        if type(self.actual_order_ids) is not tuple or any(
+            not isinstance(value, str) or not value.strip() for value in self.actual_order_ids
+        ):
+            raise ValueError("actual_order_ids must contain only proven platform order IDs")
         if (
             type(self.protection_ids) is not tuple
             or not self.protection_ids

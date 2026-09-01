@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import traceback
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from decimal import Decimal
 
 import pytest
@@ -13,17 +13,19 @@ from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.pair import Pair
 from cryptotrader.portfolio.models import BookPortfolioSnapshot, ConnectionPortfolioSnapshot
 from cryptotrader.venues.models import ConnectionPosition
+from tests.fakes.account_session import account_from_portfolio
 
 PAIR = Pair.parse("BTC/USDT:USDT")
 
 
 def _portfolio(connection_id: str, equity: str, signed_notional: str = "0") -> ConnectionPortfolioSnapshot:
-    return ConnectionPortfolioSnapshot(
+    snapshot = ConnectionPortfolioSnapshot(
         connection_id=connection_id,
         equity=Decimal(equity),
         balances={"USDT": Decimal(equity)},
         position=ConnectionPosition(PAIR, Decimal("0"), Decimal(signed_notional), None),
     )
+    return replace(snapshot, account_snapshot=account_from_portfolio(snapshot))
 
 
 def _book(*allocations: ConnectionAllocation) -> ExecutionBook:
@@ -37,11 +39,11 @@ class _Session:
         self.error = error
         self.calls = 0
 
-    async def fetch_portfolio(self, pair: Pair):
+    async def fetch_account(self):
         self.calls += 1
         if self.error is not None:
             raise self.error
-        return self.snapshot
+        return account_from_portfolio(self.snapshot)
 
 
 async def test_aggregator_reads_enabled_book_connections_concurrently_and_preserves_configuration_order():
@@ -51,13 +53,13 @@ async def test_aggregator_reads_enabled_book_connections_concurrently_and_preser
     release = asyncio.Event()
 
     class ConcurrentSession(_Session):
-        async def fetch_portfolio(self, pair: Pair):
+        async def fetch_account(self):
             self.calls += 1
             started.add(self.connection_id)
             if started == {"bybit-testnet", "okx-demo"}:
                 release.set()
             await release.wait()
-            return self.snapshot
+            return account_from_portfolio(self.snapshot)
 
     bybit = ConcurrentSession(_portfolio("bybit-testnet", "20000", "-1000"))
     okx = ConcurrentSession(_portfolio("okx-demo", "10000", "2000"))
@@ -141,7 +143,7 @@ async def test_aggregator_redacts_venue_failure_and_cancels_and_reaps_sibling_re
     sibling_reaped = asyncio.Event()
 
     class BlockingSession(_Session):
-        async def fetch_portfolio(self, pair: Pair):
+        async def fetch_account(self):
             sibling_started.set()
             try:
                 await asyncio.Event().wait()
@@ -152,7 +154,7 @@ async def test_aggregator_redacts_venue_failure_and_cancels_and_reaps_sibling_re
                 sibling_reaped.set()
 
     class FailingSession(_Session):
-        async def fetch_portfolio(self, pair: Pair):
+        async def fetch_account(self):
             await sibling_started.wait()
             raise RuntimeError(credential_marker)
 

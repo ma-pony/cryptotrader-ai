@@ -1,7 +1,12 @@
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 
-import { MarketDataContext, type ConnectionStatus, type MarketDataContextValue, type TickerData } from './market-data-context';
+import {
+  MarketDataContext,
+  type ConnectionStatus,
+  type MarketDataContextValue,
+  type TickerData,
+} from './market-data-context';
 
 const WS_BASE = 'wss://stream.binance.com:9443/stream?streams=';
 const THROTTLE_MS = 200;
@@ -10,6 +15,7 @@ const RECONNECT_MAX_MS = 30_000;
 const MAX_RETRIES = 10;
 const DEGRADED_DELAY_MS = 3_000;
 const CONNECTED_DELAY_MS = 2_000;
+const MARKET_STREAM_ENABLED = import.meta.env.VITE_MARKET_STREAM_ENABLED !== 'false';
 
 interface MarketDataProviderProps {
   children: ReactNode;
@@ -74,7 +80,7 @@ export function MarketDataProvider({ children, createWebSocket }: MarketDataProv
 
   const connectWs = useCallback(() => {
     const subs = subscriptionsRef.current;
-    if (subs.size === 0) {
+    if (!MARKET_STREAM_ENABLED || subs.size === 0) {
       closeWs();
       clearAllTimers();
       setConnectionStatus('disconnected');

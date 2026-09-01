@@ -8,8 +8,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
+from cryptotrader.decision.analysis import AnalysisFailure
 from cryptotrader.decision.models import TargetPosition
 from cryptotrader.execution.models import BookExecutionProposal, BookExecutionResult
 from cryptotrader.pair import Pair
@@ -17,64 +18,10 @@ from cryptotrader.portfolio.models import BookPortfolioSnapshot
 from cryptotrader.signals.fusion import ComponentContribution, FusedSignal
 from cryptotrader.signals.models import ComponentSignal
 
-if TYPE_CHECKING:
-    from cryptotrader.decision.models import CycleStatus
-
-
-@dataclass(frozen=True)
-class TradingCycleRecord:
-    cycle_id: str
-    created_at: datetime
-    pair: str
-    status: CycleStatus
-    profile_revision: int
-    profile_snapshot: Mapping[str, Any]
-    context_summary: Mapping[str, Any]
-    component_signals: tuple[Mapping[str, Any], ...]
-    component_error: Mapping[str, str] | None
-    fused_signal: Mapping[str, Any] | None
-    target_position: Mapping[str, Any] | None
-    trade_plan: Mapping[str, Any] | None
-    hitl_result: Mapping[str, Any] | None
-    risk_result: Mapping[str, Any] | None
-    execution_result: Mapping[str, Any] | None
-    error: str | None = None
-
-    def __post_init__(self) -> None:
-        if not self.cycle_id:
-            raise ValueError("cycle_id is required")
-        if self.created_at.tzinfo is None:
-            raise ValueError("created_at must be timezone-aware")
-        if not self.pair:
-            raise ValueError("pair is required")
-        if self.profile_revision < 1:
-            raise ValueError("profile_revision must be positive")
-        if self.profile_snapshot.get("revision") != self.profile_revision:
-            raise ValueError("profile_snapshot revision must match profile_revision")
-        available = self.context_summary.get("available")
-        if available is True:
-            required = {
-                "pair",
-                "as_of",
-                "mode",
-                "market_data_source_id",
-                "market_type",
-                "equity",
-                "current_price",
-                "atr",
-                "current_position",
-                "portfolio",
-            }
-        elif available is False:
-            required = {"pair", "as_of", "mode", "market_data_source_id"}
-        else:
-            raise ValueError("context_summary must declare availability")
-        missing = required - self.context_summary.keys()
-        if missing:
-            raise ValueError(f"context_summary missing fields: {sorted(missing)}")
-
-
 MultiVenueCycleStatus = Literal[
+    "queued",
+    "running",
+    "interrupted",
     "ready",
     "awaiting_approval",
     "approval_rejected",
@@ -90,6 +37,9 @@ MultiVenueCycleStatus = Literal[
 MultiVenueExecutionStatus = Literal["not_started", "completed", "partial", "failed"]
 _CYCLE_STATUSES = frozenset(
     {
+        "queued",
+        "running",
+        "interrupted",
         "ready",
         "awaiting_approval",
         "approval_rejected",
@@ -106,7 +56,9 @@ _CYCLE_STATUSES = frozenset(
 _EXECUTION_STATUSES = frozenset({"not_started", "completed", "partial", "failed"})
 _BOOK_CYCLE_STATUSES = frozenset({"ready", "awaiting_approval", "approval_rejected", "completed", "partial", "failed"})
 _HITL_STATUSES = frozenset({"not_required", "pending", "rejected", "invalidated", "executed"})
-_EMPTY_BOOK_CYCLE_STATUSES = frozenset({"no_change", "component_failed", "cycle_failed", "cancelled"})
+_EMPTY_BOOK_CYCLE_STATUSES = frozenset(
+    {"no_change", "component_failed", "cycle_failed", "cancelled", "queued", "running", "interrupted"}
+)
 _PREPARATION_STAGES = frozenset({"portfolio", "allocation", "risk", "planning"})
 
 
@@ -146,6 +98,12 @@ def _strict_signal(signal: ComponentSignal) -> ComponentSignal:
         signal.confidence,
         signal.reasoning,
         _freeze_detail(signal.details),
+        blocks=signal.blocks,
+        evaluation_reference=signal.evaluation_reference,
+        status=signal.status,
+        duration_ms=signal.duration_ms,
+        usage=signal.usage,
+        cost=signal.cost,
     )
 
 
@@ -217,8 +175,13 @@ class BookCycleResult:
     portfolio_after: BookPortfolioSnapshot | None
     portfolio_after_available: bool | None
     status: Literal["ready", "awaiting_approval", "approval_rejected", "completed", "partial", "failed"]
+    reconciliation_required: bool | None = False
 
     def __post_init__(self) -> None:
+        if self.reconciliation_required is not None and type(self.reconciliation_required) is not bool:
+            raise ValueError("reconciliation_required must be a bool or None")
+        if self.reconciliation_required is True and self.execution is None:
+            raise ValueError("reconciliation requires an actual execution result")
         self._validate_identity()
         self._validate_proposal()
         if self.portfolio_before is not None:
@@ -265,6 +228,13 @@ class BookCycleResult:
     def _validate_before_closure(self) -> None:
         assert self.proposal is not None
         assert self.portfolio_before is not None
+        if (
+            not self.proposal.risk.passed
+            and self.proposal.risk.rejected_by == "incomplete_account"
+            and not self.proposal.risk.connection_targets
+            and not self.proposal.connection_plans
+        ):
+            return
         expected_ids = tuple(target.connection_id for target in self.proposal.risk.connection_targets)
         actual_ids = tuple(item.connection_id for item in self.portfolio_before.connections)
         if actual_ids != expected_ids:
@@ -381,6 +351,32 @@ class BookCycleResult:
 
 
 @dataclass(frozen=True)
+class DecisionRun:
+    """Immutable input identity plus explicitly transitioned lifecycle metadata."""
+
+    pair: str | None
+    mode: Literal["analysis", "trading", "backtest"]
+    origin: Literal["manual", "scheduled", "trigger", "backtest"] | None
+    config_snapshot: Mapping[str, Any]
+    finished_at: datetime | None
+    failure: AnalysisFailure | None
+    incomplete_fields: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        if self.pair is not None:
+            Pair.parse(self.pair)
+        if self.mode not in {"analysis", "trading", "backtest"}:
+            raise ValueError("invalid decision mode")
+        if self.origin not in {None, "manual", "scheduled", "trigger", "backtest"}:
+            raise ValueError("invalid decision origin")
+        if self.finished_at is not None and self.finished_at.utcoffset() is None:
+            raise ValueError("finished_at must be timezone-aware")
+        object.__setattr__(self, "config_snapshot", _freeze_detail(self.config_snapshot))
+        if self.failure is not None and not isinstance(self.failure, AnalysisFailure):
+            raise ValueError("failure must be structured")
+
+
+@dataclass(frozen=True)
 class MultiVenueCycleRecord:
     """新主链的一次平台无关信号与逐资金池执行审计。"""
 
@@ -395,12 +391,19 @@ class MultiVenueCycleRecord:
     execution_status: MultiVenueExecutionStatus
     requires_attention: bool
     created_at: datetime
+    run: DecisionRun
 
     def __post_init__(self) -> None:
         self._validate_identity()
         self._validate_signals()
         self._validate_results()
         self._validate_status()
+        if not isinstance(self.run, DecisionRun):
+            raise ValueError("run metadata is required")
+        if self.run.mode == "analysis" and self.book_results:
+            raise ValueError("analysis cannot contain execution books")
+        if self.cycle_status in {"queued", "running"} and self.run.finished_at is not None:
+            raise ValueError("unfinished run cannot have finished_at")
 
     def _validate_identity(self) -> None:
         if type(self.cycle_id) is not str or not self.cycle_id.strip():
@@ -431,11 +434,14 @@ class MultiVenueCycleRecord:
             type(self.target_position.size_ratio) is not float or not math.isfinite(self.target_position.size_ratio)
         ):
             raise ValueError("target_position size_ratio must be an exact finite float")
-        if (self.target_position is None) != (self.fused_signal is None):
+        if (self.target_position is None) != (self.fused_signal is None) and not (
+            self.fused_signal is not None and self.run.failure is not None and self.run.failure.stage == "target"
+        ):
             raise ValueError("target_position and fused_signal must exist together")
         if self.fused_signal is not None:
             self._validate_fusion_math(component_ids)
-            self._validate_target_direction()
+            if self.target_position is not None:
+                self._validate_target_direction()
 
     def _validate_fusion_math(self, component_ids: tuple[str, ...]) -> None:
         assert self.fused_signal is not None
@@ -529,13 +535,16 @@ class MultiVenueCycleRecord:
         if self.execution_status != expected_execution:
             raise ValueError("execution_status must be derived from book states")
         expected_attention = any(
-            item.execution is not None and item.execution.requires_attention for item in self.book_results
+            item.reconciliation_required is not False
+            or (item.execution is not None and item.execution.requires_attention)
+            for item in self.book_results
         )
         if self.requires_attention != expected_attention:
-            raise ValueError("requires_attention must equal the OR of execution results")
+            raise ValueError("requires_attention must include execution and reconciliation results")
 
     def _validate_empty_book_status(self) -> None:
-        if self.cycle_status not in _EMPTY_BOOK_CYCLE_STATUSES:
+        analysis_terminal = self.run.mode == "analysis" and self.cycle_status in {"completed", "failed"}
+        if self.cycle_status not in _EMPTY_BOOK_CYCLE_STATUSES and not analysis_terminal:
             raise ValueError("risk_rejected and execution cycle_status require per-book evidence")
         if self.execution_status != "not_started" or self.requires_attention:
             raise ValueError("empty-book cycle must not report execution or attention")

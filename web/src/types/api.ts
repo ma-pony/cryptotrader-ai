@@ -4,6 +4,21 @@ import type { z } from 'zod';
 // instead of z.infer (input type where .default() fields are optional).
 
 import type {
+  ComponentEvaluationSchema,
+  EvaluationGroupSchema,
+  AccountOperationSchema,
+  AccountMoneySchema,
+  AccountSchema,
+  AccountsSchema,
+  AccountBookSchema,
+  BookRiskStateSchema,
+  AccountFillsSchema,
+  AccountIncomeSchema,
+  ReadinessSchema,
+  TradingScopeSchema,
+  DecisionSchema,
+  ResultBlockSchema,
+  SavedComponentSignalSchema,
   ConfigurationCatalogSchema,
   ConfigurationFieldSchema,
   PluginDefinitionSchema,
@@ -12,23 +27,17 @@ import type {
   CycleSchema,
   PaginatedCyclesSchema,
   BacktestMetricsSchema,
+  BacktestEquityPointSchema,
   BacktestParamsSchema,
   BacktestResultSchema,
   BacktestRunStatusSchema,
-  BacktestSessionDetailSchema,
-  CircuitBreakerStatusSchema,
-  CommitteeAgentAnalysisSchema,
+  BacktestComparisonSchema,
   CommitteeDebateTurnSchema,
   ComponentContributionSchema,
-  ComponentSignalSchema,
   ConsensusMetricsSchema,
-  CooldownSchema,
-  CorrelationGroupSchema,
   CycleRiskResultSchema,
   CycleStatusSchema,
   DailyCostPointSchema,
-  EquityCurveSchema,
-  EquityPointSchema,
   FusedSignalSchema,
   HitlRespondSchema,
   LatencyHistogramBucketSchema,
@@ -36,11 +45,6 @@ import type {
   MetricsPercentilesSchema,
   MetricsSummarySchema,
   PaginatedTriggerEventsSchema,
-  PortfolioSchema,
-  PositionSchema,
-  RecentBlockSchema,
-  RiskStatusSchema,
-  RiskThresholdsSchema,
   ScheduleRuleSchema,
   SchedulerStatusSchema,
   SignalProfileSchema,
@@ -56,22 +60,28 @@ import type {
   TriggerTypeSchema,
 } from './api.schema';
 
-// §1 Portfolio
-export type Position = z.output<typeof PositionSchema>;
-export type Portfolio = z.output<typeof PortfolioSchema>;
-export type EquityPoint = z.output<typeof EquityPointSchema>;
-export type EquityCurve = z.output<typeof EquityCurveSchema>;
-export type RangeWindow = '24h' | '7d' | '30d' | 'all';
+export type ComponentEvaluation = z.output<typeof ComponentEvaluationSchema>;
+export type EvaluationGroup = z.output<typeof EvaluationGroupSchema>;
+
+export type AccountOperation = z.output<typeof AccountOperationSchema>;
+
+export type AccountMoney = z.output<typeof AccountMoneySchema>;
+export type Account = z.output<typeof AccountSchema>;
+export type Accounts = z.output<typeof AccountsSchema>;
+export type AccountBook = z.output<typeof AccountBookSchema>;
+export type BookRiskState = z.output<typeof BookRiskStateSchema>;
+export type AccountFills = z.output<typeof AccountFillsSchema>;
+export type AccountIncome = z.output<typeof AccountIncomeSchema>;
 
 // §2 Scheduler
 export type SchedulerStatus = z.output<typeof SchedulerStatusSchema>;
 
 // §3 Decisions
 export type CycleStatus = z.output<typeof CycleStatusSchema>;
-export type CommitteeAgentAnalysis = z.output<typeof CommitteeAgentAnalysisSchema>;
 export type CommitteeDebateTurn = z.output<typeof CommitteeDebateTurnSchema>;
 export type ConsensusMetrics = z.output<typeof ConsensusMetricsSchema>;
-export type ComponentSignal = z.output<typeof ComponentSignalSchema>;
+export type ResultBlock = z.output<typeof ResultBlockSchema>;
+export type SavedComponentSignal = z.output<typeof SavedComponentSignalSchema>;
 export type ComponentContribution = z.output<typeof ComponentContributionSchema>;
 export type FusedSignal = z.output<typeof FusedSignalSchema>;
 export type TargetPosition = z.output<typeof TargetPositionSchema>;
@@ -82,7 +92,8 @@ export type BacktestParams = z.output<typeof BacktestParamsSchema>;
 export type BacktestMetrics = z.output<typeof BacktestMetricsSchema>;
 export type BacktestResult = z.output<typeof BacktestResultSchema>;
 export type BacktestRunStatus = z.output<typeof BacktestRunStatusSchema>;
-export type BacktestSessionDetail = z.output<typeof BacktestSessionDetailSchema>;
+export type BacktestComparison = z.output<typeof BacktestComparisonSchema>;
+export type EquityPoint = z.output<typeof BacktestEquityPointSchema>;
 
 // Signal strategy profile
 export type SignalProfile = z.output<typeof SignalProfileSchema>;
@@ -92,32 +103,47 @@ export type ConfigurationCatalog = z.output<typeof ConfigurationCatalogSchema>;
 export type ConfigurationField = z.output<typeof ConfigurationFieldSchema>;
 export type PluginDefinition = z.output<typeof PluginDefinitionSchema>;
 /** A cleared number is a real local draft, never coerced to zero. Not an API document. */
-export type ConfigurationDraft<T> = T extends number ? number | '' : T extends Array<infer U> ? ConfigurationDraft<U>[] : T extends object ? { [K in keyof T]: ConfigurationDraft<T[K]> } : T;
+export type ConfigurationDraft<T> = T extends number
+  ? number | ''
+  : T extends Array<infer U>
+    ? ConfigurationDraft<U>[]
+    : T extends object
+      ? { [K in keyof T]: ConfigurationDraft<T[K]> }
+      : T;
 export type RuntimeConnection = z.output<typeof RuntimeConnectionSchema>;
 export type RuntimeBook = z.output<typeof RuntimeBookSchema>;
 export type RuntimeJsonPrimitive = null | boolean | number | string;
 export type RuntimeJsonValue = RuntimeJsonPrimitive | RuntimeJsonValue[] | RuntimeJsonObject;
 export type RuntimeJsonObject = { [key: string]: RuntimeJsonValue };
 type RuntimeResponseDocument = RuntimeConfig['document'];
-export type RuntimeDocument = Omit<RuntimeResponseDocument, 'market_data' | 'signals' | 'execution' | 'security' | 'llm'> & {
+export type RuntimeDocument = Omit<
+  RuntimeResponseDocument,
+  'market_data' | 'signals' | 'execution' | 'security' | 'llm'
+> & {
   security: Pick<RuntimeResponseDocument['security'], 'enabled'>;
   llm: Omit<RuntimeResponseDocument['llm'], 'gateway_credential_configured' | 'gateway_credential_updated_at'>;
-  market_data: Omit<RuntimeResponseDocument['market_data'], 'parameters' | 'news_credential_configured' | 'news_credential_updated_at'> & { parameters: RuntimeJsonObject };
-  signals: Omit<RuntimeResponseDocument['signals'], 'components'> & { components: Array<Omit<RuntimeResponseDocument['signals']['components'][number], 'parameters'> & { parameters: RuntimeJsonObject }> };
-  execution: Omit<RuntimeResponseDocument['execution'], 'connections'> & { connections: Array<Omit<RuntimeResponseDocument['execution']['connections'][number], 'credential_configured' | 'credential_updated_at' | 'parameters'> & { parameters: RuntimeJsonObject }> };
+  market_data: Omit<
+    RuntimeResponseDocument['market_data'],
+    'parameters' | 'news_credential_configured' | 'news_credential_updated_at'
+  > & { parameters: RuntimeJsonObject };
+  signals: Omit<RuntimeResponseDocument['signals'], 'components'> & {
+    components: Array<
+      Omit<RuntimeResponseDocument['signals']['components'][number], 'parameters'> & { parameters: RuntimeJsonObject }
+    >;
+  };
+  execution: Omit<RuntimeResponseDocument['execution'], 'connections'> & {
+    connections: Array<
+      Omit<
+        RuntimeResponseDocument['execution']['connections'][number],
+        'credential_configured' | 'credential_updated_at' | 'parameters'
+      > & { parameters: RuntimeJsonObject }
+    >;
+  };
 };
 export type VenueMutation = z.output<typeof VenueMutationSchema>;
 export type CredentialMutation = z.output<typeof CredentialMutationSchema>;
 export type RuntimeTokenMutation = z.output<typeof RuntimeTokenMutationSchema>;
 export type ConnectionHealth = z.output<typeof ConnectionHealthSchema>;
-
-// §5 Risk
-export type CircuitBreakerStatus = z.output<typeof CircuitBreakerStatusSchema>;
-export type RiskThresholds = z.output<typeof RiskThresholdsSchema>;
-export type RiskStatus = z.output<typeof RiskStatusSchema>;
-export type CorrelationGroup = z.output<typeof CorrelationGroupSchema>;
-export type Cooldown = z.output<typeof CooldownSchema>;
-export type RecentBlock = z.output<typeof RecentBlockSchema>;
 
 // §6 Metrics
 export type MetricsCounters = z.output<typeof MetricsCountersSchema>;
@@ -138,15 +164,7 @@ export type HitlRespond = z.output<typeof HitlRespondSchema>;
 export type PortfolioBooks = z.output<typeof PortfolioBooksSchema>;
 export type Cycle = z.output<typeof CycleSchema>;
 export type PaginatedCycles = z.output<typeof PaginatedCyclesSchema>;
-
-// §9 Chat (P2 — stub types for store compatibility)
-export type ChatRole = 'user' | 'assistant' | 'system';
-export interface ChatMessage {
-  id: string;
-  role: ChatRole;
-  ts: string;
-  content_md?: string;
-}
+export type Decision = z.output<typeof DecisionSchema>;
 
 // Filters
 export interface DecisionListFilter {
@@ -155,3 +173,5 @@ export interface DecisionListFilter {
   page?: number;
   size?: number;
 }
+export type Readiness = z.output<typeof ReadinessSchema>;
+export type TradingScope = z.output<typeof TradingScopeSchema>;

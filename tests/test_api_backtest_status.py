@@ -1,141 +1,117 @@
-"""Tests for GET/DELETE /api/backtest/runs/{run_id} — FR-805 + FR-302.
+"""Persisted run progress, cancellation and startup recovery through HTTP."""
 
-Status polling returns BacktestRun with progress + (when complete) result.
-DELETE cancels in-flight run; 409 if already terminated.
-"""
-
-from __future__ import annotations
-
-from unittest.mock import MagicMock, patch
+import asyncio
 
 import pytest
-from fastapi.testclient import TestClient
+
+from tests.factories.research import research as research
+from tests.factories.research import research_payload
+from tests.factories.research_offline import research_offline  # noqa: F401
 
 
-@pytest.fixture
-def client() -> TestClient:
-    from api.main import app
-    from cryptotrader.runtime_config.defaults import minimal_runtime_document
+@pytest.mark.asyncio
+async def test_running_progress_and_cancel_are_readable_after_reentry(research):
+    client, service = research
+    reached = asyncio.Event()
 
-    previous = getattr(app.state, "runtime", None)
-    app.state.runtime = MagicMock(snapshot=MagicMock(document=minimal_runtime_document()))
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        app.state.runtime = previous
+    class WaitingEngine:
+        def __init__(self, **kwargs):
+            self.progress = kwargs["progress_callback"]
 
+        async def run(self):
+            await self.progress(0.42)
+            reached.set()
+            await asyncio.Event().wait()
 
-def _mock_config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.infrastructure.database_url = None
-    return cfg
-
-
-def _running_run(run_id: str = "run_a1b2c3") -> dict:
-    return {
-        "run_id": run_id,
-        "params": {
-            "start": "2026-01-01",
-            "end": "2026-04-01",
-            "pair": "BTC/USDT",
-            "initial_capital": 10000,
-        },
-        "status": "running",
-        "progress": 0.42,
-        "started_at": "2026-04-16T13:00:00Z",
-    }
+    service.engine_factory = WaitingEngine
+    run_id = (await client.post("/api/backtest/runs", json=research_payload())).json()["run_id"]
+    await asyncio.wait_for(reached.wait(), 3)
+    response = await client.get(f"/api/backtest/runs/{run_id}")
+    assert response.json()["progress"] == 0.42
+    assert (await client.delete(f"/api/backtest/runs/{run_id}")).json() == {"canceled": True}
+    assert (await client.get(f"/api/backtest/runs/{run_id}")).json()["status"] == "canceled"
+    assert (await client.delete(f"/api/backtest/runs/{run_id}")).status_code == 409
 
 
-def _completed_run(run_id: str = "run_done") -> dict:
-    return {
-        "run_id": run_id,
-        "params": {
-            "start": "2026-01-01",
-            "end": "2026-04-01",
-            "pair": "BTC/USDT",
-            "initial_capital": 10000,
-        },
-        "status": "completed",
-        "progress": 1.0,
-        "started_at": "2026-04-16T13:00:00Z",
-        "finished_at": "2026-04-16T13:08:42Z",
-        "result": {
-            "metrics": {
-                "total_return_pct": 0.085,
-                "sharpe": 1.42,
-                "max_drawdown_pct": 0.12,
-                "win_rate": 0.61,
-                "trades_count": 38,
-            },
-            "equity_curve": [{"ts": "2026-01-01T00:00:00Z", "equity": 10000.0}],
-            "decisions": [],
-        },
-    }
+@pytest.mark.asyncio
+async def test_failed_exception_body_is_never_exposed(research):
+    client, service = research
+
+    class FailedEngine:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self):
+            raise RuntimeError("super-secret-key?token=never-show")
+
+    service.engine_factory = FailedEngine
+    run_id = (await client.post("/api/backtest/runs", json=research_payload())).json()["run_id"]
+    await service.task_manager.drain()
+    response = await client.get(f"/api/backtest/runs/{run_id}")
+    assert response.json()["status"] == "failed"
+    assert "RuntimeError" in response.json()["error"]
+    assert "super-secret" not in response.text
 
 
-class TestBacktestStatus:
-    def test_running_returns_progress(self, client: TestClient) -> None:
-        with (
-            patch("api.routes.backtest._get_run", return_value=_running_run()),
-        ):
-            resp = client.get("/api/backtest/runs/run_a1b2c3")
+@pytest.mark.asyncio
+async def test_startup_interrupted_is_distinct_and_terminal(research):
+    client, service = research
+    from cryptotrader.backtest.models import BacktestParams
 
-        assert resp.status_code == 200
-        body = resp.json()
-        assert body["run_id"] == "run_a1b2c3"
-        assert body["status"] == "running"
-        assert 0 <= body["progress"] <= 1
-        assert "result" not in body or body["result"] is None
-
-    def test_completed_returns_result_block(self, client: TestClient) -> None:
-        with (
-            patch("api.routes.backtest._get_run", return_value=_completed_run()),
-        ):
-            resp = client.get("/api/backtest/runs/run_done")
-
-        body = resp.json()
-        assert body["status"] == "completed"
-        assert body["progress"] == 1.0
-        assert "finished_at" in body
-        result = body["result"]
-        for k in ("metrics", "equity_curve", "decisions"):
-            assert k in result
-        for m in ("total_return_pct", "sharpe", "max_drawdown_pct", "win_rate", "trades_count"):
-            assert m in result["metrics"]
-
-    def test_404_when_run_unknown(self, client: TestClient) -> None:
-        with (
-            patch("api.routes.backtest._get_run", return_value=None),
-        ):
-            resp = client.get("/api/backtest/runs/run_does_not_exist")
-        assert resp.status_code == 404
+    run_id = await service.store.create(BacktestParams(**research_payload()), None)
+    await service.store.update(run_id, "running", 0.7)
+    await service.store.recover_interrupted()
+    body = (await client.get(f"/api/backtest/runs/{run_id}")).json()
+    assert body["status"] == "interrupted"
+    assert body["progress"] == 0.7
+    assert (await client.delete(f"/api/backtest/runs/{run_id}")).status_code == 409
 
 
-class TestBacktestCancel:
-    def test_cancel_running_returns_200(self, client: TestClient) -> None:
-        with (
-            patch("api.routes.backtest._cancel_run", return_value=True),
-        ):
-            resp = client.delete("/api/backtest/runs/run_a1b2c3")
-        assert resp.status_code == 200
-        assert resp.json() == {"canceled": True}
+@pytest.mark.asyncio
+async def test_missing_read_cancel_and_compare_are_404(research):
+    client, _ = research
+    assert (await client.get("/api/backtest/runs/missing")).status_code == 404
+    assert (await client.delete("/api/backtest/runs/missing")).status_code == 404
+    assert (await client.get("/api/backtest/runs/compare?left=missing&right=missing")).status_code == 404
 
-    @pytest.mark.parametrize("terminal_status", ["completed", "failed", "canceled"])
-    def test_409_when_already_terminated(self, client: TestClient, terminal_status: str) -> None:
-        terminated = _completed_run("run_xyz")
-        terminated["status"] = terminal_status
 
-        with (
-            patch("api.routes.backtest._get_run", return_value=terminated),
-            patch("api.routes.backtest._cancel_run", return_value=False),
-        ):
-            resp = client.delete("/api/backtest/runs/run_xyz")
-        assert resp.status_code == 409
+@pytest.mark.asyncio
+async def test_actual_local_paper_fill_does_not_lock_run_cancellation(research, monkeypatch):
+    from unittest.mock import AsyncMock
 
-    def test_404_when_cancel_unknown(self, client: TestClient) -> None:
-        with (
-            patch("api.routes.backtest._get_run", return_value=None),
-            patch("api.routes.backtest._cancel_run", return_value=False),
-        ):
-            resp = client.delete("/api/backtest/runs/run_unknown")
-        assert resp.status_code == 404
+    from cryptotrader.backtest.engine import BacktestEngine
+    from tests.factories.backtest import registries
+
+    client, service = research
+    markets, signals, _, _ = registries()
+    reached = asyncio.Event()
+
+    async def provider(_snapshot):
+        return signals, markets
+
+    class PausedAfterFill(BacktestEngine):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs, lookback=20)
+
+        async def _run_bars(self, cycle, session):
+            persist_progress = self.progress_callback
+
+            async def pause(value):
+                await persist_progress(value)
+                if (await session.fetch_fills(None)).items:
+                    reached.set()
+                    await asyncio.Event().wait()
+
+            self.progress_callback = pause
+            return await super()._run_bars(cycle, session)
+
+    service.engine_factory = PausedAfterFill
+    service.registry_provider = provider
+    monkeypatch.setattr("cryptotrader.backtest.historical_data.fetch_fear_greed", AsyncMock(return_value={}))
+    run_id = (await client.post("/api/backtest/runs", json=research_payload(pair="BTC/USDT:USDT"))).json()["run_id"]
+    await asyncio.wait_for(reached.wait(), 5)
+    assert service.task_manager.get(run_id).execution_started is False
+    assert (await client.delete(f"/api/backtest/runs/{run_id}")).status_code == 200
+    run = (await client.get(f"/api/backtest/runs/{run_id}")).json()
+    assert run["status"] == "canceled"
+    assert run["progress"] > 0

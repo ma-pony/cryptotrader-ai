@@ -88,11 +88,23 @@ def test_position_snapshot_exposes_signed_amount_and_ratio():
     assert short.signed_ratio == -0.3
 
 
-def test_cycle_request_contains_only_pair():
+def test_cycle_request_exposes_only_canonical_admission_fields():
     from cryptotrader.decision.models import CycleRequest
     from cryptotrader.pair import Pair
 
     request = CycleRequest(Pair.parse("BTC/USDT:USDT"))
 
     assert request.pair.canonical() == "BTC/USDT:USDT"
-    assert [field.name for field in fields(request)] == ["pair"]
+    assert [field.name for field in fields(request)] == [
+        "pair",
+        "mode",
+        "origin",
+        "decision_id",
+        "confirmed_book_ids",
+    ]
+    assert (request.mode, request.origin, request.decision_id, request.confirmed_book_ids) == (
+        "trading",
+        "manual",
+        None,
+        None,
+    )

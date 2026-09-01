@@ -1,8 +1,4 @@
-"""Scheduler status + trigger rule CRUD endpoints.
-
-Public routes (``/scheduler/*``):
-
-- ``GET /scheduler/status`` — legacy public endpoint with APScheduler payload.
+"""Canonical scheduler status + trigger rule CRUD endpoints.
 
 Protected routes (``/api/scheduler/*``):
 
@@ -15,18 +11,17 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationInfo, field_validator
 
 if TYPE_CHECKING:
     from cryptotrader.scheduler import Scheduler
     from cryptotrader.triggers.store import TriggerRuleStore
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/scheduler")
 api_router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
 
 
@@ -35,140 +30,9 @@ api_router = APIRouter(prefix="/api/scheduler", tags=["scheduler"])
 # ---------------------------------------------------------------------------
 
 
-class SchedulerJobStatus(BaseModel):
-    """Status of a single APScheduler job."""
-
-    job_id: str
-    name: str
-    next_run_time: datetime | None
-    pairs: list[str]
-
-
-class PairStatus(BaseModel):
-    """Per-pair last-cycle status surfaced from Scheduler._status."""
-
-    pair: str
-    last_run: datetime | None = None
-    last_action: str | None = None
-    risk_passed: bool | None = None
-    last_error: Literal["cycle_failed", "cycle_timeout"] | None = None
-    trace_id: str | None = None
-
-
-class SchedulerStatusResponse(BaseModel):
-    """Full scheduler status response."""
-
-    running: bool
-    jobs: list[SchedulerJobStatus]
-    cycle_count: int
-    interval_minutes: int
-    pairs: list[str]
-    config_revision: int | None = None
-    enabled_books: list[str] = Field(default_factory=list)
-    # Per-pair last-cycle outcome — empty when scheduler hasn't run yet.
-    pair_statuses: list[PairStatus] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Internal helper — allows tests to override via patch
-# ---------------------------------------------------------------------------
-
-
 def _get_scheduler(request: Request) -> Scheduler | None:
     """Return the Scheduler instance from app.state, or None if not registered."""
     return getattr(request.app.state, "scheduler", None)
-
-
-# ---------------------------------------------------------------------------
-# Endpoint
-# ---------------------------------------------------------------------------
-
-
-@router.get("/status", response_model=SchedulerStatusResponse)
-async def scheduler_status(request: Request) -> SchedulerStatusResponse:
-    """Return the current scheduler status.
-
-    When the scheduler is not started (API-only deployment), returns
-    ``running=false`` with empty jobs rather than 503, so the Dashboard
-    can degrade gracefully.
-    """
-    scheduler = _get_scheduler(request)
-    runtime = scheduler.runtime if scheduler is not None else getattr(request.app.state, "runtime", None)
-    revision = runtime.snapshot.revision if runtime is not None else None
-    books = (
-        [book.id for book in runtime.snapshot.document.execution.books if book.enabled] if runtime is not None else []
-    )
-
-    if scheduler is None or not scheduler._scheduler.running:
-        return SchedulerStatusResponse(
-            running=False,
-            jobs=[],
-            cycle_count=0,
-            interval_minutes=scheduler.interval_minutes if scheduler else 240,
-            # Per spec 013: scheduler.pairs is list[Pair]; project to canonical
-            # str for the API response (frontend type is list[str]).
-            pairs=[p.canonical() for p in scheduler.pairs] if scheduler else [],
-            config_revision=revision,
-            enabled_books=books,
-        )
-
-    # Scheduler is running — collect live job data
-    raw_jobs = scheduler.jobs  # list[dict] from Scheduler.jobs property
-    job_statuses: list[SchedulerJobStatus] = []
-    for raw in raw_jobs:
-        next_run_raw = raw.get("next_run_time")
-        if isinstance(next_run_raw, str):
-            try:
-                next_run: datetime | None = datetime.fromisoformat(next_run_raw)
-            except ValueError:
-                logger.debug("Cannot parse next_run_time %r", next_run_raw)
-                next_run = None
-        elif isinstance(next_run_raw, datetime):
-            next_run = next_run_raw
-        else:
-            next_run = None
-
-        job_statuses.append(
-            SchedulerJobStatus(
-                job_id=raw.get("id", ""),
-                name=raw.get("name", ""),
-                next_run_time=next_run,
-                pairs=[p.canonical() for p in scheduler.pairs],
-            )
-        )
-
-    pair_statuses: list[PairStatus] = []
-    for p, s in (scheduler._status or {}).items():
-        last_run_raw = s.get("last_run")
-        last_run: datetime | None = None
-        if isinstance(last_run_raw, str):
-            try:
-                last_run = datetime.fromisoformat(last_run_raw)
-            except ValueError:
-                last_run = None
-        elif isinstance(last_run_raw, datetime):
-            last_run = last_run_raw
-        pair_statuses.append(
-            PairStatus(
-                pair=p,
-                last_run=last_run,
-                last_action=s.get("last_action"),
-                risk_passed=s.get("risk_passed"),
-                last_error=s.get("last_error"),
-                trace_id=s.get("trace_id"),
-            )
-        )
-
-    return SchedulerStatusResponse(
-        running=True,
-        jobs=job_statuses,
-        cycle_count=scheduler._cycle_count,
-        interval_minutes=scheduler.interval_minutes,
-        pairs=[p.canonical() for p in scheduler.pairs],
-        config_revision=revision,
-        enabled_books=books,
-        pair_statuses=pair_statuses,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -240,7 +104,7 @@ async def scheduler_status_v2(request: Request) -> SchedulerContractStatus:
     return SchedulerContractStatus(
         enabled=bool(getattr(config.scheduler, "enabled", False)),
         config_revision=runtime.snapshot.revision,
-        pairs=[pair.canonical() if hasattr(pair, "canonical") else str(pair) for pair in config.scheduler.pairs],
+        pairs=[pair.canonical() if hasattr(pair, "canonical") else str(pair) for pair in config.execution.pairs],
         enabled_books=[book.id for book in config.execution.books if book.enabled],
         next_pair=next_pair,
         next_run_at=next_run_at,
@@ -300,16 +164,12 @@ class ScheduleRuleIn(BaseModel):
         return parameter_model.model_validate(value).model_dump() if parameter_model else value
 
 
-class ScheduleRuleOut(BaseModel):
-    """Response model for a trigger rule."""
-
-    model_config = {"from_attributes": True}
+class _ScheduleRuleOut(BaseModel):
+    model_config = ConfigDict(extra="forbid", from_attributes=True, strict=True)
 
     id: str
     name: str
-    trigger_type: str
     pair: str
-    parameters: dict[str, Any]
     cooldown_minutes: int
     enabled: bool
     ttl_expires_at: datetime | None
@@ -321,16 +181,51 @@ class ScheduleRuleOut(BaseModel):
     last_triggered_at: datetime | None = None
 
 
+class _PriceScheduleRuleOut(_ScheduleRuleOut):
+    trigger_type: Literal["price_threshold"]
+    parameters: _PriceParameters
+
+
+class _ChangeScheduleRuleOut(_ScheduleRuleOut):
+    trigger_type: Literal["pct_change"]
+    parameters: _ChangeParameters
+
+
+class _CandleScheduleRuleOut(_ScheduleRuleOut):
+    trigger_type: Literal["candle_pattern"]
+    parameters: _CandleParameters
+
+
+class _FundingScheduleRuleOut(_ScheduleRuleOut):
+    trigger_type: Literal["funding_rate"]
+    parameters: _FundingParameters
+
+
+ScheduleRuleOut = Annotated[
+    _PriceScheduleRuleOut | _ChangeScheduleRuleOut | _CandleScheduleRuleOut | _FundingScheduleRuleOut,
+    Field(discriminator="trigger_type"),
+]
+_schedule_rule_adapter = TypeAdapter(ScheduleRuleOut)
+
+
+class PriceSnapshotOut(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False, str_strip_whitespace=True)
+
+    pair: str = Field(min_length=1)
+    price: float
+    ts: float
+
+
 class TriggerEventOut(BaseModel):
     """Response model for a trigger event."""
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(extra="forbid", from_attributes=True, strict=True)
 
     id: str
     rule_id: str
     triggered_at: datetime
     trigger_reason: str
-    price_snapshot: dict[str, Any]
+    price_snapshot: PriceSnapshotOut
     analysis_commit_id: str | None
     schedule_depth: int
     cooldown_skipped: bool
@@ -370,21 +265,23 @@ async def _enrich_rule(rule: Any, request: Request) -> ScheduleRuleOut:
     rsm = RedisStateManager(config.infrastructure.redis_url)
     in_cooldown = (await rsm.get(cooldown_key)) is not None
 
-    return ScheduleRuleOut(
-        id=rule.id,
-        name=rule.name,
-        trigger_type=rule.trigger_type,
-        pair=rule.pair,
-        parameters=rule.parameters,
-        cooldown_minutes=rule.cooldown_minutes,
-        enabled=rule.enabled,
-        ttl_expires_at=rule.ttl_expires_at,
-        created_by=rule.created_by,
-        schedule_depth=rule.schedule_depth,
-        created_at=rule.created_at,
-        updated_at=rule.updated_at,
-        in_cooldown=in_cooldown,
-        last_triggered_at=last_triggered,
+    return _schedule_rule_adapter.validate_python(
+        {
+            "id": rule.id,
+            "name": rule.name,
+            "trigger_type": rule.trigger_type,
+            "pair": rule.pair,
+            "parameters": rule.parameters,
+            "cooldown_minutes": rule.cooldown_minutes,
+            "enabled": rule.enabled,
+            "ttl_expires_at": rule.ttl_expires_at,
+            "created_by": rule.created_by,
+            "schedule_depth": rule.schedule_depth,
+            "created_at": rule.created_at,
+            "updated_at": rule.updated_at,
+            "in_cooldown": in_cooldown,
+            "last_triggered_at": last_triggered,
+        }
     )
 
 

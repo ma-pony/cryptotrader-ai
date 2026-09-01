@@ -68,3 +68,10 @@ async def get_engine(database_url: str) -> AsyncEngine:
                 await _init_engine(database_url)
     engine, _ = _engines[key]
     return engine
+
+
+async def dispose_engine(database_url: str) -> None:
+    """Release an explicitly owned temporary database, without touching other runtimes."""
+    cached = _engines.pop(_cache_key(database_url), None)
+    if cached is not None:
+        await cached[0].dispose()

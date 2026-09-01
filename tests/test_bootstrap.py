@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from importlib import import_module, metadata
+from importlib import import_module
 from unittest.mock import AsyncMock
 
 import pytest
@@ -52,11 +52,13 @@ def test_bootstrap_settings_missing_values_use_fixed_safe_errors(monkeypatch, mi
 @pytest.mark.asyncio
 async def test_first_start_seeds_setup_document_without_opening_venue_session(tmp_path):
     from cryptotrader.cycle_events import NullCycleEventSink
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime import build_runtime
 
     registry = _RecordingVenueRegistry()
     event_sink = NullCycleEventSink()
     settings = _settings_type()(f"sqlite+aiosqlite:///{tmp_path / 'runtime.db'}", MASTER_KEY)
+    await migrate_workbench_schema(settings.database_url)
 
     runtime = await build_runtime(
         settings,
@@ -66,7 +68,7 @@ async def test_first_start_seeds_setup_document_without_opening_venue_session(tm
         market_registry=_InstalledRegistry({"default"}),
     )
 
-    assert runtime.snapshot.setup_required is True
+    assert runtime.snapshot.document.scheduler.automation_enabled is False
     assert runtime.events.base is event_sink
     assert registry.connect_calls == []
     await runtime.close()
@@ -74,8 +76,12 @@ async def test_first_start_seeds_setup_document_without_opening_venue_session(tm
 
 @pytest.mark.asyncio
 async def test_setup_discovers_all_metadata_without_resolving_or_opening_runtime_resources(monkeypatch, tmp_path):
+    from dataclasses import replace
+
     import cryptotrader.runtime as runtime_module
+    from cryptotrader.configuration import registry as extensions
     from cryptotrader.market_sources.registry import MarketSourceRegistry
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.defaults import minimal_runtime_document
     from cryptotrader.runtime_config.models import validate_runtime_document
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
@@ -91,6 +97,18 @@ async def test_setup_discovers_all_metadata_without_resolving_or_opening_runtime
 
         return fail
 
+    registry = extensions.get_extension_registry()
+    from cryptotrader.configuration.registry import ExtensionRegistry
+
+    isolated = ExtensionRegistry(
+        components=dict(registry.components),
+        venues={
+            key: replace(value, factory=fail_if_called(f"{key} account factory"))
+            for key, value in registry.venues.items()
+        },
+        market_sources=dict(registry.market_sources),
+    )
+    monkeypatch.setattr(extensions, "get_extension_registry", lambda: isolated)
     monkeypatch.setattr(SignalComponentRegistry, "enabled", fail_if_called("signal execution resolution"))
     monkeypatch.setattr(VenueAdapterRegistry, "require", fail_if_called("venue adapter resolution"))
     monkeypatch.setattr(MarketSourceRegistry, "require", fail_if_called("market source resolution"))
@@ -98,37 +116,32 @@ async def test_setup_discovers_all_metadata_without_resolving_or_opening_runtime
     reveal = AsyncMock(side_effect=fail_if_called("credential reveal"))
     monkeypatch.setattr(RuntimeConfigRepository, "reveal_credentials", reveal)
     settings = _settings_type()(f"sqlite+aiosqlite:///{tmp_path / 'setup.db'}", MASTER_KEY)
+    await migrate_workbench_schema(settings.database_url)
 
     runtime = await runtime_module.build_runtime(settings)
     document = runtime.snapshot.document
     configured_signal_ids = {component.component_id for component in document.signals.components}
-    expected_signal_ids = {"kronos", "llm_committee"} | {
-        entry_point.name for entry_point in metadata.entry_points(group="cryptotrader.signal_components")
-    }
-    expected_venue_ids = {
-        entry_point.name for entry_point in metadata.entry_points(group="cryptotrader.venue_adapters")
-    }
-    expected_market_ids = {"default"} | {
-        entry_point.name for entry_point in metadata.entry_points(group="cryptotrader.market_sources")
-    }
+    expected_signal_ids = {"kronos", "llm_committee"}
+    expected_venue_ids = {"paper", "okx", "bybit"}
+    expected_market_ids = {"default"}
 
     assert type(runtime.signal_registry) is SignalComponentRegistry
     assert type(runtime.venue_registry) is VenueAdapterRegistry
     assert type(runtime.market_registry) is MarketSourceRegistry
     assert document == minimal_runtime_document()
-    assert runtime.signal_registry.installed_ids() == frozenset(expected_signal_ids)
-    assert runtime.venue_registry.installed_ids() == frozenset(expected_venue_ids)
-    assert runtime.market_registry.installed_ids() == frozenset(expected_market_ids)
+    assert runtime.signal_registry.registered_ids() == frozenset(expected_signal_ids)
+    assert runtime.venue_registry.registered_ids() == frozenset(expected_venue_ids)
+    assert runtime.market_registry.registered_ids() == frozenset(expected_market_ids)
     assert set(runtime.signal_registry.ids()) == configured_signal_ids
-    assert set(runtime.venue_registry.ids()) == expected_venue_ids
+    assert set(runtime.venue_registry.ids()) == set()
     assert set(runtime.market_registry.ids()) == {document.market_data.source_id}
     validate_runtime_document(
         document,
-        set(runtime.signal_registry.installed_ids()),
-        set(runtime.venue_registry.installed_ids()),
-        set(runtime.market_registry.installed_ids()),
+        set(runtime.signal_registry.registered_ids()),
+        set(runtime.venue_registry.registered_ids()),
+        set(runtime.market_registry.registered_ids()),
     )
-    assert runtime.snapshot.setup_required is True
+    assert runtime.snapshot.document.scheduler.automation_enabled is False
     reveal.assert_not_awaited()
     assert downstream_calls == []
     assert runtime.sessions == {}
@@ -140,7 +153,7 @@ class _InstalledRegistry:
     def __init__(self, installed: set[str]) -> None:
         self._installed = frozenset(installed)
 
-    def installed_ids(self):
+    def registered_ids(self):
         return self._installed
 
 
@@ -148,6 +161,9 @@ class _RecordingVenueRegistry(_InstalledRegistry):
     def __init__(self) -> None:
         super().__init__({"paper", "okx", "bybit"})
         self.connect_calls: list[str] = []
+
+    def bind_account_store(self, store):
+        self.account_store = store
 
     def require(self, adapter_id):
         self.connect_calls.append(adapter_id)

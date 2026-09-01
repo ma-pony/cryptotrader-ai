@@ -1,22 +1,8 @@
-"""Webhook notification tests."""
+"""Notification selection belongs to durable alert services."""
 
-import pytest
-
-from cryptotrader.notifications import Notifier
+from cryptotrader.runtime_config.models import NotificationConfig
 
 
-def test_notifier_disabled():
-    n = Notifier(webhook_url="", enabled=True)
-    assert not n._enabled
-
-
-def test_notifier_event_filter():
-    n = Notifier(webhook_url="http://example.com", events=["trade"])
-    assert "trade" in n._events
-    assert "rejection" not in n._events
-
-
-@pytest.mark.asyncio
-async def test_notify_skips_disabled():
-    n = Notifier(webhook_url="", enabled=False)
-    await n.notify("trade", {"pair": "BTC/USDT"})  # should not raise
+def test_notification_selection_is_explicit_and_strict():
+    config = NotificationConfig(enabled=False, events=("connection_failed", "daily_summary"))
+    assert config.events == ("connection_failed", "daily_summary")

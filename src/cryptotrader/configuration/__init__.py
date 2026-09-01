@@ -1,4 +1,4 @@
-"""Code-owned configuration definitions for installed runtime plugins."""
+"""Code-owned configuration definitions for backend-registered runtime components."""
 
 from cryptotrader.configuration.catalog import (
     ConfigurationCatalog,

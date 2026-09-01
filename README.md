@@ -84,4 +84,4 @@ uv run python scripts/import_smoke.py
 cd web && pnpm test && pnpm typecheck && pnpm lint
 ```
 
-架构约束与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。配置、类型化插件安装和旧字段清理说明见 [配置指南](docs/CONFIGURATION.md)；本次离线验收与可复现预览见 [验收记录](docs/verification/configuration-center/README.md)。现有数据库含已移除字段时，需要另行授权的一次性清理，不能直接当作空库启动。
+架构约束与数据流见 [ARCHITECTURE.md](ARCHITECTURE.md)。配置、类型化代码注册和显式迁移说明见 [配置指南](docs/CONFIGURATION.md)；本次离线验收与可复现预览见 [验收记录](docs/verification/configuration-center/README.md)。现有数据库含已移除字段时，需要另行确认目标、备份并运行一次性迁移，不能直接当作空库启动。

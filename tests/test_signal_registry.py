@@ -36,7 +36,6 @@ def _profile() -> SignalProfile:
         max_target_ratio=1.0,
         atr_stop_multiplier=2.0,
         reward_ratio=2.0,
-        hitl_required=False,
     )
 
 
@@ -73,22 +72,26 @@ def test_registry_exposes_installed_component_metadata():
     )
 
 
-def test_registry_loads_installed_python_factory():
+def test_registry_rejects_factory_that_returns_non_component(monkeypatch):
+    from dataclasses import replace
+
+    from cryptotrader.configuration import registry
+    from cryptotrader.cycle_events import NullCycleEventSink
+    from cryptotrader.runtime_config.models import SignalComponentConfig
     from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.runtime_config import runtime_document, signal_config
+    from tests.factories.workbench_extensions import sample_registry
 
-    registry = SignalComponentRegistry()
-    registry.load_factory("tests.factories.fake_signal_plugin:create_component")
-
-    assert registry.ids() == ("factory_component",)
-
-
-def test_registry_rejects_factory_that_returns_non_component():
-    from cryptotrader.signals.registry import SignalComponentRegistry
-
-    registry = SignalComponentRegistry()
-
+    extensions, _ = sample_registry()
+    extensions.components["sample_signal"] = replace(
+        extensions.components["sample_signal"], factory=lambda context: object()
+    )
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    document = runtime_document(
+        signals=signal_config(components=(SignalComponentConfig(component_id="sample_signal", enabled=True, weight=1),))
+    )
     with pytest.raises(TypeError, match="did not return SignalComponent"):
-        registry.load_factory("tests.factories.fake_signal_plugin:create_invalid_component")
+        SignalComponentRegistry.discover(document, NullCycleEventSink())
 
 
 def test_component_execution_error_keeps_component_and_cause():
@@ -100,3 +103,44 @@ def test_component_execution_error_keeps_component_and_cause():
     assert error.component_id == "fake"
     assert error.cause is cause
     assert str(error) == "signal component fake failed: RuntimeError: offline"
+
+
+@pytest.mark.asyncio
+async def test_registered_sample_signal_uses_nondefault_configured_window(monkeypatch):
+    from datetime import UTC, datetime
+
+    from cryptotrader.configuration import registry
+    from cryptotrader.cycle_events import NullCycleEventSink
+    from cryptotrader.pair import Pair
+    from cryptotrader.runtime_config.models import SignalComponentConfig
+    from cryptotrader.signals.registry import SignalComponentRegistry
+    from tests.factories.runtime_config import runtime_document, signal_config
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, calls = sample_registry()
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    document = runtime_document(
+        signals=signal_config(
+            components=(
+                SignalComponentConfig(component_id="sample_signal", enabled=True, weight=1, parameters={"window": 37}),
+            )
+        )
+    )
+    discovered = SignalComponentRegistry.discover(document, NullCycleEventSink())
+    pair = Pair.parse("BTC/USDT:USDT")
+    result = await discovered.get("sample_signal").evaluate(
+        SignalContext(
+            pair=pair,
+            as_of=datetime(2026, 8, 31, tzinfo=UTC),
+            market_data_source_id="fixture-market",
+            market_type=pair.market_type,
+            current_price=100.0,
+            atr=5.0,
+            snapshots={},
+        )
+    )
+
+    assert calls == ["signal"]
+    assert result.details["window"] == 37
+    assert any(block.kind == "metrics" and block.metrics[0].value == 37 for block in result.blocks)
+    assert any(block.kind == "table" and block.rows[0].cells[0].value == 37 for block in result.blocks)

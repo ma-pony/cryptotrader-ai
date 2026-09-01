@@ -5,10 +5,12 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router';
 import type { ReactNode } from 'react';
 import i18n from '@/lib/i18n';
-import { BacktestForm } from './backtest/components/backtest-form';
-import { RuleFormDialog } from './scheduler/components/rule-form-dialog';
-import { RuleTable } from './scheduler/components/rule-table';
+import { BacktestForm } from './research/backtest-form';
+import { RuleFormDialog } from './engine/automation/components/rule-form-dialog';
+import { RuleTable } from './engine/automation/components/rule-table';
 import type { ScheduleRule } from '@/types/api';
+import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
+import { researchRun } from '@/test/research-fixture';
 
 beforeEach(() => i18n.changeLanguage('zh-CN'));
 const rule: ScheduleRule = {
@@ -34,33 +36,30 @@ function harness(element: ReactNode, fail = false, sessionFail = false) {
     vi.fn((url: string, init?: RequestInit) => {
       const method = init?.method ?? 'GET';
       requests.push({ url, method, body: init?.body ? JSON.parse(init.body as string) : {} });
-      if (url.endsWith('/api/backtest/sessions'))
-        return Promise.resolve(new Response(JSON.stringify({ sessions: ['prior'] })));
-      if (url.endsWith('/api/backtest/sessions/prior'))
+      if (url.endsWith('/api/config')) return Promise.resolve(new Response(JSON.stringify(runtimeConfigFixture())));
+      const prior = researchRun({
+        run_id: 'prior',
+        params: {
+          ...researchRun().params,
+          pair: 'ETH/USDT',
+          start: '2026-08-01',
+          end: '2026-08-10',
+          initial_equity: '4200',
+        },
+      });
+      if (url.includes('/api/backtest/runs?'))
+        return Promise.resolve(new Response(JSON.stringify({ items: [prior], limit: 20, offset: 0, has_next: false })));
+      if (url.endsWith('/api/backtest/runs/prior'))
         return Promise.resolve(
-          new Response(
-            JSON.stringify(
-              sessionFail
-                ? { detail: 'unavailable' }
-                : {
-                    name: 'prior',
-                    params: {
-                      start: '2026-08-01',
-                      end: '2026-08-10',
-                      pair: 'ETH/USDT',
-                      initial_capital: 4200,
-                      session_name: 'prior',
-                    },
-                    result: {},
-                    saved_at: '2026-08-11T00:00:00Z',
-                  },
-            ),
-            { status: sessionFail ? 503 : 200 },
-          ),
+          new Response(JSON.stringify(sessionFail ? { detail: 'unavailable' } : prior), {
+            status: sessionFail ? 503 : 200,
+          }),
         );
       return Promise.resolve(
         new Response(
-          JSON.stringify(fail ? { detail: 'Unavailable' } : url.endsWith('/run') ? { run_id: 'run-new' } : rule),
+          JSON.stringify(
+            fail ? { detail: 'Unavailable' } : url.endsWith('/runs') ? { run_id: 'run-new', status: 'queued' } : rule,
+          ),
           { status: fail ? 503 : 200 },
         ),
       );
@@ -81,24 +80,27 @@ function dates(start = '2026-08-01', end = '2026-08-10') {
 it('prevents reversed backtest dates and focuses its linked end-date error', async () => {
   const requests = harness(<BacktestForm onRunStarted={vi.fn()} />);
   dates('2026-08-20', '2026-08-10');
+  await waitFor(() => expect(screen.getByRole('button', { name: '运行回测' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('结束日期');
   expect(screen.getByLabelText('结束日期')).toHaveAttribute('aria-invalid', 'true');
   expect(screen.getByLabelText('结束日期')).toHaveFocus();
-  expect(requests.filter((r) => r.url.endsWith('/run'))).toHaveLength(0);
+  expect(requests.filter((r) => r.url.endsWith('/runs'))).toHaveLength(0);
 });
 it('keeps a cleared capital blank and rejects future dates without starting', async () => {
   const requests = harness(<BacktestForm onRunStarted={vi.fn()} />);
   dates('2026-08-01', '2099-08-10');
   fireEvent.change(screen.getByLabelText('初始资金（USDT）'), { target: { value: '' } });
   expect(screen.getByLabelText('初始资金（USDT）')).toHaveValue(null);
+  await waitFor(() => expect(screen.getByRole('button', { name: '运行回测' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('日期');
-  expect(requests.filter((r) => r.url.endsWith('/run'))).toHaveLength(0);
+  expect(requests.filter((r) => r.url.endsWith('/runs'))).toHaveLength(0);
 });
 it('displays a backtest start failure and retains editable parameters', async () => {
   harness(<BacktestForm onRunStarted={vi.fn()} />, true);
   dates();
+  await waitFor(() => expect(screen.getByRole('button', { name: '运行回测' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
   expect(await screen.findByRole('alert')).toHaveTextContent('失败');
   expect(screen.getByLabelText('起始日期')).toHaveValue('2026-08-01');
@@ -117,13 +119,14 @@ it('keeps one pending start and delivers its run ID despite attempted edits and 
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init: RequestInit) => {
-      if (!url.endsWith('/api/backtest/run') || init?.method !== 'POST') return otherFetch(url, init);
+      if (!url.endsWith('/api/backtest/runs') || init?.method !== 'POST') return otherFetch(url, init);
       requests.push(init);
-      return pending.then(() => new Response(JSON.stringify({ run_id: 'delayed-run' })));
+      return pending.then(() => new Response(JSON.stringify({ run_id: 'delayed-run', status: 'queued' })));
     }),
   );
   const user = userEvent.setup();
   const submit = screen.getByRole('button', { name: '运行回测' });
+  await waitFor(() => expect(submit).toBeEnabled());
   await user.click(submit);
   await waitFor(() => expect(requests).toHaveLength(1));
   try {
@@ -148,20 +151,29 @@ it('loads saved parameters through GET and never sends the old output session na
   const started = vi.fn();
   const requests = harness(<BacktestForm onRunStarted={started} />);
   const selection = await screen.findByRole('combobox', { name: /历史|复用/ });
+  await screen.findByRole('option', { name: /prior/ });
   fireEvent.change(selection, { target: { value: 'prior' } });
   await waitFor(() => expect(screen.getByLabelText('初始资金（USDT）')).toHaveValue(4200));
+  await waitFor(() => expect(screen.getByRole('button', { name: '运行回测' })).toBeEnabled());
   fireEvent.click(screen.getByRole('button', { name: '运行回测' }));
   await waitFor(() => expect(started).toHaveBeenCalledWith('run-new'));
-  expect(requests.find((r) => r.url.endsWith('/run'))!.body).toEqual({
+  expect(requests.find((r) => r.url.endsWith('/runs'))!.body).toEqual({
     start: '2026-08-01',
     end: '2026-08-10',
     pair: 'ETH/USDT',
-    initial_capital: 4200,
+    initial_equity: '4200',
+    interval: '1h',
+    fee_rate: '0.001',
+    slippage_bps: '0',
+    funding_assumption: 'available_only',
+    name: null,
+    snapshot_run_id: 'prior',
   });
 });
 it('shows a saved-parameter load failure without erasing the current dates', async () => {
   harness(<BacktestForm onRunStarted={vi.fn()} />, false, true);
   dates();
+  await screen.findByRole('option', { name: /prior/ });
   fireEvent.change(await screen.findByRole('combobox', { name: /历史|复用/ }), { target: { value: 'prior' } });
   expect(await screen.findByRole('alert')).toHaveTextContent('失败');
   expect(screen.getByLabelText('起始日期')).toHaveValue('2026-08-01');

@@ -6,8 +6,15 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from cryptotrader.execution.models import ConnectionTarget, ExecutionBook
+from cryptotrader.pair import Pair
 from cryptotrader.portfolio.models import BookPortfolioSnapshot, ConnectionPortfolioSnapshot
+from cryptotrader.risk.book_state import BookRiskState
 from cryptotrader.venues.models import OpenVenueState, VenueCapabilities, VenueQuote
+
+
+def risk_increase(current: Decimal, target: Decimal) -> bool:
+    """Classify the actual account target, including direction reversals."""
+    return target != 0 and (current == 0 or current * target < 0 or abs(target) > abs(current))
 
 
 def _require_decimal(
@@ -49,7 +56,8 @@ class BookRiskRequest:
     book: ExecutionBook
     portfolio: BookPortfolioSnapshot
     target_exposure: Decimal
-    peak_equity: Decimal
+    pair: Pair
+    state: BookRiskState
 
     def __post_init__(self) -> None:
         if not isinstance(self.book, ExecutionBook):
@@ -64,9 +72,10 @@ class BookRiskRequest:
             minimum=Decimal("-1"),
             maximum=Decimal("1"),
         )
-        _require_decimal(self.peak_equity, "peak_equity", minimum=Decimal("0"))
-        if self.peak_equity == 0:
-            raise ValueError("peak_equity must be positive")
+        if not isinstance(self.pair, Pair) or not isinstance(self.state, BookRiskState):
+            raise ValueError("pair and full book state are required")
+        if self.state.book_id != self.book.id or self.state.capital_scope != self.book.capital_scope:
+            raise ValueError("risk state must belong to the book")
 
 
 @dataclass(frozen=True)
@@ -79,6 +88,7 @@ class BookRiskDecision:
     rejected_by: str = ""
     reason: str = ""
     cap_source: str = ""
+    state: BookRiskState | None = None
 
     def __post_init__(self) -> None:
         if type(self.passed) is not bool:
@@ -180,13 +190,7 @@ class ConnectionRiskRequest:
 
     @property
     def risk_increase(self) -> bool:
-        current = self.portfolio.position.signed_notional
-        target = self.target.target_signed_notional
-        if target == 0:
-            return False
-        if current == 0 or current * target < 0:
-            return True
-        return abs(target) > abs(current)
+        return risk_increase(self.portfolio.position.signed_notional, self.target.target_signed_notional)
 
 
 @dataclass(frozen=True)

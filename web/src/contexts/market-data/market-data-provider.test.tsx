@@ -81,6 +81,27 @@ describe('MarketDataProvider + useMarketDataWS', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it('does not construct a WebSocket when the build disables the public market stream', async () => {
+    vi.stubEnv('VITE_MARKET_STREAM_ENABLED', 'false');
+    vi.resetModules();
+    const { MarketDataProvider: BuildConfiguredProvider } = await import('./market-data-provider');
+    const { useMarketDataWS: useBuildConfiguredMarketData } = await import('@/hooks/use-market-data-ws');
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const Wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={queryClient}>
+        <BuildConfiguredProvider createWebSocket={(url) => new MockWebSocket(url) as unknown as WebSocket}>
+          {children}
+        </BuildConfiguredProvider>
+      </QueryClientProvider>
+    );
+
+    const { result } = renderHook(() => useBuildConfiguredMarketData('BTCUSDT'), { wrapper: Wrapper });
+
+    expect(result.current.connectionStatus).toBe('disconnected');
+    expect(MockWebSocket.instances).toHaveLength(0);
   });
 
   it('connectionStatus becomes connected after WS open + 2s delay', () => {

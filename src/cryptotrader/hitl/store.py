@@ -10,17 +10,33 @@ from uuid import uuid4
 
 from sqlalchemy import JSON, BigInteger, DateTime, String, and_, case, or_, select, update
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from cryptotrader.db import get_async_session, get_engine
+from cryptotrader.db import get_async_session
 from cryptotrader.execution.codec import book_execution_proposal_from_payload, book_execution_proposal_payload
 from cryptotrader.hitl.models import BookApproval, BookApprovalStatus
+from cryptotrader.migrations.schema import require_tables
 
 if TYPE_CHECKING:
     from cryptotrader.execution.models import BookExecutionProposal
 
 _book_ready: set[str] = set()
+_book_table_locks: dict[tuple[int, str], asyncio.Lock] = {}
+
+
+def _book_database_key(database_url: str) -> str:
+    return make_url(database_url).render_as_string(hide_password=False)
+
+
+def _book_table_lock(database_key: str) -> asyncio.Lock:
+    key = (id(asyncio.get_running_loop()), database_key)
+    lock = _book_table_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _book_table_locks[key] = lock
+    return lock
 
 
 class ApprovalStateError(RuntimeError):
@@ -146,20 +162,27 @@ class BookApprovalStore:
     """只访问 ``book_approvals`` 的 revision-bound 审批存储。"""
 
     def __init__(self, database_url: str | None = None, *, approval_ttl_minutes: int = 60) -> None:
-        if type(approval_ttl_minutes) is not int or approval_ttl_minutes <= 0:
-            raise ValueError("approval_ttl_minutes must be a positive integer")
+        self.configure_ttl(approval_ttl_minutes)
         self.database_url = database_url
-        self._ttl = timedelta(minutes=approval_ttl_minutes)
         self.records: list[BookApproval] = []
         self._lock = asyncio.Lock()
 
+    def configure_ttl(self, approval_ttl_minutes: int) -> None:
+        if type(approval_ttl_minutes) is not int or approval_ttl_minutes <= 0:
+            raise ValueError("approval_ttl_minutes must be a positive integer")
+        self._ttl = timedelta(minutes=approval_ttl_minutes)
+
     async def ensure_table(self) -> None:
-        if self.database_url is None or self.database_url in _book_ready:
+        if self.database_url is None:
             return
-        engine = await get_engine(self.database_url)
-        async with engine.begin() as connection:
-            await connection.run_sync(_BookBase.metadata.create_all)
-        _book_ready.add(self.database_url)
+        database_key = _book_database_key(self.database_url)
+        if database_key in _book_ready:
+            return
+        async with _book_table_lock(database_key):
+            if database_key in _book_ready:
+                return
+            await require_tables(self.database_url, _BookBase.metadata.tables)
+            _book_ready.add(database_key)
 
     async def create(
         self,
@@ -225,6 +248,17 @@ class BookApprovalStore:
         finally:
             await session.close()
         return _book_record(row) if row is not None else None
+
+    def is_expired(self, approval: BookApproval, now: datetime) -> bool:
+        return approval.created_at + self._ttl <= now
+
+    async def list_all(self) -> list[BookApproval]:
+        """Committed approval facts, including expired-but-not-mutated pending rows."""
+        if self.database_url is None:
+            return list(self.records)
+        await self.ensure_table()
+        async with await get_async_session(self.database_url) as session:
+            return [_book_record(row) for row in (await session.scalars(select(_BookApprovalRow))).all()]
 
     async def list_pending(self) -> list[BookApproval]:
         cutoff = datetime.now(UTC) - self._ttl

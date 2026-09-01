@@ -2,23 +2,26 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from cryptotrader._compat import UTC
-from cryptotrader.backtest.cache import _TF_MS, fetch_historical
-from cryptotrader.backtest.result import BacktestResult
+from cryptotrader.backtest.cache import _TF_MS
+from cryptotrader.backtest.result import BacktestResult, EquityPoint, closed_round_trips
 from cryptotrader.decision.models import CycleRequest
 from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
 from cryptotrader.pair import Pair
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
-from cryptotrader.venues.models import VenueConnection
+from cryptotrader.venues.models import BacktestCostModel, VenueConnection
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -36,11 +39,33 @@ class _FrozenRuntimeRepository:
 
     database_url = None
 
-    def __init__(self, snapshot) -> None:
+    def __init__(self, snapshot, account_store) -> None:
         self.snapshot = snapshot
+        self.account_store = account_store
 
     async def get_or_create(self):
         return self.snapshot
+
+
+class _HistoricalBookState:
+    """One isolated replay's peak; never a fallback for production persistence."""
+
+    def __init__(self):
+        self.states = {}
+        self.lock = asyncio.Lock()
+
+    @asynccontextmanager
+    async def book(self, _book_id):
+        async with self.lock:
+            yield
+
+    async def update(self, book_id, snapshots):
+        from cryptotrader.risk.book_state import BookRiskState
+
+        prior = self.states.get(book_id)
+        state = BookRiskState.from_snapshots(book_id, snapshots, peak_equity=prior.peak_equity if prior else None)
+        self.states[book_id] = state
+        return state
 
 
 class BacktestEngine:
@@ -58,6 +83,9 @@ class BacktestEngine:
         snapshot: RuntimeConfigSnapshot | None = None,
         signal_registry: SignalComponentRegistry | None = None,
         venue_registry=None,
+        cost_model: BacktestCostModel | None = None,
+        market_registry=None,
+        funding_settlements=None,
     ) -> None:
         self.pair = Pair.parse(pair)
         self.start = start
@@ -72,6 +100,14 @@ class BacktestEngine:
         self.snapshot = snapshot
         self.signal_registry = signal_registry
         self.venue_registry = venue_registry
+        self.cost_model = cost_model or BacktestCostModel()
+        self.market_registry = market_registry
+        self._source_config = None
+        self._data_coverage = {}
+        self.funding_settlements = tuple(funding_settlements) if funding_settlements is not None else None
+        for event in self.funding_settlements or ():
+            if event.pair != self.pair.canonical():
+                raise ValueError("funding settlement pair does not match replay")
         self._as_of: datetime | None = None
         self._candles_by_timeframe: dict[str, list[list]] = {}
         self._candles: list[list] = []
@@ -92,13 +128,9 @@ class BacktestEngine:
 
     async def run(self) -> BacktestResult:
         from cryptotrader.cycle_events import NullCycleEventSink
-        from cryptotrader.journal.store import MultiVenueCycleStore
         from cryptotrader.market_sources.registry import MarketSourceRegistry
-        from cryptotrader.runtime import build_runtime
         from cryptotrader.signals.context import HistoricalSignalContextProvider
         from cryptotrader.signals.registry import SignalComponentRegistry
-        from cryptotrader.venues.paper import PaperVenueAdapter
-        from cryptotrader.venues.registry import VenueAdapterRegistry
 
         if self.snapshot is not None:
             source_snapshot = self.snapshot
@@ -117,8 +149,11 @@ class BacktestEngine:
                 source_repository = self.repository
             source_snapshot = await source_repository.get_or_create()
         events = NullCycleEventSink()
-        registry = self.signal_registry or SignalComponentRegistry.discover(source_snapshot.document, events)
-        default_timeframe = str(source_snapshot.document.market_data.parameters.get("timeframe", self.interval))
+        frozen = self._backtest_snapshot(source_snapshot)
+        registry = self.signal_registry or SignalComponentRegistry.discover(frozen.document, events)
+        self._source_config = source_snapshot.document.market_data
+        self.market_registry = self.market_registry or MarketSourceRegistry.discover(self._source_config)
+        default_timeframe = self._source_config.timeframe
         limit = int(source_snapshot.document.market_data.parameters.get("limit", self.lookback))
         profile = source_snapshot.document.signals.to_profile(source_snapshot.revision)
         components = registry.enabled(profile)
@@ -128,17 +163,42 @@ class BacktestEngine:
             DataRequirements(candles=(CandleRequirement(self.interval, self.lookback),)),
         )
         await self._fetch_historical_data(requirements)
-        if not self._candles:
-            return BacktestResult()
         historical = HistoricalSignalContextProvider(
             self._snapshot_at,
             default_timeframe=default_timeframe,
+            source_id=self._source_config.source_id,
         )
-        frozen = self._backtest_snapshot(source_snapshot)
-        frozen_repository = _FrozenRuntimeRepository(frozen)
+        self._as_of = datetime.fromtimestamp(self.start_ms / 1000, UTC)
+        if not self._candles:
+            return self._compute_result([EquityPoint(self._clock(), Decimal(str(self.capital)))], [])
+        with TemporaryDirectory(prefix="cryptotrader-replay-") as temporary:
+            from cryptotrader.accounts.store import AccountStore
+            from cryptotrader.db import dispose_engine
+            from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+            account_store = AccountStore(f"sqlite+aiosqlite:///{temporary}/account.sqlite", clock=self._clock)
+            try:
+                await migrate_workbench_schema(account_store.database_url)
+                return await self._execute_replay(frozen, registry, historical, events, account_store)
+            finally:
+                await dispose_engine(account_store.database_url)
+
+    async def _execute_replay(self, frozen, registry, historical, events, account_store):
+        from cryptotrader.journal.store import MultiVenueCycleStore
+        from cryptotrader.market_sources.registry import MarketSourceRegistry
+        from cryptotrader.runtime import build_runtime
+        from cryptotrader.venues.paper import PaperVenueAdapter
+        from cryptotrader.venues.registry import VenueAdapterRegistry
+
+        frozen_repository = _FrozenRuntimeRepository(frozen, account_store)
         paper_registry = self.venue_registry or VenueAdapterRegistry((PaperVenueAdapter(),))
         if set(paper_registry.ids()) != {"paper"}:
             raise ValueError("backtest venue registry must contain only the Paper adapter")
+        paper = paper_registry.require("paper")
+        if not isinstance(paper, PaperVenueAdapter):
+            raise ValueError("backtest requires the local Paper implementation")
+        paper.clock = self._clock
+        paper.cost_model = self.cost_model
         runtime = await build_runtime(
             repository=frozen_repository,
             snapshot=frozen,
@@ -146,9 +206,13 @@ class BacktestEngine:
             venue_registry=paper_registry,
             market_registry=MarketSourceRegistry((historical,)),
             event_sink=events,
+            recover_unfinished=False,
         )
         try:
             async with runtime.cycle_lease() as cycle:
+                historical_state = _HistoricalBookState()
+                cycle.ownership = historical_state
+                cycle.risk_states = historical_state
                 cycle.clock = self._clock
                 cycle.journal = MultiVenueCycleStore()
                 return await self._run_bars(cycle, runtime.sessions["backtest-paper"])
@@ -159,13 +223,9 @@ class BacktestEngine:
         from cryptotrader.runtime_config.models import (
             ExecutionConfig,
             InfrastructureConfig,
-            MarketDataConfig,
             RuntimeConfigSnapshot,
-            SystemConfig,
         )
 
-        default_timeframe = str(source_snapshot.document.market_data.parameters.get("timeframe", self.interval))
-        limit = int(source_snapshot.document.market_data.parameters.get("limit", self.lookback))
         connection = VenueConnection(
             id="backtest-paper",
             label="Backtest Paper",
@@ -188,11 +248,6 @@ class BacktestEngine:
         )
         document = source_snapshot.document.model_copy(
             update={
-                "system": SystemConfig(active=True),
-                "market_data": MarketDataConfig(
-                    source_id="historical",
-                    parameters={"timeframe": default_timeframe, "limit": limit},
-                ),
                 "execution": ExecutionConfig(connections=(connection,), books=(book,)),
                 # Historical Paper execution never enters Runtime.execution_lease.
                 # This isolated, unroutable endpoint keeps the frozen document
@@ -207,35 +262,68 @@ class BacktestEngine:
         if interval_ms is None:
             raise ValueError(f"unsupported backtest timeframe {self.interval!r}")
         indexes = [
-            index for index, candle in enumerate(self._candles) if self.start_ms <= int(candle[0]) <= self.end_ms
+            index
+            for index, candle in enumerate(self._candles)
+            if self.start_ms <= int(candle[0]) and int(candle[0]) + interval_ms <= self.end_ms
         ]
         if not indexes:
-            return BacktestResult(equity_curve=[self.capital])
+            return self._compute_result(
+                [EquityPoint(datetime.fromtimestamp(self.start_ms / 1000, UTC), Decimal(str(self.capital)))], []
+            )
 
         outcomes: list[CycleOutcome] = []
-        curve = [self.capital]
+        curve = [EquityPoint(datetime.fromtimestamp(self.start_ms / 1000, UTC), Decimal(str(self.capital)))]
+        settlements = iter(sorted(self.funding_settlements or (), key=lambda item: item.occurred_at))
+        pending_funding = next(settlements, None)
         for step, index in enumerate(indexes):
             candle = self._candles[index]
-            self._as_of = datetime.fromtimestamp((int(candle[0]) + interval_ms) / 1000, UTC)
-            await session.set_quote(self.pair, Decimal(str(candle[4])))
-            outcome = await cycle.run(CycleRequest(self.pair))
+            closed_at = datetime.fromtimestamp((int(candle[0]) + interval_ms) / 1000, UTC)
+            while pending_funding is not None and pending_funding.occurred_at <= closed_at:
+                if pending_funding.occurred_at >= curve[0].time:
+                    self._as_of = pending_funding.occurred_at
+                    await session.apply_funding(
+                        self.pair,
+                        settlement_id=f"{pending_funding.source_id}:{pending_funding.id}",
+                        rate=pending_funding.rate,
+                        mark_price=pending_funding.mark_price,
+                    )
+                pending_funding = next(settlements, None)
+            self._as_of = closed_at
+            from cryptotrader.market_sources.protocol import HistoricalCandle
+
+            await session.advance_bar(
+                self.pair,
+                HistoricalCandle(
+                    open_time=datetime.fromtimestamp(int(candle[0]) / 1000, UTC),
+                    **{
+                        name: Decimal(str(value))
+                        for name, value in zip(("open", "high", "low", "close", "volume"), candle[1:], strict=True)
+                    },
+                ),
+            )
+            outcome = await cycle.run(CycleRequest(self.pair, mode="backtest", origin="backtest"))
             outcomes.append(outcome)
             portfolio = await session.fetch_portfolio(self.pair)
-            curve.append(float(portfolio.equity))
+            curve.append(EquityPoint(self._clock(), portfolio.equity))
             if self.progress_callback is not None:
-                self.progress_callback((step + 1) / len(indexes))
+                import inspect
 
-        final_equity = curve[-1]
+                pending = self.progress_callback((step + 1) / len(indexes))
+                if inspect.isawaitable(pending):
+                    await pending
+
         records = []
         for outcome in outcomes:
             record = await cycle.journal.get(outcome.cycle_id)
             if record is None:
                 raise RuntimeError(f"backtest cycle {outcome.cycle_id!r} is missing from the journal")
             records.append(record)
+        fills = await self._read_paper_history(session.fetch_fills, "venue_fill_id")
+        funding_entries = await self._read_paper_history(session.fetch_funding, "venue_entry_id")
         return self._compute_result(
-            final_equity,
             curve,
-            [],
+            fills,
+            funding_entries=funding_entries,
             records=records,
             outcomes=outcomes,
         )
@@ -245,78 +333,88 @@ class BacktestEngine:
             raise RuntimeError("backtest cycle clock is not initialized")
         return self._as_of
 
+    async def _read_paper_history(self, fetch, identity):
+        items, cursor = {}, None
+        while True:
+            page = await fetch(cursor)
+            items.update((getattr(item, identity), item) for item in page.items)
+            if page.coverage_end >= self._clock():
+                return list(items.values())
+            cursor = page.next_cursor
+
     async def _fetch_historical_data(self, requirements: DataRequirements) -> None:
+        source = self.market_registry.require(self._source_config.source_id)
         limits = {item.timeframe: item.limit for item in requirements.candles}
         limits[self.interval] = max(limits.get(self.interval, 0), self.lookback)
+        self._candles_by_timeframe = {}
+        self._data_coverage = {
+            "market_source_id": self._source_config.source_id,
+            "market_parameters": dict(self._source_config.parameters),
+            "pair": self.pair.canonical(),
+            "market_type": self.pair.market_type,
+            "as_of": datetime.fromtimestamp(self.end_ms / 1000, UTC).isoformat(),
+            "candles": {},
+            "historical_news": "unavailable; never replaced with current news",
+            "price_context": "derived from historical OHLCV, not historical news",
+            "daily_context": "previous completed day only; unavailable values are neutral placeholders",
+            "unavailable_context": [
+                "funding_rate",
+                "open_interest",
+                "long_short_ratio",
+                "etf",
+                "macro_series",
+                "orderbook",
+            ],
+            "model_limitations": (
+                "pretrained models may contain knowledge after as_of; not a strict out-of-sample replay"
+            ),
+        }
         for timeframe, limit in limits.items():
             timeframe_ms = _TF_MS.get(timeframe)
             if timeframe_ms is None:
                 raise ValueError(f"unsupported backtest timeframe {timeframe!r}")
-            self._candles_by_timeframe[timeframe] = await fetch_historical(
-                self.pair.canonical(),
-                timeframe,
-                self.start_ms - limit * timeframe_ms,
-                self.end_ms,
+            start = datetime.fromtimestamp((self.start_ms - limit * timeframe_ms) / 1000, UTC)
+            end = datetime.fromtimestamp(self.end_ms / 1000, UTC)
+            bars = await source.read_candles(self.pair, timeframe, start, end, end)
+            bars = sorted(
+                (
+                    bar
+                    for bar in bars
+                    if start <= bar.open_time < end and bar.open_time + timedelta(milliseconds=timeframe_ms) <= end
+                ),
+                key=lambda bar: bar.open_time,
             )
+            self._candles_by_timeframe[timeframe] = [
+                [
+                    int(bar.open_time.timestamp() * 1000),
+                    *[getattr(bar, name) for name in ("open", "high", "low", "close", "volume")],
+                ]
+                for bar in bars
+            ]
+            expected = (self.end_ms - int(start.timestamp() * 1000)) // timeframe_ms
+            self._data_coverage["candles"][timeframe] = {
+                "expected": expected,
+                "available": len(bars),
+                "missing": max(0, expected - len(bars)),
+                "first_open": bars[0].open_time.isoformat() if bars else None,
+                "last_close": (bars[-1].open_time + timedelta(milliseconds=timeframe_ms)).isoformat() if bars else None,
+            }
         self._candles = self._candles_by_timeframe[self.interval]
+        # Fear & Greed has dated published historical observations. The old
+        # exchange-agnostic daily-average funding and unversioned local macro
+        # cache cannot prove settlement events / point-in-time market identity.
+        from cryptotrader.backtest.historical_data import fetch_fear_greed
 
-        from cryptotrader.backtest.historical_data import (
-            fetch_btc_dominance,
-            fetch_fear_greed,
-            fetch_fred_series,
-            fetch_funding_rate,
-            fetch_futures_volume,
-        )
-
-        symbol = self.pair.base
         start = datetime.fromisoformat(self.start).replace(tzinfo=UTC)
         daily_start = (start - timedelta(days=1)).strftime("%Y-%m-%d")
-        self._fng = await fetch_fear_greed(daily_start, self.end)
-        self._funding = await fetch_funding_rate(symbol, daily_start, self.end)
-        for attribute, loader in (
-            ("_btc_dom", lambda: fetch_btc_dominance(daily_start, self.end)),
-            ("_fed_rate", lambda: fetch_fred_series("DFF", daily_start, self.end)),
-            ("_dxy", lambda: fetch_fred_series("DTWEXBGS", daily_start, self.end)),
-            ("_fut_vol", lambda: fetch_futures_volume(symbol, daily_start, self.end)),
-        ):
-            try:
-                setattr(self, attribute, await loader())
-            except Exception:
-                logger.warning("Historical source %s failed", attribute, exc_info=True)
-        self._load_extended_data(daily_start)
-
-    @staticmethod
-    def _extract_numeric(data, key: str | None = None) -> float:
-        if isinstance(data, dict):
-            return float(data.get(key, 0.0)) if key else 0.0
-        if isinstance(data, int | float):
-            return float(data)
-        return 0.0
-
-    @staticmethod
-    def _load_dict_range(source: str, start: str, end: str) -> dict:
-        from cryptotrader.data.store import get_range
-
-        return {date: value for date, value in get_range(source, start, end).items() if isinstance(value, dict)}
-
-    def _load_extended_data(self, historical_start: str) -> None:
-        from cryptotrader.data.store import get_range
-
-        symbol = self.pair.base
-        self._etf_flows = self._load_dict_range("sosovalue_etf", historical_start, self.end)
-        self._oi = self._load_dict_range(f"binance_oi_{symbol}", historical_start, self.end)
-        self._ls_ratio = self._load_dict_range(f"binance_ls_ratio_{symbol}", historical_start, self.end)
-        for date, value in get_range("stablecoin_total_supply", historical_start, self.end).items():
-            self._stablecoin_supply[date] = self._extract_numeric(value, "total_supply")
-        for date, value in get_range("defillama_tvl", historical_start, self.end).items():
-            self._defi_tvl[date] = self._extract_numeric(value, "tvl")
-        for source, target in (
-            ("btc_hashrate", self._btc_hashrate),
-            ("fred_VIXCLS", self._vix),
-            ("fred_SP500", self._sp500),
-        ):
-            for date, value in get_range(source, historical_start, self.end).items():
-                target[date] = self._extract_numeric(value)
+        try:
+            self._fng = await fetch_fear_greed(
+                daily_start, datetime.fromtimestamp(self.end_ms / 1000, UTC).strftime("%Y-%m-%d")
+            )
+        except Exception:
+            self._fng = {}
+            logger.warning("Historical Fear & Greed unavailable")
+        self._data_coverage["fear_greed"] = {"source": "alternative.me", "observations": len(self._fng)}
 
     def _snapshot_at(self, timeframe: str, as_of: datetime) -> DataSnapshot:
         timestamp_ms = int(as_of.timestamp() * 1000)
@@ -330,6 +428,9 @@ class BacktestEngine:
             candles,
             columns=["timestamp", "open", "high", "low", "close", "volume"],
         )
+        # Components use numeric frames; execution keeps the original Decimal bars.
+        for name in ("open", "high", "low", "close", "volume"):
+            frame[name] = frame[name].astype(float)
         frame.index = pd.to_datetime(frame["timestamp"], unit="ms", utc=True)
         current = candles[-1]
         completed_day = (as_of - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -390,9 +491,12 @@ class BacktestEngine:
             ),
             onchain=onchain,
             news=NewsSentiment(
-                key_events=derive_news_events(candles, len(candles) - 1),
+                key_events=derive_news_events(candles, len(candles) - 1, pair=self.pair.base, timeframe=timeframe),
                 headlines=[
-                    f"{self.pair.base} at ${float(current[4]):,.0f}, Fear&Greed={self._fng.get(completed_day, 50)}"
+                    "Historical news unavailable. Price-derived context only: "
+                    f"{self.pair.base} at ${float(current[4]):,.0f}. "
+                    f"Fear&Greed={self._fng.get(completed_day, 'unavailable')}. "
+                    "Missing historical macro, funding and orderbook inputs are placeholders, not observations."
                 ],
             ),
             macro=macro,
@@ -400,17 +504,18 @@ class BacktestEngine:
 
     def _compute_result(
         self,
-        equity: float,
-        curve: list[float],
-        trades: list[dict],
+        curve: list[EquityPoint],
+        fills: list,
         *,
         records: list[MultiVenueCycleRecord] | None = None,
         outcomes: list[CycleOutcome] | None = None,
+        funding_entries: list | None = None,
     ) -> BacktestResult:
+        values = [float(point.equity) for point in curve]
         returns = [
-            (curve[index] - curve[index - 1]) / curve[index - 1]
+            (values[index] - values[index - 1]) / values[index - 1]
             for index in range(1, len(curve))
-            if curve[index - 1] > 0.0
+            if values[index - 1] > 0.0
         ]
         if returns:
             average = sum(returns) / len(returns)
@@ -419,13 +524,14 @@ class BacktestEngine:
             sharpe = average / deviation * math.sqrt(365 * periods_per_day) if deviation > 0.0 else 0.0
         else:
             sharpe = 0.0
-        peak = curve[0] if curve else self.capital
+        peak = values[0] if values else self.capital
         max_drawdown = 0.0
-        for value in curve:
+        for value in values:
             peak = max(peak, value)
             max_drawdown = min(max_drawdown, (value - peak) / peak if peak > 0.0 else 0.0)
-        closed = [trade for trade in trades if trade.get("pnl") is not None and trade.get("pnl") != 0.0]
-        wins = sum(1 for trade in closed if trade["pnl"] > 0.0)
+        funding_entries = funding_entries or []
+        closed = closed_round_trips(fills, funding_entries)
+        wins = sum(1 for trade in closed if trade.net_pnl > 0)
         records = records or []
         outcomes = outcomes or []
         decisions = [self._decision_payload(record) for record in records]
@@ -439,13 +545,59 @@ class BacktestEngine:
                 for outcome in outcomes
             ]
         return BacktestResult(
-            total_return=(equity - self.capital) / self.capital,
+            total_return=float((curve[-1].equity - Decimal(str(self.capital))) / Decimal(str(self.capital)))
+            if curve
+            else 0.0,
             sharpe_ratio=sharpe,
             max_drawdown=max_drawdown,
-            win_rate=wins / len(closed) if closed else 0.0,
-            trades=list(trades),
+            win_rate=wins / len(closed) if closed else None,
+            fills=list(fills),
+            closed_trades=closed,
+            fees=sum((fill.fee.amount for fill in fills), Decimal("0")),
+            funding=sum((entry.amount.amount for entry in funding_entries), Decimal("0")),
+            funding_entries=funding_entries,
+            cost_assumptions={
+                "fee_rate": str(self.cost_model.fee_rate),
+                "slippage_bps": str(self.cost_model.slippage_bps),
+                "funding_enabled": self.cost_model.funding_enabled,
+                "funding": (
+                    "only supplied settlement points; preceding-close position, before current-bar protections; "
+                    "no invented rate or settlement"
+                ),
+                "execution": (
+                    "closed-bar simulation, not tick execution; existing protection first, "
+                    "then close signal/market fill; "
+                    "new protection next bar; protection fills timestamped at bar close"
+                ),
+                "protection": (
+                    "stop first if both touched; stop gap uses worse opening price; take-profit at target; "
+                    "directional slippage and fees on every fill"
+                ),
+            },
+            unmodeled_costs=["market impact and intrabar path"]
+            + (
+                ["historical funding settlements unavailable outside supplied points"]
+                if self.cost_model.funding_enabled and self.pair.market_type != "spot"
+                else []
+            ),
+            data_coverage={
+                **self._data_coverage,
+                "funding": {
+                    "status": "not_applicable"
+                    if self.pair.market_type == "spot"
+                    else "disabled"
+                    if not self.cost_model.funding_enabled
+                    else "partial"
+                    if self.funding_settlements
+                    else "unavailable",
+                    "provided_settlements": len(self.funding_settlements or ()),
+                    "applied_settlements": len(funding_entries),
+                    "source_ids": sorted({entry.source_id for entry in self.funding_settlements or ()}),
+                },
+            },
             equity_curve=list(curve),
             decisions=decisions,
+            decision_ids=[record.cycle_id for record in records],
             cycle_records=records,
             cycle_ids=[outcome.cycle_id for outcome in outcomes],
             config_revisions=[outcome.config_revision for outcome in outcomes],
@@ -453,13 +605,6 @@ class BacktestEngine:
 
     @staticmethod
     def _decision_payload(record: MultiVenueCycleRecord) -> dict[str, Any]:
-        return {
-            "cycle_id": record.cycle_id,
-            "ts": record.created_at.isoformat(),
-            "status": record.cycle_status,
-            "config_revision": record.config_revision,
-            "components": list(record.component_signals),
-            "fusion": record.fused_signal,
-            "target_position": record.target_position,
-            "books": list(record.book_results),
-        }
+        from cryptotrader.decision.read_service import decision_out
+
+        return decision_out(record).model_dump(mode="json")

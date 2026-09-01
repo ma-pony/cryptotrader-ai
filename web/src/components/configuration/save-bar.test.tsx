@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { fireEvent, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { expect, it, vi } from 'vitest';
 import '@/lib/i18n';
 import { SaveBar } from './save-bar';
@@ -9,6 +10,27 @@ import { RUNTIME_CONFIG_QUERY_KEY } from '@/hooks/use-runtime-config';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 import { SignalSettings } from '@/pages/settings/forms/signal-settings';
 import { configurationCatalogFixture } from '@/test/configuration-catalog-fixture';
+
+it('submits the owning configuration form from the keyboard', async () => {
+  const saved = vi.fn();
+  render(
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        saved();
+      }}
+    >
+      <label>
+        周期
+        <input />
+      </label>
+      <SaveBar dirty submit onSave={() => undefined} onDiscard={() => undefined} />
+    </form>,
+  );
+
+  await userEvent.type(screen.getByLabelText('周期'), '2h{Enter}');
+  expect(saved).toHaveBeenCalledOnce();
+});
 
 it('opens an advanced group and focuses the first invalid field on save', () => {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });

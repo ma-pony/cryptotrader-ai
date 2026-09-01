@@ -15,7 +15,6 @@ def _profile(*components, **overrides):
         "max_target_ratio": 1.0,
         "atr_stop_multiplier": 2.0,
         "reward_ratio": 2.0,
-        "hitl_required": False,
     }
     values.update(overrides)
     return SignalProfile(**values)
@@ -48,7 +47,7 @@ def test_component_weight_requires_non_empty_id():
         ComponentWeight("", True, 1.0)
 
 
-def test_profile_rejects_uninstalled_component():
+def test_profile_rejects_unregistered_component():
     from cryptotrader.profiles.models import ComponentWeight, validate_signal_profile
 
     profile = _profile(ComponentWeight("missing", True, 1.0))

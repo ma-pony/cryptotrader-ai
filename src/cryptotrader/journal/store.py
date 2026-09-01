@@ -1,4 +1,4 @@
-"""`trading_cycles` 的 PostgreSQL/SQLite 持久化与内存实现。"""
+"""Canonical multi-venue decision persistence for PostgreSQL and SQLite."""
 
 from __future__ import annotations
 
@@ -7,16 +7,18 @@ import math
 import re
 from collections.abc import Mapping
 from contextlib import suppress
+from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, String, func, select, update
+from sqlalchemy import JSON, BigInteger, Boolean, DateTime, String, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-from cryptotrader.db import get_async_session, get_engine
+from cryptotrader.db import get_async_session
+from cryptotrader.decision.analysis import AnalysisFailure
 from cryptotrader.decision.models import TargetPosition
 from cryptotrader.execution.codec import (
     book_execution_proposal_from_payload,
@@ -28,19 +30,16 @@ from cryptotrader.journal.models import (
     BookCycleResult,
     BookHitlSnapshot,
     BookPreparationFailure,
+    DecisionRun,
     MultiVenueCycleRecord,
-    TradingCycleRecord,
 )
+from cryptotrader.migrations.schema import require_tables
 from cryptotrader.pair import Pair
 from cryptotrader.portfolio.models import BookPortfolioSnapshot, ConnectionPortfolioSnapshot
 from cryptotrader.signals.fusion import ComponentContribution, FusedSignal
 from cryptotrader.signals.models import ComponentSignal
 from cryptotrader.venues.models import ConnectionPosition
 
-if TYPE_CHECKING:
-    from cryptotrader.decision.models import CycleStatus
-
-_ready: set[str] = set()
 _multi_venue_ready: set[str] = set()
 
 
@@ -73,24 +72,6 @@ async def _write_session(database_url: str) -> Any:
     return session
 
 
-class _Base(DeclarativeBase):
-    pass
-
-
-class _TradingCycleRow(_Base):
-    __tablename__ = "trading_cycles"
-
-    cycle_id: Mapped[str] = mapped_column(String(36), primary_key=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    pair: Mapped[str] = mapped_column(String(50), index=True)
-    status: Mapped[str] = mapped_column(String(32), index=True)
-    profile_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    payload: Mapped[dict[str, Any]] = mapped_column(
-        JSON().with_variant(JSONB(), "postgresql"),
-        nullable=False,
-    )
-
-
 class _MultiVenueBase(DeclarativeBase):
     pass
 
@@ -99,6 +80,7 @@ class _MultiVenueCycleRow(_MultiVenueBase):
     __tablename__ = "multi_venue_cycles"
 
     cycle_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    run_metadata: Mapped[dict[str, Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
     config_revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
     market_data_source_id: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     component_signals: Mapped[dict[str, Any]] = mapped_column(
@@ -121,192 +103,6 @@ class _MultiVenueCycleRow(_MultiVenueBase):
     execution_status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     requires_attention: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-
-
-def _payload(record: TradingCycleRecord) -> dict[str, Any]:
-    return {
-        "profile_snapshot": dict(record.profile_snapshot),
-        "context_summary": dict(record.context_summary),
-        "component_signals": [dict(item) for item in record.component_signals],
-        "component_error": dict(record.component_error) if record.component_error is not None else None,
-        "fused_signal": dict(record.fused_signal) if record.fused_signal is not None else None,
-        "target_position": dict(record.target_position) if record.target_position is not None else None,
-        "trade_plan": dict(record.trade_plan) if record.trade_plan is not None else None,
-        "hitl_result": dict(record.hitl_result) if record.hitl_result is not None else None,
-        "risk_result": dict(record.risk_result) if record.risk_result is not None else None,
-        "execution_result": dict(record.execution_result) if record.execution_result is not None else None,
-        "error": record.error,
-    }
-
-
-def _record(row: _TradingCycleRow) -> TradingCycleRecord:
-    payload = row.payload
-    created_at = row.created_at
-    if created_at.tzinfo is None:
-        created_at = created_at.replace(tzinfo=UTC)
-    return TradingCycleRecord(
-        cycle_id=row.cycle_id,
-        created_at=created_at,
-        pair=row.pair,
-        status=cast("CycleStatus", row.status),
-        profile_revision=row.profile_revision,
-        profile_snapshot=payload["profile_snapshot"],
-        context_summary=payload["context_summary"],
-        component_signals=tuple(payload["component_signals"]),
-        component_error=payload["component_error"],
-        fused_signal=payload["fused_signal"],
-        target_position=payload["target_position"],
-        trade_plan=payload["trade_plan"],
-        hitl_result=payload["hitl_result"],
-        risk_result=payload["risk_result"],
-        execution_result=payload["execution_result"],
-        error=payload["error"],
-    )
-
-
-class CycleJournalStore:
-    """追加并查询完整交易周期。无数据库时使用实例级内存。"""
-
-    def __init__(self, database_url: str | None = None) -> None:
-        self.database_url = database_url
-        self.records: list[TradingCycleRecord] = []
-
-    async def ensure_table(self) -> None:
-        if self.database_url is None or self.database_url in _ready:
-            return
-        engine = await get_engine(self.database_url)
-        async with engine.begin() as connection:
-            await connection.run_sync(_Base.metadata.create_all)
-        _ready.add(self.database_url)
-
-    async def append(self, record: TradingCycleRecord) -> None:
-        if self.database_url is None:
-            if any(item.cycle_id == record.cycle_id for item in self.records):
-                raise ValueError(f"cycle {record.cycle_id!r} already exists")
-            self.records.append(record)
-            return
-
-        await self.ensure_table()
-        session = await get_async_session(self.database_url)
-        try:
-            session.add(
-                _TradingCycleRow(
-                    cycle_id=record.cycle_id,
-                    created_at=record.created_at,
-                    pair=record.pair,
-                    status=record.status,
-                    profile_revision=record.profile_revision,
-                    payload=_payload(record),
-                )
-            )
-            await session.commit()
-        except IntegrityError as exc:
-            await session.rollback()
-            raise ValueError(f"cycle {record.cycle_id!r} already exists") from exc
-        finally:
-            await session.close()
-
-    async def get(self, cycle_id: str) -> TradingCycleRecord | None:
-        if self.database_url is None:
-            return next((item for item in self.records if item.cycle_id == cycle_id), None)
-
-        await self.ensure_table()
-        session = await get_async_session(self.database_url)
-        try:
-            row = await session.get(_TradingCycleRow, cycle_id)
-            return _record(row) if row is not None else None
-        finally:
-            await session.close()
-
-    async def replace(self, record: TradingCycleRecord) -> None:
-        """替换同一周期的暂停状态。供 HITL 终态迁移使用。"""
-        if self.database_url is None:
-            for index, current in enumerate(self.records):
-                if current.cycle_id == record.cycle_id:
-                    self.records[index] = record
-                    return
-            raise LookupError(f"cycle {record.cycle_id!r} does not exist")
-
-        await self.ensure_table()
-        statement = (
-            update(_TradingCycleRow)
-            .where(_TradingCycleRow.cycle_id == record.cycle_id)
-            .values(
-                created_at=record.created_at,
-                pair=record.pair,
-                status=record.status,
-                profile_revision=record.profile_revision,
-                payload=_payload(record),
-            )
-        )
-        session = await get_async_session(self.database_url)
-        try:
-            result = await session.execute(statement)
-            if result.rowcount != 1:
-                await session.rollback()
-                raise LookupError(f"cycle {record.cycle_id!r} does not exist")
-            await session.commit()
-        finally:
-            await session.close()
-
-    async def list(
-        self,
-        *,
-        limit: int = 100,
-        offset: int = 0,
-        pair: str | None = None,
-        status: CycleStatus | None = None,
-    ) -> list[TradingCycleRecord]:
-        if limit < 1 or offset < 0:
-            return []
-        if self.database_url is None:
-            records = self.records
-            if pair is not None:
-                records = [item for item in records if item.pair == pair]
-            if status is not None:
-                records = [item for item in records if item.status == status]
-            ordered = sorted(records, key=lambda item: item.created_at, reverse=True)
-            return ordered[offset : offset + limit]
-
-        await self.ensure_table()
-        query = select(_TradingCycleRow)
-        if pair is not None:
-            query = query.where(_TradingCycleRow.pair == pair)
-        if status is not None:
-            query = query.where(_TradingCycleRow.status == status)
-        query = query.order_by(_TradingCycleRow.created_at.desc()).offset(offset).limit(limit)
-        session = await get_async_session(self.database_url)
-        try:
-            rows = (await session.execute(query)).scalars().all()
-            return [_record(row) for row in rows]
-        finally:
-            await session.close()
-
-    async def count(
-        self,
-        *,
-        pair: str | None = None,
-        status: CycleStatus | None = None,
-    ) -> int:
-        if self.database_url is None:
-            records = self.records
-            if pair is not None:
-                records = [item for item in records if item.pair == pair]
-            if status is not None:
-                records = [item for item in records if item.status == status]
-            return len(records)
-
-        await self.ensure_table()
-        query = select(func.count()).select_from(_TradingCycleRow)
-        if pair is not None:
-            query = query.where(_TradingCycleRow.pair == pair)
-        if status is not None:
-            query = query.where(_TradingCycleRow.status == status)
-        session = await get_async_session(self.database_url)
-        try:
-            return int((await session.execute(query)).scalar_one())
-        finally:
-            await session.close()
 
 
 _JOURNAL_CODEC_VERSION = 1
@@ -353,6 +149,25 @@ def _contains_secret_field(value: Any) -> bool:
     if type(value) in {list, tuple}:
         return any(_contains_secret_field(item) for item in value)
     return False
+
+
+def _contains_journal_secret(payloads: tuple) -> bool:
+    """Exclude only validated usage counters at the canonical signal path."""
+    signals, *others = payloads
+    if not isinstance(signals, Mapping) or not isinstance(signals.get("items"), list):
+        return _contains_secret_field(payloads)
+    scanned = []
+    for signal in signals["items"]:
+        if isinstance(signal, Mapping):
+            usage = signal.get("usage")
+            if (
+                isinstance(usage, Mapping)
+                and set(usage) == {"input_tokens", "output_tokens"}
+                and all(type(count) is int and count >= 0 for count in usage.values())
+            ):
+                signal = {**signal, "usage": None}
+        scanned.append(signal)
+    return _contains_secret_field(({**signals, "items": scanned}, *others))
 
 
 def _codec_object(value: Any, keys: set[str]) -> dict[str, Any]:
@@ -462,11 +277,34 @@ def _component_signal_payload(value: ComponentSignal) -> dict[str, Any]:
         "confidence": value.confidence,
         "reasoning": value.reasoning,
         "details": _detail_payload(value.details),
+        "blocks": [block.model_dump(mode="json") for block in value.blocks],
+        "evaluation_reference": value.evaluation_reference.model_dump(mode="json")
+        if value.evaluation_reference
+        else None,
+        "status": value.status,
+        "duration_ms": value.duration_ms,
+        "usage": value.usage.model_dump(mode="json") if value.usage else None,
+        "cost": str(value.cost) if value.cost is not None else None,
     }
 
 
 def _component_signal_from_payload(value: Any) -> ComponentSignal:
-    payload = _codec_object(value, {"component_id", "direction", "confidence", "reasoning", "details"})
+    payload = _codec_object(
+        value,
+        {
+            "component_id",
+            "direction",
+            "confidence",
+            "reasoning",
+            "details",
+            "blocks",
+            "evaluation_reference",
+            "status",
+            "duration_ms",
+            "usage",
+            "cost",
+        },
+    )
     details = _detail_from_payload(payload["details"])
     if not isinstance(details, Mapping):
         raise ValueError("invalid component signal details")
@@ -476,6 +314,12 @@ def _component_signal_from_payload(value: Any) -> ComponentSignal:
         payload["confidence"],
         payload["reasoning"],
         details,
+        blocks=payload["blocks"],
+        evaluation_reference=payload["evaluation_reference"],
+        status=payload["status"],
+        duration_ms=payload["duration_ms"],
+        usage=payload["usage"],
+        cost=_detail_decimal_from_payload(payload["cost"]) if payload["cost"] is not None else None,
     )
 
 
@@ -545,9 +389,9 @@ def _target_position_from_payload(value: Any) -> TargetPosition | None:
 
 
 def _connection_portfolio_payload(value: ConnectionPortfolioSnapshot) -> dict[str, Any]:
-    return {
+    result = {
         "connection_id": value.connection_id,
-        "equity": str(value.equity),
+        "equity": None if value.equity is None else str(value.equity),
         "balances": [[asset, str(amount)] for asset, amount in value.balances.items()],
         "position": {
             "pair": value.position.pair.canonical(),
@@ -556,6 +400,11 @@ def _connection_portfolio_payload(value: ConnectionPortfolioSnapshot) -> dict[st
             "entry_price": None if value.position.entry_price is None else str(value.position.entry_price),
         },
     }
+    if value.account_snapshot is not None:
+        from cryptotrader.accounts.store import payload
+
+        result["account_snapshot"] = payload(value.account_snapshot)
+    return result
 
 
 def _decimal_from_payload(value: Any) -> Decimal:
@@ -568,7 +417,12 @@ def _decimal_from_payload(value: Any) -> Decimal:
 
 
 def _connection_portfolio_from_payload(value: Any) -> ConnectionPortfolioSnapshot:
-    payload = _codec_object(value, {"connection_id", "equity", "balances", "position"})
+    keys = {"connection_id", "equity", "balances", "position"}
+    if isinstance(value, dict) and "account_snapshot" in value:
+        keys.add("account_snapshot")
+    payload = _codec_object(value, keys)
+    from cryptotrader.accounts.store import snapshot_from_payload
+
     balances: dict[str, Decimal] = {}
     for raw_balance in _codec_array(payload["balances"]):
         if type(raw_balance) is not list or len(raw_balance) != 2 or type(raw_balance[0]) is not str:
@@ -586,7 +440,7 @@ def _connection_portfolio_from_payload(value: Any) -> ConnectionPortfolioSnapsho
     entry_price = position_payload["entry_price"]
     return ConnectionPortfolioSnapshot(
         payload["connection_id"],
-        _decimal_from_payload(payload["equity"]),
+        None if payload["equity"] is None else _decimal_from_payload(payload["equity"]),
         balances,
         ConnectionPosition(
             Pair.parse(position_payload["pair"]),
@@ -594,6 +448,7 @@ def _connection_portfolio_from_payload(value: Any) -> ConnectionPortfolioSnapsho
             _decimal_from_payload(position_payload["signed_notional"]),
             None if entry_price is None else _decimal_from_payload(entry_price),
         ),
+        snapshot_from_payload(payload["account_snapshot"]) if payload.get("account_snapshot") is not None else None,
     )
 
 
@@ -601,7 +456,7 @@ def _book_portfolio_payload(value: BookPortfolioSnapshot) -> dict[str, Any]:
     return {
         "book_id": value.book_id,
         "capital_scope": value.capital_scope,
-        "total_equity": str(value.total_equity),
+        "total_equity": None if value.total_equity is None else str(value.total_equity),
         "total_signed_notional": str(value.total_signed_notional),
         "connections": [_connection_portfolio_payload(item) for item in value.connections],
     }
@@ -615,7 +470,7 @@ def _book_portfolio_from_payload(value: Any) -> BookPortfolioSnapshot:
     return BookPortfolioSnapshot(
         payload["book_id"],
         payload["capital_scope"],
-        _decimal_from_payload(payload["total_equity"]),
+        None if payload["total_equity"] is None else _decimal_from_payload(payload["total_equity"]),
         _decimal_from_payload(payload["total_signed_notional"]),
         tuple(_connection_portfolio_from_payload(item) for item in _codec_array(payload["connections"])),
     )
@@ -649,6 +504,7 @@ def _book_cycle_result_payload(value: BookCycleResult) -> dict[str, Any]:
         "failure": None if value.failure is None else {"stage": value.failure.stage},
         "portfolio_after": (None if value.portfolio_after is None else _book_portfolio_payload(value.portfolio_after)),
         "portfolio_after_available": value.portfolio_after_available,
+        "reconciliation_required": value.reconciliation_required,
         "status": value.status,
     }
 
@@ -668,6 +524,7 @@ def _book_cycle_result_from_payload(value: Any) -> BookCycleResult:
             "failure",
             "portfolio_after",
             "portfolio_after_available",
+            "reconciliation_required",
             "status",
         },
     )
@@ -693,6 +550,7 @@ def _book_cycle_result_from_payload(value: Any) -> BookCycleResult:
             None if payload["portfolio_after"] is None else _book_portfolio_from_payload(payload["portfolio_after"])
         ),
         portfolio_after_available=payload["portfolio_after_available"],
+        reconciliation_required=payload["reconciliation_required"],
         status=payload["status"],
     )
 
@@ -719,6 +577,36 @@ def _record_payloads(record: MultiVenueCycleRecord) -> tuple[dict[str, Any], ...
     )
 
 
+def _run_payload(run: DecisionRun) -> dict[str, Any]:
+    return {
+        "version": 1,
+        "pair": run.pair,
+        "mode": run.mode,
+        "origin": run.origin,
+        "config_snapshot": _detail_payload(run.config_snapshot),
+        "finished_at": None if run.finished_at is None else run.finished_at.isoformat(),
+        "failure": None if run.failure is None else run.failure.model_dump(),
+        "incomplete_fields": list(run.incomplete_fields),
+    }
+
+
+def _run_from_payload(value: Any) -> DecisionRun:
+    payload = _codec_object(
+        value, {"version", "pair", "mode", "origin", "config_snapshot", "finished_at", "failure", "incomplete_fields"}
+    )
+    if type(payload["version"]) is not int or payload["version"] != 1:
+        raise ValueError("unsupported decision metadata version")
+    return DecisionRun(
+        payload["pair"],
+        payload["mode"],
+        payload["origin"],
+        _detail_mapping_from_payload(payload["config_snapshot"]),
+        None if payload["finished_at"] is None else _detail_datetime_from_payload(payload["finished_at"]),
+        None if payload["failure"] is None else AnalysisFailure.model_validate(payload["failure"]),
+        tuple(_codec_array(payload["incomplete_fields"])),
+    )
+
+
 def _contains_secret_balance_key(record: MultiVenueCycleRecord) -> bool:
     snapshots = (
         snapshot
@@ -742,14 +630,14 @@ def _validated_record_payloads(record: MultiVenueCycleRecord) -> tuple[dict[str,
     ) or _contains_secret_balance_key(record):
         raise ValueError("secret field")
     payloads = _record_payloads(record)
-    if _contains_secret_field(payloads):
+    if _contains_journal_secret(payloads) or _contains_secret_field(record.run.config_snapshot):
         raise ValueError("secret field")
     return payloads
 
 
 def _multi_venue_record(row: _MultiVenueCycleRow) -> MultiVenueCycleRecord:
     raw_payloads = (row.component_signals, row.fused_signal, row.target_position, row.book_results)
-    if _contains_secret_field(raw_payloads):
+    if _contains_journal_secret(raw_payloads):
         raise ValueError("secret field")
     invalid = False
     secret = False
@@ -769,8 +657,13 @@ def _multi_venue_record(row: _MultiVenueCycleRow) -> MultiVenueCycleRecord:
             row.execution_status,
             row.requires_attention,
             created_at,
+            _run_from_payload(row.run_metadata),
         )
-        if _contains_secret_field(_record_payloads(record)) or _contains_secret_balance_key(record):
+        if (
+            _contains_journal_secret(_record_payloads(record))
+            or _contains_secret_balance_key(record)
+            or _contains_secret_field(record.run.config_snapshot)
+        ):
             raise ValueError("secret field")
     except (ArithmeticError, KeyError, TypeError, ValueError) as error:
         secret = str(error) == "secret field"
@@ -793,9 +686,7 @@ class MultiVenueCycleStore:
     async def ensure_table(self) -> None:
         if self.database_url is None or self.database_url in _multi_venue_ready:
             return
-        engine = await get_engine(self.database_url)
-        async with engine.begin() as connection:
-            await connection.run_sync(_MultiVenueBase.metadata.create_all)
+        await require_tables(self.database_url, _MultiVenueBase.metadata.tables)
         _multi_venue_ready.add(self.database_url)
 
     async def _ensure_write_table(self) -> None:
@@ -817,6 +708,30 @@ class MultiVenueCycleStore:
             return
         await self._save_database(record, payloads)
 
+    @staticmethod
+    def stage_records(session, records) -> None:
+        """Publish immutable replay facts in their result owner's DB transaction."""
+        for record in records:
+            signals, fused, target, books = _validated_record_payloads(record)
+            if record.run.mode != "backtest":
+                raise ValueError("research publication only accepts backtest decisions")
+            session.add(
+                _MultiVenueCycleRow(
+                    cycle_id=record.cycle_id,
+                    run_metadata=_run_payload(record.run),
+                    config_revision=record.config_revision,
+                    market_data_source_id=record.market_data_source_id,
+                    component_signals=signals,
+                    fused_signal=fused,
+                    target_position=target,
+                    book_results=books,
+                    cycle_status=record.cycle_status,
+                    execution_status=record.execution_status,
+                    requires_attention=record.requires_attention,
+                    created_at=record.created_at,
+                )
+            )
+
     async def _save_database(
         self,
         record: MultiVenueCycleRecord,
@@ -829,6 +744,7 @@ class MultiVenueCycleStore:
             component_signals, fused_signal, target_position, book_results = payloads
             row = _MultiVenueCycleRow(
                 cycle_id=record.cycle_id,
+                run_metadata=_run_payload(record.run),
                 config_revision=record.config_revision,
                 market_data_source_id=record.market_data_source_id,
                 component_signals=component_signals,
@@ -870,6 +786,26 @@ class MultiVenueCycleStore:
 
     @staticmethod
     def _validate_replacement(current: MultiVenueCycleRecord, replacement: MultiVenueCycleRecord) -> None:
+        if current.cycle_status in {"queued", "running"}:
+            if (
+                current.cycle_id,
+                current.config_revision,
+                current.created_at,
+                current.market_data_source_id,
+                replace(current.run, finished_at=None, failure=None),
+            ) != (
+                replacement.cycle_id,
+                replacement.config_revision,
+                replacement.created_at,
+                replacement.market_data_source_id,
+                replace(replacement.run, finished_at=None, failure=None),
+            ):
+                raise ValueError("frozen run identity cannot change")
+            if replacement.cycle_status == "queued" or (
+                current.cycle_status == "running" and replacement.cycle_status == "running"
+            ):
+                raise ValueError("invalid run transition")
+            return
         if MultiVenueCycleStore._frozen_cycle_identity(current) != MultiVenueCycleStore._frozen_cycle_identity(
             replacement
         ):
@@ -891,6 +827,7 @@ class MultiVenueCycleStore:
             record.fused_signal,
             record.target_position,
             record.created_at,
+            record.run,
         )
 
     @staticmethod
@@ -1016,12 +953,17 @@ class MultiVenueCycleStore:
                 _MultiVenueCycleRow.cycle_status == current.cycle_status,
                 _MultiVenueCycleRow.execution_status == current.execution_status,
                 _MultiVenueCycleRow.requires_attention == current.requires_attention,
+                _MultiVenueCycleRow.run_metadata == _run_payload(current.run),
             )
             .values(
                 book_results=book_results,
                 cycle_status=replacement.cycle_status,
                 execution_status=replacement.execution_status,
                 requires_attention=replacement.requires_attention,
+                run_metadata=_run_payload(replacement.run),
+                component_signals=_component_signals_payload(replacement.component_signals),
+                fused_signal=_fused_signal_payload(replacement.fused_signal),
+                target_position=_target_position_payload(replacement.target_position),
             )
             .returning(_MultiVenueCycleRow)
             .execution_options(populate_existing=True)
@@ -1038,14 +980,62 @@ class MultiVenueCycleStore:
             await session.close()
         return _multi_venue_record(row) if row is not None else None
 
-    async def list(self, *, limit: int = 100, offset: int = 0) -> list[MultiVenueCycleRecord]:
+    async def list(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        pair=None,
+        mode=None,
+        origin=None,
+        revision=None,
+        started_at=None,
+        ended_at=None,
+        component_id=None,
+    ) -> list[MultiVenueCycleRecord]:
         if limit < 1 or offset < 0:
             return []
+        ordered = await self._filtered(
+            pair=pair,
+            mode=mode,
+            origin=origin,
+            revision=revision,
+            started_at=started_at,
+            ended_at=ended_at,
+            component_id=component_id,
+        )
+        return ordered[offset : offset + limit]
+
+    async def _filtered(self, **filters):
         if self.database_url is None:
-            ordered = sorted(self.records, key=lambda item: item.created_at, reverse=True)
-            return ordered[offset : offset + limit]
+            records = self.records
+        else:
+            records = await self._all_records()
+
+        def matches(item):
+            return (
+                all(
+                    value is None or actual == value
+                    for actual, value in (
+                        (item.run.pair, filters.get("pair")),
+                        (item.run.mode, filters.get("mode")),
+                        (item.run.origin, filters.get("origin")),
+                        (item.config_revision, filters.get("revision")),
+                    )
+                )
+                and (filters.get("started_at") is None or item.created_at >= filters["started_at"])
+                and (filters.get("ended_at") is None or item.created_at <= filters["ended_at"])
+                and (
+                    filters.get("component_id") is None
+                    or any(signal.component_id == filters["component_id"] for signal in item.component_signals)
+                )
+            )
+
+        return sorted((item for item in records if matches(item)), key=lambda item: item.created_at, reverse=True)
+
+    async def _all_records(self):
         await self.ensure_table()
-        query = select(_MultiVenueCycleRow).order_by(_MultiVenueCycleRow.created_at.desc()).offset(offset).limit(limit)
+        query = select(_MultiVenueCycleRow).order_by(_MultiVenueCycleRow.created_at.desc())
         session = await get_async_session(self.database_url)
         try:
             rows = (await session.execute(query)).scalars().all()
@@ -1053,13 +1043,22 @@ class MultiVenueCycleStore:
             await session.close()
         return [_multi_venue_record(row) for row in rows]
 
-    async def count(self) -> int:
-        if self.database_url is None:
-            return len(self.records)
-        await self.ensure_table()
-        query = select(func.count()).select_from(_MultiVenueCycleRow)
-        session = await get_async_session(self.database_url)
-        try:
-            return int((await session.execute(query)).scalar_one())
-        finally:
-            await session.close()
+    async def count(self, **filters) -> int:
+        return len(await self._filtered(**filters))
+
+    async def interrupt_unfinished(self, finished_at: datetime) -> None:
+        for record in await self._filtered():
+            if record.cycle_status in {"queued", "running"}:
+                await self.replace(
+                    replace(
+                        record,
+                        cycle_status="interrupted",
+                        run=replace(
+                            record.run,
+                            finished_at=finished_at,
+                            failure=AnalysisFailure(
+                                code="interrupted", stage="runtime", message="服务已重启。未自动恢复执行。"
+                            ),
+                        ),
+                    )
+                )

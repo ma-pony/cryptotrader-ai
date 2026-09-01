@@ -1,11 +1,12 @@
-"""A typed installed plugin example, not an investment strategy."""
+"""A typed code-registration example, not an investment strategy."""
 
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
+from cryptotrader.configuration.catalog import PluginConfiguration
 from cryptotrader.configuration.fields import LocalizedText
+from cryptotrader.configuration.registry import ExtensionRegistration
 from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements
 
 
@@ -70,18 +71,26 @@ class ExampleComponent:
         )
 
 
-@configured_factory(
-    PluginConfiguration(
-        id="configuration_example",
-        label=LocalizedText("类型化配置示例", "Typed configuration example"),
-        description=LocalizedText(
-            "仅演示插件字段。始终输出中性。不调用模型。",
-            "Demonstrates typed fields; always neutral, with no model calls.",
-        ),
-        parameter_model=Parameters,
-    )
+configuration = PluginConfiguration(
+    id="configuration_example",
+    label=LocalizedText("类型化配置示例", "Typed configuration example"),
+    description=LocalizedText(
+        "仅演示后端代码注册组件字段。始终输出中性。不调用模型。",
+        "Demonstrates typed fields; always neutral, with no model calls.",
+    ),
+    parameter_model=Parameters,
 )
-def create_component(document, sink):
-    del sink
+
+
+def create_component(context):
+    document = context.document
     configured = next(item for item in document.signals.components if item.component_id == "configuration_example")
     return ExampleComponent(Parameters.model_validate(dict(configured.parameters)))
+
+
+registration = ExtensionRegistration(configuration, create_component)
+
+
+def register_example(extensions) -> None:
+    """Explicitly add this example during application-owned registry setup."""
+    extensions.components[configuration.id] = registration

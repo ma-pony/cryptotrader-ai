@@ -53,8 +53,8 @@ async def _load_runtime_config():
     settings = BootstrapSettings.from_environment()
     repository = RuntimeConfigRepository(settings.database_url, CredentialVault(settings.config_master_key))
     snapshot = await repository.get_existing()
-    if snapshot.setup_required:
-        raise RuntimeError("runtime configuration is not active")
+    if not snapshot.operational:
+        raise RuntimeError("runtime configuration is not operational")
     return StagingRuntime(repository=repository, snapshot=snapshot)
 
 
@@ -71,9 +71,9 @@ async def _check_runtime_health(runtime) -> None:
     )
     validate_runtime_document(
         runtime.snapshot.document,
-        set(signals.installed_ids()),
-        set(venues.installed_ids()),
-        set(markets.installed_ids()),
+        set(signals.registered_ids()),
+        set(venues.registered_ids()),
+        set(markets.registered_ids()),
     )
     runtime.signal_registry = signals
     runtime.venue_registry = venues

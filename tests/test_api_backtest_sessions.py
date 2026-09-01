@@ -1,98 +1,45 @@
-"""Tests for GET /api/backtest/sessions and /api/backtest/sessions/{name} — FR-806.
-
-Surface saved backtest sessions for the historical-runs dropdown.
-"""
-
-from __future__ import annotations
-
-from unittest.mock import MagicMock, patch
+"""History replaces file sessions; snapshot reuse is an explicit new experiment."""
 
 import pytest
-from fastapi.testclient import TestClient
+
+from tests.factories.research import research as research
+from tests.factories.research import research_payload
+from tests.factories.research_offline import research_offline  # noqa: F401
 
 
-@pytest.fixture
-def client() -> TestClient:
-    from api.main import app
-    from cryptotrader.runtime_config.defaults import minimal_runtime_document
-
-    previous = getattr(app.state, "runtime", None)
-    app.state.runtime = MagicMock(snapshot=MagicMock(document=minimal_runtime_document()))
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        app.state.runtime = previous
+@pytest.mark.asyncio
+async def test_empty_history_then_unnamed_run_remains_on_second_visit(research):
+    client, service = research
+    assert (await client.get("/api/backtest/runs")).json()["items"] == []
+    run_id = (await client.post("/api/backtest/runs", json=research_payload())).json()["run_id"]
+    await service.task_manager.drain()
+    assert (await client.get("/api/backtest/runs")).json()["items"][0]["run_id"] == run_id
+    assert (await client.get("/api/backtest/runs?limit=0")).status_code == 422
 
 
-def _mock_config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.infrastructure.database_url = None
-    return cfg
+@pytest.mark.asyncio
+async def test_reuse_freezes_old_risk_and_component_weight_then_compare_shows_cost_difference(research):
+    client, service = research
+    a = (await client.post("/api/backtest/runs", json=research_payload())).json()["run_id"]
+    await service.task_manager.drain()
+    old = (await service.store.get(a)).config_snapshot
+    snapshot = service.repository.snapshot
+    from cryptotrader.runtime_config.models import PositionConfig, RiskConfig
 
-
-class TestSessionsList:
-    def test_returns_session_names(self, client: TestClient) -> None:
-        with (
-            patch(
-                "cryptotrader.backtest.session.list_sessions",
-                return_value=["q1-rules-baseline", "q2-llm-aggressive"],
-            ),
-        ):
-            resp = client.get("/api/backtest/sessions")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "sessions" in body
-        assert body["sessions"] == ["q1-rules-baseline", "q2-llm-aggressive"]
-
-    def test_empty_when_no_sessions(self, client: TestClient) -> None:
-        with (
-            patch("cryptotrader.backtest.session.list_sessions", return_value=[]),
-        ):
-            resp = client.get("/api/backtest/sessions")
-
-        assert resp.status_code == 200
-        assert resp.json() == {"sessions": []}
-
-
-class TestSessionDetail:
-    def test_returns_session_with_params_and_result(self, client: TestClient) -> None:
-        loaded = {
-            "name": "q1-rules-baseline",
-            "params": {
-                "start": "2026-01-01",
-                "end": "2026-04-01",
-                "pair": "BTC/USDT",
-                "initial_capital": 10000,
-                "session_name": "q1-rules-baseline",
-            },
-            "result": {
-                "metrics": {
-                    "total_return_pct": 0.085,
-                    "sharpe": 1.42,
-                    "max_drawdown_pct": 0.12,
-                    "win_rate": 0.61,
-                    "trades_count": 38,
-                },
-                "equity_curve": [],
-                "decisions": [],
-            },
-            "saved_at": "2026-04-16T13:08:42Z",
-        }
-        with (
-            patch("cryptotrader.backtest.session.load_session", return_value=loaded),
-        ):
-            resp = client.get("/api/backtest/sessions/q1-rules-baseline")
-
-        assert resp.status_code == 200
-        body = resp.json()
-        for key in ("name", "params", "result", "saved_at"):
-            assert key in body
-        assert body["name"] == "q1-rules-baseline"
-
-    def test_404_when_session_unknown(self, client: TestClient) -> None:
-        with (
-            patch("cryptotrader.backtest.session.load_session", return_value=None),
-        ):
-            resp = client.get("/api/backtest/sessions/never-existed")
-        assert resp.status_code == 404
+    service.repository.snapshot = type(snapshot)(
+        9,
+        snapshot.document.model_copy(update={"risk": RiskConfig(position=PositionConfig(max_single_pct=0.2))}),
+        snapshot.updated_at,
+    )
+    b = (await client.post("/api/backtest/runs", json=research_payload(snapshot_run_id=a, fee_rate="0.002"))).json()[
+        "run_id"
+    ]
+    await service.task_manager.drain()
+    assert (await service.store.get(b)).config_snapshot == old
+    response = await client.get(f"/api/backtest/runs/compare?left={a}&right={b}")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["comparable"] is False
+    assert body["condition_differences"]["fee_rate"] == {"left": "0.001", "right": "0.002"}
+    assert body["left"]["run_id"] == a
+    assert body["right"]["run_id"] == b

@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal
+
+from cryptotrader.signals.presentation import RESULT_BLOCKS, EvaluationReference, ResultBlock, SignalUsage
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -86,6 +89,7 @@ class SignalContext:
     current_price: float
     atr: float
     snapshots: Mapping[str, DataSnapshot]
+    evaluation_reference: EvaluationReference | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +101,12 @@ class ComponentSignal:
     confidence: float
     reasoning: str
     details: Mapping[str, Any] = field(default_factory=dict)
+    blocks: tuple[ResultBlock, ...] = ()
+    evaluation_reference: EvaluationReference | None = None
+    status: Literal["completed", "skipped", "failed"] = "completed"
+    duration_ms: int | None = None
+    usage: SignalUsage | None = None
+    cost: Decimal | None = None
 
     def __post_init__(self) -> None:
         if not self.component_id.strip():
@@ -105,3 +115,16 @@ class ComponentSignal:
             raise ValueError("direction must be long, short, or neutral")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be in [0, 1]")
+        if self.status not in {"completed", "skipped", "failed"}:
+            raise ValueError("invalid component status")
+        if self.duration_ms is not None and (type(self.duration_ms) is not int or self.duration_ms < 0):
+            raise ValueError("duration_ms must be a nonnegative integer")
+        if self.cost is not None and (not isinstance(self.cost, Decimal) or not self.cost.is_finite() or self.cost < 0):
+            raise ValueError("cost must be a nonnegative finite Decimal in USD")
+        object.__setattr__(self, "blocks", RESULT_BLOCKS.validate_python(self.blocks))
+        if self.evaluation_reference is not None:
+            object.__setattr__(
+                self, "evaluation_reference", EvaluationReference.model_validate(self.evaluation_reference)
+            )
+        if self.usage is not None:
+            object.__setattr__(self, "usage", SignalUsage.model_validate(self.usage))

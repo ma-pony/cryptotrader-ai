@@ -1,4 +1,4 @@
-"""Parameter models consumed by the built-in plugin factories."""
+"""Parameter models consumed by backend-registered component factories."""
 
 from __future__ import annotations
 
@@ -182,14 +182,15 @@ class LlmCommitteeParameters(PluginParameters):
 class DefaultMarketSourceParameters(PluginParameters):
     field_descriptions = {
         "market_adapter_id": LocalizedText(
-            "行情采集使用的已安装交易所适配器。", "Installed exchange adapter used for market data collection."
+            "行情采集使用的后端已注册交易所适配器。",
+            "Exchange adapter registered by the backend for market data collection.",
         ),
         "kronos_aux_symbol": LocalizedText(
             "默认行情源为 Kronos 特征采集的辅助标的。",
             "Auxiliary symbol collected by the default source for Kronos features.",
         ),
         "timeframe": LocalizedText(
-            "统一退出策略计算 ATR 时使用的K线周期。",
+            "统一退出策略计算平均真实波幅时使用的K线周期。",
             "Candle timeframe used to calculate ATR for the shared exit policy.",
         ),
         "limit": LocalizedText(

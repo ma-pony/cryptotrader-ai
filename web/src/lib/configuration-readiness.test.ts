@@ -1,6 +1,7 @@
 import { expect, it } from 'vitest';
 import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 import { toRuntimeDocument } from '@/hooks/use-runtime-config';
+import { workflowCatalog } from '@/test/configuration-workflow';
 import {
   bookErrors,
   connectionChecksReady,
@@ -31,10 +32,10 @@ it('binds readiness to every saved connection parameter and credential timestamp
       health: { healthy: true },
     } as ConnectionCheck,
   };
-  expect(connectionChecksReady(document, checks, { [connection.id]: { updatedAt: 'first' } })).toBe(true);
-  expect(connectionChecksReady(document, checks, { [connection.id]: { updatedAt: 'rotated' } })).toBe(false);
+  expect(connectionChecksReady(document, checks, { [connection.id]: { updatedAt: 'first' } }, workflowCatalog)).toBe(true);
+  expect(connectionChecksReady(document, checks, { [connection.id]: { updatedAt: 'rotated' } }, workflowCatalog)).toBe(false);
   connection.parameters = { initial_equity: 20000 };
-  expect(connectionChecksReady(document, checks, { [connection.id]: { updatedAt: 'first' } })).toBe(false);
+  expect(connectionChecksReady(document, checks, { [connection.id]: { updatedAt: 'first' } }, workflowCatalog)).toBe(false);
 });
 
 it('requires valid scope-safe unique allocations that total 100 percent', () => {
@@ -47,21 +48,21 @@ it('requires valid scope-safe unique allocations that total 100 percent', () => 
     hitl_required: true,
     allocations: [{ connection_id: connection.id, enabled: true, weight: 1 }],
   };
-  expect(bookErrors([book], [connection], (key) => key)).toEqual({});
+  expect(bookErrors([book], [connection], workflowCatalog, (key) => key)).toEqual({});
   for (const invalid of [
     { ...connection, enabled: false },
     { ...connection, canary_only: true },
     { ...connection, environment: 'live' as const },
   ]) {
-    expect(bookErrors([book], [invalid], (key) => key)['execution.books.0.allocations.0.weight']).toBe(
+    expect(bookErrors([book], [invalid], workflowCatalog, (key) => key)['execution.books.0.allocations.0.weight']).toBe(
       'invalidConnection',
     );
   }
   expect(
-    bookErrors([book, { ...book, id: 'other' }], [connection], (key) => key)['execution.books.1.allocations.0.weight'],
+    bookErrors([book, { ...book, id: 'other' }], [connection], workflowCatalog, (key) => key)['execution.books.1.allocations.0.weight'],
   ).toBe('duplicateConnection');
   expect(
-    bookErrors([{ ...book, allocations: [{ ...book.allocations[0]!, weight: 0.4 }] }], [connection], (key) => key)[
+    bookErrors([{ ...book, allocations: [{ ...book.allocations[0]!, weight: 0.4 }] }], [connection], workflowCatalog, (key) => key)[
       'execution.books.0.allocations.0.weight'
     ],
   ).toBe('bookWeight');

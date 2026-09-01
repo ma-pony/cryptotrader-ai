@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { ConfigurationDraft, RuntimeDocument } from '@/types/api';
-import { BooleanField, NumberField, StringListField, type DomainFormProps } from '@/components/configuration/field';
+import { BooleanField, NumberField, type DomainFormProps } from '@/components/configuration/field';
 import { AdvancedSection, Section } from '@/components/configuration/section';
 
 export function SchedulerSettings({
@@ -22,14 +22,6 @@ export function SchedulerSettings({
           label={t('forms.schedulerEnabled')}
           value={value.enabled}
           onChange={(enabled) => onChange({ ...value, enabled })}
-        />
-        <StringListField
-          name="scheduler.pairs"
-          label={t('forms.pairs')}
-          addLabel={t('forms.addPair')}
-          value={value.pairs}
-          onChange={(pairs) => onChange({ ...value, pairs })}
-          error={errors['scheduler.pairs']}
         />
         <NumberField
           name="scheduler.interval_minutes"

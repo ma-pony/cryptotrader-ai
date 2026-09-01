@@ -23,6 +23,18 @@ from cryptotrader.venues.models import ConnectionPosition
 from tests.test_execution_coordinator import _proposal, _result
 
 
+async def _database_url(path):
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+    database_url = f"sqlite+aiosqlite:///{path}"
+    await migrate_workbench_schema(database_url)
+    return database_url
+
+
+async def _store(store_type, path, database):
+    return store_type(await _database_url(path) if database else None)
+
+
 def _proposal_for(
     book_id: str = "simulation",
     capital_scope: str = "simulated",
@@ -278,6 +290,51 @@ def _fused():
     )
 
 
+@pytest.mark.asyncio
+async def test_presentation_timeline_reference_usage_and_cost_round_trip(tmp_path):
+    from cryptotrader.journal.store import MultiVenueCycleStore
+    from cryptotrader.signals.presentation import EvaluationReference, SignalUsage, TimelineBlock, TimelineEntry
+
+    record = _record()
+    reference = EvaluationReference(
+        reference_time=datetime(2026, 8, 29, 1, tzinfo=UTC),
+        reference_price=Decimal("101.2300"),
+        due_at=datetime(2026, 8, 29, 2, tzinfo=UTC),
+        interval="1h",
+        market_source_id="market-primary",
+    )
+    signal = replace(
+        record.component_signals[0],
+        evaluation_reference=reference,
+        duration_ms=42,
+        usage=SignalUsage(input_tokens=120, output_tokens=30),
+        cost=Decimal("0.000120"),
+        blocks=(
+            TimelineBlock(
+                title="辩论记录",
+                entries=(TimelineEntry(time=reference.reference_time, actor="测试智能体", body="完整原文"),),
+            ),
+        ),
+    )
+    record = replace(record, component_signals=(signal, record.component_signals[1]))
+    store = MultiVenueCycleStore(await _database_url(tmp_path / "presentation.db"))
+    await store.save(record)
+    restored = await store.get(record.cycle_id)
+    assert restored.component_signals == record.component_signals
+    for secret_details in (
+        {"input_tokens": 1, "output_tokens": 2},
+        {"api_key": "private"},  # pragma: allowlist secret
+    ):
+        with pytest.raises(ValueError, match="secret field"):
+            await store.save(
+                replace(
+                    record,
+                    cycle_id="secret",
+                    component_signals=(replace(signal, details=secret_details), record.component_signals[1]),
+                )
+            )
+
+
 def _record(
     *,
     cycle_id: str = "cycle-1",
@@ -287,7 +344,7 @@ def _record(
     execution_status: str = "partial",
     requires_attention: bool = True,
 ):
-    from cryptotrader.journal.models import MultiVenueCycleRecord
+    from cryptotrader.journal.models import DecisionRun, MultiVenueCycleRecord
 
     books = (_book_cycle(),) if book_results is None else book_results
     return MultiVenueCycleRecord(
@@ -302,6 +359,7 @@ def _record(
         execution_status=execution_status,
         requires_attention=requires_attention,
         created_at=datetime(2026, 8, 29, 2, tzinfo=UTC),
+        run=DecisionRun("BTC/USDT:USDT", "trading", "manual", {}, datetime(2026, 8, 29, 2, tzinfo=UTC), None),
     )
 
 
@@ -436,7 +494,7 @@ def test_multi_venue_cycle_record_supports_only_simple_empty_book_terminal_matri
 async def test_multi_venue_cycle_round_trip_preserves_awaiting_hitl_identity(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'cycles.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "cycles.db", database)
     live = _book_cycle(
         book_id="live",
         capital_scope="real",
@@ -465,7 +523,7 @@ async def test_multi_venue_cycle_round_trip_preserves_awaiting_hitl_identity(tmp
 async def test_multi_venue_cycle_round_trip_preserves_execution_and_portfolios(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'terminal.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "terminal.db", database)
     record = _record(cycle_id=f"cycle-terminal-{database}")
 
     await store.save(record)
@@ -512,7 +570,7 @@ async def test_journal_read_path_rejects_secrets_and_bool_codec_version(tmp_path
     from cryptotrader.journal.store import MultiVenueCycleStore
 
     path = tmp_path / "read-corrupt.db"
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    store = MultiVenueCycleStore(await _database_url(path))
     record = _record()
     await store.save(record)
     column = "component_signals" if corruption == "secret" else "book_results"
@@ -541,41 +599,6 @@ async def test_journal_read_path_rejects_secrets_and_bool_codec_version(tmp_path
 
 
 @pytest.mark.asyncio
-async def test_multi_venue_store_schema_is_exact_and_ignores_legacy_trading_cycles(tmp_path):
-    from cryptotrader.journal.store import MultiVenueCycleStore
-
-    path = tmp_path / "coexist.db"
-    with sqlite3.connect(path) as connection:
-        connection.execute("CREATE TABLE trading_cycles (cycle_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
-        connection.execute("INSERT INTO trading_cycles VALUES ('legacy-cycle', 'RAW_LEGACY_PAYLOAD')")
-
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
-    record = _record()
-    await store.save(record)
-
-    with sqlite3.connect(path) as connection:
-        columns = {row[1] for row in connection.execute("PRAGMA table_info(multi_venue_cycles)")}
-        legacy = connection.execute("SELECT payload FROM trading_cycles").fetchone()[0]
-
-    assert columns == {
-        "cycle_id",
-        "config_revision",
-        "market_data_source_id",
-        "component_signals",
-        "fused_signal",
-        "target_position",
-        "book_results",
-        "cycle_status",
-        "execution_status",
-        "requires_attention",
-        "created_at",
-    }
-    assert legacy == "RAW_LEGACY_PAYLOAD"
-    assert await store.get("legacy-cycle") is None
-    assert await store.count() == 1
-
-
-@pytest.mark.asyncio
 async def test_multi_venue_store_lists_newest_first_and_counts_only_new_records():
     from cryptotrader.journal.store import MultiVenueCycleStore
 
@@ -595,7 +618,7 @@ async def test_multi_venue_store_lists_newest_first_and_counts_only_new_records(
 async def test_duplicate_cycle_fails_without_database_cause_or_context(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'duplicate.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "duplicate.db", database)
     record = _record()
     await store.save(record)
 
@@ -610,7 +633,7 @@ async def test_corrupt_multi_venue_payload_fails_closed_without_raw_context(tmp_
     from cryptotrader.journal.store import MultiVenueCycleStore
 
     path = tmp_path / "corrupt.db"
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    store = MultiVenueCycleStore(await _database_url(path))
     record = _record()
     await store.save(record)
 
@@ -639,7 +662,7 @@ async def test_corrupt_multi_venue_payload_fails_closed_without_raw_context(tmp_
 async def test_replace_advances_same_cycle_after_live_approval(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'replace.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "replace.db", database)
     sim = _book_cycle(status="completed")
     live = _book_cycle(
         book_id="live",
@@ -678,7 +701,7 @@ async def test_replace_advances_same_cycle_after_live_approval(tmp_path, databas
 async def test_sqlite_concurrent_replace_allows_only_one_progression(tmp_path):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    database_url = f"sqlite+aiosqlite:///{tmp_path / 'replace-race.db'}"
+    database_url = await _database_url(tmp_path / "replace-race.db")
     creator = MultiVenueCycleStore(database_url)
     sim = _book_cycle(status="completed")
     live = _book_cycle(
@@ -742,7 +765,7 @@ async def test_sqlite_concurrent_replace_allows_only_one_progression(tmp_path):
 async def test_replace_rejects_frozen_identity_change_without_mutating_original(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'guard.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "guard.db", database)
     original = _record()
     await store.save(original)
     changed = replace(original, market_data_source_id="other-source")
@@ -761,7 +784,7 @@ async def test_replace_requires_existing_cycle(tmp_path, monkeypatch, database):
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'missing.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "missing.db", database)
     sessions = []
     if database:
         await store.ensure_table()
@@ -953,7 +976,7 @@ def test_completed_and_preparation_failed_books_are_partial_without_attention():
 async def test_preparation_failure_and_completed_sibling_round_trip_truthfully(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'prep-roundtrip.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "prep-roundtrip.db", database)
     record = _record(
         cycle_id=f"prep-roundtrip-{database}",
         book_results=(_book_cycle(status="completed"), _preparation_failure_book("risk")),
@@ -1279,7 +1302,7 @@ def _record_with_secret_balance_key():
 async def test_journal_rejects_secret_shaped_portfolio_balance_keys_before_encoding(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'secret-balance.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "secret-balance.db", database)
     with pytest.raises(ValueError, match=r"^secret field$") as captured:
         await store.save(_record_with_secret_balance_key())
     assert captured.value.__cause__ is None
@@ -1291,7 +1314,7 @@ async def test_journal_rejects_injected_secret_balance_key_after_decode(tmp_path
     from cryptotrader.journal.store import MultiVenueCycleStore
 
     path = tmp_path / "read-secret-balance.db"
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    store = MultiVenueCycleStore(await _database_url(path))
     record = _record()
     await store.save(record)
     with sqlite3.connect(path) as connection:
@@ -1320,7 +1343,7 @@ async def test_journal_rejects_injected_secret_balance_key_after_decode(tmp_path
 async def test_replace_cannot_rewrite_terminal_execution_or_portfolio(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'terminal-rewrite.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "terminal-rewrite.db", database)
     original = _record()
     await store.save(original)
     book = original.book_results[0]
@@ -1356,7 +1379,7 @@ async def test_replace_cannot_rewrite_terminal_execution_or_portfolio(tmp_path, 
 async def test_replace_cannot_rewrite_awaiting_approval_identity(tmp_path, database):
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'approval-rewrite.db'}" if database else None)
+    store = await _store(MultiVenueCycleStore, tmp_path / "approval-rewrite.db", database)
     live = _book_cycle(
         book_id="live",
         capital_scope="real",
@@ -1443,7 +1466,7 @@ async def test_save_closes_write_session_when_row_constructor_raises(tmp_path, m
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'row-constructor-{close_fails}.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / f"row-constructor-{close_fails}.db"))
     await store.ensure_table()
     sessions = _install_tracking_write_session(
         monkeypatch,
@@ -1472,7 +1495,7 @@ async def test_database_write_session_closes_once_on_success(tmp_path, monkeypat
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'close-success-{operation}.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / f"close-success-{operation}.db"))
     await store.ensure_table()
     record = _record()
     if operation == "replace":
@@ -1494,7 +1517,7 @@ async def test_normal_database_write_close_failure_is_redacted(tmp_path, monkeyp
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'close-failure-{operation}.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / f"close-failure-{operation}.db"))
     await store.ensure_table()
     record = _record()
     if operation == "replace":
@@ -1525,7 +1548,7 @@ async def test_program_close_failure_after_success_is_redacted(tmp_path, monkeyp
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'program-close-{operation}.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / f"program-close-{operation}.db"))
     await store.ensure_table()
     record = _record()
     if operation == "replace":
@@ -1555,7 +1578,7 @@ async def test_write_close_does_not_swallow_cancellation(tmp_path, monkeypatch):
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'close-cancelled.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / "close-cancelled.db"))
     await store.ensure_table()
     sessions = _install_tracking_write_session(
         monkeypatch,
@@ -1574,7 +1597,7 @@ async def test_illegal_terminal_replace_closes_once_and_preserves_domain_error(t
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'close-domain.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / "close-domain.db"))
     original = _record()
     await store.save(original)
     book = original.book_results[0]
@@ -1605,7 +1628,7 @@ async def test_corrupt_replace_row_closes_write_session_once(tmp_path, monkeypat
     from cryptotrader.journal.store import MultiVenueCycleStore
 
     path = tmp_path / "close-corrupt.db"
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    store = MultiVenueCycleStore(await _database_url(path))
     record = _record()
     await store.save(record)
     with sqlite3.connect(path) as connection:
@@ -1634,7 +1657,7 @@ async def test_program_write_failure_closes_once_without_close_overwrite(tmp_pat
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / f'close-program-{failure}.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / f"close-program-{failure}.db"))
     await store.ensure_table()
     record = _record()
     if failure == "validate":
@@ -1671,7 +1694,7 @@ async def test_lookup_error_is_preserved_when_close_has_program_failure(tmp_path
     from cryptotrader.journal import store as journal_store
     from cryptotrader.journal.store import MultiVenueCycleStore
 
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{tmp_path / 'close-lookup.db'}")
+    store = MultiVenueCycleStore(await _database_url(tmp_path / "close-lookup.db"))
     record = _record()
     await store.save(record)
     sessions = _install_tracking_write_session(
@@ -1701,7 +1724,7 @@ async def test_sqlalchemy_write_failures_are_redacted_without_params_or_context(
     from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
 
     path = tmp_path / f"abort-{operation}.db"
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    store = MultiVenueCycleStore(await _database_url(path))
     await store.ensure_table()
     record = _record()
     replacement = record
@@ -1762,7 +1785,7 @@ async def test_sqlalchemy_session_creation_failures_are_redacted(tmp_path, monke
     from cryptotrader.journal.store import JournalPersistenceError, MultiVenueCycleStore
 
     path = tmp_path / f"session-{operation}.db"
-    store = MultiVenueCycleStore(f"sqlite+aiosqlite:///{path}")
+    store = MultiVenueCycleStore(await _database_url(path))
     await store.ensure_table()
     record = _record()
     if operation == "replace":

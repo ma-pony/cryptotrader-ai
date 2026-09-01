@@ -9,7 +9,9 @@ fills.
 
 from __future__ import annotations
 
+import asyncio
 import os
+import socket
 import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,12 +19,30 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest_plugins = ("tests.test_runtime_config_api",)
+
 _test_runtime_database: Path | None = None
 if "DATABASE_URL" not in os.environ:
     _test_runtime_database = Path(tempfile.gettempdir()) / f"cryptotrader-test-runtime-{os.getpid()}.db"
     _test_runtime_database.unlink(missing_ok=True)
     os.environ["DATABASE_URL"] = f"sqlite+aiosqlite:///{_test_runtime_database}"
 os.environ.setdefault("CONFIG_MASTER_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+
+
+def pytest_sessionstart() -> None:
+    """Explicitly migrate the one SQLite database owned by the test session."""
+    if _test_runtime_database is None:
+        return
+
+    async def migrate() -> None:
+        from cryptotrader.db import dispose_engine
+        from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+        database_url = os.environ["DATABASE_URL"]
+        await migrate_workbench_schema(database_url)
+        await dispose_engine(database_url)
+
+    asyncio.run(migrate())
 
 
 def pytest_sessionfinish() -> None:
@@ -33,68 +53,36 @@ def pytest_sessionfinish() -> None:
 @pytest.fixture(autouse=True)
 def _install_minimal_runtime_for_api_clients():
     """TestClient routes read an explicit database-runtime security document."""
-    try:
-        from api.main import app
-        from cryptotrader.runtime_config.defaults import minimal_runtime_document
-        from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
+    from api.main import app
+    from cryptotrader.runtime_config.defaults import minimal_runtime_document
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot
 
-        previous = getattr(app.state, "runtime", None)
-        document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
-        app.state.runtime = SimpleNamespace(
-            snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
-            repository=SimpleNamespace(database_url=os.environ["DATABASE_URL"]),
-            cycle=None,
-        )
-        yield
-        app.state.runtime = previous
-    except ImportError:
-        yield
-
-
-@pytest.fixture(autouse=True)
-def _reset_okx_portfolio_cache() -> None:
-    """Reset the per-process OKX live-portfolio cache between tests.
-
-    portfolio_v2 caches a successful read for 30s to avoid pounding OKX on
-    every poll. Without this reset, tests that mock ``read_portfolio_from_exchange``
-    to return None see the previous test's cached dict instead of going through
-    the mocked path. Added 2026-05-07 with the cache.
-    """
-    try:
-        import api.routes.portfolio_v2 as p
-
-        p._OKX_LAST_FAIL_AT = 0.0
-        p._OKX_LAST_OK_AT = 0.0
-        p._OKX_LAST_OK_RESULT = None
-    except Exception:
-        pass
+    previous = getattr(app.state, "runtime", None)
+    previous_migration = getattr(app.state, "migration_required", None)
+    document = minimal_runtime_document().model_copy(update={})
+    app.state.runtime = SimpleNamespace(
+        snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
+        repository=SimpleNamespace(database_url=os.environ["DATABASE_URL"]),
+        cycle=None,
+    )
+    app.state.migration_required = None
+    yield
+    app.state.runtime = previous
+    app.state.migration_required = previous_migration
 
 
 @pytest.fixture(autouse=True)
-def _reset_api_rate_limiter() -> None:
-    """Clear API rate-limit buckets, backtest run state, and health caches before each test."""
-    try:
-        import api.main as api_main
+def _offline_process_boundary(monkeypatch) -> None:
+    """Ordinary tests fail closed before any real socket or Redis connection."""
+    import api.main as api_main
+    from api.routes.health import _reset_health_clients
 
-        api_main._rate_buckets.clear()
-        api_main._redis_client = None
-    except Exception:
-        pass
+    def deny_external_socket(*_args, **_kwargs):
+        raise AssertionError("tests must inject an offline transport before network access")
 
-    try:
-        from api.routes.backtest import _RUNS, _TASKS
-
-        _RUNS.clear()
-        _TASKS.clear()
-    except Exception:
-        pass
-
-    try:
-        # #8-RC1: /health caches Redis client + DB engine across requests.
-        # Reset between tests so mocked/patched fixtures take effect on each
-        # call (otherwise a previous test's success leaves a live client cached).
-        from api.routes.health import _reset_health_clients
-
-        _reset_health_clients()
-    except Exception:
-        pass
+    monkeypatch.setattr(socket.socket, "connect", deny_external_socket)
+    monkeypatch.setattr(socket.socket, "connect_ex", deny_external_socket)
+    monkeypatch.setattr(api_main, "_get_redis_for_rate_limit", lambda: None)
+    api_main._rate_buckets.clear()
+    api_main._redis_client = None
+    _reset_health_clients()

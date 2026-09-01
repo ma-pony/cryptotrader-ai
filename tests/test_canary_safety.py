@@ -34,11 +34,81 @@ def _script(name: str):
     return module
 
 
-def test_venue_canary_refuses_live_environment():
+def test_venue_canary_refuses_real_capital_scope():
     venue_canary = _script("venue_canary.py")
 
-    with pytest.raises(venue_canary.CanarySafetyError, match="live connections are read-only in canary"):
-        venue_canary.require_simulated_environment("live")
+    with pytest.raises(venue_canary.CanarySafetyError, match="real capital is read-only in canary"):
+        venue_canary.require_simulated_environment("real")
+    venue_canary.require_simulated_environment("simulated")
+
+
+@pytest.mark.asyncio
+async def test_real_capital_write_is_rejected_before_connection_or_credentials(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    connection = SimpleNamespace(
+        id="real-arbitrary-name",
+        adapter_id="fake-adapter",
+        environment="institutional-primary",
+        enabled=True,
+        canary_only=True,
+    )
+    snapshot = SimpleNamespace(revision=3, document=SimpleNamespace(infrastructure=SimpleNamespace(redis_url=None)))
+    repository = SimpleNamespace()
+    opened = False
+
+    async def load(_identity):
+        return snapshot, connection, repository
+
+    async def open_connection(*_args):
+        nonlocal opened
+        opened = True
+        raise AssertionError("real write must stop before connection access")
+
+    monkeypatch.setattr(venue_canary, "_load_target", load)
+    monkeypatch.setattr(venue_canary, "_open_connection", open_connection)
+    monkeypatch.setattr(
+        venue_canary,
+        "require_environment",
+        lambda _adapter, _environment: SimpleNamespace(capital_scope="real"),
+    )
+    options = venue_canary.parse_venue_canary_args(["--connection", connection.id, "--pair", "BTC/USDT:USDT"])
+    with pytest.raises(venue_canary.CanarySafetyError, match="real capital"):
+        await venue_canary._main(options)
+    assert opened is False
+
+
+@pytest.mark.asyncio
+async def test_open_connection_binds_repository_account_store_before_revealing_credentials(monkeypatch):
+    venue_canary = _script("venue_canary.py")
+    events = []
+    store = object()
+    credentials = object()
+    connection = SimpleNamespace(adapter_id="paper", credential_ref="paper-secret")
+
+    class Adapter:
+        async def connect(self, observed_connection, observed_credentials):
+            events.append(("connect", observed_connection, observed_credentials))
+            return "session"
+
+    class Registry:
+        def bind_account_store(self, observed_store):
+            events.append(("bind", observed_store))
+
+        def require(self, _adapter_id):
+            events.append(("require",))
+            return Adapter()
+
+    class Repository:
+        account_store = store
+
+        async def reveal_credentials(self, _credential_ref):
+            events.append(("reveal",))
+            return credentials
+
+    monkeypatch.setattr(venue_canary.VenueAdapterRegistry, "discover", lambda _ids: Registry())
+    assert await venue_canary._open_connection(connection, Repository()) == "session"
+    assert events[0] == ("bind", store)
+    assert events[1:] == [("reveal",), ("require",), ("connect", connection, credentials)]
 
 
 def test_venue_canary_refuses_a_normal_simulated_connection_before_connecting():
@@ -717,7 +787,7 @@ async def test_main_repeated_external_cancellation_waits_for_lease_exit_and_audi
     audit_completed = asyncio.Event()
     audit_gate = asyncio.Event()
     session = object()
-    connection = SimpleNamespace(id="canary", environment="testnet", canary_only=True)
+    connection = SimpleNamespace(id="canary", adapter_id="paper", environment="testnet", canary_only=True)
     snapshot = SimpleNamespace(
         revision=9, document=SimpleNamespace(infrastructure=SimpleNamespace(redis_url="redis://test"))
     )
@@ -744,7 +814,16 @@ async def test_main_repeated_external_cancellation_waits_for_lease_exit_and_audi
             run_finalized.set()
 
     monkeypatch.setattr(venue_canary, "_load_target", _async_value((snapshot, connection, object())))
-    monkeypatch.setattr(venue_canary, "execution_pair_lease", lease)
+    monkeypatch.setattr(
+        venue_canary,
+        "require_environment",
+        lambda _adapter, _environment: SimpleNamespace(capital_scope="simulated"),
+    )
+    monkeypatch.setattr(
+        venue_canary,
+        "ExecutionOwnership",
+        lambda url: SimpleNamespace(connection=lambda connection_id: lease(url, connection_id)),
+    )
     monkeypatch.setattr(venue_canary, "_open_connection", _async_value(session))
     monkeypatch.setattr(venue_canary, "run_simulated_canary", simulated)
     monkeypatch.setattr(venue_canary, "audit_in_subprocess", audit)

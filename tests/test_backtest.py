@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from cryptotrader.backtest.engine import BacktestEngine
-from cryptotrader.backtest.result import BacktestResult
+from cryptotrader.backtest.result import BacktestResult, EquityPoint
 from cryptotrader.signals.models import CandleRequirement, DataRequirements
 
 
@@ -64,7 +65,6 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
         RuntimeConfigSnapshot,
         SignalComponentConfig,
         SignalConfig,
-        SystemConfig,
     )
     from cryptotrader.signals.models import ComponentSignal
     from cryptotrader.signals.registry import SignalComponentRegistry
@@ -100,7 +100,6 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
     document = runtime_document(
         connections=(live_connection, demo_connection, testnet_connection),
         books=(live_book,),
-        system=SystemConfig(active=True),
         market_data=MarketDataConfig(source_id="default", parameters={"timeframe": "1h", "limit": 20}),
         signals=SignalConfig(
             components=(SignalComponentConfig(component_id="fixture", enabled=True, weight=1.0),),
@@ -157,9 +156,15 @@ async def test_backtest_replaces_configured_connections_with_one_hundred_percent
 
     monkeypatch.setattr(Runtime, "execution_lease", reject_production_execution_lease)
 
+    def reject_redis(*_):
+        raise AssertionError("historical Paper must not open Redis")
+
+    monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", reject_redis)
+
     result = await engine.run()
 
     assert result.config_revisions == [7] * len(result.cycle_records)
+    assert {(record.run.mode, record.run.origin) for record in result.cycle_records} == {("backtest", "backtest")}
     assert {book.book_id for record in result.cycle_records for book in record.book_results} == {"backtest"}
     assert paper.connect_calls == [("paper", "backtest-paper")]
 
@@ -188,7 +193,10 @@ async def test_explicit_backtest_snapshot_never_reads_ambient_bootstrap_or_repos
     monkeypatch.setattr(BootstrapSettings, "from_environment", fail_ambient_bootstrap)
     monkeypatch.setattr(engine, "_fetch_historical_data", no_candles)
 
-    assert await engine.run() == BacktestResult()
+    result = await engine.run()
+    assert result.fill_count == 0
+    assert result.win_rate is None
+    assert result.equity_curve == [EquityPoint(datetime(2024, 1, 1, tzinfo=UTC), Decimal("10000"))]
 
 
 def test_snapshot_uses_previous_completed_day_for_daily_inputs():
@@ -229,25 +237,23 @@ def test_snapshot_uses_previous_completed_day_for_daily_inputs():
 
 @pytest.mark.asyncio
 async def test_historical_daily_sources_include_previous_day():
+    from tests.factories.backtest import registries, replay_config
+
     engine = BacktestEngine("BTC/USDT:USDT", "2024-01-01", "2024-01-03", interval="1h")
-    loaded_starts: list[str] = []
-    engine._load_extended_data = lambda *args: loaded_starts.extend(args)
+    engine.lookback = 20
+    engine.market_registry = registries()[0]
+    engine._source_config = replay_config().document.market_data
     empty = AsyncMock(return_value={})
 
     with (
-        patch("cryptotrader.backtest.engine.fetch_historical", new=AsyncMock(return_value=_candles(3))),
         patch("cryptotrader.backtest.historical_data.fetch_fear_greed", new=empty) as fear_greed,
-        patch("cryptotrader.backtest.historical_data.fetch_funding_rate", new=AsyncMock(return_value={})),
-        patch("cryptotrader.backtest.historical_data.fetch_btc_dominance", new=AsyncMock(return_value={})),
-        patch("cryptotrader.backtest.historical_data.fetch_fred_series", new=AsyncMock(return_value={})),
-        patch("cryptotrader.backtest.historical_data.fetch_futures_volume", new=AsyncMock(return_value={})),
     ):
         await engine._fetch_historical_data(
             DataRequirements(candles=(CandleRequirement("1h", 2),)),
         )
 
     fear_greed.assert_awaited_once_with("2023-12-31", "2024-01-03")
-    assert loaded_starts == ["2023-12-31"]
+    assert engine._data_coverage["fear_greed"]["observations"] == 0
 
 
 @pytest.mark.asyncio
@@ -309,12 +315,15 @@ def test_result_computes_metrics_from_paper_cycle_equity():
         "2024-01-02",
         initial_capital=10_000.0,
     )
+    start = datetime(2024, 1, 1, tzinfo=UTC)
     result = engine._compute_result(
-        equity=10_100.0,
-        curve=[10_000.0, 10_050.0, 10_100.0],
-        trades=[{"pnl": 100.0}],
+        curve=[
+            EquityPoint(start + timedelta(hours=i), Decimal(value))
+            for i, value in enumerate(("10000", "10050", "10100"))
+        ],
+        fills=[],
     )
 
     assert result.total_return == pytest.approx(0.01)
-    assert result.win_rate == 1.0
+    assert result.win_rate is None
     assert result.max_drawdown == 0.0

@@ -1,21 +1,49 @@
-"""Installed plugin definitions and strict parameter validation."""
+"""Code-owned extension declarations; describing them never constructs a runtime."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from importlib import metadata
-from typing import TYPE_CHECKING, Any
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Literal
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, SecretStr, ValidationError
 
-from cryptotrader.configuration.fields import ConfigurationField, LocalizedText, configuration_fields
+from cryptotrader.configuration.fields import (
+    ConfigurationField,
+    CredentialField,
+    LocalizedText,
+    configuration_fields,
+    credential_fields,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable
+    from collections.abc import Callable, Mapping
 
-SIGNAL_COMPONENT_GROUP = "cryptotrader.signal_components"
-MARKET_SOURCE_GROUP = "cryptotrader.market_sources"
-VENUE_ADAPTER_GROUP = "cryptotrader.venue_adapters"
+    from cryptotrader.venues.models import VenueCapabilities
+
+
+@dataclass(frozen=True)
+class EnvironmentDefinition:
+    id: str
+    label: LocalizedText
+    capital_scope: Literal["simulated", "real"]
+    parameter_model: type[BaseModel] | None = None
+    credential_model: type[BaseModel] | None = None
+    margin_modes: tuple[str, ...] | None = None
+    leverage_minimum: int | None = None
+    leverage_maximum: int | None = None
+    capabilities: VenueCapabilities | None = None
+
+    def __post_init__(self):
+        if not self.id.strip() or self.capital_scope not in {"simulated", "real"}:
+            raise ValueError("invalid environment declaration")
+
+
+@dataclass(frozen=True)
+class ComponentDependency:
+    kind: Literal["market", "model_service", "local_artifact", "context"]
+    key: str
+    label: LocalizedText
+    configuration_path: str
 
 
 @dataclass(frozen=True)
@@ -24,22 +52,58 @@ class PluginConfiguration:
     label: LocalizedText
     description: LocalizedText
     parameter_model: type[BaseModel]
-    environments: tuple[str, ...] = ()
-    credential_fields: tuple[str, ...] = ()
+    environments: tuple[EnvironmentDefinition, ...] = ()
+    credential_model: type[BaseModel] | None = None
     margin_modes: tuple[str, ...] = ()
+    leverage_minimum: int = 1
+    leverage_maximum: int | None = None
+    capabilities: VenueCapabilities | None = None
+    dependency_resolver: Callable[[BaseModel], tuple[ComponentDependency, ...]] | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.parameter_model, type) or not issubclass(self.parameter_model, BaseModel):
             raise TypeError("parameter_model must be a BaseModel subclass")
-        configuration_fields(self.parameter_model)
+        if {field.key for field in self.fields} & {field.key for field in self.credential_fields}:
+            raise ValueError("credential fields cannot be ordinary parameters")
+        if len({environment.id for environment in self.environments}) != len(self.environments):
+            raise ValueError("duplicate environment id")
 
     @property
     def fields(self) -> tuple[ConfigurationField, ...]:
         return configuration_fields(self.parameter_model)
 
+    @property
+    def credential_fields(self) -> tuple[CredentialField, ...]:
+        return credential_fields(self.credential_model) if self.credential_model is not None else ()
+
+    def require_environment(self, environment: str) -> EnvironmentDefinition:
+        for item in self.environments:
+            if item.id == environment:
+                return item
+        raise ValueError(f"unsupported environment for {self.id}")
+
     def validate_environment(self, environment: str) -> None:
-        if environment not in self.environments:
-            raise ValueError(f"unsupported environment {environment!r} for {self.id}")
+        self.require_environment(environment)
+
+    def for_environment(self, environment: str) -> PluginConfiguration:
+        selected = self.require_environment(environment)
+        overrides = {
+            key: getattr(selected, key)
+            for key in (
+                "parameter_model",
+                "credential_model",
+                "margin_modes",
+                "leverage_minimum",
+                "leverage_maximum",
+                "capabilities",
+            )
+            if getattr(selected, key) is not None
+        }
+        return replace(self, **overrides)
+
+    def dependencies(self, parameters: Mapping[str, Any]) -> tuple[ComponentDependency, ...]:
+        validated = self.parameter_model.model_validate(dict(parameters))
+        return self.dependency_resolver(validated) if self.dependency_resolver else ()
 
 
 @dataclass(frozen=True)
@@ -58,81 +122,30 @@ class ConfigurationCatalog:
         return _require(self.market_sources, "market source", source_id)
 
 
-def _require(definitions: dict[str, PluginConfiguration], kind: str, plugin_id: str) -> PluginConfiguration:
+def _require(definitions, kind, extension_id):
     try:
-        return definitions[plugin_id]
+        return definitions[extension_id]
     except KeyError:
-        raise ValueError(f"uninstalled {kind}: {plugin_id}") from None
-
-
-def configured_factory(configuration: PluginConfiguration):
-    """Attach the required immutable declaration to an installed factory."""
-
-    def decorate(factory):
-        factory.configuration = configuration
-        return factory
-
-    return decorate
-
-
-def require_factory_configuration(plugin_id: str, factory: Callable[..., Any]) -> PluginConfiguration:
-    if not callable(factory):
-        raise TypeError(f"factory for {plugin_id} is not callable")
-    configuration = getattr(factory, "configuration", None)
-    if not isinstance(configuration, PluginConfiguration):
-        raise TypeError(f"factory for {plugin_id} must declare PluginConfiguration")
-    if configuration.id != plugin_id:
-        raise ValueError(f"plugin configuration id mismatch: entry point {plugin_id}, configuration {configuration.id}")
-    return configuration
-
-
-def installed_plugin_factories(
-    group: str,
-    builtins: dict[str, Callable[..., Any]],
-    *,
-    entry_points: Iterable[Any] | None = None,
-) -> dict[str, Callable[..., Any]]:
-    """Load factory metadata only; constructing a plugin remains a runtime operation."""
-    factories = dict(builtins)
-    discovered = metadata.entry_points(group=group) if entry_points is None else entry_points
-    for entry_point in discovered:
-        factory = entry_point.load()
-        installed = factories.get(entry_point.name)
-        if installed is not None:
-            if installed is factory:
-                continue
-            raise ValueError(f"duplicate installed plugin id: {entry_point.name}")
-        factories[entry_point.name] = factory
-    for plugin_id, factory in factories.items():
-        require_factory_configuration(plugin_id, factory)
-    return factories
-
-
-def _builtin_factories() -> tuple[dict[str, Callable[..., Any]], dict[str, Callable[..., Any]]]:
-    from cryptotrader.market_sources.default import create_source
-    from cryptotrader.signals.components.kronos import create_component as create_kronos
-    from cryptotrader.signals.components.llm_committee import create_component as create_llm_committee
-
-    return (
-        {"kronos": create_kronos, "llm_committee": create_llm_committee},
-        {"default": create_source},
-    )
+        raise ValueError(f"unregistered {kind}: {extension_id}") from None
 
 
 def configuration_catalog() -> ConfigurationCatalog:
-    components, market_sources = _builtin_factories()
-    component_factories = installed_plugin_factories(SIGNAL_COMPONENT_GROUP, components)
-    market_source_factories = installed_plugin_factories(MARKET_SOURCE_GROUP, market_sources)
-    venue_factories = installed_plugin_factories(VENUE_ADAPTER_GROUP, {})
+    from cryptotrader.configuration import registry
+
+    extensions = registry.get_extension_registry()
     return ConfigurationCatalog(
-        components={plugin_id: factory.configuration for plugin_id, factory in component_factories.items()},
-        venues={plugin_id: factory.configuration for plugin_id, factory in venue_factories.items()},
-        market_sources={plugin_id: factory.configuration for plugin_id, factory in market_source_factories.items()},
+        **{
+            group: {key: item.configuration for key, item in getattr(extensions, group).items()}
+            for group in ("components", "venues", "market_sources")
+        }
     )
 
 
+def require_environment(adapter_id: str, environment: str) -> EnvironmentDefinition:
+    return configuration_catalog().require_venue(adapter_id).require_environment(environment)
+
+
 def validate_configuration_parameters(document) -> None:
-    """Reject unknown or invalid installed-plugin parameters before a CAS replacement."""
     catalog = configuration_catalog()
     try:
         for component in document.signals.components:
@@ -141,8 +154,49 @@ def validate_configuration_parameters(document) -> None:
             dict(document.market_data.parameters)
         )
         for connection in document.execution.connections:
-            definition = catalog.require_venue(connection.adapter_id)
-            definition.validate_environment(connection.environment)
+            definition = catalog.require_venue(connection.adapter_id).for_environment(connection.environment)
             definition.parameter_model.model_validate(dict(connection.parameters))
+            if connection.margin_mode not in definition.margin_modes:
+                raise ValueError("unsupported margin mode")
+            if connection.leverage < definition.leverage_minimum or (
+                definition.leverage_maximum is not None and connection.leverage > definition.leverage_maximum
+            ):
+                raise ValueError("unsupported leverage")
     except (ValidationError, TypeError, ValueError):
-        raise ValueError("invalid plugin configuration parameters") from None
+        raise ValueError("invalid registered component parameters") from None
+
+
+class CredentialValidationError(ValueError):
+    """Only field paths and error codes cross the credential-validation boundary."""
+
+    def __init__(self, errors):
+        self.errors = errors
+        super().__init__("invalid venue credentials")
+
+
+def validate_venue_credentials(adapter_id: str, environment: str, values: dict[str, str]):
+    from cryptotrader.runtime_config.secrets import CredentialPayload
+
+    definition = configuration_catalog().require_venue(adapter_id).for_environment(environment)
+    if definition.credential_model is None or not definition.credential_fields:
+        raise CredentialValidationError([{"field": "values", "code": "credentials_not_supported"}])
+    fields = {field.key for field in definition.credential_fields}
+    if set(values) - fields:
+        raise CredentialValidationError([{"field": "values", "code": "extra_forbidden"}])
+    try:
+        validated = definition.credential_model.model_validate(values)
+    except ValidationError as error:
+        errors = [
+            {"field": ".".join(map(str, item["loc"])), "code": item["type"]}
+            for item in error.errors(include_input=False, include_context=False)
+        ]
+        raise CredentialValidationError(errors) from None
+    payload = {key: value for key, value in validated.model_dump().items() if value is not None}
+    empty = [
+        key
+        for key, value in payload.items()
+        if not isinstance(value, SecretStr) or not value.get_secret_value().strip()
+    ]
+    if empty:
+        raise CredentialValidationError([{"field": key, "code": "empty"} for key in empty])
+    return CredentialPayload(values=payload)

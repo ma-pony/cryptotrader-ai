@@ -9,7 +9,6 @@ from cryptotrader.runtime_config.models import (
     RuntimeConfigDocument,
     SignalComponentConfig,
     SignalConfig,
-    SystemConfig,
 )
 from cryptotrader.venues.models import VenueConnection
 
@@ -26,12 +25,12 @@ def connection(
     values = {
         "id": connection_id,
         "label": connection_id,
-        "adapter_id": "paper" if environment == "paper" else "okx",
+        "adapter_id": "paper" if environment == "paper" else "bybit" if environment == "testnet" else "okx",
         "environment": environment,
         "enabled": True,
         "credential_ref": "live-credentials" if environment == "live" else None,
         "leverage": 1,
-        "margin_mode": "isolated",
+        "margin_mode": "cross" if environment == "paper" else "isolated",
         "canary_only": False,
         "parameters": {"initial_equity": "10000"} if environment == "paper" else {},
     }
@@ -69,7 +68,6 @@ def signal_config(**overrides) -> SignalConfig:
         "max_target_ratio": 1.0,
         "atr_stop_multiplier": 2.0,
         "reward_ratio": 2.0,
-        "hitl_required": False,
     }
     return SignalConfig(**(values | overrides))
 
@@ -85,10 +83,9 @@ def runtime_document(
     **overrides,
 ) -> RuntimeConfigDocument:
     values = {
-        "system": SystemConfig(active=False),
         "market_data": market_config(),
         "signals": signal_config(),
-        "execution": ExecutionConfig(connections=connections, books=books),
+        "execution": ExecutionConfig(connections=connections, books=books, pairs=("BTC/USDT", "BTC/USDT:USDT")),
     }
     return RuntimeConfigDocument(**(values | overrides))
 
@@ -108,7 +105,6 @@ def active_document(**overrides) -> RuntimeConfigDocument:
     values = {
         "connections": (connection(),),
         "books": (book(),),
-        "system": SystemConfig(active=True),
         "infrastructure": InfrastructureConfig(redis_url="redis://runtime-test:6379/0"),
     }
     return runtime_document(

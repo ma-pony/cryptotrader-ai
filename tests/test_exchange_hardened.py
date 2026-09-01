@@ -18,7 +18,13 @@ async def _session():
     adapter = OkxVenueAdapter(client_factory=FakeCcxtFactory("okx"))
     session = await adapter.connect(
         connection("okx-demo", "demo", adapter_id="okx", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
     return adapter, session
 

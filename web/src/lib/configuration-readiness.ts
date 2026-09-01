@@ -1,16 +1,20 @@
-import type { ConfigurationDraft, ConnectionHealth, RuntimeDocument } from '@/types/api';
+import type { ConfigurationCatalog, ConfigurationDraft, ConnectionHealth, RuntimeDocument } from '@/types/api';
 
 export type BookDraft = ConfigurationDraft<RuntimeDocument['execution']['books'][number]>;
 export type Connection = RuntimeDocument['execution']['connections'][number];
 export type ConnectionCheck = { fingerprint: string; health: ConnectionHealth };
 export const connectionFingerprint = (connection: Connection, updatedAt?: string | null) =>
   JSON.stringify({ connection, updatedAt: updatedAt ?? null });
-export const eligibleConnection = (scope: BookDraft['capital_scope'], connection: Connection) =>
+export const connectionCapitalScope = (connection: Connection, catalog: ConfigurationCatalog | undefined) =>
+  catalog?.venues
+    .find((venue) => venue.id === connection.adapter_id)
+    ?.environments.find((environment) => environment.id === connection.environment)?.capital_scope;
+export const eligibleConnection = (scope: BookDraft['capital_scope'], connection: Connection, catalog: ConfigurationCatalog | undefined) =>
   connection.enabled &&
   !connection.canary_only &&
-  (scope === 'real' ? connection.environment === 'live' : connection.environment !== 'live');
+  connectionCapitalScope(connection, catalog) === scope;
 
-export function bookErrors(books: BookDraft[], connections: Connection[], message: (key: string) => string) {
+export function bookErrors(books: BookDraft[], connections: Connection[], catalog: ConfigurationCatalog | undefined, message: (key: string) => string) {
   const errors: Record<string, string> = {};
   const ids = new Set<string>();
   const used = new Set<string>();
@@ -24,7 +28,7 @@ export function bookErrors(books: BookDraft[], connections: Connection[], messag
     book.allocations.forEach((allocation, row) => {
       const field = `${path}.allocations.${row}.weight`;
       const connection = connections.find((item) => item.id === allocation.connection_id);
-      if (!connection || !eligibleConnection(book.capital_scope, connection) || local.has(allocation.connection_id))
+      if (!connection || !eligibleConnection(book.capital_scope, connection, catalog) || local.has(allocation.connection_id))
         errors[field] = message('invalidConnection');
       local.add(allocation.connection_id);
       if (
@@ -47,19 +51,23 @@ export function bookErrors(books: BookDraft[], connections: Connection[], messag
   return errors;
 }
 
+export function isConnectionChecked(
+  connection: Connection,
+  check: ConnectionCheck | undefined,
+  updatedAt?: string | null,
+) {
+  return Boolean(check?.health.healthy && check.fingerprint === connectionFingerprint(connection, updatedAt));
+}
+
 export function connectionChecksReady(
   document: RuntimeDocument,
   checks: Record<string, ConnectionCheck>,
   credentials: Record<string, { updatedAt: string | null }>,
+  catalog: ConfigurationCatalog | undefined,
 ) {
   const enabled = document.execution.connections.filter((item) => item.enabled);
   return (
     enabled.length > 0 &&
-    enabled.every((item) => {
-      const check = checks[item.id];
-      return (
-        check?.health.healthy && check.fingerprint === connectionFingerprint(item, credentials[item.id]?.updatedAt)
-      );
-    })
+    enabled.every((item) => connectionCapitalScope(item, catalog) !== undefined && isConnectionChecked(item, checks[item.id], credentials[item.id]?.updatedAt))
   );
 }

@@ -19,16 +19,51 @@ def test_connection_accepts_only_declared_environments(environment):
     assert connection("c", environment, **overrides).environment == environment
 
 
-def test_connection_rejects_undeclared_environment():
+def test_runtime_rejects_undeclared_environment():
+    from cryptotrader.runtime_config.models import validate_runtime_document
+    from tests.factories.runtime_config import (
+        INSTALLED_ADAPTERS,
+        INSTALLED_MARKET_SOURCES,
+        INSTALLED_SIGNALS,
+        runtime_document,
+    )
+
     with pytest.raises(ValueError, match="environment"):
-        connection("c", "sandbox")
+        validate_runtime_document(
+            runtime_document(connections=(connection("c", "sandbox"),)),
+            INSTALLED_SIGNALS,
+            INSTALLED_ADAPTERS,
+            INSTALLED_MARKET_SOURCES,
+        )
 
 
-def test_live_connection_requires_credential_reference():
+@pytest.mark.asyncio
+async def test_live_connection_draft_can_be_saved_without_credentials_but_is_not_eligible():
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+
+    from cryptotrader.decision.readiness import book_scope
+    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, validate_runtime_document
     from cryptotrader.venues.models import VenueConnection
+    from tests.factories.runtime_config import (
+        INSTALLED_ADAPTERS,
+        INSTALLED_MARKET_SOURCES,
+        INSTALLED_SIGNALS,
+        allocation,
+        book,
+        runtime_document,
+    )
 
-    with pytest.raises(ValueError, match="credential_ref"):
-        VenueConnection("live", "Live", "okx", "live", True, None, 1, "isolated", False)
+    document = runtime_document(
+        connections=(VenueConnection("live", "Live", "okx", "live", True, None, 1, "isolated", False),),
+        books=(book("real", "real", allocation("live")),),
+    )
+    validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
+    assert document.execution.connections[0].credential_ref is None
+    assert document.execution.live_order_execution_enabled is False
+    scope = await book_scope(RuntimeConfigSnapshot(1, document, datetime.now(UTC)), SimpleNamespace())
+    assert scope[0].eligible is False
+    assert {reason.code for reason in scope[0].reasons} == {"real_authorization_missing", "credentials_missing"}
 
 
 def test_connection_parameters_default_to_an_immutable_empty_mapping():
@@ -57,6 +92,15 @@ def test_capabilities_are_immutable_and_validate_declared_values():
         capabilities.native_protection = False
     with pytest.raises(ValueError, match="market_types"):
         VenueCapabilities(frozenset({"margin"}), True, False, True, frozenset({"market"}))
+    with pytest.raises(ValueError, match="unknown capability"):
+        VenueCapabilities(
+            frozenset({"spot"}),
+            False,
+            False,
+            True,
+            frozenset({"market"}),
+            unknown_fields=frozenset({"native_protection"}),
+        )
 
 
 def test_venue_values_keep_decimal_precision_and_open_state_is_immutable():
@@ -196,6 +240,18 @@ def test_venue_protocols_are_structural_and_contract_helper_checks_capabilities(
         capabilities = VenueCapabilities(frozenset({"spot", "swap"}), True, False, True, frozenset({"market"}))
 
         async def check_connection(self):
+            return None
+
+        async def list_instruments(self):
+            return ()
+
+        async def fetch_account(self):
+            return None
+
+        async def fetch_fills(self, cursor):
+            return None
+
+        async def fetch_funding(self, cursor):
             return None
 
         async def fetch_portfolio(self, pair):

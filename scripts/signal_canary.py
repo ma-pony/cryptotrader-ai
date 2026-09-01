@@ -11,13 +11,13 @@ from decimal import Decimal
 from typing import Any
 
 from cryptotrader.cycle_events import NullCycleEventSink
+from cryptotrader.decision.analysis import SignalAnalysisService
 from cryptotrader.decision.engine import DecisionEngine
 from cryptotrader.market_sources.registry import MarketSourceRegistry
 from cryptotrader.pair import Pair
 from cryptotrader.runtime_config.repository import LLM_GATEWAY_CREDENTIAL_REF, RuntimeConfigRepository
 from cryptotrader.runtime_config.secrets import CredentialVault
 from cryptotrader.signals.fusion import WeightedSignalFusion
-from cryptotrader.signals.models import DataRequirements
 from cryptotrader.signals.registry import SignalComponentRegistry
 from cryptotrader.signals.runner import ComponentRunner
 
@@ -105,14 +105,28 @@ async def run_signal_canary(pair_text: str) -> dict[str, Any]:
         raise RuntimeError("Kronos and llm_committee must both be enabled for signal canary")
     market_registry = MarketSourceRegistry.discover(snapshot.document.market_data)
     source = market_registry.require(snapshot.document.market_data.source_id)
-    requirements = DataRequirements.merge(*(component.requirements() for component in components))
-    context = await source.collect(Pair.parse(pair_text), datetime.now(UTC), requirements)
-    signals = await ComponentRunner(events).run(components, context)
+    analysis = SignalAnalysisService(
+        market_source=source,
+        registry=registry,
+        runner=ComponentRunner(events),
+        fusion=WeightedSignalFusion(),
+        decisions=DecisionEngine(),
+    )
+    outcome = await analysis.analyze(Pair.parse(pair_text), snapshot, datetime.now(UTC))
+    if (
+        outcome.failure is not None
+        or outcome.context is None
+        or outcome.fused_signal is None
+        or outcome.target_position is None
+    ):
+        raise RuntimeError("signal canary analysis did not complete")
+    context = outcome.context
+    signals = outcome.component_signals
     required_roles = {"tech_agent", "chain_agent", "news_agent", "macro_agent", "debate", "committee_summary"}
     if set(observed_models) != required_roles or any(not models for models in observed_models.values()):
         raise RuntimeError("signal canary requires actual response model metadata for every committee role")
-    fused = WeightedSignalFusion().fuse(signals, profile.components)
-    target = DecisionEngine().target_for(fused, profile)
+    fused = outcome.fused_signal
+    target = outcome.target_position
     model_ids = {role: sorted(models) for role, models in observed_models.items()}
     return _safe_value(
         {

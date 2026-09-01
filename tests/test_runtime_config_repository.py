@@ -17,16 +17,21 @@ from tests.factories.runtime_config import active_document, runtime_document
 def credential_payload(marker: str = "credential-marker"):
     from cryptotrader.runtime_config.secrets import CredentialPayload
 
-    return CredentialPayload(api_key=f"{marker}-key", secret=f"{marker}-secret", passphrase=f"{marker}-phrase")
+    return CredentialPayload(
+        values={"api_key": f"{marker}-key", "secret": f"{marker}-secret", "passphrase": f"{marker}-phrase"}
+    )
 
 
 @pytest.fixture
-def repository(tmp_path):
+async def repository(tmp_path):
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
     from cryptotrader.runtime_config.secrets import CredentialVault
 
     vault = CredentialVault(base64.urlsafe_b64encode(b"r" * 32).decode())
-    return RuntimeConfigRepository(f"sqlite+aiosqlite:///{tmp_path / 'runtime-config.db'}", vault)
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'runtime-config.db'}"
+    await migrate_workbench_schema(database_url)
+    return RuntimeConfigRepository(database_url, vault)
 
 
 async def test_get_or_create_is_stable_and_round_trips_the_exact_document(repository):
@@ -50,16 +55,18 @@ async def test_get_or_create_is_stable_and_round_trips_the_exact_document(reposi
     assert (loaded.apply_status, loaded.applied_revision, loaded.apply_error) == ("pending", 1, None)
 
 
-async def test_ensure_tables_rechecks_a_recreated_database_at_the_same_url(tmp_path):
-    """A URL is not a database lifetime: test/worker DB files are recreated in place."""
+async def test_ensure_tables_requires_migration_after_database_file_is_recreated(tmp_path):
+    """A deleted database lifetime must not trigger implicit schema recreation."""
     import cryptotrader.db as database
-    from cryptotrader.db import get_async_session, get_engine
+    from cryptotrader.db import get_engine
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
     from cryptotrader.runtime_config.secrets import CredentialVault
 
     database_path = tmp_path / "recreated-runtime.db"
     url = f"sqlite+aiosqlite:///{database_path}"
     repository = RuntimeConfigRepository(url, CredentialVault(base64.urlsafe_b64encode(b"l" * 32).decode()))
+    await migrate_workbench_schema(url)
     await repository.ensure_tables()
 
     engine = await get_engine(url)
@@ -68,26 +75,25 @@ async def test_ensure_tables_rechecks_a_recreated_database_at_the_same_url(tmp_p
         database._engines.pop(key)
     database_path.unlink()
 
-    await repository.ensure_tables()
-    session = await get_async_session(url)
-    try:
-        columns = (await session.execute(text("PRAGMA table_info(runtime_config)"))).all()
-        names = {column[1] for column in columns}
-    finally:
-        await session.close()
+    from cryptotrader.migrations.schema import MigrationRequired
 
-    assert {"apply_status", "applied_revision", "apply_error"} <= names
+    with pytest.raises(MigrationRequired, match="migration required"):
+        await repository.ensure_tables()
+    assert not database_path.exists()
 
 
 async def test_ensure_tables_rejects_a_removed_runtime_schema(tmp_path):
     """Hard cutover must fail clearly instead of lazily altering an old table."""
     from cryptotrader.db import get_async_session
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository
     from cryptotrader.runtime_config.secrets import CredentialVault
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'old-runtime.db'}"
+    await migrate_workbench_schema(url)
     session = await get_async_session(url)
     try:
+        await session.execute(text("DROP TABLE runtime_config"))
         await session.execute(
             text(
                 "CREATE TABLE runtime_config ("
@@ -148,21 +154,29 @@ async def test_failed_transition_accepts_only_a_pending_revision_and_never_accep
         )
 
 
-async def test_get_existing_never_creates_schema_or_default_row(tmp_path):
+async def test_get_existing_preserves_explicitly_migrated_empty_runtime_tables(tmp_path):
     from cryptotrader.db import get_async_session
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
     from cryptotrader.runtime_config.repository import RuntimeConfigRepository, RuntimeConfigUnavailable
     from cryptotrader.runtime_config.secrets import CredentialVault
 
     url = f"sqlite+aiosqlite:///{tmp_path / 'empty.db'}"
+    await migrate_workbench_schema(url)
     repo = RuntimeConfigRepository(url, CredentialVault(base64.urlsafe_b64encode(b"s" * 32).decode()))
     with pytest.raises(RuntimeConfigUnavailable):
         await repo.get_existing()
     session = await get_async_session(url)
     try:
         names = await session.scalars(text("SELECT name FROM sqlite_master WHERE type='table'"))
-        assert set(names) == set()
+        assert {"runtime_config", "runtime_credentials"} <= set(names)
+        counts = tuple(
+            await session.execute(
+                text("SELECT (SELECT count(*) FROM runtime_config), (SELECT count(*) FROM runtime_credentials)")
+            )
+        )
     finally:
         await session.close()
+    assert counts == ((0, 0),)
 
 
 async def test_get_existing_preserves_empty_runtime_tables(repository):
@@ -371,7 +385,7 @@ async def test_concurrent_same_reference_creation_has_one_winner_and_one_revisio
     assert sum(isinstance(result, RevisionConflict) for result in results) == 1
     conflict = next(result for result in results if isinstance(result, RevisionConflict))
     assert (conflict.expected, conflict.actual) == (before.revision, before.revision + 1)
-    assert await repository.reveal_credentials("shared-ref") in {first, second}
+    assert await repository.reveal_credentials("shared-ref") in (first, second)
 
 
 async def test_repository_api_objects_never_serialize_secrets(repository):

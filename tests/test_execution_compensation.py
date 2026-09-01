@@ -15,7 +15,7 @@ async def test_open_success_protection_failure_compensates_actual_fill_on_same_c
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("1", protections=(_venue_protection("1"),), failures=("replace_protection",))
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.status == "failed"
     assert result.compensation.attempted is True
@@ -36,7 +36,7 @@ async def test_failed_compensation_marks_unprotected_residual_for_attention():
         protections=(_venue_protection("1"),),
         failures=("replace_protection", "place_order"),
     )
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.status == "failed"
     assert result.compensation.attempted is True
@@ -54,7 +54,7 @@ async def test_successful_compensation_result_is_closed_over_explicit_safe_state
     from cryptotrader.venues.models import ConnectionPosition
 
     session = _VenueSession("1", protections=(_venue_protection("1"),), failures=("replace_protection",))
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.compensation.succeeded is True
     assert result.compensation.safe_signed_amount == Decimal("1")
@@ -79,7 +79,7 @@ async def test_partial_risk_increase_compensates_only_reported_fill():
         protections=(_venue_protection("1"),),
         partial_fill=Decimal("0.25"),
     )
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.status == "failed"
     assert result.compensation.succeeded is True
@@ -106,7 +106,7 @@ async def test_order_transport_error_reconciles_and_compensates_observed_new_ris
         return await original_place(intent)
 
     session.place_order = fill_then_raise
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.status == "failed"
     assert result.compensation.succeeded is True
@@ -134,7 +134,7 @@ async def test_flip_open_transport_error_after_fill_compensates_back_to_flat():
         return await original_place(intent)
 
     session.place_order = second_fill_then_raise
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "-2"))
 
     assert result.status == "failed"
     assert result.compensation.succeeded is True
@@ -171,7 +171,7 @@ async def test_extra_active_protection_triggers_compensation_and_exact_prior_spe
         return protection
 
     session.replace_protection = append_then_restore
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.status == "failed"
     assert result.error_operation == "protection_mismatch"
@@ -209,7 +209,7 @@ async def test_extra_active_protection_surviving_rollback_requires_attention():
         return protection
 
     session.replace_protection = always_append
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
     assert result.status == "failed"
     assert result.compensation.attempted is True

@@ -93,7 +93,7 @@
   "bid": "Bid",
   "ask": "Ask",
   "last": "Last",
-  "invalidPluginEvidence": "Invalid plugin evidence",
+  "invalidPluginEvidence": "Invalid component evidence",
   "status": {
     "completed": "Completed",
     "executed": "Executed",
@@ -110,6 +110,8 @@
     "no_change": "No change",
     "queued": "Queued",
     "running": "Running",
+    "interrupted": "Interrupted",
+    "skipped": "Skipped",
     "filled": "Filled",
     "closed": "Closed",
     "open": "Open",

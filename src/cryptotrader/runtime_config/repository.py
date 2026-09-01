@@ -6,12 +6,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import JSON, BigInteger, DateTime, LargeBinary, String, inspect, select, update
+from sqlalchemy import JSON, BigInteger, DateTime, LargeBinary, String, delete, inspect, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from cryptotrader.db import get_async_session, get_engine
+from cryptotrader.migrations.schema import MigrationRequired, require_tables
 from cryptotrader.runtime_config.defaults import minimal_runtime_document
 from cryptotrader.runtime_config.models import RuntimeConfigDocument, RuntimeConfigSnapshot
 
@@ -77,11 +78,18 @@ class _RuntimeCredentialRow(_Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class _VenueConnectionCheckRow(_Base):
+    __tablename__ = "venue_connection_checks"
+
+    connection_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    result: Mapped[dict[str, Any]] = mapped_column(JSON().with_variant(JSONB(), "postgresql"), nullable=False)
+
+
 def _assert_current_schema(connection) -> None:
     """Reject a database created by the removed configuration runtime.
 
-    ``create_all`` only creates missing tables; it deliberately does not alter an
-    existing table.  The runtime is a hard cutover, so serving a table missing
+    The runtime is a hard cutover, so serving a table missing
     its apply-state columns would split persisted and in-memory configuration.
     Operators must provision the current schema instead of receiving a lazy
     compatibility migration while handling a request.
@@ -119,12 +127,16 @@ class RuntimeConfigRepository:
         self.database_url = database_url
         self._vault = vault
         self._default_factory = default_factory
+        from cryptotrader.accounts.store import AccountStore
+
+        self.account_store = AccountStore(database_url)
 
     async def ensure_tables(self) -> None:
+        await require_tables(self.database_url, _Base.metadata.tables)
         engine = await get_engine(self.database_url)
-        async with engine.begin() as connection:
-            await connection.run_sync(_Base.metadata.create_all)
+        async with engine.connect() as connection:
             await connection.run_sync(_assert_current_schema)
+        await self.account_store.ensure_tables()
 
     async def get_or_create(self) -> RuntimeConfigSnapshot:
         await self.ensure_tables()
@@ -143,6 +155,9 @@ class RuntimeConfigRepository:
                 )
                 session.add(row)
                 try:
+                    from cryptotrader.accounts.store import update_memberships
+
+                    await update_memberships(session, self._default_factory(), row.updated_at)
                     await session.commit()
                 except IntegrityError:
                     await session.rollback()
@@ -155,6 +170,7 @@ class RuntimeConfigRepository:
 
     async def get_existing(self) -> RuntimeConfigSnapshot:
         """Read the existing global config without DDL, initialization, or repair."""
+        await self.ensure_tables()
         session = await get_async_session(self.database_url)
         try:
             row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
@@ -164,7 +180,7 @@ class RuntimeConfigRepository:
             if snapshot.revision < 1:
                 raise RuntimeConfigUnavailable("runtime configuration revision is invalid")
             return snapshot
-        except RuntimeConfigUnavailable:
+        except (MigrationRequired, RuntimeConfigUnavailable):
             raise
         except Exception as error:
             raise RuntimeConfigUnavailable("runtime configuration schema is unavailable") from error
@@ -194,6 +210,8 @@ class RuntimeConfigRepository:
         )
         session = await get_async_session(self.database_url)
         try:
+            previous = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+            previous_document = RuntimeConfigDocument.model_validate(previous.document) if previous else None
             result = await session.execute(statement)
             if result.rowcount != 1:
                 actual = await self._actual_revision(session)
@@ -203,6 +221,36 @@ class RuntimeConfigRepository:
             if row is None:
                 await session.rollback()
                 raise RuntimeError("runtime config row disappeared")
+            from cryptotrader.accounts.store import update_memberships
+
+            await update_memberships(session, document, updated_at)
+            from cryptotrader.accounts.store import ArchivedAccountRow
+            from cryptotrader.configuration.catalog import require_environment
+
+            retained = {c.id for c in document.execution.connections}
+            for connection_id in retained:
+                if await session.get(ArchivedAccountRow, connection_id) is not None:
+                    raise ValueError("archived connection identity cannot be reused")
+            if previous_document is not None:
+                for connection in previous_document.execution.connections:
+                    if connection.id not in retained:
+                        await session.merge(
+                            ArchivedAccountRow(
+                                connection_id=connection.id,
+                                payload={
+                                    "id": connection.id,
+                                    "label": connection.label,
+                                    "adapter_id": connection.adapter_id,
+                                    "environment": connection.environment,
+                                    "enabled": False,
+                                    "archived": True,
+                                    "capital_scope": require_environment(
+                                        connection.adapter_id, connection.environment
+                                    ).capital_scope,
+                                    "archived_at": updated_at.isoformat(),
+                                },
+                            )
+                        )
             await session.commit()
             return _snapshot(row)
         finally:
@@ -268,6 +316,38 @@ class RuntimeConfigRepository:
         encrypted_payload = self._vault.seal(credential_ref, payload)
         return await self._put_encrypted_payload(expected_revision, credential_ref, encrypted_payload)
 
+    async def delete_credentials(self, expected_revision: int, credential_ref: str) -> RuntimeConfigSnapshot:
+        """Remove one credential atomically with a configuration revision increment."""
+        await self.ensure_tables()
+        updated_at = datetime.now(UTC)
+        session = await get_async_session(self.database_url)
+        try:
+            result = await session.execute(
+                update(_RuntimeConfigRow)
+                .where(_RuntimeConfigRow.id == _GLOBAL_ID, _RuntimeConfigRow.revision == expected_revision)
+                .values(
+                    revision=_RuntimeConfigRow.revision + 1,
+                    updated_at=updated_at,
+                    apply_status="pending",
+                    apply_error=None,
+                )
+            )
+            if result.rowcount != 1:
+                actual = await self._actual_revision(session)
+                await session.rollback()
+                raise RevisionConflict(expected_revision, actual)
+            await session.execute(
+                delete(_RuntimeCredentialRow).where(_RuntimeCredentialRow.credential_ref == credential_ref)
+            )
+            row = await session.get(_RuntimeConfigRow, _GLOBAL_ID)
+            if row is None:
+                await session.rollback()
+                raise RevisionConflict(expected_revision, 0)
+            await session.commit()
+            return _snapshot(row)
+        finally:
+            await session.close()
+
     async def credential_state(self, credential_ref: str) -> CredentialState:
         await self.ensure_tables()
         session = await get_async_session(self.database_url)
@@ -289,6 +369,25 @@ class RuntimeConfigRepository:
             if row is None:
                 raise CredentialNotConfigured(credential_ref)
             return self._vault.open(credential_ref, row.encrypted_payload)
+        finally:
+            await session.close()
+
+    async def connection_check(self, connection_id: str, fingerprint: str) -> dict[str, Any] | None:
+        session = await get_async_session(self.database_url)
+        try:
+            row = await session.get(_VenueConnectionCheckRow, connection_id)
+            return row.result if row is not None and row.fingerprint == fingerprint else None
+        finally:
+            await session.close()
+
+    async def save_connection_check(self, connection_id: str, fingerprint: str, result: dict[str, Any]) -> None:
+        """Check metadata is independent of the trading configuration revision."""
+        session = await get_async_session(self.database_url)
+        try:
+            await session.merge(
+                _VenueConnectionCheckRow(connection_id=connection_id, fingerprint=fingerprint, result=result)
+            )
+            await session.commit()
         finally:
             await session.close()
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from importlib import metadata
 
 import pytest
 
@@ -13,6 +12,50 @@ from cryptotrader.venues.models import OrderIntent
 from tests.factories.runtime_config import connection
 
 PAIR = Pair.parse("BTC/USDT:USDT")
+
+
+@pytest.mark.asyncio
+async def test_paper_cross_quote_close_reports_unknown_cost_instead_of_zero_profit():
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    session = await PaperVenueAdapter().connect(connection("paper-cost", "paper"), None)
+    acquired, sold = Pair.parse("BTC/USDT"), Pair.parse("BTC/USDC")
+    await session.set_quote(acquired, Decimal("100"))
+    await session.set_quote(sold, Decimal("110"))
+    buy = await session.place_order(OrderIntent(acquired, "buy", Decimal("1"), "market", None, False))
+    sell = await session.place_order(OrderIntent(sold, "sell", Decimal("1"), "market", None, False))
+    assert buy.status == sell.status == "filled"
+    fills = (await session.fetch_fills(None)).items
+    assert fills[0].realized_pnl.amount == Decimal("0")
+    assert fills[1].realized_pnl.amount is None
+    assert fills[1].realized_pnl.currency == "USDC"
+    assert fills[1].realized_pnl.unavailable_reason
+
+
+@pytest.mark.asyncio
+async def test_full_account_reads_do_not_apply_bankruptcy_or_recreate_account_start():
+    from cryptotrader.venues.models import ProtectionSpec, VenueQuote
+    from cryptotrader.venues.paper import PaperVenueAdapter
+
+    adapter = PaperVenueAdapter()
+    config = connection("readonly-bankruptcy", "paper", leverage=10, parameters={"initial_equity": "100"})
+    session = await adapter.connect(config, None)
+    await session.set_quote(PAIR, Decimal("100"))
+    await session.place_order(OrderIntent(PAIR, "buy", Decimal("5"), "market", None, False))
+    await session.replace_protection(ProtectionSpec(PAIR, "long", Decimal("5"), Decimal("90"), None))
+    # Install a market observation without invoking the execution engine's advancement.
+    session._account.quotes[PAIR] = VenueQuote(PAIR, Decimal("1"), Decimal("1"), Decimal("1"))
+    snapshot = await session.fetch_account()
+    page = await session.fetch_fills(None)
+    assert snapshot.equity.amount == Decimal("-395")
+    assert len(snapshot.positions) == 1
+    assert len(snapshot.orders) == 1
+    assert len(page.items) == 1
+    assert session._account.balances["USDT"] == Decimal("100")
+    await session.close()
+    reopened = await adapter.connect(config, None)
+    assert (await reopened.fetch_fills(None)).coverage_start == page.coverage_start
+    assert (await reopened.fetch_fills(page.next_cursor)).items == ()
 
 
 class OptionPair(Pair):
@@ -53,7 +96,12 @@ def test_paper_adapter_rejects_non_paper_environments(environment):
 async def test_paper_connection_rejects_credentials():
     from cryptotrader.venues.paper import PaperVenueAdapter
 
-    credentials = CredentialPayload(api_key="paper-key", secret="paper-secret")  # pragma: allowlist secret
+    credentials = CredentialPayload(
+        values={
+            "api_key": "paper-key",  # pragma: allowlist secret
+            "secret": "paper-secret",  # pragma: allowlist secret
+        }
+    )
     with pytest.raises(ValueError, match="does not accept credentials"):
         await PaperVenueAdapter().connect(paper_connection(), credentials)
 
@@ -246,13 +294,14 @@ async def test_paper_shared_session_contract():
     await assert_paper_session_contract(PaperVenueAdapter)
 
 
-def test_installed_metadata_loads_all_three_production_venue_factories():
+def test_code_registry_constructs_all_three_production_venue_factories():
     expected = {"okx", "bybit", "paper"}
-    entry_points = tuple(metadata.entry_points(group="cryptotrader.venue_adapters"))
-    by_name = {entry_point.name: entry_point for entry_point in entry_points}
+    from cryptotrader.configuration.registry import get_extension_registry
+
+    by_name = get_extension_registry().venues
 
     assert expected <= set(by_name)
-    adapters = {name: by_name[name].load()() for name in expected}
+    adapters = {name: by_name[name].factory() for name in expected}
     assert {name: adapter.adapter_id for name, adapter in adapters.items()} == {
         "okx": "okx",
         "bybit": "bybit",

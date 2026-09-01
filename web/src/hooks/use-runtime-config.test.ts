@@ -9,28 +9,125 @@ describe('runtime config response decoder', () => {
     expect(RuntimeConfigSchema.safeParse(applied).success).toBe(true);
     expect(RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'pending' }).success).toBe(true);
     expect(RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'active' }).success).toBe(false);
-    expect(RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'failed', applied_revision: null, apply_error: null }).success).toBe(true);
+    expect(
+      RuntimeConfigSchema.safeParse({ ...applied, apply_status: 'failed', applied_revision: null, apply_error: null })
+        .success,
+    ).toBe(true);
   });
   it('rejects every semantically impossible JsonValue envelope field', () => {
-    const base = { kind: 'null', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [], entries: [] };
+    const base = {
+      kind: 'null',
+      boolean_value: null,
+      number_value: null,
+      string_value: null,
+      datetime_value: null,
+      pair_value: null,
+      items: [],
+      entries: [],
+    };
     expect(JsonValueSchema.safeParse({ ...base, boolean_value: false }).success).toBe(false);
     expect(JsonValueSchema.safeParse({ ...base, kind: 'number', number_value: '1', items: [{}] }).success).toBe(false);
-    expect(JsonValueSchema.safeParse({ ...base, kind: 'array', items: [], entries: [{ key: 'bad', value: base }] }).success).toBe(false);
+    expect(
+      JsonValueSchema.safeParse({ ...base, kind: 'array', items: [], entries: [{ key: 'bad', value: base }] }).success,
+    ).toBe(false);
     expect(JsonValueSchema.safeParse({ ...base, kind: 'object', items: [{}] }).success).toBe(false);
   });
   it('recursively converts DTO envelopes into ordinary writable JSON', () => {
-    expect(decodeJsonValue({ kind: 'object', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [], entries: [{ key: 'nested', value: { kind: 'array', boolean_value: null, number_value: null, string_value: null, datetime_value: null, pair_value: null, items: [{ kind: 'number', boolean_value: null, number_value: '2.5', string_value: null, datetime_value: null, pair_value: null, items: [], entries: [] }], entries: [] } }] })).toEqual({ nested: [2.5] });
+    expect(
+      decodeJsonValue({
+        kind: 'object',
+        boolean_value: null,
+        number_value: null,
+        string_value: null,
+        datetime_value: null,
+        pair_value: null,
+        items: [],
+        entries: [
+          {
+            key: 'nested',
+            value: {
+              kind: 'array',
+              boolean_value: null,
+              number_value: null,
+              string_value: null,
+              datetime_value: null,
+              pair_value: null,
+              items: [
+                {
+                  kind: 'number',
+                  boolean_value: null,
+                  number_value: '2.5',
+                  string_value: null,
+                  datetime_value: null,
+                  pair_value: null,
+                  items: [],
+                  entries: [],
+                },
+              ],
+              entries: [],
+            },
+          },
+        ],
+      }),
+    ).toEqual({ nested: [2.5] });
   });
   it('rejects malformed typed envelopes instead of putting them back', () => {
     expect(() => decodeJsonValue({ kind: 'number' } as never)).toThrow('Invalid runtime numeric parameter');
   });
   it('strips credential state while retaining plain connection parameters', () => {
-    const document = toRuntimeDocument({ system: { active: false }, security: { enabled: false }, market_data: { source_id: 'market', parameters: [] }, llm: { models: {}, gateway_credential_configured: true, gateway_credential_updated_at: null }, signals: { components: [], neutral_threshold: .2, max_target_ratio: 1, atr_stop_multiplier: 2, reward_ratio: 2, hitl_required: false }, risk: {}, execution: { books: [], connections: [{ id: 'demo', label: 'Demo', adapter_id: 'okx', environment: 'demo', enabled: true, credential_configured: true, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [{ key: 'sandbox', value: { kind: 'boolean', boolean_value: true } }] }] }, hitl: {}, scheduler: {}, triggers: {}, notifications: {}, infrastructure: {}, observability: {} } as never);
+    const document = toRuntimeDocument({
+      security: { enabled: false },
+      market_data: { source_id: 'market', parameters: [] },
+      llm: { models: {}, gateway_credential_configured: true, gateway_credential_updated_at: null },
+      signals: { components: [], neutral_threshold: 0.2, max_target_ratio: 1, atr_stop_multiplier: 2, reward_ratio: 2 },
+      risk: {},
+      execution: {
+        books: [],
+        connections: [
+          {
+            id: 'demo',
+            label: 'Demo',
+            adapter_id: 'okx',
+            environment: 'demo',
+            enabled: true,
+            credential_configured: true,
+            credential_updated_at: null,
+            leverage: 1,
+            margin_mode: 'cross',
+            parameters: [{ key: 'sandbox', value: { kind: 'boolean', boolean_value: true } }],
+          },
+        ],
+      },
+      hitl: {},
+      scheduler: {},
+      triggers: {},
+      notifications: {},
+      infrastructure: {},
+      observability: {},
+    } as never);
     expect(document.execution.connections[0]).toEqual(expect.objectContaining({ parameters: { sandbox: true } }));
     expect(document.execution.connections[0]).not.toHaveProperty('credential_configured');
   });
   it('fails closed when a strict runtime response has an unknown field', () => {
-    expect(RuntimeConfigSchema.safeParse({ revision: 1, updated_at: '2026-08-28T00:00:00Z', setup_required: true, document: { system: { active: false, injected: true }, market_data: { source_id: 'market', parameters: [] }, llm: { models: {} }, signals: { components: [] }, risk: {}, execution: { connections: [], books: [] }, hitl: {}, scheduler: {}, triggers: {}, notifications: {}, infrastructure: {} } }).success).toBe(false);
+    expect(
+      RuntimeConfigSchema.safeParse({
+        revision: 1,
+        updated_at: '2026-08-28T00:00:00Z',
+        document: {
+          system: { active: false, injected: true },
+          market_data: { source_id: 'market', parameters: [] },
+          llm: { models: {} },
+          signals: { components: [] },
+          risk: {},
+          execution: { connections: [], books: [] },
+          hitl: {},
+          scheduler: {},
+          triggers: {},
+          notifications: {},
+          infrastructure: {},
+        },
+      }).success,
+    ).toBe(false);
   });
 
   it.each([
@@ -43,12 +140,48 @@ describe('runtime config response decoder', () => {
     ['Map', { nested: new Map([['x', 1]]) }],
     ['Set', { nested: new Set([1]) }],
     ['custom prototype', { nested: Object.create({ inherited: true }) }],
-    ['symbol own key', (() => { const value = { nested: 1 }; Object.defineProperty(value, Symbol('secret'), { value: 2 }); return value; })()],
-    ['sparse array', (() => { const value = Array(2); value[1] = 1; return { nested: value }; })()],
-    ['array symbol property', (() => { const value = [1]; Object.defineProperty(value, Symbol('x'), { value: 2 }); return value; })()],
+    [
+      'symbol own key',
+      (() => {
+        const value = { nested: 1 };
+        Object.defineProperty(value, Symbol('secret'), { value: 2 });
+        return value;
+      })(),
+    ],
+    [
+      'sparse array',
+      (() => {
+        const value = Array(2);
+        value[1] = 1;
+        return { nested: value };
+      })(),
+    ],
+    [
+      'array symbol property',
+      (() => {
+        const value = [1];
+        Object.defineProperty(value, Symbol('x'), { value: 2 });
+        return value;
+      })(),
+    ],
     ['array extra property', Object.assign([1], { extra: 2 })],
-    ['array accessor', (() => { const value: unknown[] = []; Object.defineProperty(value, '0', { get: () => 1, enumerable: true }); value.length = 1; return value; })()],
-    ['array with locked length', (() => { const value = [1]; Object.defineProperty(value, 'length', { writable: false }); return value; })()],
+    [
+      'array accessor',
+      (() => {
+        const value: unknown[] = [];
+        Object.defineProperty(value, '0', { get: () => 1, enumerable: true });
+        value.length = 1;
+        return value;
+      })(),
+    ],
+    [
+      'array with locked length',
+      (() => {
+        const value = [1];
+        Object.defineProperty(value, 'length', { writable: false });
+        return value;
+      })(),
+    ],
   ])('rejects runtime JSON containing %s before it can be serialized', (_name, value) => {
     expect(() => assertRuntimeJsonDocument(value)).toThrow('Invalid runtime JSON');
   });
@@ -59,8 +192,26 @@ describe('runtime config response decoder', () => {
   });
 
   it('uses the strict exported connection and book schemas everywhere', () => {
-    const connection = { id: 'paper', label: 'Paper', adapter_id: 'paper', environment: 'paper', enabled: true, credential_configured: false, credential_updated_at: null, leverage: 1, margin_mode: 'cross', parameters: [] };
-    const book = { id: 'sim', label: 'Sim', capital_scope: 'simulated', enabled: true, hitl_required: false, allocations: [] };
+    const connection = {
+      id: 'paper',
+      label: 'Paper',
+      adapter_id: 'paper',
+      environment: 'paper',
+      enabled: true,
+      credential_configured: false,
+      credential_updated_at: null,
+      leverage: 1,
+      margin_mode: 'cross',
+      parameters: [],
+    };
+    const book = {
+      id: 'sim',
+      label: 'Sim',
+      capital_scope: 'simulated',
+      enabled: true,
+      hitl_required: false,
+      allocations: [],
+    };
     expect(RuntimeConnectionSchema.safeParse({ ...connection, margin_mode: 'bad' }).success).toBe(false);
     expect(RuntimeConnectionSchema.safeParse({ ...connection, leverage: 1.5 }).success).toBe(false);
     const { parameters: _parameters, ...connectionWithoutParameters } = connection;

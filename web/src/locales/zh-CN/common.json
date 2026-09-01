@@ -1,18 +1,32 @@
 {
   "app": {
     "name": "CryptoTrader AI",
+    "version": "智能交易 · {{version}} 版",
     "tagline": "多代理加密货币交易研究与监控"
   },
+  "header": {
+    "accessCredential": "接口访问密钥",
+    "keyPresent": "密钥已提供",
+    "keyMissing": "密钥未提供",
+    "breadcrumb": "导航路径",
+    "toggleSidebar": "切换侧边栏",
+    "primaryNavigation": "主要导航"
+  },
   "nav": {
+    "workbench": "工作台",
+    "engine": "引擎",
+    "accounts": "账户",
+    "research": "研究",
+    "settings": "系统",
     "dashboard": "总览",
     "strategy": "策略配置",
     "decisions": "决策复盘",
     "cycles": "周期",
     "debate": "辩论",
-    "backtest": "回测",
+    "backtest": "研究与回测",
     "risk": "风控",
     "metrics": "指标",
-    "chat": "AI 对话",
+    "chat": "智能对话",
     "market": "行情看板",
     "memory": "记忆演化",
     "scheduler": "调度规则",
@@ -45,23 +59,25 @@
     "redis_down": "Redis 不可达：调度器以保守模式运行"
   },
   "theme": {
+    "title": "主题",
     "light": "浅色",
     "dark": "深色",
     "system": "跟随系统"
   },
   "locale": {
+    "title": "语言",
     "zh-CN": "简体中文",
-    "en-US": "English"
+    "en-US": "英语"
   },
   "errors": {
     "generic": "发生了一个错误",
     "network": "网络异常，请检查后端是否启动",
-    "unauthorized": "未授权：请检查 X-API-Key",
+    "unauthorized": "未授权：请检查接口访问密钥",
     "forbidden": "无权限",
     "not_found": "资源不存在",
     "rate_limited": "请求过于频繁，稍后再试",
     "server": "服务器内部错误",
-    "trace_id": "Trace ID"
+    "trace_id": "请求追踪标识"
   },
   "ws": {
     "connecting": "连接中",

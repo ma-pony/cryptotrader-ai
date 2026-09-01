@@ -14,6 +14,8 @@ const toneByStatus: Record<string, CycleStatusTone> = {
   pending: 'warning',
   queued: 'warning',
   running: 'warning',
+  interrupted: 'warning',
+  skipped: 'neutral',
   open: 'warning',
   partially_filled: 'warning',
   awaiting_approval: 'warning',

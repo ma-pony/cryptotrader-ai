@@ -21,9 +21,18 @@ _LAST_DATA_INDEX = _URLSAFE_ALPHABET.index(VALID_MASTER_KEY[-2])
 NON_CANONICAL_MASTER_KEY = VALID_MASTER_KEY[:-2] + _URLSAFE_ALPHABET[_LAST_DATA_INDEX + 1] + "="
 
 
+def test_dynamic_credentials_round_trip_without_encrypting_masks():
+    payload = CredentialPayload(values={"access_token": "exact-access-token", "tenant_pin": "1234"})
+    vault = CredentialVault(VALID_MASTER_KEY)
+    envelope = vault.seal("sample-ref", payload)
+    assert vault.open("sample-ref", envelope).values["access_token"].get_secret_value() == "exact-access-token"
+    assert "exact-access-token" not in payload.model_dump_json()
+    assert "1234" not in payload.model_dump_json()
+
+
 def test_vault_round_trip_uses_unique_nonce_and_reference_as_aad():
     vault = CredentialVault(VALID_MASTER_KEY)
-    payload = CredentialPayload(api_key="key", secret="secret", passphrase="phrase")
+    payload = CredentialPayload(values={"api_key": "key", "secret": "secret", "passphrase": "phrase"})
 
     first = vault.seal("okx-demo", payload)
     second = vault.seal("okx-demo", payload)
@@ -76,10 +85,12 @@ def test_structured_payload_validation_errors_never_retain_input_values():
 
     with pytest.raises(ValidationError) as error:
         CredentialPayload(
-            api_key=sentinel.encode(),
-            secret=[sentinel],
-            passphrase={"value": sentinel},
-            unexpected=sentinel,
+            values={
+                "api_key": sentinel.encode(),
+                "secret": [sentinel],
+                "passphrase": {"value": sentinel},
+                "unexpected": sentinel,
+            }
         )
 
     structured = json.dumps(error.value.errors(), default=str)
@@ -90,7 +101,12 @@ def test_structured_payload_validation_errors_never_retain_input_values():
 def test_payload_text_representations_are_always_redacted():
     from cryptotrader.runtime_config.secrets import CredentialPayload
 
-    payload = CredentialPayload(api_key="repr-key-marker", secret="repr-secret-marker", passphrase=None)
+    payload = CredentialPayload(
+        values={
+            "api_key": "repr-key-marker",  # pragma: allowlist secret
+            "secret": "repr-secret-marker",  # pragma: allowlist secret
+        }
+    )
 
     assert repr(payload) == "CredentialPayload(**redacted**)"
     assert str(payload) == "CredentialPayload(**redacted**)"
@@ -100,10 +116,10 @@ def test_vault_rejects_unsupported_envelope_without_echoing_it():
     from cryptotrader.runtime_config.secrets import CredentialPayload, CredentialVault
 
     vault = CredentialVault(VALID_MASTER_KEY)
-    payload = CredentialPayload(api_key="key", secret="secret")
+    payload = CredentialPayload(values={"api_key": "key", "secret": "secret"})
     envelope = vault.seal("okx-demo", payload)
 
     with pytest.raises(ValueError, match="unsupported credential envelope") as error:
-        vault.open("okx-demo", b"\x02" + envelope[1:])
+        vault.open("okx-demo", b"\x7f" + envelope[1:])
 
     assert envelope.hex() not in str(error.value)

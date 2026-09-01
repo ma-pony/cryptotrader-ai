@@ -30,33 +30,35 @@ def _setup():
 @app.command()
 def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,
+    confirm_book: Annotated[
+        list[str] | None, typer.Option("--confirm-book", help="Confirm every eligible execution book ID")
+    ] = None,
 ):
-    """Run one analysis cycle for each pair sequentially."""
-    asyncio.run(_run(pair))
+    """Run explicitly confirmed trading for configured pairs."""
+    asyncio.run(_run(pair, confirm_book))
 
 
-async def _run(pairs: list[str] | None):
+async def _run(pairs: list[str] | None, confirmed_book_ids=None):
     from cryptotrader.runtime import build_runtime
 
     runtime = await build_runtime()
     try:
-        if runtime.cycle is None:
-            console.print("[red]Runtime setup is incomplete.[/red]")
+        if not pairs or not confirmed_book_ids:
+            console.print(
+                "[red]Specify --pair and every eligible --confirm-book. Review scope in the web console.[/red]"
+            )
             raise typer.Exit(1)
-        selected = pairs or list(runtime.snapshot.document.scheduler.pairs) or ["BTC/USDT"]
-        await _run_pairs_loop(selected, runtime)
+        await _run_pairs_loop(pairs, runtime, confirmed_book_ids)
     finally:
         await runtime.close()
 
 
-async def _run_pairs_loop(pairs, runtime):
+async def _run_pairs_loop(pairs, runtime, confirmed_book_ids):
     for pair in pairs:
-        async with runtime.execution_lease(pair) as cycle:
-            await _run_one_pair(pair, cycle)
+        await _run_one_pair(pair, runtime, confirmed_book_ids)
 
 
-async def _run_one_pair(pair: str, cycle) -> None:
-    from cryptotrader.decision.models import CycleRequest
+async def _run_one_pair(pair: str, runtime, confirmed_book_ids) -> None:
     from cryptotrader.pair import Pair
     from cryptotrader.tracing import set_trace_id
 
@@ -64,7 +66,13 @@ async def _run_one_pair(pair: str, cycle) -> None:
     console.print(f"\n[bold]Trader[/bold] analyzing [cyan]{pair}[/cyan] trace=[dim]{trace_id}[/dim]")
 
     try:
-        outcome = await cycle.run(CycleRequest(Pair.parse(pair)))
+        scope = await runtime.run_service.trading_scope(Pair.parse(pair))
+        decision_id = await runtime.run_service.start_trading(
+            Pair.parse(pair), scope.saved_revision, confirmed_book_ids
+        )
+        outcome = await runtime.task_manager.get(decision_id).task
+        if outcome is None:
+            raise RuntimeError("trading did not complete")
     except Exception:
         console.print(f"[red]Cycle failed. Trace: {trace_id}[/red]")
         console.print("[yellow]Check the per-book Journal before retrying.[/yellow]")
@@ -186,11 +194,18 @@ def backtest(
 
 
 async def _backtest(pair: str, start: str, end: str, interval: str, capital: float):
-    from cryptotrader.backtest.engine import BacktestEngine
+    from cryptotrader.backtest.models import BacktestParams
+    from cryptotrader.backtest.service import configured_service
 
     console.print(f"[bold]Backtest[/bold] {pair} from {start} to {end} ({interval})")
-    engine = BacktestEngine(pair, start, end, interval, capital)
-    result = await engine.run()
+    run = await configured_service().run(
+        BacktestParams(pair=pair, start=start, end=end, interval=interval, initial_equity=capital)
+    )
+    console.print(f"运行记录：{run.run_id} · {run.status} · /research/{run.run_id}")
+    if run.status != "completed":
+        console.print(run.error)
+        raise typer.Exit(1)
+    result = run.result
     table = Table(title="Backtest Results")
     table.add_column("Metric", style="cyan")
     table.add_column("Value", style="green")

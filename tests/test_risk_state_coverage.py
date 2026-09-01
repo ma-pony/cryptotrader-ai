@@ -365,7 +365,8 @@ class TestRedisStateManagerWithMockRedis:
 
     @pytest.mark.asyncio
     async def test_buffer_push_redis(self):
-        mock_pipe = AsyncMock()
+        mock_pipe = MagicMock()
+        mock_pipe.execute = AsyncMock()
         mock_r = AsyncMock()
         mock_r.pipeline = MagicMock(return_value=mock_pipe)
         mgr = self._make_mgr(mock_r)
@@ -377,7 +378,7 @@ class TestRedisStateManagerWithMockRedis:
 
     @pytest.mark.asyncio
     async def test_buffer_push_redis_error(self):
-        mock_pipe = AsyncMock()
+        mock_pipe = MagicMock()
         mock_pipe.execute = AsyncMock(side_effect=RedisError("fail"))
         mock_r = AsyncMock()
         mock_r.pipeline = MagicMock(return_value=mock_pipe)

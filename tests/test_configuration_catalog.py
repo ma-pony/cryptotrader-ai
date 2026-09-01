@@ -1,4 +1,4 @@
-"""Installed plugin configuration catalog and parameter-validation contracts."""
+"""Code-registered configuration catalog and parameter-validation contracts."""
 
 from __future__ import annotations
 
@@ -12,7 +12,255 @@ from cryptotrader.runtime_config.models import SignalComponentConfig
 from tests.factories.runtime_config import runtime_document
 from tests.test_runtime_config_api import active_payload
 
-pytest_plugins = ("tests.test_runtime_config_api",)
+
+def test_market_adapter_description_names_code_registration_truthfully():
+    from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
+
+    description = DefaultMarketSourceParameters.field_descriptions["market_adapter_id"]
+    assert "后端已注册" in description.zh_CN
+    assert "registered by the backend" in description.en_US
+    assert "已安装" not in description.zh_CN
+    assert "Installed" not in description.en_US
+
+
+def test_catalog_builtin_venues_do_not_depend_on_package_metadata(monkeypatch):
+    from cryptotrader.configuration.catalog import configuration_catalog
+
+    monkeypatch.setattr(metadata, "entry_points", lambda **kwargs: ())
+    assert set(configuration_catalog().venues) == {"paper", "okx", "bybit"}
+
+
+def test_catalog_does_not_instantiate_extensions(monkeypatch):
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import configuration_catalog
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, calls = sample_registry()
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    definition = configuration_catalog().require_venue("sample_venue")
+    assert definition.environments[0].capital_scope == "simulated"
+    assert [(field.key, field.required) for field in definition.credential_fields] == [
+        ("access_token", True),
+        ("tenant_pin", False),
+    ]
+    assert calls == []
+
+
+async def test_environment_definition_is_readable_without_constructing_a_session(api_harness):
+    response = await api_harness.client.get("/api/config/catalog/venues/paper?environment=paper")
+    assert response.status_code == 200
+    assert response.json()["environment"]["capital_scope"] == "simulated"
+    assert response.json()["credential_fields"] == []
+    assert all(not adapter.connect_calls for adapter in api_harness.adapters.values())
+
+
+async def test_custom_environment_and_dynamic_credentials_can_be_saved(api_harness, monkeypatch, caplog):
+    from cryptotrader.configuration import registry
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, _ = sample_registry()
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    api_harness.runtime.venue_registry = VenueAdapterRegistry.discover()
+    body = {
+        "expected_revision": 1,
+        "id": "sample-account",
+        "label": "Sample",
+        "adapter_id": "sample_venue",
+        "environment": "sandbox",
+        "enabled": False,
+        "leverage": 1,
+        "margin_mode": "cross",
+        "canary_only": False,
+        "parameters": {"account_code": "account-1"},
+    }
+    response = await api_harness.client.post("/api/venue-connections", json=body)
+    assert response.status_code == 201, response.text
+    secret = "sample-secret-value"  # pragma: allowlist secret
+    response = await api_harness.client.put(
+        "/api/venue-connections/sample-account/credentials",
+        json={
+            "expected_revision": response.json()["revision"],
+            "values": {"access_token": secret},
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert secret not in response.text
+    payload = await api_harness.runtime.repository.reveal_credentials("venue-connection:sample-account")
+    assert payload.values["access_token"].get_secret_value() == secret
+    assert "tenant_pin" not in payload.values
+    adapter = api_harness.runtime.venue_registry.require("sample_venue")
+    saved = await api_harness.runtime.repository.get_or_create()
+    connection = saved.document.execution.connections[-1]
+    await adapter.connect(connection, payload)
+    assert adapter.received_values == {"access_token": secret}
+    assert secret not in saved.document.model_dump_json()
+    config_response = await api_harness.client.get("/api/config")
+    assert secret not in config_response.text
+    assert secret not in caplog.text
+    invalid = await api_harness.client.put(
+        "/api/venue-connections/sample-account/credentials",
+        json={
+            "expected_revision": saved.revision,
+            "values": {"unknown": secret},
+        },
+    )
+    assert invalid.status_code == 422
+    assert secret not in invalid.text
+    assert (await api_harness.runtime.repository.get_or_create()).revision == saved.revision
+
+
+def test_custom_environment_capital_scope_comes_from_declaration(monkeypatch):
+    from cryptotrader.configuration import registry
+    from cryptotrader.runtime_config.models import validate_runtime_document
+    from tests.factories.runtime_config import allocation, book, connection
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, _ = sample_registry()
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    sample = connection(
+        "sample",
+        environment="sandbox",
+        adapter_id="sample_venue",
+        credential_ref="sample-ref",
+        parameters={"account_code": "a"},
+    )
+    document = runtime_document()
+    document = document.model_copy(
+        update={
+            "execution": document.execution.model_copy(
+                update={
+                    "connections": (sample,),
+                    "books": (book("sample-book", allocations=(allocation("sample"),)),),
+                }
+            )
+        }
+    )
+    validate_runtime_document(
+        document, set(extensions.components), set(extensions.venues), set(extensions.market_sources)
+    )
+
+
+@pytest.mark.parametrize(
+    ("protected", "applying", "expected"), [(False, False, 200), (True, False, 401), (False, True, 503)]
+)
+async def test_environment_definition_setup_admission(api_harness, protected, applying, expected):
+    snapshot = api_harness.runtime.snapshot
+    document = snapshot.document.model_copy(
+        update={
+            "security": snapshot.document.security.model_copy(update={"enabled": protected}),
+        }
+    )
+    api_harness.runtime.snapshot = replace(snapshot, document=document)
+    api_harness.runtime.application_in_progress = applying
+    response = await api_harness.client.get("/api/config/catalog/venues/okx?environment=demo")
+    assert response.status_code == expected
+
+
+def test_environment_definition_selects_declared_overrides_without_factory_calls(monkeypatch):
+    from api.routes.config import venue_definition
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import EnvironmentDefinition
+    from cryptotrader.configuration.fields import LocalizedText
+    from cryptotrader.configuration.parameters import EmptyParameters
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, calls = sample_registry()
+    item = extensions.venues["sample_venue"]
+    configuration = replace(
+        item.configuration,
+        environments=(
+            *item.configuration.environments,
+            EnvironmentDefinition(
+                "local",
+                LocalizedText("本地", "Local"),
+                "simulated",
+                parameter_model=EmptyParameters,
+                credential_model=EmptyParameters,
+                margin_modes=("isolated",),
+                leverage_maximum=1,
+            ),
+        ),
+    )
+    extensions.venues["sample_venue"] = replace(item, configuration=configuration)
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    definition = venue_definition("sample_venue", "local")
+    assert definition.fields == []
+    assert definition.credential_fields == []
+    assert definition.margin_modes == ["isolated"]
+    assert definition.leverage_maximum == 1
+    assert calls == []
+
+
+def test_component_dependencies_are_declared_from_parameters_without_resources():
+    from cryptotrader.configuration.catalog import configuration_catalog
+
+    catalog = configuration_catalog()
+    dependencies = catalog.require_component("kronos").dependencies(
+        {
+            "gate_path": "missing-gate.pkl",
+            "timeframe": "1h",
+            "model_name": "fixture/custom-kronos",
+            "tokenizer_name": "missing-tokenizer-directory",
+        }
+    )
+    assert [(item.kind, item.key, item.configuration_path) for item in dependencies] == [
+        ("market", "1h", "market_data"),
+        ("local_artifact", "missing-gate.pkl", "signals.components.kronos.parameters.gate_path"),
+        ("local_artifact", "fixture/custom-kronos", "signals.components.kronos.parameters.model_name"),
+        ("local_artifact", "missing-tokenizer-directory", "signals.components.kronos.parameters.tokenizer_name"),
+        ("context", "kronos_aux", "market_data"),
+    ]
+    committee = catalog.require_component("llm_committee").dependencies({})
+    assert ("model_service", "llm-gateway", "llm") in [
+        (item.kind, item.key, item.configuration_path) for item in committee
+    ]
+
+
+def test_credential_validation_errors_and_parameter_documents_exclude_secret_values(monkeypatch):
+    import json
+
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import (
+        CredentialValidationError,
+        validate_configuration_parameters,
+        validate_venue_credentials,
+    )
+    from tests.factories.runtime_config import connection
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, _ = sample_registry()
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    secret = "must-not-leak-dynamic-value"  # pragma: allowlist secret
+    with pytest.raises(CredentialValidationError) as error:
+        validate_venue_credentials("sample_venue", "sandbox", {"access_token": [secret]})
+    assert secret not in str(error.value)
+    assert secret not in json.dumps(error.value.errors)
+    with pytest.raises(ValueError, match="invalid registered component parameters"):
+        validate_configuration_parameters(
+            runtime_document(
+                connections=(
+                    connection(
+                        "sample",
+                        environment="sandbox",
+                        adapter_id="sample_venue",
+                        credential_ref="sample",
+                        parameters={"account_code": "normal", "tenant_pin": secret},
+                    ),
+                )
+            )
+        )
+
+
+def test_builtin_capability_declarations_match_runtime_adapters():
+    from cryptotrader.configuration.registry import get_extension_registry
+
+    for entry in get_extension_registry().venues.values():
+        adapter = entry.factory()
+        for environment in entry.configuration.environments:
+            assert entry.configuration.for_environment(environment.id).capabilities == adapter.capabilities(
+                environment.id
+            )
 
 
 @pytest.mark.parametrize(
@@ -25,7 +273,6 @@ async def test_inactive_catalog_http_admission_keeps_authentication_and_applicat
     snapshot = api_harness.runtime.snapshot
     document = snapshot.document.model_copy(
         update={
-            "system": snapshot.document.system.model_copy(update={"active": False}),
             "security": snapshot.document.security.model_copy(update={"enabled": protected}),
             "infrastructure": snapshot.document.infrastructure.model_copy(update={"redis_url": ""}),
         }
@@ -52,7 +299,8 @@ async def test_catalog_exposes_paper_funding_field(api_harness):
 
     assert response.status_code == 200
     paper = next(item for item in response.json()["venues"] if item["id"] == "paper")
-    assert paper["environments"] == ["paper"]
+    assert paper["label"] == {"zh_CN": "本地模拟器", "en_US": "Paper trading"}
+    assert [(item["id"], item["capital_scope"]) for item in paper["environments"]] == [("paper", "simulated")]
     assert paper["credential_fields"] == []
     assert paper["margin_modes"] == ["cross"]
     initial_equity = next(field for field in paper["fields"] if field["key"] == "initial_equity")
@@ -105,14 +353,19 @@ async def test_config_write_rejects_zero_paper_equity_before_persistence(api_har
 
 
 def test_catalog_lists_unconfigured_installed_factory_without_calling_it(monkeypatch):
-    from cryptotrader.configuration.catalog import configuration_catalog
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import PluginConfiguration, configuration_catalog
+    from cryptotrader.configuration.fields import LocalizedText
+    from cryptotrader.configuration.registry import ExtensionRegistration
+    from tests.factories.fake_signal_plugin import UnconfiguredSignalParameters, create_unconfigured_signal
 
-    entry_point = _entry_point(
-        "unconfigured",
-        "tests.factories.fake_signal_plugin:create_unconfigured_signal",
-        "cryptotrader.signal_components",
+    extensions = registry.get_extension_registry()
+    label = LocalizedText("测试", "Test")
+    extensions.components["unconfigured"] = ExtensionRegistration(
+        PluginConfiguration("unconfigured", label, label, UnconfiguredSignalParameters),
+        lambda context: create_unconfigured_signal(context.document, context.events),
     )
-    monkeypatch.setattr(metadata, "entry_points", lambda *, group: (entry_point,) if group == entry_point.group else ())
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
 
     catalog = configuration_catalog()
 
@@ -153,15 +406,20 @@ def test_plugin_configuration_rejects_a_non_pydantic_parameter_model():
         )
 
 
-def test_validation_rejects_unknown_parameters_and_accepts_nested_typed_plugin(monkeypatch):
-    from cryptotrader.configuration.catalog import validate_configuration_parameters
+def test_validation_rejects_unknown_parameters_and_accepts_nested_typed_component(monkeypatch):
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import PluginConfiguration, validate_configuration_parameters
+    from cryptotrader.configuration.fields import LocalizedText
+    from cryptotrader.configuration.registry import ExtensionRegistration
+    from tests.factories.fake_signal_plugin import UnconfiguredSignalParameters, create_unconfigured_signal
 
-    entry_point = _entry_point(
-        "unconfigured",
-        "tests.factories.fake_signal_plugin:create_unconfigured_signal",
-        "cryptotrader.signal_components",
+    extensions = registry.get_extension_registry()
+    label = LocalizedText("测试", "Test")
+    extensions.components["unconfigured"] = ExtensionRegistration(
+        PluginConfiguration("unconfigured", label, label, UnconfiguredSignalParameters),
+        lambda context: create_unconfigured_signal(context.document, context.events),
     )
-    monkeypatch.setattr(metadata, "entry_points", lambda *, group: (entry_point,) if group == entry_point.group else ())
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
     document = runtime_document(
         signals=runtime_document().signals.model_copy(
             update={
@@ -195,7 +453,7 @@ def test_validation_rejects_unknown_parameters_and_accepts_nested_typed_plugin(m
             )
         }
     )
-    with pytest.raises(ValueError, match="invalid plugin configuration parameters"):
+    with pytest.raises(ValueError, match="invalid registered component parameters"):
         validate_configuration_parameters(invalid)
 
 

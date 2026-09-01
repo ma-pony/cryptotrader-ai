@@ -34,13 +34,8 @@ from tests.runtime_lease import static_cycle_lease
 
 def _make_scheduler(interval_minutes: int = 60) -> Scheduler:
     """Return a Scheduler with a single pair and the given interval."""
-    document = active_document(
-        scheduler=SchedulerConfig(
-            enabled=True,
-            pairs=("BTC/USDT",),
-            interval_minutes=interval_minutes,
-        )
-    )
+    document = active_document(scheduler=SchedulerConfig(enabled=True, interval_minutes=interval_minutes))
+    document = document.model_copy(update={"execution": document.execution.model_copy(update={"pairs": ("BTC/USDT",)})})
     cycle = SimpleNamespace(run=AsyncMock())
     snapshot = SimpleNamespace(revision=1, document=document)
     cycle.snapshot = snapshot

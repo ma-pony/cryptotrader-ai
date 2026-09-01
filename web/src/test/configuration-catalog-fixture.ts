@@ -103,5 +103,19 @@ export const configurationCatalogFixture: ConfigurationCatalog = {
       margin_modes: [],
     },
   ],
-  venues: [],
+  venues: [
+    {
+      id: 'sample_venue',
+      label: { zh_CN: '示例平台', en_US: 'Sample venue' },
+      description: { zh_CN: '用于验证动态平台配置。', en_US: 'Used to verify dynamic venue configuration.' },
+      fields: [],
+      environments: [{ id: 'sandbox', label: { zh_CN: '沙盒', en_US: 'Sandbox' }, capital_scope: 'simulated' }],
+      credential_fields: [
+        { key: 'account_code', label: { zh_CN: '账户编码', en_US: 'Account code' }, description: { zh_CN: '沙盒账户标识。', en_US: 'Sandbox account identifier.' }, required: true },
+        { key: 'access_token', label: { zh_CN: '访问令牌', en_US: 'Access token' }, description: { zh_CN: '仅用于本次保存。', en_US: 'Used only for this save.' }, required: true },
+        { key: 'tenant_pin', label: { zh_CN: '租户 PIN', en_US: 'Tenant PIN' }, description: { zh_CN: '可选。', en_US: 'Optional.' }, required: false },
+      ],
+      margin_modes: ['cross'],
+    },
+  ],
 };

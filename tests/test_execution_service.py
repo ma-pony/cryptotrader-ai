@@ -63,6 +63,7 @@ class _VenueSession:
         quote: VenueQuote | None = None,
     ) -> None:
         self.connection_id = "paper-a"
+        self.connection = connection("paper-a")
         self.capabilities = VENUE_CAPABILITIES
         self.signed_amount = Decimal(current)
         self.protections = protections
@@ -122,6 +123,7 @@ class _VenueSession:
                 spec.take_profit,
                 True,
                 False,
+                (f"new-{self._sequence}",),
             ),
         )
         return self.protections[0]
@@ -187,7 +189,7 @@ async def test_venue_service_reloads_state_and_uses_platform_protection_replacem
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("2", protections=(_venue_protection("2"),))
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "3"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "3"))
 
     assert result.status == "completed"
     assert session.orders[0].amount == Decimal("1")
@@ -196,6 +198,86 @@ async def test_venue_service_reloads_state_and_uses_platform_protection_replacem
     assert result.trace == ("pre_read", "place_order", "replace_protection", "reconcile")
     assert result.final_position is not None
     assert result.final_position.protected is True
+
+
+@pytest.mark.parametrize("failure", ["post_bind", "record_order", "protection_bind"])
+async def test_post_fill_ledger_failure_preserves_receipt_and_safety_cleanup(failure):
+    from cryptotrader.execution.service import VenueExecutionService
+
+    class FailingLedger:
+        async def bind_order(self, connection_id, client_id, **values):
+            if (failure == "post_bind" and client_id and values.get("venue_order_id")) or (
+                failure == "protection_bind" and client_id is None
+            ):
+                raise OSError("sensitive ledger diagnostic")
+
+        async def record_order(self, connection_id, order):
+            if failure == "record_order":
+                raise OSError("sensitive ledger diagnostic")
+
+    session = _VenueSession("0")
+    result = await VenueExecutionService(session, connection=session.connection, account_store=FailingLedger()).execute(
+        _venue_plan("0", "1")
+    )
+    assert result.status == "failed"
+    assert result.requires_attention is True
+    assert result.error_operation == "account_ledger"
+    assert "account_ledger" in result.trace
+    assert "sensitive" not in repr(result)
+    assert len(result.orders) == 1
+    assert result.orders[0].filled_amount == Decimal("1")
+    assert result.orders[0].id == "order-1"
+    assert result.final_position.position.signed_amount == Decimal("1")
+    assert result.final_position.protected is True
+    assert session.calls.count("place_order") == 1
+    assert session.calls[-1] == "list_open_state"
+    assert session.calls.count("replace_protection") == 1
+
+
+async def test_pre_submission_ledger_failure_blocks_order_and_requires_attention():
+    from cryptotrader.execution.service import VenueExecutionService
+
+    class FailingLedger:
+        async def bind_order(self, *args, **kwargs):
+            raise OSError("sensitive pre-submit failure")
+
+    session = _VenueSession("0")
+    result = await VenueExecutionService(session, connection=session.connection, account_store=FailingLedger()).execute(
+        _venue_plan("0", "1")
+    )
+    assert result.status == "failed"
+    assert result.requires_attention is True
+    assert result.error_operation == "account_ledger"
+    assert result.orders == ()
+    assert "place_order" not in session.calls
+
+
+@pytest.mark.parametrize("persistent_outage", [False, True])
+async def test_audit_fault_preserves_successful_compensation_but_still_requires_attention(persistent_outage):
+    from cryptotrader.execution.service import VenueExecutionService
+
+    class FailingLedger:
+        offline = False
+
+        async def bind_order(self, *args, **kwargs):
+            if self.offline:
+                raise OSError("ledger offline")
+
+        async def record_order(self, *args, **kwargs):
+            self.offline = persistent_outage
+            raise OSError("ledger offline")
+
+    session = _VenueSession("0", failures=("replace_protection",))
+    result = await VenueExecutionService(session, connection=session.connection, account_store=FailingLedger()).execute(
+        _venue_plan("0", "1")
+    )
+    assert result.compensation.succeeded is True
+    assert result.final_position.position.signed_amount == Decimal("0")
+    assert result.requires_attention is True
+    assert result.error_operation == "account_ledger"
+    assert len(result.orders) == 1
+    assert result.compensation.order.id == "order-2"
+    assert session.calls.count("place_order") == 2  # opening and required risk compensation, never an audit retry
 
 
 @pytest.mark.asyncio
@@ -218,13 +300,45 @@ async def test_spot_nonflat_execution_reconciles_without_native_protection():
         capabilities=SPOT_CAPABILITIES,
     )
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "completed"
     assert result.protection is None
     assert result.final_position is not None
     assert result.final_position.protected is False
     assert result.final_position.position.signed_amount == Decimal("1")
+    assert "replace_protection" not in session.calls
+    assert result.trace == ("pre_read", "place_order", "reconcile")
+
+
+@pytest.mark.parametrize("current", ["0", "1"])
+async def test_spot_frozen_quantity_retains_fill_after_quote_change(current):
+    from cryptotrader.execution.service import VenueExecutionService
+
+    original = _venue_plan(current, "0.8", old_protection_ids=())
+    plan = replace(
+        original,
+        pair=SPOT_PAIR,
+        market_type="spot",
+        capabilities=SPOT_CAPABILITIES,
+        quote=replace(original.quote, pair=SPOT_PAIR),
+        stop_loss=None,
+        take_profit=None,
+    )
+    session = _VenueSession(current, quote=VenueQuote(SPOT_PAIR, Decimal("99"), Decimal("99"), Decimal("99")))
+    session.capabilities = SPOT_CAPABILITIES
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan, frozen=True)
+    assert result.status == "completed"
+    assert result.quantity_frozen
+    assert result.orders[0].id == "order-1"
+    assert result.orders[0].amount == (Decimal("0.8") if current == "0" else Decimal("0.2"))
+    assert result.orders[0].side == ("buy" if current == "0" else "sell")
+    assert result.target_signed_notional == Decimal("80")
+    assert result.final_position.position.signed_amount == Decimal("0.8")
+    assert result.final_position.position.signed_notional == Decimal("79.2")
+    with pytest.raises(ValueError, match="imply target notional"):
+        replace(result, quantity_frozen=False)
+    assert replace(result, quantity_frozen=None).quantity_frozen is None
     assert "replace_protection" not in session.calls
     assert result.trace == ("pre_read", "place_order", "reconcile")
 
@@ -257,7 +371,7 @@ async def test_spot_active_protection_fails_precondition_before_quote_or_mutatio
         capabilities=SPOT_CAPABILITIES,
     )
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "failed"
     assert result.error_operation == "precondition"
@@ -285,7 +399,7 @@ async def test_spot_never_validates_or_installs_plan_protection_at_latest_quote(
         capabilities=capabilities,
     )
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "completed"
     assert result.protection is None
@@ -297,7 +411,7 @@ async def test_venue_service_flat_target_cancels_old_protection_while_flat():
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("1", protections=(_venue_protection("1"),))
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "0"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "0"))
 
     assert result.status == "completed"
     assert result.trace == ("pre_read", "place_order", "cancel_old_protection", "reconcile")
@@ -311,7 +425,7 @@ async def test_venue_service_sign_flip_closes_then_opens_without_one_leg_flip():
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("1", protections=(_venue_protection("1"),))
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "-2"))
 
     assert result.status == "completed"
     assert [(order.side, order.amount, order.reduce_only) for order in session.orders] == [
@@ -345,7 +459,7 @@ async def test_venue_service_open_failure_after_flip_close_stays_safely_flat():
         return await original_place(intent)
 
     session.place_order = fail_second
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "-2"))
 
     assert result.status == "failed"
     assert session.signed_amount == 0
@@ -366,7 +480,7 @@ async def test_flip_close_transport_error_after_fill_cancels_old_protection_whil
         raise VenueOperationError("RAW_SECRET_CLOSE")
 
     session.place_order = fill_then_fail
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "-2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "-2"))
 
     assert result.status == "failed"
     assert result.requires_attention is False
@@ -387,7 +501,7 @@ async def test_partial_risk_reduction_never_reincreases_position():
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("2", protections=(_venue_protection("2"),), partial_fill=Decimal("0.5"))
-    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("2", "1"))
 
     assert result.status == "failed"
     assert len(session.orders) == 1
@@ -407,7 +521,7 @@ async def test_ambiguous_derivative_reduction_marks_unprotected_residual_for_att
         raise VenueOperationError("RAW_SECRET_REDUCTION")
 
     session.place_order = fill_then_fail
-    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("2", "1"))
 
     assert result.status == "failed"
     assert result.final_position is not None
@@ -425,7 +539,7 @@ async def test_unreadable_state_after_failed_reduction_requires_attention():
         protections=(_venue_protection("2"),),
         failures=("place_order", "list_open_state"),
     )
-    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("2", "1"))
 
     assert result.status == "failed"
     assert result.final_position is None
@@ -444,7 +558,7 @@ async def test_reduction_replace_transport_error_is_safe_only_with_exact_desired
         raise VenueOperationError("RAW_SECRET_REPLACE_RESPONSE")
 
     session.replace_protection = install_then_fail
-    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("2", "1"))
 
     assert result.status == "failed"
     assert result.error_operation == "replace_protection"
@@ -471,7 +585,7 @@ async def test_reduction_replace_transport_error_with_extra_id_in_one_group_requ
         raise VenueOperationError("RAW_SECRET_REPLACE_RESPONSE")
 
     session.replace_protection = install_ambiguous_group_then_fail
-    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("2", "1"))
 
     assert result.status == "failed"
     assert result.error_operation == "replace_protection"
@@ -497,7 +611,7 @@ async def test_reduction_replace_transport_error_with_old_and_new_protection_req
         raise VenueOperationError("RAW_SECRET_REPLACE_RESPONSE")
 
     session.replace_protection = retain_old_install_new_then_fail
-    result = await VenueExecutionService(session).execute(_venue_plan("2", "1"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("2", "1"))
 
     assert result.status == "failed"
     assert result.error_operation == "replace_protection"
@@ -526,7 +640,7 @@ async def test_partial_spot_reduction_does_not_require_native_protection_attenti
         capabilities=SPOT_CAPABILITIES,
     )
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "failed"
     assert result.final_position is not None
@@ -539,7 +653,7 @@ async def test_venue_quote_failure_has_safe_category_while_programmer_error_prop
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("1", protections=(_venue_protection("1"),), failures=("fetch_quote",))
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
     assert result.status == "failed"
     assert result.error_operation == "fetch_quote"
     assert "RAW_SECRET" not in repr(result)
@@ -550,7 +664,7 @@ async def test_venue_quote_failure_has_safe_category_while_programmer_error_prop
     session = _VenueSession("1", protections=(_venue_protection("1"),))
     session.fetch_quote = invalid_quote
     with pytest.raises(ValueError, match="contract violated"):
-        await VenueExecutionService(session).execute(_venue_plan("1", "2"))
+        await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "2"))
 
 
 @pytest.mark.asyncio
@@ -562,7 +676,7 @@ async def test_venue_service_executes_the_same_contract_against_real_paper_sessi
     await session.set_quote(VENUE_PAIR, Decimal("100"))
     plan = replace(_venue_plan("0", "1", old_protection_ids=()), capabilities=session.capabilities)
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "completed"
     assert result.final_position is not None
@@ -579,7 +693,9 @@ async def test_latest_quote_invalidating_protection_fails_closed_before_mutation
     session = _VenueSession("0", quote=latest)
 
     with pytest.raises(ValueError, match="geometry"):
-        await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
+        await VenueExecutionService(session, connection=session.connection).execute(
+            _venue_plan("0", "1", old_protection_ids=())
+        )
     assert session.orders == []
 
 
@@ -642,7 +758,7 @@ async def test_target_notional_inside_current_spread_band_is_audited_no_trade(
             capabilities=SPOT_CAPABILITIES,
         )
 
-    result = await VenueExecutionService(session).execute(plan)
+    result = await VenueExecutionService(session, connection=session.connection).execute(plan)
 
     assert result.status == "completed"
     assert result.orders == ()
@@ -664,7 +780,7 @@ async def test_runtime_precision_that_cannot_reach_target_band_fails_before_muta
         return Decimal("0.005")
 
     session.normalize_amount = coarse_precision
-    result = await VenueExecutionService(session).execute(_venue_plan("1", "1.02"))
+    result = await VenueExecutionService(session, connection=session.connection).execute(_venue_plan("1", "1.02"))
 
     assert result.status == "failed"
     assert result.error_operation == "incomplete_fill"
@@ -679,12 +795,46 @@ async def test_live_execution_gate_refuses_before_any_venue_read_or_write():
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("0")
-    session.connection = connection("live-a", environment="live")
+    session.connection = connection("paper-a", environment="live")
 
-    result = await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
+    result = await VenueExecutionService(session, connection=session.connection).execute(
+        _venue_plan("0", "1", old_protection_ids=())
+    )
 
     assert result.error_operation == "execution_gate"
     assert result.trace == ("execution_gate",)
+    assert session.calls == []
+
+
+async def test_custom_real_environment_cannot_bypass_execution_gate(monkeypatch):
+    from cryptotrader.configuration import registry
+    from cryptotrader.configuration.catalog import EnvironmentDefinition
+    from cryptotrader.configuration.fields import LocalizedText
+    from cryptotrader.execution.service import VenueExecutionService
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, _ = sample_registry()
+    item = extensions.venues["sample_venue"]
+    extensions.venues["sample_venue"] = replace(
+        item,
+        configuration=replace(
+            item.configuration,
+            environments=(EnvironmentDefinition("production", LocalizedText("真实", "Real"), "real"),),
+        ),
+    )
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    session = _VenueSession("0")
+    configured = connection(
+        "paper-a",
+        environment="production",
+        adapter_id="sample_venue",
+        credential_ref="sample-ref",
+        parameters={"account_code": "a"},
+    )
+    result = await VenueExecutionService(session, connection=configured).execute(
+        _venue_plan("0", "1", old_protection_ids=())
+    )
+    assert result.error_operation == "execution_gate"
     assert session.calls == []
 
 
@@ -694,9 +844,15 @@ async def test_non_live_environment_is_not_blocked_by_live_execution_gate(enviro
     from cryptotrader.execution.service import VenueExecutionService
 
     session = _VenueSession("0")
-    session.connection = connection(f"{environment}-a", environment=environment)
+    session.connection = connection(
+        "paper-a",
+        environment=environment,
+        adapter_id="bybit" if environment == "testnet" else "paper" if environment == "paper" else "okx",
+    )
 
-    result = await VenueExecutionService(session).execute(_venue_plan("0", "1", old_protection_ids=()))
+    result = await VenueExecutionService(session, connection=session.connection).execute(
+        _venue_plan("0", "1", old_protection_ids=())
+    )
 
     assert result.status == "completed"
     assert session.calls[0] == "list_open_state"

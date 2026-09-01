@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 
 import type { SSEEvent } from '@/lib/stream-fetch';
-import type { ComponentSignal, FusedSignal } from '@/types/api';
+import type { FusedSignal } from '@/types/api';
 import type {
   AgentAnalysisCompletedData,
   ComponentCompletedData,
@@ -14,9 +14,14 @@ import type {
   SSEEnvelope,
 } from '@/types/analysis-events';
 
+export interface ComponentProgressSignal {
+  direction: ComponentCompletedData['direction'];
+  confidence: number;
+}
+
 export interface ComponentProgress {
   status: 'running' | 'done' | 'failed';
-  signal?: ComponentSignal;
+  signal?: ComponentProgressSignal;
   error?: string;
 }
 
@@ -71,7 +76,17 @@ export function useAnalysisProgress() {
       }
       case 'component_completed': {
         const data = payload as unknown as ComponentCompletedData;
-        setProgress((current) => ({ ...current, components: { ...current.components, [data.component_id]: { status: 'done', signal: data.signal } }, lastEventId }));
+        setProgress((current) => ({
+          ...current,
+          components: {
+            ...current.components,
+            [data.component_id]: {
+              status: 'done',
+              signal: { direction: data.direction, confidence: data.confidence },
+            },
+          },
+          lastEventId,
+        }));
         break;
       }
       case 'component_failed': {

@@ -22,19 +22,21 @@ class TestRequestValidationErrorHandler:
     """
 
     @pytest.fixture
-    def client(self):
+    def client(self, monkeypatch):
         """Return a TestClient using the current api.main app."""
         # Re-use the existing import if available
         if "api.main" not in sys.modules:
             import api.main  # noqa: F401
         from api.main import app
 
+        monkeypatch.setattr("api.main._get_redis_for_rate_limit", lambda: None)
+
         return TestClient(app, raise_server_exceptions=False)
 
     def _post_invalid_json(self, client):
         """POST non-JSON bytes with application/json content-type -> 422."""
         return client.post(
-            "/api/backtest/run",
+            "/api/backtest/runs",
             content=b"THIS IS NOT JSON",
             headers={"Content-Type": "application/json"},
         )
@@ -55,7 +57,7 @@ class TestRequestValidationErrorHandler:
         """422 response detail must NOT echo back raw request body."""
         sensitive_payload = b"NOT-JSON password=supersecret"
         r = client.post(
-            "/api/backtest/run",
+            "/api/backtest/runs",
             content=sensitive_payload,
             headers={"Content-Type": "application/json"},
         )
@@ -90,7 +92,33 @@ class TestRequestValidationErrorHandler:
         assert log_calls, "No warning was logged for the validation error"
         # The logged message or args should mention method/path info
         all_log_text = " ".join(str(c) for c in log_calls)
-        assert "POST" in all_log_text or "/api/backtest/run" in all_log_text
+        assert "POST" in all_log_text or "/api/backtest/runs" in all_log_text
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_uses_an_explicit_offline_redis_transport(monkeypatch):
+    """The process-wide network guard must not replace dedicated fake transport coverage."""
+    import api.main as api_main
+
+    class FakeRedis:
+        def __init__(self) -> None:
+            self.counts: dict[str, int] = {}
+            self.expirations: list[tuple[str, int]] = []
+
+        async def incr(self, key: str) -> int:
+            self.counts[key] = self.counts.get(key, 0) + 1
+            return self.counts[key]
+
+        async def expire(self, key: str, seconds: int) -> None:
+            self.expirations.append((key, seconds))
+
+    transport = FakeRedis()
+    monkeypatch.setattr(api_main, "_get_redis_for_rate_limit", lambda: transport)
+
+    assert all([await api_main._check_rate_limit("offline-test") for _ in range(api_main.RATE_LIMIT)])
+    assert not await api_main._check_rate_limit("offline-test")
+    assert len(transport.counts) == 1
+    assert len(transport.expirations) == 1
 
 
 def test_runtime_api_routes_are_api_key_protected_and_signal_profile_is_absent():
@@ -100,16 +128,17 @@ def test_runtime_api_routes_are_api_key_protected_and_signal_profile_is_absent()
     expected = {
         "/api/config",
         "/api/config/catalog",
+        "/api/config/catalog/venues/{adapter_id}",
         "/api/venue-connections",
         "/api/venue-connections/{connection_id}",
         "/api/venue-connections/{connection_id}/credentials",
         "/api/venue-connections/{connection_id}/test",
+        "/api/venue-connections/{connection_id}/check",
         "/api/portfolio/books",
         "/api/portfolio/books/{book_id}",
-        "/api/cycles",
-        "/api/cycles/{cycle_id}",
         "/api/decisions",
-        "/api/decisions/{cycle_id}",
+        "/api/decisions/{decision_id}",
+        "/api/analyses",
     }
     routes = {route.path: route for route in app.routes if route.path in expected}
 
@@ -132,7 +161,7 @@ def test_openapi_response_schemas_never_declare_credential_or_ciphertext_fields(
                 "/api/config",
                 "/api/venue-connections",
                 "/api/portfolio/books",
-                "/api/cycles",
+                "/api/accounts",
                 "/api/decisions",
                 "/api/hitl",
             )
@@ -183,7 +212,6 @@ def test_runtime_response_openapi_has_no_free_form_object_escape_hatches():  # n
                 "/api/config",
                 "/api/venue-connections",
                 "/api/portfolio/books",
-                "/api/cycles",
                 "/api/decisions",
                 "/api/hitl",
             )

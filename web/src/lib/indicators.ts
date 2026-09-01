@@ -1,4 +1,4 @@
-import type { OHLCVBar } from '@/types/chart-analysis';
+import type { OHLCVBar } from '@/types/market-chart';
 
 export function calcSMA(bars: OHLCVBar[], period: number): number {
   if (bars.length < period) return 0;

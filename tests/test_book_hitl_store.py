@@ -23,6 +23,19 @@ def _non_ready_proposal(*, config_revision: int = 7) -> BookExecutionProposal:
     return replace(_book_proposal(config_revision=config_revision), connection_plans=(), ready=False)
 
 
+async def _database_url(path):
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+    database_url = f"sqlite+aiosqlite:///{path}"
+    await migrate_workbench_schema(database_url)
+    return database_url
+
+
+async def _store(store_type, path, database, **kwargs):
+    database_url = await _database_url(path) if database else None
+    return store_type(database_url, **kwargs)
+
+
 @pytest.mark.parametrize(
     ("status", "decided", "claimed"),
     [
@@ -86,7 +99,7 @@ def test_book_approval_rejects_identity_and_time_mismatches():
 async def test_store_rejects_non_ready_proposal_before_create(tmp_path, database):
     from cryptotrader.hitl.store import BookApprovalStore
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'non-ready.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "non-ready.db", database)
 
     with pytest.raises(ValueError, match="ready"):
         await store.create(_non_ready_proposal(), cycle_id="cycle-non-ready")
@@ -98,7 +111,7 @@ async def test_store_rejects_non_ready_proposal_before_create(tmp_path, database
 async def test_memory_and_sqlite_round_trip_the_exact_proposal_and_list_pending(tmp_path, database):
     from cryptotrader.hitl.store import BookApprovalStore
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'round-trip.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "round-trip.db", database)
     proposal = _book_proposal()
 
     approval = await store.create(
@@ -114,12 +127,42 @@ async def test_memory_and_sqlite_round_trip_the_exact_proposal_and_list_pending(
 
 
 @pytest.mark.asyncio
+async def test_sqlite_first_concurrent_creates_persist_both_approvals(tmp_path):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    store = BookApprovalStore(await _database_url(tmp_path / "concurrent-create.db"))
+
+    first, second = await asyncio.gather(
+        store.create(_book_proposal(), cycle_id="cycle", approval_id="approval-1"),
+        store.create(_book_proposal(), cycle_id="cycle", approval_id="approval-2"),
+    )
+
+    assert {item.id for item in await store.list_pending()} == {first.id, second.id}
+
+
+@pytest.mark.asyncio
+async def test_two_store_instances_share_sqlite_first_table_initialization(tmp_path):
+    from cryptotrader.hitl.store import BookApprovalStore
+
+    database_url = await _database_url(tmp_path / "two-store-concurrent-create.db")
+    first_store = BookApprovalStore(database_url)
+    second_store = BookApprovalStore(database_url)
+
+    first, second = await asyncio.gather(
+        first_store.create(_book_proposal(), cycle_id="cycle", approval_id="approval-1"),
+        second_store.create(_book_proposal(), cycle_id="cycle", approval_id="approval-2"),
+    )
+
+    assert {item.id for item in await first_store.list_pending()} == {first.id, second.id}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("initial_status", ["pending", "approved"])
 @pytest.mark.parametrize("database", [False, True])
 async def test_revision_change_invalidates_unexecuted_approval(tmp_path, initial_status, database):
     from cryptotrader.hitl.store import ApprovalInvalidated, BookApprovalStore
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'revision.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "revision.db", database)
     approval = await store.create(_book_proposal(), cycle_id=f"cycle-{initial_status}")
     if initial_status == "approved":
         await store.approve(approval.id)
@@ -142,7 +185,7 @@ async def test_expired_approval_is_atomically_invalidated_before_approval_or_cla
 ):
     import cryptotrader.hitl.store as stores
 
-    store = stores.BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'expiry.db'}" if database else None)
+    store = await _store(stores.BookApprovalStore, tmp_path / "expiry.db", database)
     now = datetime.now(UTC)
     approval = await store.create(_book_proposal(), created_at=now)
     if operation == "claim":
@@ -171,7 +214,7 @@ async def test_expired_approval_is_atomically_invalidated_before_approval_or_cla
 async def test_pending_list_excludes_expired_requests(tmp_path, database):
     from cryptotrader.hitl.store import BookApprovalStore
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'expiry-list.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "expiry-list.db", database)
     await store.create(_book_proposal(), created_at=datetime.now(UTC) - timedelta(minutes=61))
     current = await store.create(_book_proposal())
     assert await store.list_pending() == [current]
@@ -187,7 +230,7 @@ async def test_orchestration_can_explicitly_invalidate_an_unclaimed_approval(
 ):
     from cryptotrader.hitl.store import ApprovalInvalidated, BookApprovalStore
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'explicit-invalidate.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "explicit-invalidate.db", database)
     approval = await store.create(_book_proposal(), cycle_id=f"cycle-{initial_status}")
     if initial_status == "approved":
         await store.approve(approval.id)
@@ -212,7 +255,7 @@ async def test_pending_rejected_missing_and_claimed_states_raise_distinct_safe_e
         BookApprovalStore,
     )
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'states.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "states.db", database)
     pending = await store.create(_book_proposal(), cycle_id="pending")
     rejected = await store.create(_book_proposal(), cycle_id="rejected")
     await store.reject(rejected.id)
@@ -238,7 +281,7 @@ async def test_pending_rejected_missing_and_claimed_states_raise_distinct_safe_e
 async def test_approve_and_reject_only_accept_pending_approvals(tmp_path, database):
     from cryptotrader.hitl.store import ApprovalStateError, BookApprovalStore
 
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'decisions.db'}" if database else None)
+    store = await _store(BookApprovalStore, tmp_path / "decisions.db", database)
     approved = await store.create(_book_proposal(), cycle_id="approved")
     rejected = await store.create(_book_proposal(), cycle_id="rejected")
 
@@ -255,7 +298,7 @@ async def test_approve_and_reject_only_accept_pending_approvals(tmp_path, databa
 async def test_sqlite_concurrent_claim_executes_exact_saved_proposal_once(tmp_path):
     from cryptotrader.hitl.store import BookApprovalStore
 
-    database_url = f"sqlite+aiosqlite:///{tmp_path / 'approvals.db'}"
+    database_url = await _database_url(tmp_path / "approvals.db")
     creator = BookApprovalStore(database_url)
     approval = await creator.create(_book_proposal(), cycle_id="cycle-concurrent")
     await creator.approve(approval.id)
@@ -280,7 +323,7 @@ async def test_sqlite_concurrent_claim_executes_exact_saved_proposal_once(tmp_pa
 async def test_sqlite_approve_claim_race_returns_exact_approved_transition_snapshot(tmp_path):
     from cryptotrader.hitl.store import ApprovalNotApproved, BookApprovalStore
 
-    database_url = f"sqlite+aiosqlite:///{tmp_path / 'approve-claim-race.db'}"
+    database_url = await _database_url(tmp_path / "approve-claim-race.db")
     creator = BookApprovalStore(database_url)
     approval = await creator.create(_book_proposal(), cycle_id="cycle-approve-claim-race")
 
@@ -318,7 +361,7 @@ async def test_sqlite_state_transition_rolls_back_when_returned_envelope_is_corr
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / f"rollback-{operation}.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     approval = await store.create(_book_proposal(), cycle_id="cycle-rollback")
     if operation == "claim":
         await store.approve(approval.id)
@@ -357,7 +400,7 @@ async def test_sqlite_state_transition_rolls_back_when_returned_envelope_is_corr
 async def test_approve_returns_its_exact_transition_snapshot_without_post_commit_reread(tmp_path, monkeypatch):
     from cryptotrader.hitl.store import BookApprovalStore
 
-    database_url = f"sqlite+aiosqlite:///{tmp_path / 'approve-race.db'}"
+    database_url = await _database_url(tmp_path / "approve-race.db")
     approver = BookApprovalStore(database_url)
     claimer = BookApprovalStore(database_url)
     approval = await approver.create(_book_proposal(), cycle_id="cycle-race")
@@ -384,7 +427,7 @@ async def test_sqlite_schema_has_exact_book_approval_columns(tmp_path):
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / "schema.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     await store.ensure_table()
 
     with sqlite3.connect(path) as connection:
@@ -408,7 +451,7 @@ async def test_sqlite_proposal_json_is_a_strict_versioned_identity_envelope(tmp_
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / "envelope.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     approval = await store.create(
         _book_proposal(),
         approval_id="approval-envelope",
@@ -436,7 +479,7 @@ async def test_sqlite_envelope_rejects_bool_revision_even_when_equal_to_integer_
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / "bool-envelope-revision.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     approval = await store.create(_book_proposal(config_revision=1), cycle_id="cycle-bool-revision")
     with sqlite3.connect(path) as connection:
         envelope = json.loads(
@@ -461,7 +504,7 @@ async def test_sqlite_envelope_rejects_invalid_identity_types(tmp_path, field_na
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / f"invalid-envelope-{field_name}.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     approval = await store.create(_book_proposal(), cycle_id="cycle-invalid-identity")
     with sqlite3.connect(path) as connection:
         envelope = json.loads(
@@ -485,7 +528,7 @@ async def test_sqlite_envelope_rejects_extra_fields(tmp_path):
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / "extra-envelope-field.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     approval = await store.create(_book_proposal(), cycle_id="cycle-extra-field")
     with sqlite3.connect(path) as connection:
         envelope = json.loads(
@@ -529,7 +572,7 @@ async def test_corrupt_or_identity_mismatched_sqlite_payload_fails_closed(
     from cryptotrader.hitl.store import BookApprovalStore
 
     path = tmp_path / "corrupt.db"
-    store = BookApprovalStore(f"sqlite+aiosqlite:///{path}")
+    store = BookApprovalStore(await _database_url(path))
     approval = await store.create(_book_proposal(), cycle_id="cycle-corrupt")
 
     with sqlite3.connect(path) as connection:

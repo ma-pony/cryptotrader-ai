@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_TIMEFRAME_UNIT_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+_TIMEFRAME_UNIT_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
 
 
 def _timeframe_ms(timeframe: str) -> int:
@@ -36,8 +36,8 @@ def _timeframe_ms(timeframe: str) -> int:
 def _closed_ohlcv(rows: list, timeframe: str, now_ms: int) -> list:
     """Return only candles whose full interval has elapsed."""
     tf_ms = _timeframe_ms(timeframe)
-    current_open_ms = now_ms - now_ms % tf_ms
-    return [row for row in rows if row and row[0] < current_open_ms]
+    # Exchange candles need not share Unix epoch alignment (weekly bars often open Monday).
+    return [row for row in rows if row and row[0] + tf_ms <= now_ms]
 
 
 def clip_ohlcv_at(frame: pd.DataFrame, as_of: datetime, limit: int | None = None) -> pd.DataFrame:
@@ -63,6 +63,53 @@ def clip_ohlcv_at(frame: pd.DataFrame, as_of: datetime, limit: int | None = None
 
 
 class MarketCollector:
+    async def read_candles(self, pair, market_adapter_id, timeframe, start, end, as_of):
+        """Explicit historical window, isolated from live/cache/account collection."""
+        from datetime import UTC, datetime
+        from decimal import Decimal
+
+        from cryptotrader.market_sources.protocol import HistoricalCandle
+        from cryptotrader.signals.presentation import interval_delta
+
+        if any(value.utcoffset() is None for value in (start, end, as_of)) or start >= end:
+            raise ValueError("historical window requires increasing aware timestamps")
+        delta = interval_delta(timeframe)
+        exchange = getattr(ccxt, market_adapter_id)(
+            {"options": {"fetchMarkets": fetch_market_types(market_adapter_id)}}
+        )
+        found = {}
+        try:
+            await exchange.load_markets()
+            if timeframe not in (exchange.timeframes or {}):
+                return ()
+            cursor = int(start.timestamp() * 1000)
+            end_ms = int(min(end, as_of).timestamp() * 1000)
+            step = int(delta.total_seconds() * 1000)
+            while cursor < end_ms:
+                limit = min(300, max(1, (end_ms - cursor + step - 1) // step))
+                rows = await exchange.fetch_ohlcv(pair, timeframe, since=cursor, limit=limit)
+                if not rows:
+                    break
+                for row in rows:
+                    opened = datetime.fromtimestamp(row[0] / 1000, UTC)
+                    if start <= opened < end and opened + delta <= as_of:
+                        bar = HistoricalCandle(
+                            open_time=opened,
+                            open=Decimal(str(row[1])),
+                            high=Decimal(str(row[2])),
+                            low=Decimal(str(row[3])),
+                            close=Decimal(str(row[4])),
+                            volume=Decimal(str(row[5])),
+                        )
+                        found[opened] = bar
+                following = max(row[0] for row in rows) + step
+                if following <= cursor:
+                    break
+                cursor = following
+        finally:
+            await exchange.close()
+        return tuple(found[key] for key in sorted(found))
+
     async def latest_price(self, pair: str, market_adapter_id: str) -> float:
         """Read one current public ticker without collecting a new snapshot."""
         exchange: ccxt.Exchange = getattr(ccxt, market_adapter_id)(

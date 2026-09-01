@@ -2,8 +2,6 @@ import { Check, ChevronRight, Globe, Languages, Menu, Moon, Sun, SunMoon } from 
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router';
 
-import { StatusPill } from '@/components/ui/status-pill';
-import { WSStatusIndicator } from '@/components/ws-status-indicator';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -31,42 +29,35 @@ const LOCALE_OPTIONS: { value: Locale; labelKey: 'locale.zh-CN' | 'locale.en-US'
 
 const PATH_LABELS: Record<
   string,
-  | 'nav.dashboard'
-  | 'nav.strategy'
+  | 'nav.workbench'
   | 'nav.decisions'
-  | 'nav.debate'
-  | 'nav.backtest'
-  | 'nav.risk'
-  | 'nav.metrics'
-  | 'nav.chat'
-  | 'nav.market'
-  | 'nav.scheduler'
+  | 'nav.engine'
+  | 'nav.accounts'
+  | 'nav.research'
+  | 'nav.settings'
 > = {
-  '/': 'nav.dashboard',
-  '/strategy': 'nav.strategy',
+  '/': 'nav.workbench',
   '/decisions': 'nav.decisions',
-  '/debate': 'nav.debate',
-  '/backtest': 'nav.backtest',
-  '/risk': 'nav.risk',
-  '/metrics': 'nav.metrics',
-  '/chat': 'nav.chat',
-  '/market': 'nav.market',
-  '/scheduler': 'nav.scheduler',
+  '/engine': 'nav.engine',
+  '/accounts': 'nav.accounts',
+  '/research': 'nav.research',
+  '/settings': 'nav.settings',
 };
 
 const ApiKeyBadge = () => {
+  const { t } = useTranslation();
   const apiKey = useSettingsStore((s) => s.apiKey);
   const present = apiKey.length > 0;
   return (
     <span
       className={
         present
-          ? 'rounded-full border border-trade-long/40 bg-trade-long-soft px-2 py-0.5 text-[10px] font-medium text-trade-long'
-          : 'rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-medium text-amber-500'
+          ? 'rounded-full border border-trade-long/40 bg-trade-long-soft px-2 py-1 text-sm font-medium text-trade-long'
+          : 'rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-sm font-medium text-amber-500'
       }
-      title="X-API-Key"
+      title={t('header.accessCredential')}
     >
-      {present ? 'API ✓' : 'API ✗'}
+      {t(present ? 'header.keyPresent' : 'header.keyMissing')}
     </span>
   );
 };
@@ -79,14 +70,14 @@ const BtcPriceDisplay = () => {
   if (!Number.isFinite(price)) return null;
   return (
     <div className="hidden items-center gap-1.5 md:flex">
-      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">BTC</span>
-      <span className="font-mono text-xs font-semibold tabular-nums">
+      <span className="text-sm text-muted-foreground">BTC</span>
+      <span className="font-mono text-sm font-semibold tabular-nums">
         ${price.toLocaleString('en-US', { maximumFractionDigits: 0 })}
       </span>
       {Number.isFinite(changePct) ? (
         <span
           className={
-            changePct >= 0 ? 'font-mono text-[10px] text-trade-long' : 'font-mono text-[10px] text-trade-short'
+            changePct >= 0 ? 'font-mono text-sm text-trade-long' : 'font-mono text-sm text-trade-short'
           }
         >
           {changePct >= 0 ? '+' : ''}
@@ -106,17 +97,15 @@ const Breadcrumb = () => {
   const section = SETTINGS_SECTIONS.find((item) => item.path === pathname);
   const pageLabel = section
     ? t('configuration:' + section.label)
-    : pathname === '/setup'
-      ? t('configuration:center.checklist')
-      : labelKey
-        ? t(labelKey)
-        : (segments[0] ?? '');
+    : labelKey
+      ? t(labelKey)
+      : (segments[0] ?? '');
 
   return (
-    <nav className="hidden items-center gap-1.5 text-[11px] font-medium md:flex" aria-label="breadcrumb">
+    <nav className="hidden items-center gap-1.5 text-sm font-medium md:flex" aria-label={t('header.breadcrumb')}>
       <span className="text-muted-foreground">{t('app.name')}</span>
       <ChevronRight className="h-3 w-3 text-muted-foreground" strokeWidth={2} />
-      <span className="text-foreground">{pageLabel || t('nav.dashboard')}</span>
+      <span className="text-foreground">{pageLabel || t('nav.workbench')}</span>
       {segments.length > 1 && !section ? (
         <>
           <ChevronRight className="h-3 w-3 text-muted-foreground" strokeWidth={2} />
@@ -137,8 +126,6 @@ export const TopBar = () => {
   const toggleSidebar = useUIStore((s) => s.toggleSidebar);
   const setMobileNavOpen = useUIStore((s) => s.setMobileNavOpen);
 
-  const isOnline = connectionStatus === 'connected';
-
   // Below md the sidebar is hidden; the menu button opens the mobile drawer.
   // At md+ the menu button toggles the desktop sidebar's collapsed state.
   const onMenuClick = () => {
@@ -152,7 +139,7 @@ export const TopBar = () => {
   return (
     <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4">
       <div className="flex items-center gap-3">
-        <Button variant="ghost" size="icon" onClick={onMenuClick} aria-label="toggle sidebar">
+        <Button variant="ghost" size="icon" onClick={onMenuClick} aria-label={t('header.toggleSidebar')}>
           <Menu className="h-4 w-4" />
         </Button>
         <Breadcrumb />
@@ -162,10 +149,9 @@ export const TopBar = () => {
         <BtcPriceDisplay />
         <span className="hidden h-3.5 w-px bg-border md:block" />
         <ApiKeyBadge />
-        <WSStatusIndicator status={connectionStatus} />
-        <StatusPill tone={isOnline ? 'success' : 'default'} live={isOnline}>
-          {isOnline ? t('ws.online', { defaultValue: '在线' }) : t('ws.offline', { defaultValue: '离线' })}
-        </StatusPill>
+        <span className="hidden text-sm text-muted-foreground lg:inline">
+          行情流：{connectionStatus === 'connected' ? '已连接' : connectionStatus === 'connecting' ? '连接中' : '未连接'}
+        </span>
 
         <span className="mx-1 h-5 w-px bg-border" />
 
@@ -177,7 +163,7 @@ export const TopBar = () => {
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
             <DropdownMenuLabel>
-              <Globe className="mr-2 inline h-3.5 w-3.5" /> Theme
+              <Globe className="mr-2 inline h-3.5 w-3.5" /> {t('theme.title')}
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             {THEME_OPTIONS.map((opt) => (
@@ -197,7 +183,7 @@ export const TopBar = () => {
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Language</DropdownMenuLabel>
+            <DropdownMenuLabel>{t('locale.title')}</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {LOCALE_OPTIONS.map((opt) => (
               <DropdownMenuItem key={opt.value} onSelect={() => setLocale(opt.value)}>

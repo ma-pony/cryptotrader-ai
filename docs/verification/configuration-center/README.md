@@ -62,7 +62,7 @@ TDD 实际结果：后端目录 RED 6 failed / 10 passed（缺少能力和独占
 | 路径 | 浏览器 / API 实际观察 | 补充自动化覆盖 |
 | --- | --- | --- |
 | 初始化/日常配置 | 未启用可访问八节；分区保存并回访 | setup、configuration workflow |
-| 类型化安装插件 | 安装 `configuration_example` 后自动出现窗口、周期和嵌套高级开关；窗口 24、15m 和 diagnostics 保存后仍在 | `test_configuration_acceptance.py`、catalog/field suites |
+| 类型化代码注册组件 | 后端注册 `configuration_example` 后出现窗口、周期和嵌套高级开关；窗口 24、15m 和 diagnostics 保存后仍在 | `test_configuration_acceptance.py`、catalog/field suites |
 | 跨节编辑 | model draft 保留，保存 risk 7.5% 后 GET 得到 0.075，再保存 model；未启用状态不变 | draft lifecycle、workflow |
 | Paper | 默认 10000，改为 12500，创建/回访/实际本地只读检查成功；无凭据字段 | venue/model/API suites |
 | 外部平台 | OKX 仅 Demo/Live；缺凭据检查失败，缺 Passphrase 不能保存凭据；公共测试字符串写 vault 后，假外部适配器返回 authentication_failed | real adapter read-only/close、credential redaction suites |
@@ -98,17 +98,17 @@ TDD 实际结果：后端目录 RED 6 failed / 10 passed（缺少能力和独占
 
 ## 复现隔离预览
 
-在项目 worktree 根目录执行，要求已经安装项目开发依赖。使用独立插件目标目录和临时 SQLite，以下变量不涉及用户运行配置：
+在项目 worktree 根目录执行，要求已经安装项目开发依赖。使用独立代码注册示例目标目录和临时 SQLite，以下变量不涉及用户运行配置：
 
 ```bash
 fixture_dir=$(mktemp -d /private/tmp/cryptotrader-configuration.XXXXXX)
-uv pip install --python .venv/bin/python --target "$fixture_dir/plugins" \
+uv pip install --python .venv/bin/python --target "$fixture_dir/components" \
   --no-deps --no-build-isolation examples/configuration_plugin
 cd web
 VITE_API_BASE_URL= VITE_OTLP_UI_ENDPOINT= node node_modules/vite/bin/vite.js build \
   --outDir "$fixture_dir/spa"
 cd ..
-PYTHONPATH="$fixture_dir/plugins" .venv/bin/python -m tests.manual.configuration_preview \
+PYTHONPATH="$fixture_dir/components" .venv/bin/python -m tests.manual.configuration_preview \
   --spa-dir "$fixture_dir/spa" --port 8765
 ```
 

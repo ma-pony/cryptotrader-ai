@@ -1,24 +1,25 @@
 """Four-domain LLM committee with an internal LangGraph debate."""
+# ruff: noqa: RUF001
 
 from __future__ import annotations
 
 import asyncio
 import json
 from dataclasses import asdict, dataclass, is_dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypedDict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 
-from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
-from cryptotrader.configuration.fields import LocalizedText
 from cryptotrader.configuration.parameters import LlmCommitteeParameters
 from cryptotrader.cycle_events import CycleEvent, NullCycleEventSink
 from cryptotrader.debate.challenge import challenge_agent
 from cryptotrader.debate.convergence import check_convergence, compute_divergence, debate_gate_decision
 from cryptotrader.signals.component import ComponentExecutionError
 from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements, SignalContext
+from cryptotrader.signals.presentation import TextBlock, TimelineBlock, TimelineEntry
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable, Mapping
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 class CommitteeState(TypedDict):
     context: SignalContext
     analyses: dict[str, dict[str, Any]]
+    timeline: list[TimelineEntry]
     debate_round: int
     debate_turns: list[dict[str, Any]]
     divergence_scores: list[float]
@@ -64,7 +66,7 @@ def normalize_summary_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
 
 class LLMCommitteeComponent:
     id = "llm_committee"
-    display_name = "LLM 四智能体委员会"
+    display_name = "大模型四智能体委员会"
     description = "技术、链上、新闻和宏观智能体的内部交叉辩论"
 
     def __init__(
@@ -110,6 +112,7 @@ class LLMCommitteeComponent:
         initial: CommitteeState = {
             "context": context,
             "analyses": {},
+            "timeline": [],
             "debate_round": 0,
             "debate_turns": [],
             "divergence_scores": [],
@@ -157,7 +160,13 @@ class LLMCommitteeComponent:
         for name, result in zip(names, results, strict=True):
             if isinstance(result, BaseException):
                 raise self._error("analysis", result, subject=name) from result
-        return {"analyses": dict(zip(names, results, strict=True))}
+        return {
+            "analyses": dict(zip(names, results, strict=True)),
+            "timeline": [
+                TimelineEntry(time=datetime.now(UTC), actor=self._actor(name), body=self._opinion(result))
+                for name, result in zip(names, results, strict=True)
+            ],
+        }
 
     async def _analyze_one(self, name: str, agent, snapshot) -> dict[str, Any]:
         await self.events.publish(CycleEvent("committee_agent_started", {"agent_id": name}))
@@ -223,16 +232,28 @@ class LLMCommitteeComponent:
                 raise self._error("debate", result, subject=name) from result
         updated = {}
         turns = list(state["debate_turns"])
+        timeline = list(state["timeline"])
         for name, result in zip(names, results, strict=True):
             updated[name], turn = result
             turns.append(turn)
+            body = f"第 {round_number} 轮\n{self._opinion(updated[name])}"
+            for key, label in (
+                ("challenge", "质疑"),
+                ("response", "回应"),
+                ("reasoning", "辩论意见"),
+                ("new_findings", "新发现"),
+                ("move", "立场变化"),
+            ):
+                if turn.get(key):
+                    body += f"\n{label}：{turn[key]}"
+            timeline.append(TimelineEntry(time=datetime.now(UTC), actor=self._actor(name), body=body))
         await self.events.publish(
             CycleEvent(
                 "debate_round_completed",
                 {"round_number": round_number, "stage": "debate"},
             )
         )
-        return {"analyses": updated, "debate_turns": turns, "debate_round": round_number}
+        return {"analyses": updated, "debate_turns": turns, "debate_round": round_number, "timeline": timeline}
 
     async def _convergence(self, state: CommitteeState) -> dict:
         scores = [*state["divergence_scores"], compute_divergence(state["analyses"])]
@@ -267,6 +288,11 @@ class LLMCommitteeComponent:
                 "debate_skipped": state["debate_skipped"],
                 "debate_skip_reason": state["debate_skip_reason"],
             },
+            blocks=(
+                TextBlock(title="委员会观点", body=payload["reasoning"]),
+                TimelineBlock(title="四智能体意见与辩论", entries=tuple(state["timeline"])),
+            ),
+            evaluation_reference=state["context"].evaluation_reference,
         )
         await self.events.publish(
             CycleEvent(
@@ -280,6 +306,24 @@ class LLMCommitteeComponent:
             )
         )
         return {"final_signal": signal}
+
+    @staticmethod
+    def _actor(name: str) -> str:
+        return {
+            "tech_agent": "技术智能体",
+            "chain_agent": "链上智能体",
+            "news_agent": "新闻智能体",
+            "macro_agent": "宏观智能体",
+        }.get(name, name)
+
+    @staticmethod
+    def _opinion(analysis: dict) -> str:
+        direction = {"bullish": "看多", "bearish": "看空", "neutral": "中性"}.get(analysis.get("direction"), "未知")
+        body = f"{direction} · 置信度 {float(analysis.get('confidence', 0)):.0%}\n{analysis.get('reasoning', '')}"
+        for key, label in (("key_factors", "关键因素"), ("risk_flags", "风险提示")):
+            if analysis.get(key):
+                body += f"\n{label}：" + "；".join(str(value) for value in analysis[key])
+        return body
 
     async def _challenge_with_llm(
         self,
@@ -422,17 +466,6 @@ class LLMCommitteeComponent:
         return ComponentExecutionError(self.id, RuntimeError(f"{identity}:{type(cause).__name__}"))
 
 
-@configured_factory(
-    PluginConfiguration(
-        id="llm_committee",
-        label=LocalizedText(zh_CN="LLM 四智能体委员会", en_US="LLM four-agent committee"),
-        description=LocalizedText(
-            zh_CN="由技术、链上、新闻和宏观智能体进行内部辩论后汇总信号。",
-            en_US="Synthesizes technical, on-chain, news, and macro analysis through an internal debate.",
-        ),
-        parameter_model=LlmCommitteeParameters,
-    )
-)
 def create_component(
     document: RuntimeConfigDocument,
     sink: CycleEventSink,

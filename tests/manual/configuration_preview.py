@@ -20,11 +20,17 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from api.dependencies import verify_api_key
-from api.routes import config, venues
+from api.routes import backtest, config, venues
+from cryptotrader.backtest.models import BacktestParams
+from cryptotrader.backtest.result import BacktestResult
+from cryptotrader.backtest.service import BacktestService
+from cryptotrader.backtest.snapshot import safe_snapshot
 from cryptotrader.configuration.catalog import configuration_catalog
+from cryptotrader.migrations.workbench import migrate_workbench_schema
 from cryptotrader.runtime_config.models import RuntimeConfigDocument
 from cryptotrader.runtime_config.repository import API_ACCESS_CREDENTIAL_REF, RuntimeConfigRepository
 from cryptotrader.runtime_config.secrets import CredentialVault, TokenPayload
+from cryptotrader.tasks import BackgroundTaskManager
 from cryptotrader.venues.ccxt_base import VenueOperationError
 from cryptotrader.venues.paper import PaperVenueAdapter
 from cryptotrader.venues.registry import VenueAdapterRegistry
@@ -49,12 +55,14 @@ class RejectedExternalAdapter:
 class PreviewRuntime:
     def __init__(self, repository, snapshot):
         self.repository, self.snapshot = repository, snapshot
+        self.task_manager = BackgroundTaskManager()
+        self.backtest_service = BacktestService(repository=repository, task_manager=self.task_manager)
         self.application_in_progress = False
         self.fail_next_publish = False
         self.lock = asyncio.Lock()
         catalog = configuration_catalog()
-        self.signal_registry = SimpleNamespace(installed_ids=lambda: frozenset(catalog.components))
-        self.market_registry = SimpleNamespace(installed_ids=lambda: frozenset(catalog.market_sources))
+        self.signal_registry = SimpleNamespace(registered_ids=lambda: frozenset(catalog.components))
+        self.market_registry = SimpleNamespace(registered_ids=lambda: frozenset(catalog.market_sources))
         self.venue_registry = VenueAdapterRegistry(
             (PaperVenueAdapter(), RejectedExternalAdapter("okx"), RejectedExternalAdapter("bybit"))
         )
@@ -69,7 +77,7 @@ class PreviewRuntime:
                 self.application_in_progress = False
 
     async def prepare_candidate(self, snapshot):
-        if snapshot.document.system.active != self.snapshot.document.system.active:
+        if snapshot.document.scheduler.automation_enabled:
             raise ValueError("Fixture refuses activation")
         return self
 
@@ -97,9 +105,7 @@ async def fixture_safety(request: Request, call_next):
     if path == "/api/config" and request.method == "PUT":
         payload = await request.json()
         desired = payload.get("document", {})
-        activation = (
-            desired.get("system", {}).get("active") != request.app.state.runtime.snapshot.document.system.active
-        )
+        activation = desired.get("scheduler", {}).get("automation_enabled", False)
         if activation or desired.get("execution", {}).get("live_order_execution_enabled"):
             return JSONResponse({"detail": "Fixture refuses activation and live execution"}, status_code=403)
     allowed_write = path == "/api/config" or path.startswith(
@@ -152,18 +158,28 @@ def spa_response(spa_dir: Path, path: str):
 
 async def create_preview(data_dir: Path, spa_dir: Path, *, active_ui=False):
     document = preview_document(active_ui)
+    database_url = f"sqlite+aiosqlite:///{data_dir / 'configuration-preview.db'}"
+    await migrate_workbench_schema(database_url)
     repository = RuntimeConfigRepository(
-        f"sqlite+aiosqlite:///{data_dir / 'configuration-preview.db'}",
+        database_url,
         CredentialVault("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
         default_factory=lambda: document,
     )
     app = FastAPI()
     app.state.runtime = PreviewRuntime(repository, await repository.get_or_create())
+    store = app.state.runtime.backtest_service.store
+    await store.create(
+        BacktestParams(pair="ETH/USDT", start="2025-01-01", end="2025-02-01", initial_equity="2500"),
+        safe_snapshot(app.state.runtime.snapshot),
+        run_id="fixture-saved-parameters",
+    )
+    await store.update("fixture-saved-parameters", "completed", 1, BacktestResult())
 
     app.middleware("http")(fixture_safety)
 
     app.include_router(config.router, dependencies=[Depends(verify_api_key)])
     app.include_router(venues.router, dependencies=[Depends(verify_api_key)])
+    app.include_router(backtest.router, dependencies=[Depends(verify_api_key)])
 
     @app.post("/__fixture__/fail-next-publication")
     async def fail_publication():
@@ -181,19 +197,6 @@ async def create_preview(data_dir: Path, spa_dir: Path, *, active_ui=False):
         saved = await repository.replace(saved.revision, RuntimeConfigDocument.model_validate(raw))
         app.state.runtime.snapshot = await repository.mark_applied(saved.revision)
         return {"fixture": "protected with documented disposable key"}
-
-    @app.get("/api/backtest/sessions", dependencies=[Depends(verify_api_key)])
-    async def sessions():
-        return {"sessions": ["fixture-saved-parameters"]}
-
-    @app.get("/api/backtest/sessions/fixture-saved-parameters", dependencies=[Depends(verify_api_key)])
-    async def saved_parameters():
-        return {
-            "name": "fixture-saved-parameters",
-            "params": {"pair": "ETH/USDT", "start": "2025-01-01", "end": "2025-02-01", "initial_capital": 2500},
-            "result": {},
-            "saved_at": "2026-08-30T00:00:00Z",
-        }
 
     @app.get("/api/scheduler/rules", dependencies=[Depends(verify_api_key)])
     async def rules():

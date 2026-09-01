@@ -33,7 +33,7 @@ class ExecutionCoordinator:
                 raise ValueError("each service must match its connection ID and expose execute")
         self._services = normalized
 
-    async def execute(self, proposal: BookExecutionProposal) -> BookExecutionResult:
+    async def execute(self, proposal: BookExecutionProposal, *, frozen=False) -> BookExecutionResult:
         if not isinstance(proposal, BookExecutionProposal):
             raise TypeError("proposal must be a BookExecutionProposal")
         if not proposal.ready:
@@ -47,7 +47,10 @@ class ExecutionCoordinator:
                 raise KeyError(f"missing execution service for connection {plan.connection_id}") from None
 
         outcomes = await asyncio.gather(
-            *(service.execute(plan) for service, plan in zip(services, proposal.connection_plans, strict=True)),
+            *(
+                service.execute(plan, frozen=True) if frozen else service.execute(plan)
+                for service, plan in zip(services, proposal.connection_plans, strict=True)
+            ),
             return_exceptions=True,
         )
         results: list[ConnectionExecutionResult] = []
@@ -59,7 +62,7 @@ class ExecutionCoordinator:
             if (
                 isinstance(outcome, Exception)
                 or not isinstance(outcome, ConnectionExecutionResult)
-                or not self._matches_plan(outcome, plan)
+                or not self._matches_plan(outcome, plan, frozen=frozen)
             ):
                 results.append(
                     ConnectionExecutionResult.failed(
@@ -84,7 +87,17 @@ class ExecutionCoordinator:
         )
 
     @staticmethod
-    def _matches_plan(result: ConnectionExecutionResult, plan: ConnectionExecutionPlan) -> bool:
+    def _matches_plan(result: ConnectionExecutionResult, plan: ConnectionExecutionPlan, *, frozen=False) -> bool:
+        if (
+            (frozen or result.quantity_frozen)
+            and result.status == "completed"
+            and (
+                result.target_signed_amount != plan.post_fill_signed_amount
+                or any(order.side != plan.side for order in result.orders)
+                or sum((order.amount for order in result.orders), start=0) != plan.amount
+            )
+        ):
+            return False
         return (
             result.book_id == plan.book_id
             and result.connection_id == plan.connection_id

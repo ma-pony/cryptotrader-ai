@@ -1,6 +1,6 @@
 import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { SaveBar } from '@/components/configuration/save-bar';
 import type { ConfigurationSection } from '@/hooks/use-configuration-draft';
 import { ModelSettings } from './forms/model-settings';
@@ -20,49 +20,31 @@ export function ConfigurationLayout() {
   return (
     <div className="configuration-workbench">
       <header className="configuration-center-header">
-        <span>
-          {t('center.title')} · {t('revisionValue', { revision: runtime.revision })}
-        </span>
-        {pathname !== '/setup' ? <Link to="/setup">{t('center.checklist')}</Link> : null}
+        <span>{t('center.systemHub')} · {runtime.revision ? t('revisionValue', { revision: runtime.revision }) : '配置版本未知'}</span>
       </header>
-      {pathname !== '/setup' ? (
-        <>
-          <div className="configuration-mobile-navigation configuration-field">
-            <label htmlFor="configuration-section">{t('center.section')}</label>
-            <select
-              id="configuration-section"
-              className="configuration-control"
-              value={pathname}
-              onChange={(event) => void navigate(event.target.value)}
-            >
-              {SETTINGS_SECTIONS.map((section) => (
-                <option key={section.id} value={section.path}>
-                  {t(section.label)}
-                </option>
-              ))}
-            </select>
-          </div>
-          <nav className="configuration-navigation" aria-label={t('center.title')}>
-            {SETTINGS_SECTIONS.map((section) => (
-              <NavLink key={section.id} to={section.path}>
-                {t(section.label)}
-              </NavLink>
-            ))}
-          </nav>
-        </>
-      ) : null}
-      {runtime.catalog.isPending ? (
-        <p role="status">{t('center.catalogLoading')}</p>
-      ) : runtime.catalog.isError ? (
-        <div role="alert">
-          <p>{t('center.catalogFailed')}</p>
-          <button className="configuration-button" onClick={() => void runtime.catalog.refetch()}>
-            {t('retry')}
-          </button>
-        </div>
-      ) : (
-        <Outlet />
-      )}
+      <div className="configuration-mobile-navigation configuration-field">
+        <label htmlFor="configuration-section">{t('center.section')}</label>
+        <select
+          id="configuration-section"
+          className="configuration-control"
+          value={pathname}
+          onChange={(event) => void navigate(event.target.value)}
+        >
+          {SETTINGS_SECTIONS.map((section) => (
+            <option key={section.id} value={section.path}>
+              {t(section.label)}
+            </option>
+          ))}
+        </select>
+      </div>
+      <nav className="configuration-navigation" aria-label={t('center.systemHub')}>
+        {SETTINGS_SECTIONS.map((section) => (
+          <NavLink key={section.id} to={section.path}>
+            {t(section.label)}
+          </NavLink>
+        ))}
+      </nav>
+      <Outlet />
     </div>
   );
 }
@@ -83,6 +65,7 @@ export function ConfigurationSaveBar({
       applyStatus={runtime.applyStatus}
       conflict={runtime.conflict}
       loading={runtime.isSaving || runtime.isReloading}
+      submit
       onSave={() => void runtime.save(section, form ?? undefined)}
       onDiscard={() => runtime.discard(section)}
       onReload={() => void runtime.reload()}
@@ -90,7 +73,7 @@ export function ConfigurationSaveBar({
   );
 }
 
-export default function SettingsPage({ section }: { section: Exclude<ConfigurationSection, 'books'> }) {
+export default function SettingsPage({ section, componentId }: { section: Exclude<ConfigurationSection, 'books' | 'notifications'>; componentId?: string }) {
   const runtime = useConfiguration();
   const form = useRef<HTMLFormElement>(null);
   const { t } = useTranslation('configuration');
@@ -104,6 +87,7 @@ export default function SettingsPage({ section }: { section: Exclude<Configurati
   });
   return (
     <form
+      id={section === 'models' ? 'models' : section === 'system' ? 'system-settings' : undefined}
       ref={form}
       noValidate
       onSubmit={(event) => {
@@ -125,6 +109,7 @@ export default function SettingsPage({ section }: { section: Exclude<Configurati
           onChange={(value) => runtime.update('signals', value)}
           errors={errors}
           catalog={catalog}
+          {...(componentId ? { componentId } : {})}
         />
       ) : null}
       {section === 'market' ? (
@@ -161,8 +146,8 @@ export default function SettingsPage({ section }: { section: Exclude<Configurati
             value={document}
             onChange={(patch) => {
               if (patch.security) runtime.update('security', patch.security);
+              if (patch.accounts) runtime.update('accounts', patch.accounts);
               if (patch.infrastructure) runtime.update('infrastructure', patch.infrastructure);
-              if (patch.notifications) runtime.update('notifications', patch.notifications);
               if (patch.observability) runtime.update('observability', patch.observability);
             }}
             errors={errors}

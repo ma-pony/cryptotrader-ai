@@ -3,17 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import replace
+from datetime import UTC, datetime
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
-from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
-from cryptotrader.configuration.fields import LocalizedText
-from cryptotrader.configuration.parameters import EmptyParameters
+from cryptotrader.accounts.models import (
+    AccountOrder,
+    AccountPosition,
+    AccountSnapshot,
+    Fill,
+    FillPage,
+    FundingEntry,
+    FundingPage,
+    Money,
+)
+from cryptotrader.configuration.catalog import require_environment
+from cryptotrader.venues.account_reads import timestamp
 from cryptotrader.venues.ccxt_base import CcxtVenueBase, VenueOperationError, create_async_client
-from cryptotrader.venues.models import ProtectionState, VenueCapabilities
+from cryptotrader.venues.models import ACCOUNT_READS, EXIT_OPERATIONS, ProtectionState, VenueCapabilities
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from decimal import Decimal
 
     from cryptotrader.pair import Pair
     from cryptotrader.runtime_config.secrets import CredentialPayload
@@ -26,6 +37,7 @@ class OkxVenueSession(CcxtVenueBase):
     def __init__(self, connection: VenueConnection, client: Any, capabilities: VenueCapabilities) -> None:
         super().__init__(connection, client, capabilities)
         self._protection_pairs: dict[str, Pair] = {}
+        self._algo_orders: dict[str, tuple[Pair, str]] = {}
         self._position_mode_lock = asyncio.Lock()
         self._hedged: bool | None = None
 
@@ -90,6 +102,185 @@ class OkxVenueSession(CcxtVenueBase):
         if account is None:
             raise VenueOperationError(f"{self.connection_id}: invalid OKX equity response")
         return self._decimal(account.get("totalEq"), "OKX total equity")
+
+    async def _account_rows(self, method, params):
+        response = await self._call("read OKX account", method, params)
+        if (
+            not isinstance(response, dict)
+            or str(response.get("code")) != "0"
+            or not isinstance(response.get("data"), list)
+        ):
+            raise VenueOperationError("invalid OKX account response")
+        return response["data"]
+
+    async def _all_account_rows(self, method, params, id_field):
+        rows, after = [], None
+        seen = set()
+        while True:
+            page = await self._account_rows(method, {**params, "limit": "100", **({"after": after} if after else {})})
+            if not page:
+                return rows
+            rows.extend(page)
+            after = str(page[-1].get(id_field) or "")
+            if not after or after in seen:
+                raise VenueOperationError("OKX account cursor did not advance")
+            seen.add(after)
+
+    async def fetch_account(self) -> AccountSnapshot:
+        await self._ensure_markets()
+        raw = await self._call("fetch OKX balance", self._client.fetch_balance)
+        data = raw.get("info", {}).get("data", [])
+        account = data[0] if data else {}
+        equity = self._money(account.get("totalEq"), "USD", "total_equity_unavailable")
+        used = self._money(account.get("imr"), "USD", "initial_margin_unavailable")
+        available = self._money(account.get("availEq"), "USD", "available_margin_unavailable")
+        balances = tuple(
+            self._money(value, asset, "balance_unavailable") for asset, value in raw.get("total", {}).items()
+        )
+        rows = await self._account_rows(self._client.private_get_account_positions, {})
+        positions = []
+        for row in rows:
+            instrument = self._read_instrument(row.get("instId"), row.get("instType", ""))
+            amount = self._read_amount(row.get("pos"), instrument)
+            if amount == 0:
+                continue
+            sign = Decimal("-1") if row.get("posSide") == "short" or amount < 0 else Decimal("1")
+            if row.get("instType") == "MARGIN" and instrument.pair is not None:
+                if row.get("posCcy") not in {instrument.pair.base, instrument.pair.quote}:
+                    raise VenueOperationError("OKX margin position direction unavailable")
+                sign = Decimal("-1") if row["posCcy"] == instrument.pair.quote else Decimal("1")
+            available_amount = (
+                self._read_amount(row["availPos"], instrument) if row.get("availPos") not in (None, "") else None
+            )
+            positions.append(
+                AccountPosition(
+                    instrument,
+                    abs(amount) * sign,
+                    abs(available_amount) if available_amount is not None else None,
+                    self._signed_money(
+                        self._money(row.get("notionalUsd"), "USD", "current_notional_unavailable"), sign
+                    ),
+                    self._optional_decimal(row.get("avgPx")),
+                    self._money(
+                        row.get("upl"), self._settlement(instrument) or row.get("ccy"), "unrealized_pnl_unavailable"
+                    ),
+                )
+            )
+        now = datetime.now(UTC)
+        orders = []
+        rows = await self._all_account_rows(self._client.private_get_trade_orders_pending, {}, "ordId")
+        for order_type in ("oco", "conditional", "trigger", "move_order_stop"):
+            rows.extend(
+                await self._all_account_rows(
+                    self._client.private_get_trade_orders_algo_pending, {"ordType": order_type}, "algoId"
+                )
+            )
+        for row in rows:
+            instrument = self._read_instrument(row.get("instId"), row.get("instType", ""))
+            algo = bool(row.get("algoId"))
+            protection = algo and (row.get("ordType") in {"oco", "conditional"} or self._boolean(row.get("reduceOnly")))
+            orders.append(
+                AccountOrder(
+                    self.connection_id,
+                    str(row.get("algoId") or row["ordId"]),
+                    instrument,
+                    row.get("side", "unknown"),
+                    row.get("ordType", "unknown"),
+                    self._read_amount(row.get("sz"), instrument),
+                    self._read_amount(row.get("actualSz") or "0" if algo else row.get("accFillSz"), instrument),
+                    self._optional_decimal(row.get("actualPx") if algo else row.get("avgPx")),
+                    "open" if row.get("state") in {"live", "partially_filled"} else row.get("state", "unknown"),
+                    self._boolean(row.get("reduceOnly")),
+                    protection,
+                    row.get("algoClOrdId") or row.get("clOrdId") or None,
+                    now,
+                    self._remaining_notional(
+                        instrument,
+                        row.get("sz"),
+                        row.get("actualSz") or "0" if algo else row.get("accFillSz"),
+                        row.get("orderPx") if algo else row.get("px"),
+                    )
+                    if not (row.get("tgtCcy") == "quote_ccy" and row.get("ordType") == "market")
+                    else Money(
+                        None, self._settlement(instrument) or "UNKNOWN", "quote_unit_market_order_valuation_unavailable"
+                    ),
+                )
+            )
+            if protection and instrument.tradable:
+                self._protection_pairs[str(row["algoId"])] = instrument.pair
+            if algo and instrument.tradable:
+                self._algo_orders[str(row["algoId"])] = (instrument.pair, row["ordType"])
+        missing = self._completeness(equity, used, available, positions)
+        # Bot/grid/recurring investment orders live in separate product APIs.
+        missing += ("orders:trading_bot_orders_not_supported",)
+        return AccountSnapshot(
+            self.connection_id,
+            now,
+            require_environment(self.connection.adapter_id, self.connection.environment).capital_scope,
+            equity,
+            balances,
+            tuple(positions),
+            tuple(orders),
+            used,
+            available,
+            missing,
+        )
+
+    async def fetch_fills(self, cursor: str | None) -> FillPage:
+        await self._ensure_markets()
+        categories = ("SPOT", "MARGIN", "SWAP", "FUTURES", "OPTION")
+        state = self._history_state(cursor, "fills", len(categories), 90)
+        params = {"instType": categories[state["scope"]], "begin": state["begin"], "end": state["end"], "limit": "100"}
+        if state["after"]:
+            params["after"] = state["after"]
+        rows = await self._account_rows(self._client.private_get_trade_fills_history, params)
+        fills = []
+        for row in rows:
+            instrument = self._read_instrument(row.get("instId"), row.get("instType", ""))
+            fee = self._money(row.get("fee"), row.get("feeCcy"), "fill_fee_unavailable")
+            if fee.amount is not None:
+                fee = replace(fee, amount=-fee.amount)
+            pnl = row.get("fillPnl") if row.get("instType") not in {"SPOT", "MARGIN"} else None
+            fills.append(
+                Fill(
+                    self.connection_id,
+                    str(row["billId"]),
+                    str(row["ordId"]),
+                    instrument,
+                    row["side"],
+                    self._read_amount(row["fillSz"], instrument),
+                    self._decimal(row["fillPx"], "fill price"),
+                    timestamp(row.get("fillTime") or row["ts"]),
+                    fee,
+                    self._money(pnl, self._settlement(instrument), "realized_pnl_unavailable"),
+                    "platform",
+                    row.get("clOrdId") or None,
+                )
+            )
+        return self._history_page(FillPage, fills, state, str(rows[-1]["billId"]) if rows else None, len(categories))
+
+    async def fetch_funding(self, cursor: str | None) -> FundingPage:
+        await self._ensure_markets()
+        state = self._history_state(cursor, "funding", 1, 90)
+        params = {"type": "8", "begin": state["begin"], "end": state["end"], "limit": "100"}
+        if state["after"]:
+            params["after"] = state["after"]
+        rows = await self._account_rows(self._client.private_get_account_bills_archive, params)
+        entries = []
+        for row in rows:
+            change = row.get("balChg")
+            if self._optional_decimal(change) == 0:
+                change = row.get("posBalChg")
+            entries.append(
+                FundingEntry(
+                    self.connection_id,
+                    str(row["billId"]),
+                    self._read_instrument(row.get("instId"), row.get("instType", "")),
+                    self._money(change, row.get("ccy"), "funding_amount_unavailable"),
+                    timestamp(row["ts"]),
+                )
+            )
+        return self._history_page(FundingPage, entries, state, str(rows[-1]["billId"]) if rows else None, 1)
 
     async def replace_protection(self, spec: ProtectionSpec) -> ProtectionState:
         market = await self._market(spec.pair)
@@ -172,6 +363,14 @@ class OkxVenueSession(CcxtVenueBase):
             take_profit = self._decimal(raw_take, "OKX take profit") if raw_take not in (None, "", "0") else None
             if stop_loss is None and take_profit is None:
                 continue
+            order_ids = row.get("ordIdList", [])
+            if not isinstance(order_ids, list) or any(not isinstance(item, str) or not item for item in order_ids):
+                raise VenueOperationError(f"{self.connection_id}: invalid OKX protection order identities")
+            order_id = row.get("ordId")
+            if order_id not in (None, ""):
+                if not isinstance(order_id, str):
+                    raise VenueOperationError(f"{self.connection_id}: invalid OKX protection order identity")
+                order_ids = [order_id, *order_ids]
             protections.append(
                 self._sync(
                     "normalize OKX protection",
@@ -184,6 +383,7 @@ class OkxVenueSession(CcxtVenueBase):
                     take_profit,
                     True,
                     False,
+                    tuple(dict.fromkeys(order_ids)),
                 )
             )
         return tuple(protections)
@@ -195,6 +395,18 @@ class OkxVenueSession(CcxtVenueBase):
             if pair is None:
                 continue
             grouped.setdefault(pair, []).append(protection_id)
+        await self._cancel_algo_orders(grouped)
+
+    async def cancel_order(self, order_id: str, pair: Pair) -> None:
+        algo = self._algo_orders.get(order_id)
+        if algo is None:
+            await super().cancel_order(order_id, pair)
+            return
+        if algo[0] != pair:
+            raise VenueOperationError(f"{self.connection_id}: OKX algo order pair mismatch")
+        await self._cancel_algo_orders({pair: [order_id]})
+
+    async def _cancel_algo_orders(self, grouped: dict[Pair, list[str]]) -> None:
         for pair, ids in grouped.items():
             market = await self._market(pair)
             params = [{"algoId": protection_id, "instId": str(market["id"])} for protection_id in ids]
@@ -230,6 +442,9 @@ class OkxVenueAdapter:
             hedge_mode=True,
             reduce_only=True,
             supported_order_types=frozenset({"market", "limit"}),
+            account_reads=ACCOUNT_READS,
+            exit_operations=EXIT_OPERATIONS,
+            history_initial_days=7,
         )
 
     async def connect(
@@ -238,12 +453,12 @@ class OkxVenueAdapter:
         credentials: CredentialPayload | None,
     ) -> OkxVenueSession:
         self._require_connection(connection)
-        if credentials is None or not credentials.api_key or not credentials.secret or not credentials.passphrase:
+        if credentials is None or not all(credentials.values.get(key) for key in ("api_key", "secret", "passphrase")):
             raise ValueError("OKX connection requires API key, secret, and passphrase")
         config = {
-            "apiKey": credentials.api_key,
-            "secret": credentials.secret,
-            "password": credentials.passphrase,
+            "apiKey": credentials.values["api_key"].get_secret_value(),
+            "secret": credentials.values["secret"].get_secret_value(),
+            "password": credentials.values["passphrase"].get_secret_value(),
             "enableRateLimit": True,
             "options": {"fetchMarkets": ["spot", "swap"]},
         }
@@ -262,18 +477,5 @@ class OkxVenueAdapter:
             raise ValueError(f"unsupported OKX environment: {environment}")
 
 
-@configured_factory(
-    PluginConfiguration(
-        id="okx",
-        label=LocalizedText(zh_CN="OKX", en_US="OKX"),
-        description=LocalizedText(
-            zh_CN="连接 OKX 的模拟或真实交易账户。", en_US="Connects an OKX demo or live account."
-        ),
-        parameter_model=EmptyParameters,
-        environments=("demo", "live"),
-        credential_fields=("api_key", "secret", "passphrase"),
-        margin_modes=("cross", "isolated"),
-    )
-)
 def create_adapter() -> OkxVenueAdapter:
     return OkxVenueAdapter()

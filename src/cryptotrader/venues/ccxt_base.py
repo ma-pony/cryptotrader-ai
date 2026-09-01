@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from cryptotrader.portfolio.models import ConnectionPortfolioSnapshot
+from cryptotrader.venues.account_reads import AccountReadMixin
 from cryptotrader.venues.models import (
     ConnectionPosition,
     NormalizedOrder,
@@ -38,7 +39,7 @@ def create_async_client(adapter_id: str, config: dict[str, Any], client_factory:
     return getattr(ccxt_async, adapter_id)(config)
 
 
-class CcxtVenueBase:
+class CcxtVenueBase(AccountReadMixin):
     """Common precision, normalization, metadata, and lifecycle behavior."""
 
     def __init__(self, connection: VenueConnection, client: Any, capabilities: VenueCapabilities) -> None:

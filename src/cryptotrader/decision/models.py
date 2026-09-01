@@ -60,6 +60,10 @@ class CycleRequest:
     """启动一次决策周期所需的输入。"""
 
     pair: Pair
+    mode: Literal["trading", "backtest"] = "trading"
+    origin: Literal["manual", "scheduled", "trigger", "backtest"] = "manual"
+    decision_id: str | None = None
+    confirmed_book_ids: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

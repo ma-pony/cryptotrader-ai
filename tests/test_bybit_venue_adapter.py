@@ -18,7 +18,7 @@ async def _connect(environment: str = "testnet"):
     adapter = BybitVenueAdapter(client_factory=factory)
     session = await adapter.connect(
         connection("bybit", environment, adapter_id="bybit", credential_ref="credentials"),
-        CredentialPayload(api_key="key", secret="secret"),  # pragma: allowlist secret
+        CredentialPayload(values={"api_key": "key", "secret": "secret"}),  # pragma: allowlist secret
     )
     return adapter, session, factory
 
@@ -237,3 +237,93 @@ async def test_bybit_one_way_short_confirms_requested_short_protection():
     protection = await session.replace_protection(spec)
 
     assert protection.position_side == "short"
+
+
+@pytest.mark.asyncio
+async def test_bybit_conditional_reduce_only_order_is_grouped_as_protection():
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("bybit")
+    original = client.private_get_v5_order_realtime
+
+    async def conditional_close(params):
+        response = await original(params)
+        for row in response["result"]["list"]:
+            if row["orderId"] == "protect1":
+                row["stopOrderType"] = "Stop"
+                row["closeOnTrigger"] = True
+        return response
+
+    client.private_get_v5_order_realtime = conditional_close
+    snapshot = await session.fetch_account()
+    assert next(order for order in snapshot.orders if order.venue_order_id == "protect1").protection
+
+
+@pytest.mark.asyncio
+async def test_bybit_missing_fee_currency_and_option_cash_flow_do_not_become_known_profit():
+    from tests.fakes.account_client import account_session
+    from tests.test_account_read_contract import collect_pages
+
+    session, client = await account_session("bybit")
+    original = client.private_get_v5_execution_list
+
+    async def no_currency(params):
+        response = await original(params)
+        for row in response["result"]["list"]:
+            row["feeCurrency"] = ""
+        return response
+
+    client.private_get_v5_execution_list = no_currency
+    fills, _ = await collect_pages(session.fetch_fills)
+    fill = next(fill for fill in fills if fill.venue_fill_id == "trade1")
+    assert fill.fee.amount is None
+    assert "currency" in fill.fee.unavailable_reason
+    option = next(fill for fill in fills if fill.venue_fill_id == "eth-option-fill")
+    assert option.realized_pnl.amount is None
+    assert option.realized_pnl.unavailable_reason
+    assert option.instrument.tradable is False
+
+
+@pytest.mark.asyncio
+async def test_bybit_explicit_cancel_can_target_real_protection_id_from_full_account_read():
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("bybit")
+    pending = {"protect1"}
+
+    async def cancel_order(order_id, symbol):
+        assert symbol == "BTC/USDT:USDT"
+        pending.remove(order_id)
+
+    client.cancel_order = cancel_order
+    snapshot = await session.fetch_account()
+    assert pending == {"protect1"}
+    protective_order = next(order for order in snapshot.orders if order.protection)
+    await session.cancel_protection((protective_order.venue_order_id,))
+    assert pending == set()
+
+
+@pytest.mark.asyncio
+async def test_bybit_full_account_protection_cancel_failure_is_safe_and_does_not_forget_target():
+    from cryptotrader.venues.protocol import VenueOperationError
+    from tests.fakes.account_client import account_session
+
+    session, client = await account_session("bybit")
+    pending = {"protect1"}
+
+    async def rejected(_order_id, _symbol):
+        raise RuntimeError("fixture-private-message")
+
+    client.cancel_order = rejected
+    await session.fetch_account()
+    with pytest.raises(VenueOperationError) as caught:
+        await session.cancel_protection(("protect1",))
+    assert "fixture-private-message" not in str(caught.value)
+    assert pending == {"protect1"}
+
+    async def accepted(order_id, _symbol):
+        pending.remove(order_id)
+
+    client.cancel_order = accepted
+    await session.cancel_protection(("protect1",))
+    assert pending == set()

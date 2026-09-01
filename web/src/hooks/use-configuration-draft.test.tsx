@@ -18,24 +18,124 @@ it.each([
   ['maximum', 0, true],
 ] as const)('validates %s against %s with inclusive and exclusive semantics', (bound, value, valid) => {
   const source = configurationCatalogFixture.market_sources[0]!;
-  const catalog = { ...configurationCatalogFixture, market_sources: [{ ...source, fields: [{
-    ...source.fields[0]!, minimum: null, maximum: null, exclusive_minimum: null, exclusive_maximum: null, [bound]: 0,
-  }] }] };
+  const catalog = {
+    ...configurationCatalogFixture,
+    market_sources: [
+      {
+        ...source,
+        fields: [
+          {
+            ...source.fields[0]!,
+            step: null,
+            minimum: null,
+            maximum: null,
+            exclusive_minimum: null,
+            exclusive_maximum: null,
+            [bound]: 0,
+          },
+        ],
+      },
+    ],
+  };
   const document = toRuntimeDocument(runtimeConfigFixture().document);
-  document.market_data = { source_id: 'default', parameters: { threshold: value } };
+  document.market_data = { source_id: 'default', timeframe: '1h', parameters: { threshold: value } };
   expect(validateConfigurationSection('market', document, catalog, (key) => key)).toEqual(
     valid ? {} : { 'market_data.parameters.threshold': 'numberInvalid' },
   );
 });
 
-function harness() {
+function harness(initial = runtimeConfigFixture()) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
-  client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, runtimeConfigFixture());
+  client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, initial);
   const hook = renderHook(() => useConfigurationDraft(configurationCatalogFixture), {
     wrapper: ({ children }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>,
   });
   return { client, ...hook };
 }
+
+it('retains ordinary pool edits but never resurrects a pool stopped by manual exit', async () => {
+  const initial = runtimeConfigFixture();
+  initial.document.execution.connections = [
+    {
+      id: 'account',
+      label: '账户',
+      adapter_id: 'sample_venue',
+      environment: 'sandbox',
+      enabled: true,
+      canary_only: false,
+      credential_configured: true,
+      credential_updated_at: null,
+      leverage: 1,
+      margin_mode: 'cross',
+      parameters: [],
+    },
+  ];
+  initial.document.execution.books = [
+    {
+      id: 'pool',
+      label: '原池名',
+      enabled: true,
+      capital_scope: 'simulated',
+      hitl_required: false,
+      allocations: [{ connection_id: 'account', enabled: true, weight: 1 }],
+    },
+  ];
+  const { result, client } = harness(initial);
+  const id = result.current.document!.execution.books[0]!.id;
+  act(() =>
+    result.current.update('execution', {
+      ...result.current.document!.execution,
+      books: result.current.document!.execution.books.map((b) => (b.id === id ? { ...b, label: '尚未保存的池名' } : b)),
+    }),
+  );
+  const stopped = structuredClone(initial);
+  stopped.revision = 2;
+  stopped.document.execution.books[0]!.enabled = false;
+  act(() => {
+    client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, stopped);
+  });
+  await waitFor(() => expect(result.current.document!.execution.books[0]!.enabled).toBe(false));
+  expect(result.current.document!.execution.books[0]!.label).toBe('尚未保存的池名');
+  const submitted: unknown[] = [];
+  let saved = stopped;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation((_url, init: RequestInit) => {
+      if (init.method === 'PUT') {
+        const body = JSON.parse(init.body as string) as {
+          expected_revision: number;
+          document: { execution: { books: typeof initial.document.execution.books } };
+        };
+        submitted.push(body);
+        saved = structuredClone(saved);
+        saved.revision = body.expected_revision + 1;
+        saved.document.execution.books = body.document.execution.books;
+      }
+      return Promise.resolve(new Response(JSON.stringify(saved), { status: 200 }));
+    }),
+  );
+  await act(async () => {
+    expect(await result.current.save('books')).toBe(true);
+  });
+  expect(submitted[0]).toMatchObject({
+    expected_revision: 2,
+    document: { execution: { books: [{ id: 'pool', enabled: false, label: '尚未保存的池名' }] } },
+  });
+  act(() =>
+    result.current.update('execution', {
+      ...result.current.document!.execution,
+      books: result.current.document!.execution.books.map((b) => (b.id === id ? { ...b, enabled: true } : b)),
+    }),
+  );
+  expect(result.current.document!.execution.books[0]!.enabled).toBe(true);
+  await act(async () => {
+    expect(await result.current.save('books')).toBe(true);
+  });
+  expect(submitted[1]).toMatchObject({
+    expected_revision: 3,
+    document: { execution: { books: [{ id: 'pool', enabled: true, label: '尚未保存的池名' }] } },
+  });
+});
 
 it('saves only the selected section over the latest baseline and retains other pending sections', async () => {
   const { result, client } = harness();
@@ -338,7 +438,7 @@ it('leaves optional factory-default lists sparse but rejects an explicitly blank
     ],
   };
   const document = toRuntimeDocument(runtimeConfigFixture().document);
-  document.market_data = { source_id: 'default', parameters: {} };
+  document.market_data = { source_id: 'default', timeframe: '1h', parameters: {} };
   expect(validateConfigurationSection('market', document, catalog, (key) => key)).toEqual({});
   document.market_data.parameters.threshold = '';
   expect(validateConfigurationSection('market', document, catalog, (key) => key)).toEqual({

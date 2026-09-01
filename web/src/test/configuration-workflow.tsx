@@ -5,7 +5,15 @@ import { vi } from 'vitest';
 import { App } from '@/App';
 import { runtimeConfigFixture } from './runtime-config-fixture';
 import { configurationCatalogFixture, pluginFields } from './configuration-catalog-fixture';
-import type { ConfigurationCatalog, RuntimeConfig, RuntimeDocument, RuntimeJsonValue } from '@/types/api';
+import { connectionFingerprint } from '@/lib/configuration-readiness';
+import { toRuntimeDocument } from '@/hooks/use-runtime-config';
+import type {
+  ConfigurationCatalog,
+  ConnectionHealth,
+  RuntimeConfig,
+  RuntimeDocument,
+  RuntimeJsonValue,
+} from '@/types/api';
 import type { JsonValueOut } from '@/types/api.schema';
 import { MarketDataContext, type MarketDataContextValue } from '@/contexts/market-data/market-data-context';
 
@@ -22,15 +30,16 @@ export const workflowCatalog: ConfigurationCatalog = {
   components: ['kronos', 'llm_committee'].map((id) => ({
     ...configurationCatalogFixture.components[0]!,
     id,
-    label: { zh_CN: id === 'kronos' ? 'Kronos' : 'LLM 委员会', en_US: id },
+    label: { zh_CN: id === 'kronos' ? 'Kronos' : '大模型四智能体委员会', en_US: id },
     fields: [],
   })),
   venues: [
+    ...configurationCatalogFixture.venues,
     {
       id: 'paper',
-      label: { zh_CN: 'Paper 模拟账户', en_US: 'Paper' },
+      label: { zh_CN: '本地模拟器', en_US: 'Paper' },
       description: { zh_CN: '', en_US: '' },
-      environments: ['paper'],
+      environments: [{ id: 'paper', label: { zh_CN: '本地模拟器', en_US: 'Paper' }, capital_scope: 'simulated' }],
       credential_fields: [],
       margin_modes: ['cross'],
       fields: [
@@ -51,8 +60,20 @@ export const workflowCatalog: ConfigurationCatalog = {
       label: { zh_CN: id.toUpperCase(), en_US: id.toUpperCase() },
       description: { zh_CN: '', en_US: '' },
       fields: [],
-      environments: id === 'okx' ? ['demo', 'live'] : ['demo', 'testnet', 'live'],
-      credential_fields: id === 'okx' ? ['api_key', 'secret', 'passphrase'] : ['api_key', 'secret'],
+      environments: (id === 'okx' ? ['demo', 'live'] : ['demo', 'testnet', 'live']).map(
+        (environment) =>
+          ({
+            id: environment,
+            label: { zh_CN: environment, en_US: environment },
+            capital_scope: environment === 'live' ? 'real' : 'simulated',
+          }) as const,
+      ),
+      credential_fields: (id === 'okx' ? ['api_key', 'secret', 'passphrase'] : ['api_key', 'secret']).map((key) => ({
+        key,
+        label: { zh_CN: key, en_US: key },
+        description: { zh_CN: '', en_US: '' },
+        required: true,
+      })),
       margin_modes: ['cross', 'isolated'] as ('cross' | 'isolated')[],
     })),
   ],
@@ -70,14 +91,47 @@ export const paperConnection = {
   margin_mode: 'cross' as const,
   parameters: [],
 };
+export function workflowApprovedChecks(config: RuntimeConfig) {
+  const document = toRuntimeDocument(config.document);
+  return new Map(
+    document.execution.connections.map((connection) => {
+      const source = config.document.execution.connections.find((item) => item.id === connection.id)!;
+      const health: ConnectionHealth = {
+        connection_id: connection.id,
+        checked_at: '2026-08-30T12:00:00Z',
+        healthy: true,
+        error_code: null,
+        environment: connection.environment,
+        credential_configured: source.credential_configured,
+        capabilities: {
+          market_types: [],
+          native_protection: false,
+          hedge_mode: false,
+          reduce_only: true,
+          supported_order_types: [],
+          account_reads: ['balances', 'positions', 'orders', 'fills', 'funding', 'instruments'],
+          exit_operations: [],
+          history_initial_days: null,
+          unknown_fields: [],
+        },
+      };
+      return [connection.id, { fingerprint: connectionFingerprint(connection, source.credential_updated_at), health }];
+    }),
+  );
+}
 export function workflowConfig() {
   const base = runtimeConfigFixture();
   return runtimeConfigFixture({
-    setup_required: true,
     document: {
       ...base.document,
-      system: { active: false },
-      market_data: { news_credential_configured: false, news_credential_updated_at: null, source_id: 'default', parameters: [] },
+
+      market_data: {
+        news_credential_configured: false,
+        news_credential_updated_at: null,
+        source_id: 'default',
+        timeframe: '1h',
+        parameters: [],
+      },
       signals: {
         ...base.document.signals,
         components: [{ component_id: 'kronos', enabled: true, weight: 1, parameters: [] }],
@@ -121,18 +175,70 @@ function encode(value: RuntimeJsonValue): JsonValueOut {
     entries: Object.entries(value).map(([key, item]) => ({ key, value: encode(item) })),
   };
 }
-export function workflowHarness(path = '/setup', initial = workflowConfig(), requiredAccess?: string) {
+export function workflowHarness(
+  path = '/settings/models',
+  initial = workflowConfig(),
+  requiredAccess?: string,
+  checks = new Map<string, { fingerprint: string; health: ConnectionHealth }>(),
+  routeResponse?: (url: string, init?: RequestInit) => Promise<Response> | undefined,
+) {
   let saved = initial;
   const writes: { expected_revision: number; document: RuntimeDocument }[] = [];
   let failure: { status: number; detail: unknown } | undefined;
+  let credentialFailure: { status: number; detail: unknown } | undefined;
   let failReload = false;
   let failApply = false;
   const response = (value: unknown, status = 200) => Promise.resolve(new Response(JSON.stringify(value), { status }));
   const fetchMock = vi.fn((url: string, init?: RequestInit) => {
+    const overridden = routeResponse?.(url, init);
+    if (overridden) return overridden;
     if (requiredAccess && new Headers(init?.headers).get('X-API-Key') !== requiredAccess) {
       return response({ detail: 'Invalid API key' }, 401);
     }
+    if (url.includes('/api/config/catalog/venues/')) {
+      const adapterId = decodeURIComponent(url.split('/').at(-1)!.split('?')[0]!);
+      const environmentId = new URL(url, 'http://fixture.local').searchParams.get('environment');
+      const venue = workflowCatalog.venues.find((item) => item.id === adapterId);
+      const environment = venue?.environments.find((item) => item.id === environmentId);
+      const scoped = adapterId === 'sample_venue';
+      return response({
+        id: venue?.id,
+        label: venue?.label,
+        description: venue?.description,
+        environment,
+        fields: scoped ? [pluginFields[0]!] : (venue?.fields ?? []),
+        credential_fields: venue?.credential_fields ?? [],
+        margin_modes: scoped ? ['isolated'] : (venue?.margin_modes ?? []),
+        leverage_minimum: 1,
+        leverage_maximum: null,
+        account_read: true,
+        capabilities: null,
+      });
+    }
     if (url.endsWith('/api/config/catalog')) return response(workflowCatalog);
+    if (url.endsWith('/api/runtime/status'))
+      return response({
+        analysis: { ready: true, reasons: [] },
+        trading: { ready: saved.apply_status === 'applied' && saved.applied_revision === saved.revision, reasons: [] },
+        components: [],
+        saved_revision: saved.revision,
+        applied_revision: saved.applied_revision,
+        apply_error: saved.apply_error,
+        automation_enabled: saved.document.scheduler.automation_enabled,
+        latest_run_at: null,
+        execution_pairs: saved.document.execution.pairs,
+      });
+    if (url.endsWith('/api/runtime/automation') && init?.method === 'PUT') {
+      const body = JSON.parse(init.body as string) as { enabled: boolean; expected_revision: number };
+      if (body.expected_revision !== saved.revision) return response({ detail: 'conflict' }, 409);
+      saved = {
+        ...saved,
+        revision: saved.revision + 1,
+        applied_revision: saved.revision + 1,
+        document: { ...saved.document, scheduler: { ...saved.document.scheduler, automation_enabled: body.enabled } },
+      };
+      return response(saved);
+    }
     if (url.endsWith('/api/scheduler/status'))
       return response({ enabled: false, next_pair: null, next_run_at: null, redis_available: true });
     if (url.includes('/api/config/credentials/')) {
@@ -146,7 +252,10 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
         apply_status: 'applied',
         document: {
           ...saved.document,
-          market_data: { ...saved.document.market_data, ...(news ? { news_credential_configured: true, news_credential_updated_at: '2026-08-30T13:00:00Z' } : {}) },
+          market_data: {
+            ...saved.document.market_data,
+            ...(news ? { news_credential_configured: true, news_credential_updated_at: '2026-08-30T13:00:00Z' } : {}),
+          },
           llm: {
             ...saved.document.llm,
             ...(gateway
@@ -171,7 +280,6 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
       saved = runtimeConfigFixture({
         ...saved,
         revision: saved.revision + 1,
-        setup_required: !doc.system.active,
         apply_status: failApply ? 'failed' : 'applied',
         applied_revision: failApply ? saved.applied_revision : saved.revision + 1,
         document: {
@@ -193,7 +301,11 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
               parameters: encode(item.parameters).entries,
             })),
           },
-          market_data: { ...saved.document.market_data, ...doc.market_data, parameters: encode(doc.market_data.parameters).entries },
+          market_data: {
+            ...saved.document.market_data,
+            ...doc.market_data,
+            parameters: encode(doc.market_data.parameters).entries,
+          },
           execution: {
             ...doc.execution,
             connections: doc.execution.connections.map((item) => ({
@@ -209,14 +321,25 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
       });
       return failApply ? response({ detail: 'Runtime configuration cannot be applied' }, 503) : response(saved);
     }
+    if (url.endsWith('/check')) {
+      const id = url.split('/').at(-2)!;
+      const connection = toRuntimeDocument(saved.document).execution.connections.find((item) => item.id === id)!;
+      const connectionResponse = saved.document.execution.connections.find((item) => item.id === id)!;
+      const check = checks.get(id);
+      return response(
+        check && check.fingerprint === connectionFingerprint(connection, connectionResponse.credential_updated_at)
+          ? check.health
+          : null,
+      );
+    }
     if (url.endsWith('/test')) {
       const id = url.split('/').at(-2)!;
       const connection = saved.document.execution.connections.find((item) => item.id === id)!;
-      if (failure) return response({ detail: failure.detail }, failure.status);
-      return response({
+      const health: ConnectionHealth = {
         connection_id: id,
         checked_at: '2026-08-30T12:00:00Z',
-        healthy: true,
+        healthy: !failure,
+        error_code: failure ? ((failure.detail as { code?: string })?.code ?? 'account_unavailable') : null,
         environment: connection.environment,
         credential_configured: connection.credential_configured,
         capabilities: {
@@ -225,12 +348,20 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
           hedge_mode: false,
           reduce_only: true,
           supported_order_types: [],
+          account_reads: ['balances', 'positions', 'orders', 'fills', 'funding', 'instruments'],
+          exit_operations: [],
+          history_initial_days: null,
+          unknown_fields: [],
         },
-      });
+      };
+      const current = toRuntimeDocument(saved.document).execution.connections.find((item) => item.id === id)!;
+      checks.set(id, { fingerprint: connectionFingerprint(current, connection.credential_updated_at), health });
+      return response(health);
     }
-    if (url.includes('/venue-connections/') && url.endsWith('/credentials')) {
-      if (failure) return response({ detail: failure.detail }, failure.status);
+    if (url.includes('/venue-connections/') && url.includes('/credentials')) {
+      if (credentialFailure) return response({ detail: credentialFailure.detail }, credentialFailure.status);
       const id = url.split('/').at(-2)!;
+      const configured = init?.method !== 'DELETE';
       saved = {
         ...saved,
         revision: saved.revision + 1,
@@ -240,7 +371,11 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
             ...saved.document.execution,
             connections: saved.document.execution.connections.map((item) =>
               item.id === id
-                ? { ...item, credential_configured: true, credential_updated_at: '2026-08-30T13:00:00Z' }
+                ? {
+                    ...item,
+                    credential_configured: configured,
+                    credential_updated_at: configured ? '2026-08-30T13:00:00Z' : null,
+                  }
                 : item,
             ),
           },
@@ -248,7 +383,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
       };
       return response({
         revision: saved.revision,
-        credential: { configured: true, updated_at: '2026-08-30T13:00:00Z' },
+        credential: { configured, updated_at: configured ? '2026-08-30T13:00:00Z' : null },
       });
     }
     if (url.includes('/api/venue-connections') && (init?.method === 'POST' || init?.method === 'PUT')) {
@@ -271,9 +406,10 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
       const allowedFields = init.method === 'POST' ? createFields : updateFields;
       const unexpectedField = Object.keys(body).find((field) => !allowedFields.includes(field));
       if (unexpectedField) {
-        return response([
-          { type: 'extra_forbidden', loc: ['body', unexpectedField], msg: 'Extra inputs are not permitted' },
-        ], 422);
+        return response(
+          [{ type: 'extra_forbidden', loc: ['body', unexpectedField], msg: 'Extra inputs are not permitted' }],
+          422,
+        );
       }
       const { expected_revision: _revision, ...input } = body;
       const id = init.method === 'POST' ? body.id : url.split('/').at(-1)!;
@@ -291,7 +427,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
         document: {
           ...saved.document,
           execution: {
-          ...saved.document.execution,
+            ...saved.document.execution,
             connections: saved.document.execution.connections.some((c) => c.id === id)
               ? saved.document.execution.connections.map((c) => (c.id === id ? connection : c))
               : [...saved.document.execution.connections, connection],
@@ -318,6 +454,7 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
     ...view,
     client,
     fetchMock,
+    checks,
     writes,
     saved: () => saved,
     setSaved: (value: RuntimeConfig) => {
@@ -325,6 +462,9 @@ export function workflowHarness(path = '/setup', initial = workflowConfig(), req
     },
     fail: (status: number, detail: unknown) => {
       failure = { status, detail };
+    },
+    failCredentials: (status: number, detail: unknown) => {
+      credentialFailure = { status, detail };
     },
     clearFailure: () => {
       failure = undefined;

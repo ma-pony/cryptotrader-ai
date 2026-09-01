@@ -26,7 +26,7 @@ vi.mock('@/lib/format', () => ({
 
 // ── Component imports (after mocks) ───────────────────────────────────────
 
-import { SkillsGrid } from '@/pages/memory/components/SkillsGrid';
+import { SkillsGrid } from '@/pages/settings/agent-profiles/skills-grid';
 import { useQuery } from '@tanstack/react-query';
 
 const mockUseQuery = vi.mocked(useQuery);

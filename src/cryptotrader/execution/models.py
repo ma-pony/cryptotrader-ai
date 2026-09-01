@@ -75,7 +75,7 @@ class ConnectionTarget:
     book_id: str
     connection_id: str
     weight: Decimal
-    book_equity: Decimal
+    book_equity: Decimal | None
     target_exposure: Decimal
     target_signed_notional: Decimal
 
@@ -86,7 +86,9 @@ class ConnectionTarget:
             raise ValueError("connection_id must be a non-empty string")
         if not isinstance(self.weight, Decimal) or not self.weight.is_finite() or not Decimal("0") <= self.weight <= 1:
             raise ValueError("weight must be a finite Decimal in [0, 1]")
-        if not isinstance(self.book_equity, Decimal) or not self.book_equity.is_finite() or self.book_equity < 0:
+        if self.book_equity is not None and (
+            not isinstance(self.book_equity, Decimal) or not self.book_equity.is_finite() or self.book_equity < 0
+        ):
             raise ValueError("book_equity must be a non-negative finite Decimal")
         if (
             not isinstance(self.target_exposure, Decimal)
@@ -96,7 +98,9 @@ class ConnectionTarget:
             raise ValueError("target_exposure must be a finite Decimal in [-1, 1]")
         if not isinstance(self.target_signed_notional, Decimal) or not self.target_signed_notional.is_finite():
             raise ValueError("target_signed_notional must be a finite Decimal")
-        expected = self.book_equity * self.target_exposure * self.weight
+        if self.book_equity is None and self.target_exposure != 0:
+            raise ValueError("unknown equity only permits a flat target")
+        expected = Decimal("0") if self.target_exposure == 0 else self.book_equity * self.target_exposure * self.weight
         if self.target_signed_notional != expected:
             raise ValueError("target_signed_notional must equal book_equity * target_exposure * weight")
 
@@ -134,6 +138,7 @@ class ConnectionExecutionPlan:
     take_profit: Decimal | None
     old_protection_ids: tuple[str, ...]
     capabilities: VenueCapabilities
+    decision_id: str | None = None
 
     def __post_init__(self) -> None:
         self._validate_identity()
@@ -401,6 +406,7 @@ _BOOK_EXECUTION_STATUSES = frozenset({"completed", "partial", "failed"})
 _EXECUTION_OPERATIONS = frozenset(
     {
         "execution_gate",
+        "account_ledger",
         "pre_read",
         "precondition",
         "fetch_quote",
@@ -557,8 +563,11 @@ class ConnectionExecutionResult:
     requires_attention: bool
     trace: tuple[str, ...]
     execution_quote: VenueQuote | None = None
+    quantity_frozen: bool | None = False
 
     def __post_init__(self) -> None:
+        if self.quantity_frozen is not None and type(self.quantity_frozen) is not bool:
+            raise ValueError("quantity_frozen must be a bool or None")
         self._validate_identity_and_target()
         self._validate_outcomes()
         self._validate_status()
@@ -625,7 +634,7 @@ class ConnectionExecutionResult:
             "fetch_quote",
         }:
             raise ValueError("failed result after quote acquisition requires an execution quote")
-        if self.compensation.succeeded and self.requires_attention:
+        if self.compensation.succeeded and self.requires_attention and self.error_operation != "account_ledger":
             raise ValueError("successful compensation cannot require attention")
         if self.compensation.succeeded:
             self._validate_successful_compensation()
@@ -653,7 +662,7 @@ class ConnectionExecutionResult:
         if self.target_signed_notional == 0 or self.target_signed_amount == 0:
             if self.target_signed_notional != 0 or self.target_signed_amount != 0:
                 raise ValueError("completed flat target must have exact zero notional and amount")
-        else:
+        elif self.quantity_frozen is False:
             implied_price = self.target_signed_notional / self.target_signed_amount
             if not self.execution_quote.bid <= implied_price <= self.execution_quote.ask:
                 raise ValueError("completed target amount must imply target notional within the execution quote")

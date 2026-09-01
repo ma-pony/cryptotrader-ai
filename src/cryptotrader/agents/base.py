@@ -188,6 +188,10 @@ def create_runtime_llm_factory(  # noqa: C901 - one factory owns runtime model a
                     kwargs["callbacks"].append(observer_callback)
             elif observer_callback is not None:
                 kwargs["callbacks"] = [observer_callback]
+            from cryptotrader.backtest.evidence import current_model_evidence
+
+            evidence = current_model_evidence()
+            kwargs.setdefault("callbacks", []).extend([evidence] if evidence is not None else [])
             return wrap_with_retry(ChatOpenAI(**kwargs), config.retry)
 
         llm = build(selected_model)

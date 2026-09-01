@@ -115,7 +115,11 @@ export const toRuntimeDocument = (response: RuntimeConfig['document']): RuntimeD
   llm: (({ gateway_credential_configured: _configured, gateway_credential_updated_at: _updatedAt, ...llm }) => llm)(
     response.llm,
   ),
-  market_data: { source_id: response.market_data.source_id, parameters: decodeEntries(response.market_data.parameters) },
+  market_data: {
+    source_id: response.market_data.source_id,
+    timeframe: response.market_data.timeframe,
+    parameters: decodeEntries(response.market_data.parameters),
+  },
   signals: {
     ...response.signals,
     components: response.signals.components.map((component) => ({
@@ -158,6 +162,8 @@ export const useRuntimeConfig = () => {
     },
     onSuccess: (saved) => {
       client.setQueryData(RUNTIME_CONFIG_QUERY_KEY, saved);
+      void client.invalidateQueries({ queryKey: ['runtime-status'] });
+      void client.invalidateQueries({ queryKey: ['trading-scope'] });
     },
     onError: (error) => {
       if (error instanceof ApiError && error.status === 409) setRuntimeConfigConflict(client);
@@ -193,7 +199,11 @@ export const useRuntimeConfig = () => {
   );
   const reload = async () => {
     const result = await query.refetch();
-    if (result.isSuccess && !result.error) clearRuntimeConfigConflict(client);
+    if (result.isSuccess && !result.error) {
+      clearRuntimeConfigConflict(client);
+      void client.invalidateQueries({ queryKey: ['runtime-status'] });
+      void client.invalidateQueries({ queryKey: ['trading-scope'] });
+    }
     return result;
   };
   return {
@@ -201,7 +211,6 @@ export const useRuntimeConfig = () => {
     document,
     credentialStates,
     secretStates,
-    setupRequired: query.data?.setup_required ?? false,
     applyStatus: query.data?.apply_status,
     appliedRevision: query.data?.applied_revision,
     applyError: query.data?.apply_error,

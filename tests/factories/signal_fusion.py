@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from uuid import uuid4
 
 from cryptotrader.decision.models import TargetPosition, TradePlan
 from cryptotrader.pair import Pair
@@ -85,7 +84,6 @@ def profile(
     max_target_ratio=1.0,
     atr_stop_multiplier=2.0,
     reward_ratio=2.0,
-    hitl=False,
 ) -> SignalProfile:
     configured = components or (
         ComponentWeight("kronos", kronos > 0.0, kronos),
@@ -98,7 +96,6 @@ def profile(
         max_target_ratio=max_target_ratio,
         atr_stop_multiplier=atr_stop_multiplier,
         reward_ratio=reward_ratio,
-        hitl_required=hitl,
     )
 
 
@@ -123,62 +120,3 @@ def trade_plan(target: TargetPosition, **overrides) -> TradePlan:
         "fused_signal": FusedSignal(score=0.0, contributions=(), reasoning="fixture"),
     }
     return TradePlan(**(values | overrides))
-
-
-def cycle_record(**overrides):
-    from cryptotrader.journal.models import TradingCycleRecord
-
-    values = {
-        "cycle_id": str(uuid4()),
-        "created_at": datetime.now(UTC),
-        "pair": "BTC/USDT:USDT",
-        "status": "no_change",
-        "profile_revision": 1,
-        "profile_snapshot": {
-            "revision": 1,
-            "components": [
-                {"component_id": "kronos", "enabled": True, "weight": 0.6},
-                {"component_id": "llm_committee", "enabled": True, "weight": 0.4},
-            ],
-            "neutral_threshold": 0.2,
-            "max_target_ratio": 1.0,
-            "atr_stop_multiplier": 2.0,
-            "reward_ratio": 2.0,
-            "hitl_required": False,
-            "updated_at": None,
-        },
-        "context_summary": {
-            "available": True,
-            "pair": "BTC/USDT:USDT",
-            "as_of": "2026-01-01T00:00:00+00:00",
-            "mode": "paper",
-            "market_data_source_id": "default",
-            "market_type": "swap",
-            "equity": 10_000.0,
-            "current_price": 100.0,
-            "atr": 5.0,
-            "current_position": {
-                "side": "flat",
-                "amount": 0.0,
-                "size_ratio": 0.0,
-                "avg_price": None,
-                "unrealized_pnl": 0.0,
-            },
-            "portfolio": {},
-        },
-        "component_signals": (),
-        "component_error": None,
-        "fused_signal": None,
-        "target_position": None,
-        "trade_plan": None,
-        "hitl_result": None,
-        "risk_result": None,
-        "execution_result": None,
-    }
-    values.update(overrides)
-    if "profile_snapshot" not in overrides:
-        values["profile_snapshot"] = {
-            **values["profile_snapshot"],
-            "revision": values["profile_revision"],
-        }
-    return TradingCycleRecord(**values)

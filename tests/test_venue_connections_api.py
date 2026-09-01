@@ -31,7 +31,7 @@ def create_payload(
         "environment": environment,
         "enabled": True,
         "leverage": 1,
-        "margin_mode": "isolated",
+        "margin_mode": "cross",
         "canary_only": False,
         "parameters": {},
     }
@@ -55,6 +55,59 @@ async def _connection_and_revision(harness: ApiHarness, connection_id: str) -> t
     config = (await harness.client.get("/api/config")).json()
     connection = next(item for item in config["document"]["execution"]["connections"] if item["id"] == connection_id)
     return connection, config["revision"]
+
+
+async def test_check_is_persisted_without_changing_configuration_revision(api_harness):
+    await put_fixture_credentials(api_harness, "okx-demo")
+    _, revision = await _connection_and_revision(api_harness, "okx-demo")
+    path = "/api/venue-connections/okx-demo"
+    assert (await api_harness.client.get(path + "/check")).json() is None
+    checked = await api_harness.client.post(path + "/test")
+    assert checked.status_code == 200
+    assert checked.json()["healthy"] is True
+    assert (await api_harness.client.get(path + "/check")).json() == checked.json()
+    assert (await _connection_and_revision(api_harness, "okx-demo"))[1] == revision
+    assert len(api_harness.adapters["okx"].connect_calls) == 1
+
+
+async def test_saved_checks_are_readable_before_system_activation(api_harness):
+    document = active_payload()
+    document["scheduler"]["automation_enabled"] = False
+    saved = await api_harness.client.put("/api/config", json={"expected_revision": 1, "document": document})
+    assert saved.status_code == 200
+    assert saved.json()["document"]["scheduler"]["automation_enabled"] is False
+    response = await api_harness.client.get("/api/venue-connections/okx-demo/check")
+    assert response.status_code == 200
+    assert response.json() is None
+
+
+async def test_saved_check_expires_on_connection_or_credential_change(api_harness):
+    await put_fixture_credentials(api_harness, "okx-demo")
+    path = "/api/venue-connections/okx-demo"
+    await api_harness.client.post(path + "/test")
+    connection, revision = await _connection_and_revision(api_harness, "okx-demo")
+    await api_harness.client.put(path, json=update_payload(revision, connection, leverage=2))
+    assert (await api_harness.client.get(path + "/check")).json() is None
+    await api_harness.client.post(path + "/test")
+    await put_fixture_credentials(api_harness, "okx-demo", marker="rotated")
+    assert (await api_harness.client.get(path + "/check")).json() is None
+
+
+async def test_failed_check_is_persisted_safely_and_manual_retry_replaces_it(api_harness):
+    await put_fixture_credentials(api_harness, "okx-demo")
+    adapter = api_harness.adapters["okx"]
+    adapter.session_check_error = VenueOperationError("secret-must-not-leak", code="authentication_failed")
+    path = "/api/venue-connections/okx-demo"
+    failed = await api_harness.client.post(path + "/test")
+    assert failed.status_code == 200
+    assert failed.json()["healthy"] is False
+    assert failed.json()["error_code"] == "authentication_failed"
+    assert "secret-must-not-leak" not in failed.text
+    assert (await api_harness.client.get(path + "/check")).json() == failed.json()
+    adapter.session_check_error = None
+    retried = await api_harness.client.post(path + "/test")
+    assert retried.json()["healthy"] is True
+    assert (await api_harness.client.get(path + "/check")).json() == retried.json()
 
 
 async def test_connection_create_cas_writes_the_complete_document(api_harness):
@@ -175,11 +228,24 @@ async def test_paper_connection_rejects_credentials(api_harness):
         "/api/venue-connections/paper-no-credentials/credentials",
         json={
             "expected_revision": created.json()["revision"],
-            "credentials": {"api_key": "key", "secret": "value"},  # pragma: allowlist secret
+            "values": {"api_key": "key", "secret": "value", "passphrase": "phrase"},  # pragma: allowlist secret
         },
     )
 
     assert response.status_code == 422
+
+
+async def test_delete_credentials_uses_cas_and_invalidates_saved_check(api_harness):
+    assert (await put_fixture_credentials(api_harness, "okx-demo")).status_code == 200
+    path = "/api/venue-connections/okx-demo"
+    assert (await api_harness.client.post(path + "/test")).status_code == 200
+    revision = (await api_harness.client.get("/api/config")).json()["revision"]
+
+    deleted = await api_harness.client.delete(path + f"/credentials?expected_revision={revision}")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["credential"] == {"configured": False, "updated_at": None}
+    assert (await api_harness.client.get(path + "/check")).json() is None
 
 
 async def test_credential_storage_failure_is_safe_service_unavailable(api_harness):
@@ -191,7 +257,7 @@ async def test_credential_storage_failure_is_safe_service_unavailable(api_harnes
         "/api/venue-connections/okx-demo/credentials",
         json={
             "expected_revision": revision,
-            "credentials": {"api_key": "key", "secret": "value"},  # pragma: allowlist secret
+            "values": {"api_key": "key", "secret": "value", "passphrase": "phrase"},  # pragma: allowlist secret
         },
     )
 
@@ -202,8 +268,9 @@ async def test_credential_storage_failure_is_safe_service_unavailable(api_harnes
 async def test_connection_test_requires_configured_credentials(api_harness):
     response = await api_harness.client.post("/api/venue-connections/bybit-testnet/test")
 
-    assert response.status_code == 503
-    assert response.json() == {"detail": {"code": "credentials_missing"}}
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "credentials_missing"
+    assert response.json()["healthy"] is False
     assert "bybit-testnet-credentials" not in response.text
 
 
@@ -224,6 +291,7 @@ async def test_explicit_canary_only_connection_test_still_reveals_connects_reads
     assert body == {
         "connection_id": "bybit-canary",
         "healthy": True,
+        "error_code": None,
         "environment": "testnet",
         "capabilities": {
             "market_types": ["swap"],
@@ -231,6 +299,10 @@ async def test_explicit_canary_only_connection_test_still_reveals_connects_reads
             "hedge_mode": False,
             "reduce_only": True,
             "supported_order_types": ["limit", "market"],
+            "account_reads": [],
+            "exit_operations": [],
+            "history_initial_days": None,
+            "unknown_fields": [],
         },
         "credential_configured": True,
         "checked_at": ANY,
@@ -251,8 +323,9 @@ async def test_connection_test_rejects_failed_account_read_without_writing_or_le
 
     response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
 
-    assert response.status_code == 502
-    assert response.json() == {"detail": {"code": "account_unavailable"}}
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "account_unavailable"
+    assert response.json()["healthy"] is False
     assert marker not in response.text
     assert (await api_harness.client.get("/api/config")).json()["revision"] == revision
     session = adapter.opened_sessions[0]
@@ -268,8 +341,9 @@ async def test_connection_test_maps_a_safe_authentication_failure_code(api_harne
 
     response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
 
-    assert response.status_code == 401
-    assert response.json() == {"detail": {"code": "authentication_failed"}}
+    assert response.status_code == 200
+    assert response.json()["error_code"] == "authentication_failed"
+    assert response.json()["healthy"] is False
     assert adapter.opened_sessions[0].check_calls == 1
     assert adapter.opened_sessions[0].closed == 1
 
@@ -282,7 +356,8 @@ async def test_connection_test_returns_safe_bad_gateway_and_closes_session(api_h
 
     response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
 
-    assert response.status_code == 502
+    assert response.status_code == 200
+    assert response.json()["healthy"] is False
     assert marker not in response.text
 
 
@@ -294,7 +369,8 @@ async def test_connection_test_closes_session_after_post_connect_failure(api_har
 
     response = await api_harness.client.post("/api/venue-connections/okx-demo/test")
 
-    assert response.status_code == 502
+    assert response.status_code == 200
+    assert response.json()["healthy"] is False
     assert marker not in response.text
     assert adapter.opened_sessions[0].closed == 1
     assert adapter.opened_sessions[0].order_calls == 0

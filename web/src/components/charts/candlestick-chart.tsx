@@ -8,7 +8,7 @@ import {
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
-import type { CandlestickChartHandle, OHLCVBar } from '@/types/chart-analysis';
+import type { CandlestickChartHandle, OHLCVBar } from '@/types/market-chart';
 import { calcSMA } from '@/lib/indicators';
 
 interface CandlestickChartProps {

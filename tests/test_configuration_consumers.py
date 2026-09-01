@@ -44,14 +44,6 @@ def test_shipped_fields_all_have_bilingual_help_and_advanced_debate_thresholds()
     assert debate["debate.convergence_threshold"].advanced is True
 
 
-async def test_correlation_reporting_has_no_fictitious_limit():
-    from api.routes.risk import _build_correlation_groups
-
-    groups = await _build_correlation_groups(None, portfolio={"positions": {"BTC/USDT": {"amount": 1}}})
-    assert groups[0].open == 1
-    assert "max" not in groups[0].model_dump()
-
-
 @pytest.mark.parametrize(
     ("model", "value"),
     [
@@ -76,27 +68,6 @@ async def test_correlation_reporting_has_no_fictitious_limit():
 def test_ignored_controls_are_rejected_instead_of_silently_saved(model, value):
     with pytest.raises(ValidationError):
         model.model_validate(value)
-
-
-def test_monitor_thresholds_are_the_four_enforced_ratio_limits():
-    from api.routes.risk import _build_thresholds
-
-    config = runtime_document(
-        risk=RiskConfig(
-            position={
-                "max_single_pct": 0.45,
-                "max_total_exposure_pct": 0.8,
-                "max_margin_used_pct": 0.35,
-            },
-            loss={"max_drawdown_pct": 0.12},
-        )
-    )
-    assert _build_thresholds(config).model_dump() == {
-        "max_single_pct": 0.45,
-        "max_total_exposure_pct": 0.8,
-        "max_margin_used_pct": 0.35,
-        "max_drawdown_pct": 0.12,
-    }
 
 
 @pytest.mark.parametrize("annotation", [dict[str, str], Any, list[int], tuple[int, ...], Literal[1, 2]])
@@ -125,23 +96,34 @@ def test_unused_debate_hold_threshold_is_rejected():
 @pytest.mark.parametrize(
     ("enabled", "events", "sends"), [(False, ("daily_summary",), 0), (True, (), 0), (True, ("daily_summary",), 1)]
 )
-async def test_scheduler_summary_obeys_notification_switch_and_empty_events(monkeypatch, enabled, events, sends):
-    from cryptotrader.notifications import WebhookBackend
+async def test_scheduler_summary_obeys_notification_switch_and_empty_events(tmp_path, enabled, events, sends):
+    from cryptotrader.alerts.service import AlertService
+    from cryptotrader.alerts.store import AlertStore
+    from cryptotrader.migrations.workbench import migrate_alerts
     from cryptotrader.scheduler import Scheduler
 
-    delivered = []
-
-    async def send(self, event, data):
-        delivered.append((event, data))
-
-    monkeypatch.setattr(WebhookBackend, "send", send)
     document = runtime_document(
         notifications=NotificationConfig(webhook_url="https://example.test/summary", enabled=enabled, events=events)
     )
-    runtime = SimpleNamespace(snapshot=SimpleNamespace(document=document, revision=1))
+    url = f"sqlite+aiosqlite:///{tmp_path}/summary.db"
+    await migrate_alerts(url)
+    store = AlertStore(url)
+
+    async def notification_config():
+        return document.notifications
+
+    runtime = SimpleNamespace(
+        snapshot=SimpleNamespace(document=document, revision=1),
+        alerts=AlertService(store, notification_config),
+        alert_owner=None,
+    )
     scheduler = Scheduler(document.scheduler, runtime=runtime)
     await scheduler._emit_daily_summary()
-    assert len(delivered) == sends
-    if sends:
-        assert delivered[0][0] == "daily_summary"
-        assert delivered[0][1]["config_revision"] == 1
+    await scheduler._emit_daily_summary()
+    alerts = await store.list_alerts()
+    deliveries = await store.list_deliveries()
+    assert len(alerts) == 1
+    assert alerts[0].type == "daily_summary"
+    assert alerts[0].event_key.startswith("daily_summary:")
+    assert "example.test" not in alerts[0].message
+    assert len(deliveries) == sends

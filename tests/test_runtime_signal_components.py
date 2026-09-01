@@ -21,7 +21,14 @@ def _snapshot(rows: int = 30, price: float = 100.0) -> DataSnapshot:
     market = MarketData(
         pair="BTC/USDT:USDT",
         ohlcv=pd.DataFrame(
-            {"open": closes, "high": closes + 1, "low": closes - 1, "close": closes, "volume": np.full(rows, 10.0)}
+            {
+                "timestamp": pd.date_range(end="2025-12-31T20:00:00Z", periods=rows, freq="4h"),
+                "open": closes,
+                "high": closes + 1,
+                "low": closes - 1,
+                "close": closes,
+                "volume": np.full(rows, 10.0),
+            }
         ),
         ticker={"last": price},
         funding_rate=0.0,
@@ -95,8 +102,10 @@ async def test_kronos_is_a_pure_directional_component_with_gate_and_prediction_f
     assert "position_scale" not in accepted.details
     assert (rejected.direction, rejected.confidence) == ("neutral", 0.0)
     assert (weak_short.direction, weak_short.confidence) == ("neutral", 0.0)
-    with pytest.raises(ComponentExecutionError, match="prediction"):
+    with pytest.raises(ComponentExecutionError) as raised:
         await _kronos(predictor=_Predictor(error=RuntimeError("offline"))).evaluate(_kronos_context())
+    assert raised.value.stage == "prediction"
+    assert "offline" not in str(raised.value)
 
 
 def test_kronos_factory_reads_only_component_parameters_from_runtime_document():

@@ -1,264 +1,139 @@
-"""Tests for POST /api/backtest/run — FR-805.
-
-Schedule a backtest as a background task; respond 202 with `run_id`.
-Param validation rejects invalid dates, capital, and retired strategy selectors.
-"""
-
-from __future__ import annotations
-
-from datetime import UTC, datetime
-from types import MappingProxyType, SimpleNamespace
-from unittest.mock import MagicMock, patch
+"""Canonical admission and historical replay integration."""
 
 import pytest
-from fastapi.testclient import TestClient
 
-
-@pytest.fixture
-def client() -> TestClient:
-    from api.main import app
-    from cryptotrader.runtime_config.defaults import minimal_runtime_document
-    from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
-
-    previous = getattr(app.state, "runtime", None)
-    document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
-    app.state.runtime = SimpleNamespace(
-        repository=object(),
-        snapshot=RuntimeConfigSnapshot(1, document, datetime.now(UTC)),
-        signal_registry=object(),
-    )
-    try:
-        yield TestClient(app, raise_server_exceptions=False)
-    finally:
-        app.state.runtime = previous
-
-
-def _mock_config() -> MagicMock:
-    cfg = MagicMock()
-    cfg.infrastructure.database_url = None
-    return cfg
-
-
-def _valid_payload() -> dict:
-    return {
-        "start": "2026-01-01",
-        "end": "2026-04-01",
-        "pair": "BTC/USDT",
-        "initial_capital": 10000,
-        "session_name": "q1-profile-revision-3",
-    }
-
-
-class TestBacktestRunHappyPath:
-    def test_returns_202_with_run_id(self, client: TestClient, monkeypatch) -> None:
-        from api.main import app
-        from cryptotrader.runtime_config.defaults import minimal_runtime_document
-        from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SystemConfig
-
-        shared_repository = object()
-        document = minimal_runtime_document().model_copy(update={"system": SystemConfig(active=True)})
-        shared_snapshot = RuntimeConfigSnapshot(1, document, datetime.now(UTC))
-        shared_signal_registry = object()
-        monkeypatch.setattr(
-            app.state,
-            "runtime",
-            SimpleNamespace(
-                repository=shared_repository,
-                snapshot=shared_snapshot,
-                signal_registry=shared_signal_registry,
-            ),
-        )
-        with (
-            patch("api.routes.backtest._spawn_run", return_value="run_a1b2c3") as spawn_run,
-        ):
-            resp = client.post("/api/backtest/run", json=_valid_payload())
-
-        assert resp.status_code == 202
-        assert spawn_run.call_args.args[1] is shared_snapshot
-        assert spawn_run.call_args.args[2] is shared_signal_registry
-        body = resp.json()
-        assert "run_id" in body
-        assert body["run_id"].startswith("run_")
-
-    def test_session_name_is_optional(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        del payload["session_name"]
-        with (
-            patch("api.routes.backtest._spawn_run", return_value="run_xyz"),
-        ):
-            resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code == 202
-
-    def test_legacy_mode_selector_is_rejected(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        payload["mode"] = "llm"
-        with (
-            patch("api.routes.backtest._spawn_run", return_value="run_unused"),
-        ):
-            resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code == 422
-
-
-class TestBacktestRunValidation:
-    def test_422_when_session_name_is_not_a_safe_identifier(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        payload["session_name"] = "../outside"
-        with patch("api.routes.backtest._spawn_run", return_value="run_unused"):
-            response = client.post("/api/backtest/run", json=payload)
-        assert response.status_code == 422
-
-    def test_400_when_start_after_end(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        payload["start"] = "2026-05-01"
-        payload["end"] = "2026-04-01"
-        resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code in (400, 422)
-
-    def test_400_when_capital_below_minimum(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        payload["initial_capital"] = 50  # < 100 floor
-        resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code in (400, 422)
-
-    def test_422_when_required_field_missing(self, client: TestClient) -> None:
-        payload = _valid_payload()
-        del payload["pair"]
-        resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code == 422
-
-    def test_400_when_end_in_future(self, client: TestClient) -> None:
-        """data-model §3 — end ≤ today."""
-        payload = _valid_payload()
-        payload["start"] = "2026-01-01"
-        payload["end"] = "2199-12-31"
-        resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code in (400, 422)
-
-    @pytest.mark.parametrize("bad_date", ["not-a-date", "2026/01/01", "01-01-2026"])
-    def test_422_on_malformed_date(self, client: TestClient, bad_date: str) -> None:
-        payload = _valid_payload()
-        payload["start"] = bad_date
-        resp = client.post("/api/backtest/run", json=payload)
-        assert resp.status_code in (400, 422)
+from tests.factories.research import research as research
+from tests.factories.research import research_payload
+from tests.factories.research_offline import research_offline  # noqa: F401
 
 
 @pytest.mark.asyncio
-async def test_mounted_backtest_route_completes_with_runtime_dependencies(monkeypatch) -> None:
-    import httpx
-
-    from api.main import app
-    from api.routes.backtest import _RUNS, _TASKS
-    from cryptotrader.backtest.cache import _TF_MS
-    from cryptotrader.cycle_events import MultiplexedCycleEventSink, NullCycleEventSink
-    from cryptotrader.runtime import Runtime
-    from cryptotrader.runtime_config.models import (
-        MarketDataConfig,
-        RuntimeConfigSnapshot,
-        SignalComponentConfig,
-        SignalConfig,
-        SystemConfig,
-    )
-    from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements
-    from cryptotrader.signals.registry import SignalComponentRegistry
-    from tests.factories.runtime_config import runtime_document
-
-    class Component:
-        id = "fixture"
-        display_name = "Fixture"
-        description = "deterministic API backtest signal"
-
-        @staticmethod
-        def requirements():
-            return DataRequirements(candles=(CandleRequirement("1h", 20),))
-
-        async def evaluate(self, context):
-            return ComponentSignal(
-                self.id,
-                "long",
-                1.0,
-                "mounted route evidence",
-                MappingProxyType({"evidence": MappingProxyType({"source": "mounted-real-engine"})}),
-            )
-
-    document = runtime_document(
-        system=SystemConfig(active=True),
-        market_data=MarketDataConfig(
-            source_id="default",
-            parameters={"timeframe": "1h", "limit": 20},
-        ),
-        signals=SignalConfig(
-            components=(SignalComponentConfig(component_id="fixture", enabled=True, weight=1.0),),
-            neutral_threshold=0.2,
-            max_target_ratio=1.0,
-            atr_stop_multiplier=2.0,
-            reward_ratio=2.0,
-        ),
-    )
-    snapshot = RuntimeConfigSnapshot(4, document, datetime.now(UTC))
-
-    class Repository:
-        database_url = None
-
-        async def get_or_create(self):
-            return snapshot
-
-        async def reveal_credentials(self, credential_ref):
-            raise AssertionError("backtest must not reveal venue credentials")
-
-    repository = Repository()
-    signal_registry = SignalComponentRegistry((Component(),))
-    runtime = Runtime(
-        snapshot=snapshot,
-        repository=repository,
-        cycle=None,
-        sessions={},
-        signal_registry=signal_registry,
-        market_registry=object(),
-        venue_registry=object(),
-        events=MultiplexedCycleEventSink(NullCycleEventSink()),
-    )
-    previous = getattr(app.state, "runtime", None)
-    app.state.runtime = runtime
-
-    async def load_historical(self, requirements):
-        for requirement in requirements.candles:
-            interval_ms = _TF_MS[requirement.timeframe]
-            start_ms = self.start_ms - requirement.limit * interval_ms
-            self._candles_by_timeframe[requirement.timeframe] = [
-                [
-                    start_ms + index * interval_ms,
-                    100.0 + index,
-                    102.0 + index,
-                    99.0 + index,
-                    101.0 + index,
-                    10.0,
-                ]
-                for index in range(requirement.limit + 3)
-            ]
-        self._candles = self._candles_by_timeframe[self.interval]
-
-    monkeypatch.setattr(
-        "cryptotrader.backtest.engine.BacktestEngine._fetch_historical_data",
-        load_historical,
-    )
-    try:
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            payload = _valid_payload()
-            payload.pop("session_name")
-            response = await client.post("/api/backtest/run", json=payload)
-            assert response.status_code == 202
-            run_id = response.json()["run_id"]
-            await _TASKS[run_id]
-            status = await client.get(f"/api/backtest/runs/{run_id}")
-    finally:
-        app.state.runtime = previous
-
-    assert status.status_code == 200
-    body = status.json()
+async def test_unnamed_run_is_saved_and_only_explicit_post_runs(research):
+    client, service = research
+    response = await client.post("/api/backtest/runs", json=research_payload())
+    assert response.status_code == 202
+    assert response.json()["status"] == "queued"
+    run_id = response.json()["run_id"]
+    await service.task_manager.drain()
+    body = (await client.get(f"/api/backtest/runs/{run_id}")).json()
     assert body["status"] == "completed"
-    decision = body["result"]["decisions"][0]
-    assert decision["config_revision"] == 4
-    assert decision["components"][0]["details"]["evidence"] == {"source": "mounted-real-engine"}
-    assert decision["books"][0]["book_id"] == "backtest"
-    assert _RUNS[run_id]["error"] is None
+    assert body["result"]["metrics"]["win_rate"] is None
+    assert body["params"]["name"] is None
+    assert body["config_snapshot"]["market_data"]["parameters"]["market_adapter_id"] == "bybit"
+    assert "execution" not in body["config_snapshot"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"start": "not-a-date"},
+        {"start": "2024-01-03"},
+        {"end": "2199-01-01"},
+        {"initial_equity": "50"},
+        {"fee_rate": "-1"},
+        {"slippage_bps": "10000"},
+        {"interval": "weird"},
+        {"session_name": "old"},
+        {"initial_capital": 10000},
+        {"save_dir": "retired-directory"},
+        {"mode": "llm"},
+    ],
+)
+async def test_invalid_or_retired_inputs_are_rejected_before_admission(research, change):
+    client, service = research
+    response = await client.post("/api/backtest/runs", json=research_payload(**change))
+    assert response.status_code == 422
+    assert await service.store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_old_post_and_session_routes_have_no_alias(research):
+    client, _ = research
+    assert (await client.post("/api/backtest/run", json=research_payload())).status_code == 404
+    assert (await client.get("/api/backtest/sessions")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_real_replay_journal_and_evaluations_survive_fresh_services(research, monkeypatch):
+    from dataclasses import replace
+    from datetime import timedelta
+    from unittest.mock import AsyncMock
+
+    from cryptotrader.backtest.store import BacktestStore
+    from cryptotrader.db import dispose_engine
+    from cryptotrader.decision.read_service import DecisionReadService
+    from cryptotrader.journal.store import MultiVenueCycleStore
+    from cryptotrader.signals.evaluation import EvaluationService
+    from cryptotrader.signals.evaluation_store import EvaluationStore
+    from tests.factories.backtest import START, registries
+
+    client, service = research
+    markets, signals, source, component = registries()
+
+    async def provider(_snapshot):
+        return signals, markets
+
+    from cryptotrader.backtest.engine import BacktestEngine
+
+    errors = []
+
+    class CapturingEngine(BacktestEngine):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs, lookback=20)
+
+        async def run(self):
+            try:
+                return await super().run()
+            except Exception as error:
+                errors.append(error)
+                raise
+
+    service.engine_factory = CapturingEngine
+    service.registry_provider = provider
+    monkeypatch.setattr("cryptotrader.backtest.historical_data.fetch_fear_greed", AsyncMock(return_value={}))
+    response = await client.post(
+        "/api/backtest/runs", json=research_payload(initial_equity="1000", pair="BTC/USDT:USDT")
+    )
+    run_id = response.json()["run_id"]
+    await service.task_manager.drain()
+    original = await service.store.get(run_id)
+    assert original.status == "completed", errors or original.error
+    assert original.result.fills
+    assert original.result.cycle_records
+    url = service.store.database_url
+    await dispose_engine(url)
+    fresh = BacktestStore(url)
+    restored = await fresh.get(run_id)
+    assert restored.result.equity_curve == original.result.equity_curve
+    assert restored.result.fills == original.result.fills
+    assert restored.result.cycle_records == original.result.cycle_records
+    journal = MultiVenueCycleStore(url)
+    read = DecisionReadService(journal)
+    decision = await read.get(restored.result.decision_ids[0])
+    assert decision.mode == "backtest"
+    assert decision.created_at == START + timedelta(hours=1)
+    assert decision.components[0].component_id == "fixture"
+    # Keep one contemporaneous live sample in a separate group.
+    first = restored.result.cycle_records[0]
+    await journal.save(
+        replace(
+            first,
+            cycle_id="live-evaluation-fixture",
+            book_results=(),
+            execution_status="not_started",
+            run=replace(first.run, mode="analysis", origin="manual"),
+        )
+    )
+    evaluation_store = EvaluationStore(url)
+    evaluations = EvaluationService(journal, evaluation_store, source_factory=lambda config: source)
+    # Future evaluations are unnecessary for proving the original frozen samples exist.
+    await evaluations.evaluate_due(START)
+    groups = (await evaluation_store.summary()).groups
+    assert {group.mode for group in groups} == {"backtest", "analysis"}
+    assert sum(group.total for group in groups if group.mode == "backtest") == len(restored.result.cycle_records)
+    count = len(component.contexts)
+    for identity in restored.result.decision_ids:
+        assert (await client.get(f"/api/decisions/{identity}")).status_code == 200
+    await client.get(f"/api/backtest/runs/{run_id}")
+    assert len(component.contexts) == count

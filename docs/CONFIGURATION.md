@@ -5,15 +5,14 @@
 | 分区 | 路径 |
 | --- | --- |
 | 模型与网关 | `/settings/models` |
-| 信号与权重 | `/strategy` |
-| 行情数据 | `/settings/market` |
-| 平台连接 | `/settings/venues` |
-| 执行资金池 | `/settings/execution-books` |
-| 风控与审批 | `/settings/risk` |
-| 调度与触发器 | `/settings/scheduler` |
-| 系统与通知 | `/settings/system` |
+| 信号、行情、风险与自动化 | `/engine` |
+| 平台连接与资金池 | `/accounts` |
+| 研究与回测 | `/research` |
+| 模型 | `/settings/models` |
+| 通知 | `/settings/notifications` |
+| 安全 | `/settings/security` |
 
-`/setup` 显示配置准备情况。访问过某节不代表该节有效；保存配置不会启用交易。手机使用“配置分区”选择器，桌面保留分区导航。
+工作台显示配置准备情况和下一步。访问过某节不代表该节有效；保存配置不会启用交易。
 
 ## 保存与检查
 
@@ -29,24 +28,24 @@ Paper 新连接显示 10000 USDT 默认资金，保存前可修改，不需要 A
 
 资金池的 ID 和资金作用域保存后固定。只有启用且作用域匹配的非 canary 连接可分配。权重总计必须为 100%；计算示例清楚标注为示例，不使用真实余额。真实下单开关默认关闭，HITL 不能绕过它。
 
-## 类型化插件
+## 类型化代码注册
 
-可安装示例位于 [`examples/configuration_plugin`](../examples/configuration_plugin)。它始终返回中性信号，不调用模型。`configuration_example.py` 是完整实现，`pyproject.toml` 注册 entry point：
+代码注册示例位于 [`examples/configuration_plugin/configuration_example.py`](../examples/configuration_plugin/configuration_example.py)。它始终返回中性信号，不调用模型。应用启动代码显式调用示例的注册函数：
 
-```toml
-[project.entry-points."cryptotrader.signal_components"]
-configuration_example = "configuration_example:create_component"
+```python
+from cryptotrader.configuration.registry import get_extension_registry
+from examples.configuration_plugin.configuration_example import register_example
+
+register_example(get_extension_registry())
 ```
 
-这里是 Python 包安装元数据；运行配置仍保存在数据库。插件安装进 API 的 Python 环境后重新启动进程，目录即可发现它，无需为插件添加前端代码。隔离安装与预览步骤见 [验收记录](verification/configuration-center/README.md#复现隔离预览)。
-
-工厂签名为 `create_component(document, sink)`，使用 `@configured_factory(PluginConfiguration(...))` 携带声明。entry-point 名、声明 ID 与组件 ID 必须相同。声明导入应无副作用：目录发现不会调用工厂，导入过程也不应联系模型或交易所。
+本期不扫描已安装包、entry point 或运行时目录。注册 ID、声明 ID 与组件 ID 必须相同；注册与导入都不应联系模型或交易所。运行配置仍保存在数据库。
 
 参数模型使用 `BaseModel`、`ConfigDict(extra="forbid", hide_input_in_errors=True)` 和有默认值的字段。`Field` 的 `json_schema_extra` 支持双语 label/description、unit、step、advanced 及 choice options；数值约束使用 Pydantic 的范围规则。嵌套模型生成分组字段，示例的 `diagnostics.enabled` 是高级开关。
 
 支持文本、整数/数值、布尔、枚举选择与字符串列表。不支持任意对象、秘密参数字段或 JSON 编辑兜底。缺少声明、ID 不匹配、重复注册和不支持的字段定义会在发现阶段失败；未知键和非法参数在保存前被拒绝。工厂应再次从同一参数模型读取类型化值。
 
-市场源和平台分别使用 `cryptotrader.market_sources`、`cryptotrader.venue_adapters` entry-point 组。平台声明还包含支持的 environments 和 credential_fields；凭据通过 vault 接口写入，不能作为普通插件字段暴露。
+市场源和平台使用同一个应用代码注册表。平台声明还包含支持的 environments 和 credential_fields；凭据通过 vault 接口写入，不能作为普通配置字段暴露。
 
 ## 已移除字段与部署前清理
 

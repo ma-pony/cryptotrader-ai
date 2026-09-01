@@ -102,7 +102,6 @@ def signal_profile_payload(profile: SignalProfile) -> dict[str, Any]:
         "max_target_ratio": profile.max_target_ratio,
         "atr_stop_multiplier": profile.atr_stop_multiplier,
         "reward_ratio": profile.reward_ratio,
-        "hitl_required": profile.hitl_required,
         "updated_at": profile.updated_at.isoformat() if profile.updated_at is not None else None,
     }
 
@@ -116,7 +115,6 @@ def signal_profile_from_payload(payload: Mapping[str, Any]) -> SignalProfile:
         max_target_ratio=float(payload["max_target_ratio"]),
         atr_stop_multiplier=float(payload["atr_stop_multiplier"]),
         reward_ratio=float(payload["reward_ratio"]),
-        hitl_required=bool(payload["hitl_required"]),
         updated_at=datetime.fromisoformat(str(raw_updated_at)) if raw_updated_at else None,
     )
 

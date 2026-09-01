@@ -23,7 +23,8 @@ describe('useAnalysisProgress', () => {
     act(() => result.current.handleProgressEvent(event('cycle_started', { cycle_id: 'cycle-1', pair: 'BTC/USDT', mode: 'paper' })));
     act(() => result.current.handleProgressEvent(event('component_completed', {
       component_id: 'kronos',
-      signal: { component_id: 'kronos', direction: 'long', confidence: 0.8, reasoning: 'trend', details: {} },
+      direction: 'long',
+      confidence: 0.8,
     }, 2)));
     act(() => result.current.handleProgressEvent(event('fusion_completed', {
       cycle_id: 'cycle-1',
@@ -35,6 +36,7 @@ describe('useAnalysisProgress', () => {
     }, 3)));
 
     expect(result.current.progress.components.kronos?.signal?.direction).toBe('long');
+    expect(result.current.progress.components.kronos?.signal?.confidence).toBe(0.8);
     expect(result.current.progress.fusion?.score).toBe(0.48);
     expect(result.current.progress).not.toHaveProperty('verdict');
 

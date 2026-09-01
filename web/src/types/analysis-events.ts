@@ -1,4 +1,4 @@
-import type { ComponentSignal, FusedSignal } from './api';
+import type { FusedSignal } from './api';
 
 export type AnalysisEventType =
   | 'session_start'
@@ -49,7 +49,8 @@ export interface ComponentStartedData {
 
 export interface ComponentCompletedData {
   component_id: string;
-  signal: ComponentSignal;
+  direction: 'long' | 'short' | 'neutral';
+  confidence: number;
 }
 
 export interface ComponentFailedData {

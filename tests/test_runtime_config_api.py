@@ -24,7 +24,6 @@ from cryptotrader.runtime_config.models import (
     InfrastructureConfig,
     RuntimeConfigDocument,
     SignalComponentConfig,
-    SystemConfig,
 )
 from cryptotrader.runtime_config.repository import RuntimeConfigRepository
 from cryptotrader.runtime_config.secrets import CredentialVault
@@ -51,7 +50,7 @@ def _connection(
         enabled=True,
         credential_ref=credential_ref,
         leverage=1,
-        margin_mode="isolated",
+        margin_mode="cross" if adapter_id == "paper" else "isolated",
         canary_only=False,
         parameters={},
     )
@@ -86,7 +85,6 @@ def active_document() -> RuntimeConfigDocument:
         ),
     )
     return RuntimeConfigDocument(
-        system=SystemConfig(active=True),
         market_data=market_config(),
         signals=signal_config(components=(SignalComponentConfig(component_id="kronos", enabled=True, weight=1.0),)),
         execution=ExecutionConfig(connections=connections, books=books),
@@ -143,6 +141,11 @@ class FakeSession:
     async def fetch_portfolio(self, pair: Pair) -> ConnectionPortfolioSnapshot:
         return self.snapshot
 
+    async def fetch_account(self):
+        from tests.fakes.account_session import account_from_portfolio
+
+        return account_from_portfolio(self.snapshot)
+
     async def check_connection(self) -> None:
         self.check_calls += 1
         if self.check_error is not None:
@@ -198,12 +201,21 @@ class ApiHarness:
 
 
 @pytest.fixture
-async def api_harness(tmp_path):
+async def api_harness(tmp_path, monkeypatch):
     from api.main import app
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+    monkeypatch.setattr("api.main._get_redis_for_rate_limit", lambda: None)
+    # A prior lifespan may leave callbacks bound to unrelated scheduler/trigger owners.
+    monkeypatch.setattr(app.state, "refresh_runtime_owners", None, raising=False)
+    monkeypatch.setattr(app.state, "clear_runtime_owners", None, raising=False)
+    monkeypatch.setattr(app.state, "account_sync_owner", None, raising=False)
 
     document = active_document()
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'runtime-api.db'}"
+    await migrate_workbench_schema(database_url)
     repository = RuntimeConfigRepository(
-        f"sqlite+aiosqlite:///{tmp_path / 'runtime-api.db'}",
+        database_url,
         CredentialVault(MASTER_KEY),
         default_factory=lambda: document,
     )
@@ -239,8 +251,8 @@ async def api_harness(tmp_path):
         repository=repository,
         cycle=cycle,
         sessions=sessions,
-        signal_registry=SimpleNamespace(installed_ids=lambda: frozenset({"kronos", "llm_committee"})),
-        market_registry=SimpleNamespace(installed_ids=lambda: frozenset({"default"})),
+        signal_registry=SimpleNamespace(registered_ids=lambda: frozenset({"kronos", "llm_committee"})),
+        market_registry=SimpleNamespace(registered_ids=lambda: frozenset({"default"})),
         venue_registry=VenueAdapterRegistry(tuple(adapters.values())),
         reload_for_cycle=AsyncMock(),
         application_barrier=application_barrier,
@@ -250,12 +262,44 @@ async def api_harness(tmp_path):
         fail_closed=AsyncMock(),
         application_in_progress=False,
     )
+    from cryptotrader.decision.read_service import DecisionReadService
+
+    runtime.read_service = DecisionReadService(cycle.journal)
     previous = getattr(app.state, "runtime", None)
     app.state.runtime = runtime
     transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield ApiHarness(client, runtime, adapters)
     app.state.runtime = previous
+
+
+@pytest.mark.parametrize("publication_fails", [False, True])
+async def test_api_harness_isolates_and_restores_previous_runtime_owners(tmp_path, monkeypatch, publication_fails):
+    from api.main import app
+
+    refresh = AsyncMock(side_effect=AssertionError("previous runtime refresh must not run"))
+    clear = AsyncMock(side_effect=AssertionError("previous runtime clear must not run"))
+    monkeypatch.setattr(app.state, "refresh_runtime_owners", refresh, raising=False)
+    monkeypatch.setattr(app.state, "clear_runtime_owners", clear, raising=False)
+
+    # Enter the real fixture after installing offline sentinels, with its own teardown scope.
+    with pytest.MonkeyPatch.context() as fixture_patch:
+        async with asynccontextmanager(api_harness.__wrapped__)(tmp_path, fixture_patch) as harness:
+            if publication_fails:
+                harness.runtime.publish_candidate.side_effect = RuntimeError("offline publication failure")
+            document = active_payload()
+            document["scheduler"]["enabled"] = True
+            document["triggers"]["enabled"] = True
+            response = await harness.client.put("/api/config", json={"expected_revision": 1, "document": document})
+            assert response.status_code == (503 if publication_fails else 200), response.text
+            saved = await harness.runtime.repository.get_or_create()
+            assert saved.revision == 2
+            assert saved.apply_status == ("failed" if publication_fails else "applied")
+
+    assert app.state.refresh_runtime_owners is refresh
+    assert app.state.clear_runtime_owners is clear
+    refresh.assert_not_awaited()
+    clear.assert_not_awaited()
 
 
 async def put_fixture_credentials(
@@ -269,7 +313,11 @@ async def put_fixture_credentials(
         f"/api/venue-connections/{connection_id}/credentials",
         json={
             "expected_revision": current.json()["revision"],
-            "credentials": {"api_key": marker, "secret": marker, "passphrase": marker},
+            "values": {
+                "api_key": marker,
+                "secret": marker,
+                **({"passphrase": marker} if connection_id.startswith("okx") else {}),
+            },
         },
     )
 
@@ -280,7 +328,7 @@ async def test_get_config_exposes_latest_snapshot_and_credential_state(api_harne
     assert response.status_code == 200
     body = response.json()
     assert body["revision"] == 1
-    assert body["setup_required"] is False
+    assert body["apply_status"] == "applied"
     assert body["document"]["execution"]["connections"][0]["credential_configured"] is False
     assert body["document"]["execution"]["connections"][0]["credential_updated_at"] is None
     assert "credential_ref" not in json.dumps(body)
@@ -323,6 +371,41 @@ async def test_put_config_requires_expected_revision(api_harness):
     )
     assert stale.status_code == 409
     assert stale.json() == {"detail": "Runtime configuration changed; reload and retry"}
+
+
+@pytest.mark.parametrize("automation_enabled", [False, True])
+async def test_ordinary_put_preserves_automation_in_candidate_and_saved_document(api_harness, automation_enabled):
+    repository = api_harness.runtime.repository
+    initial = await repository.get_or_create()
+    document = initial.document.model_copy(
+        update={"scheduler": initial.document.scheduler.model_copy(update={"automation_enabled": automation_enabled})}
+    )
+    await repository.replace(initial.revision, document)
+    current = await repository.mark_applied(2)
+    api_harness.runtime.snapshot = current
+    payload = active_payload()
+    payload["scheduler"].update(automation_enabled=not automation_enabled, interval_minutes=60, enabled=True)
+    payload["triggers"]["enabled"] = True
+
+    response = await api_harness.client.put("/api/config", json={"expected_revision": 2, "document": payload})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["document"]["scheduler"]["automation_enabled"] is automation_enabled
+    saved = await repository.get_or_create()
+    prepared = api_harness.runtime.prepare_candidate.call_args.args[0]
+    assert prepared.document == saved.document == api_harness.runtime.snapshot.document
+    assert saved.document.scheduler.automation_enabled is automation_enabled
+    assert saved.document.scheduler.interval_minutes == 60
+    assert saved.document.scheduler.enabled is True
+    assert saved.document.triggers.enabled is True
+    assert saved.document.execution.live_order_execution_enabled is False
+    assert [book.hitl_required for book in saved.document.execution.books] == [False, True]
+    assert all(not adapter.connect_calls for adapter in api_harness.adapters.values())
+
+    stale = await api_harness.client.put("/api/config", json={"expected_revision": 2, "document": payload})
+    assert stale.status_code == 409
+    assert api_harness.runtime.prepare_candidate.await_count == 1
+    assert (await repository.get_or_create()).revision == 3
 
 
 async def test_put_config_publishes_the_saved_revision_to_the_running_runtime(api_harness):
@@ -481,7 +564,7 @@ async def test_config_read_is_rejected_while_a_real_asgi_application_request_has
     blocked = await api_harness.client.get("/api/config")
     assert blocked.status_code == 503
     assert blocked.json() == {"detail": "Runtime configuration is being applied"}
-    business = await api_harness.client.get("/api/backtest/sessions")
+    business = await api_harness.client.post("/api/backtest/runs", json={})
     assert business.status_code == 503
     assert business.json() == {"detail": "Runtime configuration is being applied"}
 
@@ -517,7 +600,7 @@ async def test_venue_credential_mutation_waits_for_application_barrier_while_rea
             "/api/venue-connections/okx-demo/credentials",
             json={
                 "expected_revision": current.json()["revision"] + 1,
-                "credentials": {
+                "values": {
                     "api_key": "queued-key",  # pragma: allowlist secret
                     "secret": "queued-secret",  # pragma: allowlist secret
                     "passphrase": "queued-pass",
@@ -585,7 +668,7 @@ async def test_activation_requires_nonempty_api_and_llm_credentials_before_persi
     assert after.json()["revision"] == current.json()["revision"]
 
 
-async def test_activation_with_llm_committee_requires_gateway_credential_before_persisting(api_harness):
+async def test_saving_an_analysis_draft_does_not_require_gateway_credentials(api_harness):
     current = await api_harness.client.get("/api/config")
     document = active_payload()
     document["signals"] = signal_config().model_dump(mode="json")
@@ -595,8 +678,9 @@ async def test_activation_with_llm_committee_requires_gateway_credential_before_
         json={"expected_revision": current.json()["revision"], "document": document},
     )
 
-    assert response.status_code == 422
-    assert (await api_harness.client.get("/api/config")).json()["revision"] == current.json()["revision"]
+    assert response.status_code == 200
+    assert (await api_harness.client.get("/api/config")).json()["revision"] == current.json()["revision"] + 1
+    assert response.json()["document"]["llm"]["gateway_credential_configured"] is False
 
 
 async def test_put_config_cannot_change_existing_connection_environment(api_harness):
@@ -616,7 +700,7 @@ async def test_put_config_cannot_change_existing_connection_environment(api_harn
     assert response.status_code == 422
 
 
-async def test_put_config_cannot_delete_existing_connection(api_harness):
+async def test_put_config_cannot_delete_enabled_unverified_connection(api_harness):
     current = await api_harness.client.get("/api/config")
     document = active_payload()
     document["execution"]["connections"] = [
@@ -628,7 +712,7 @@ async def test_put_config_cannot_delete_existing_connection(api_harness):
         json={"expected_revision": current.json()["revision"], "document": document},
     )
 
-    assert response.status_code == 422
+    assert response.status_code == 409
 
 
 async def test_put_config_cannot_disable_connection_referenced_by_enabled_book(api_harness):
@@ -678,7 +762,7 @@ async def test_credential_validation_error_never_echoes_secret_input(api_harness
         "/api/venue-connections/okx-demo/credentials",
         json={
             "expected_revision": 1,
-            "credentials": {"api_key": marker, "secret": marker, "unexpected": marker},
+            "values": {"api_key": marker, "secret": marker, "unexpected": marker},
         },
     )
 

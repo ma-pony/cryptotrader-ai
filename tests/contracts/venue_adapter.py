@@ -45,7 +45,13 @@ async def assert_ccxt_session_contract(adapter_factory, environment: ConnectionE
             adapter_id=adapter.adapter_id,
             credential_ref="credentials",
         ),
-        CredentialPayload(api_key="key", secret="secret", passphrase="passphrase"),  # pragma: allowlist secret
+        CredentialPayload(
+            values={
+                "api_key": "key",  # pragma: allowlist secret
+                "secret": "secret",  # pragma: allowlist secret
+                "passphrase": "passphrase",  # pragma: allowlist secret
+            }
+        ),
     )
 
     assert session.capabilities == adapter.capabilities(environment)

@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from cryptotrader.cycle_lock import ExecutionLeaseUnavailableError, cycle_lock, execution_pair_lease
+from cryptotrader.cycle_lock import ExecutionLeaseUnavailableError, cycle_lock, execution_book_lease
 from cryptotrader.risk.state import RedisStateManager
 
 
@@ -101,7 +101,7 @@ async def test_stale_execution_lease_release_cannot_delete_a_reassigned_redis_ke
 
 
 @pytest.mark.asyncio
-async def test_execution_pair_lease_canonicalizes_pair_and_does_not_translate_body_errors(monkeypatch):
+async def test_execution_book_lease_scopes_pool_and_does_not_translate_body_errors(monkeypatch):
     seen: list[str] = []
 
     class State:
@@ -118,13 +118,13 @@ async def test_execution_pair_lease_canonicalizes_pair_and_does_not_translate_bo
     monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", asynccontextmanager(acquire))
 
     with pytest.raises(RuntimeError, match="body failure"):
-        async with execution_pair_lease("redis://localhost/0", "BTC/USDT:USDT"):
+        async with execution_book_lease("redis://localhost/0", "simulation"):
             raise RuntimeError("body failure")
-    assert seen == ["BTC/USDT:USDT"]
+    assert seen == ["book:simulation"]
 
 
 @pytest.mark.asyncio
-async def test_execution_pair_lease_uses_dedicated_contention_error(monkeypatch):
+async def test_execution_book_lease_uses_dedicated_contention_error(monkeypatch):
     class State:
         async def aclose(self):
             return None
@@ -137,12 +137,12 @@ async def test_execution_pair_lease_uses_dedicated_contention_error(monkeypatch)
     monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
     monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", asynccontextmanager(unavailable))
     with pytest.raises(ExecutionLeaseUnavailableError):
-        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+        async with execution_book_lease("redis://localhost/0", "simulation", wait_timeout=0):
             pass
 
 
 @pytest.mark.asyncio
-async def test_execution_pair_lease_closes_an_entered_false_context_before_raising(monkeypatch):
+async def test_execution_book_lease_closes_an_entered_false_context_before_raising(monkeypatch):
     closed = False
 
     class State:
@@ -161,13 +161,13 @@ async def test_execution_pair_lease_closes_an_entered_false_context_before_raisi
     monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", lambda *_args: FalseLease())
 
     with pytest.raises(ExecutionLeaseUnavailableError):
-        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+        async with execution_book_lease("redis://localhost/0", "simulation", wait_timeout=0):
             pass
     assert closed is True
 
 
 @pytest.mark.asyncio
-async def test_execution_pair_lease_cancellation_owns_release_and_redis_close(monkeypatch):
+async def test_execution_book_lease_cancellation_owns_release_and_redis_close(monkeypatch):
     released = False
     redis_closed = False
     release_started = asyncio.Event()
@@ -192,7 +192,7 @@ async def test_execution_pair_lease_cancellation_owns_release_and_redis_close(mo
     monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", lambda *_args: Lease())
 
     async def worker():
-        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+        async with execution_book_lease("redis://localhost/0", "simulation"):
             await asyncio.Event().wait()
 
     task = asyncio.create_task(worker())
@@ -209,7 +209,7 @@ async def test_execution_pair_lease_cancellation_owns_release_and_redis_close(mo
 
 
 @pytest.mark.asyncio
-async def test_execution_pair_lease_closes_redis_when_lease_exit_fails(monkeypatch):
+async def test_execution_book_lease_closes_redis_when_lease_exit_fails(monkeypatch):
     redis_closed = False
 
     class State:
@@ -227,6 +227,6 @@ async def test_execution_pair_lease_closes_redis_when_lease_exit_fails(monkeypat
     monkeypatch.setattr("cryptotrader.cycle_lock.RedisStateManager", lambda _url: State(), raising=False)
     monkeypatch.setattr("cryptotrader.cycle_lock.cycle_lock", lambda *_args: Lease())
     with pytest.raises(RuntimeError, match="release failed"):
-        async with execution_pair_lease("redis://localhost/0", "BTC/USDT"):
+        async with execution_book_lease("redis://localhost/0", "simulation"):
             pass
     assert redis_closed is True

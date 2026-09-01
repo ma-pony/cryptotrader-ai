@@ -6,9 +6,12 @@ import asyncio
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from importlib import import_module
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
+from cryptotrader.accounts.models import Instrument
 from cryptotrader.cycle_events import NullCycleEventSink
 from cryptotrader.decision.engine import DecisionEngine
 from cryptotrader.decision.exit_policy import AtrExitPolicy
@@ -17,11 +20,12 @@ from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.hitl.store import BookApprovalStore
 from cryptotrader.journal.store import MultiVenueCycleStore
 from cryptotrader.pair import Pair
-from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SignalComponentConfig, SignalConfig, SystemConfig
+from cryptotrader.runtime_config.models import RuntimeConfigSnapshot, SignalComponentConfig, SignalConfig
 from cryptotrader.signals.fusion import WeightedSignalFusion
 from cryptotrader.signals.models import ComponentSignal, DataRequirements, SignalContext
 from cryptotrader.trading_cycle import TradingCycle
 from tests.factories.runtime_config import connection, runtime_document
+from tests.fakes.book_risk import MemoryRiskStates, NoContentionOwnership, with_accounts
 from tests.test_multi_venue_journal import _execution, _portfolio, _proposal_for
 
 PAIR = Pair.parse("BTC/USDT:USDT")
@@ -53,7 +57,6 @@ def _snapshot(*books: ExecutionBook, revision: int = 9) -> RuntimeConfigSnapshot
     document = runtime_document(
         connections=connections,
         books=books,
-        system=SystemConfig(active=True),
         signals=SignalConfig(
             components=(SignalComponentConfig(component_id="fixture", enabled=True, weight=1.0),),
             neutral_threshold=0.2,
@@ -94,6 +97,9 @@ class _MarketSource:
 
     def requirements(self) -> DataRequirements:
         return DataRequirements()
+
+    async def read_candles(self, pair, timeframe, start, end, as_of):
+        return ()
 
     async def collect(self, pair, as_of, requirements) -> SignalContext:
         self.calls += 1
@@ -140,9 +146,9 @@ class _Aggregator:
             raise RuntimeError("raw venue secret must not escape")
         proposal = self.proposals[book.id]
         if count == 0:
-            return _portfolio(proposal)
+            return with_accounts(_portfolio(proposal))
         execution = _execution(proposal)
-        return _portfolio(proposal, after=True, execution=execution)
+        return with_accounts(_portfolio(proposal, after=True, execution=execution))
 
 
 class _Planner:
@@ -154,9 +160,12 @@ class _Planner:
         self.calls += 1
         proposal = self.proposals[request.book.id]
         assert request.target_exposure == 1
-        assert request.peak_equity == request.portfolio.total_equity
+        assert request.state.equity == request.portfolio.total_equity
         assert config_revision == proposal.config_revision
         return proposal
+
+    async def validate_frozen(self, book, proposal, portfolio, state, sessions):
+        return True
 
 
 class _AllocationPolicy:
@@ -171,7 +180,7 @@ class _Coordinator:
         self.proposals = []
         self.failed_books = set(failed_books)
 
-    async def execute(self, proposal):
+    async def execute(self, proposal, *, frozen=False):
         self.proposals.append(proposal)
         if proposal.book_id in self.failed_books:
             raise RuntimeError("raw venue failure must remain book-local")
@@ -184,7 +193,7 @@ class _ConcurrentCoordinator:
         self.proposals = []
         self._all_entered = asyncio.Event()
 
-    async def execute(self, proposal):
+    async def execute(self, proposal, *, frozen=False):
         self.proposals.append(proposal)
         if len(self.proposals) == self.expected_calls:
             self._all_entered.set()
@@ -221,7 +230,9 @@ def _cycle(snapshot, *, failed_books=(), execution_failed_books=(), repository=N
         decisions=DecisionEngine(),
         exits=AtrExitPolicy(),
         sessions={
-            allocation.connection_id: object()
+            allocation.connection_id: SimpleNamespace(
+                list_instruments=AsyncMock(return_value=(Instrument(PAIR.canonical(), PAIR, PAIR.market_type, True),))
+            )
             for book in snapshot.document.execution.books
             for allocation in book.allocations
         },
@@ -235,6 +246,8 @@ def _cycle(snapshot, *, failed_books=(), execution_failed_books=(), repository=N
         journal=journal,
         events=NullCycleEventSink(),
         clock=lambda: NOW,
+        ownership=NoContentionOwnership(),
+        risk_states=MemoryRiskStates(),
     )
     return cycle, runner, coordinator, journal, approvals
 
@@ -334,6 +347,8 @@ async def test_execute_approved_uses_original_proposal_once_and_replaces_same_cy
     cycle, runner, coordinator, journal, approvals = _cycle(snapshot)
     awaiting = await cycle.run(CycleRequest(PAIR))
     approval_id = awaiting.book("live").hitl.approval_id
+    frozen = awaiting.book("live").proposal
+    assert all(plan.decision_id == awaiting.cycle_id for plan in frozen.connection_plans)
     await approvals.approve(approval_id)
 
     completed = await cycle.execute_approved(approval_id)
@@ -342,6 +357,7 @@ async def test_execute_approved_uses_original_proposal_once_and_replaces_same_cy
     assert runner.calls == 1
     assert len(coordinator.proposals) == 1
     assert coordinator.proposals[0] is awaiting.book("live").proposal
+    assert completed.book("live").proposal is frozen
     assert completed.book("live").status == "completed"
     assert len(journal.records) == 1
     assert journal.records[0].cycle_id == awaiting.cycle_id
@@ -351,10 +367,14 @@ async def test_execute_approved_uses_original_proposal_once_and_replaces_same_cy
 @pytest.mark.parametrize("database", [False, True])
 async def test_expired_approved_cycle_never_reaches_coordinator(tmp_path, monkeypatch, database):
     import cryptotrader.hitl.store as stores
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
 
     book = _book("simulation", "simulated", ("sim-first", "sim-second"), hitl=True)
     cycle, _, coordinator, _, _ = _cycle(_snapshot(book))
-    approvals = stores.BookApprovalStore(f"sqlite+aiosqlite:///{tmp_path / 'cycle-expiry.db'}" if database else None)
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'cycle-expiry.db'}" if database else None
+    if database_url is not None:
+        await migrate_workbench_schema(database_url)
+    approvals = stores.BookApprovalStore(database_url)
     cycle.approvals = approvals
     awaiting = await cycle.run(CycleRequest(PAIR))
     approval_id = awaiting.book("simulation").hitl.approval_id
@@ -381,7 +401,7 @@ async def test_assembled_cycle_uses_snapshot_approval_ttl_and_market_candles():
     document = snapshot.document.model_copy(
         update={
             "hitl": HitlConfig(approval_ttl_minutes=5),
-            "market_data": MarketDataConfig(parameters={"timeframe": "15m", "limit": 55}),
+            "market_data": MarketDataConfig(timeframe="15m", parameters={"limit": 55}),
         }
     )
     snapshot = replace(snapshot, document=document)
@@ -520,9 +540,10 @@ async def test_ambiguous_journal_write_and_failed_read_does_not_invalidate_possi
     cycle, _, _, _, approvals = _cycle(_snapshot(live))
 
     class _AmbiguousJournal(MultiVenueCycleStore):
-        async def save(self, record):
-            await super().save(record)
-            raise RuntimeError("ambiguous write response")
+        async def replace(self, record):
+            await super().replace(record)
+            if record.cycle_status == "awaiting_approval":
+                raise RuntimeError("ambiguous write response")
 
         async def get(self, cycle_id):
             raise RuntimeError("durable read unavailable")
@@ -595,7 +616,13 @@ async def test_concurrent_book_approvals_execute_once_and_merge_both_terminal_fa
 
 
 def test_cycle_request_and_signal_context_are_hard_cut_over():
-    assert [field.name for field in fields(CycleRequest)] == ["pair"]
+    assert [field.name for field in fields(CycleRequest)] == [
+        "pair",
+        "mode",
+        "origin",
+        "decision_id",
+        "confirmed_book_ids",
+    ]
     assert [field.name for field in fields(SignalContext)] == [
         "pair",
         "as_of",
@@ -604,6 +631,7 @@ def test_cycle_request_and_signal_context_are_hard_cut_over():
         "current_price",
         "atr",
         "snapshots",
+        "evaluation_reference",
     ]
 
 

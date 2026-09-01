@@ -147,10 +147,8 @@ class TriggerRuleStore:
 
     @staticmethod
     async def ensure_tables(database_url: str) -> None:
-        """Create tables using the provided database URL."""
-        from cryptotrader.db import get_engine
+        """Require the explicitly migrated trigger schema."""
+        from cryptotrader.migrations.schema import require_tables
         from cryptotrader.triggers.models import Base
 
-        engine = await get_engine(database_url)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+        await require_tables(database_url, Base.metadata.tables)

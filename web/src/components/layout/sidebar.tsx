@@ -1,42 +1,20 @@
-import {
-  BarChart3,
-  Brain,
-  Briefcase,
-  CalendarClock,
-  Gauge,
-  GitBranch,
-  MessageSquare,
-  ScrollText,
-  ShieldCheck,
-  Settings2,
-  TrendingUp,
-  type LucideIcon,
-} from 'lucide-react';
+import { BarChart3, Briefcase, Cog, Landmark, ScrollText, SlidersHorizontal, type LucideIcon } from 'lucide-react';
 import { type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NavLink } from 'react-router';
 
-import { useCountdown } from '@/hooks/use-countdown';
+import { useRuntimeStatus } from '@/hooks/use-runtime-status';
 import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 import { cn } from '@/lib/cn';
 import { useUIStore } from '@/stores/use-ui-store';
 
 type NavLabelKey =
-  | 'nav.dashboard'
-  | 'nav.strategy'
+  | 'nav.workbench'
   | 'nav.decisions'
-  | 'nav.cycles'
-  | 'nav.debate'
-  | 'nav.backtest'
-  | 'nav.risk'
-  | 'nav.memory'
-  | 'nav.metrics'
-  | 'nav.chat'
-  | 'nav.market'
-  | 'nav.scheduler'
-  | 'nav.venues'
-  | 'nav.execution_books'
-  | 'nav.configuration';
+  | 'nav.engine'
+  | 'nav.accounts'
+  | 'nav.research'
+  | 'nav.settings';
 
 interface NavItem {
   to: string;
@@ -44,80 +22,46 @@ interface NavItem {
   icon: LucideIcon;
 }
 
-interface NavSection {
-  /** Sidebar group label (i18n key with sensible defaultValue). */
-  titleKey: 'nav.section.trading' | 'nav.section.analysis' | 'nav.section.operations' | 'nav.section.configuration';
-  defaultTitle: string;
-  items: NavItem[];
-}
-
-// Grouping rationale (deep review FE-2026-05-06):
-//   trading      = the live decision loop (overview / decisions / debate)
-//   analysis     = retrospective + market context (backtest / market / metrics)
-//   operations   = control plane (risk / chat / scheduler)
-const NAV_SECTIONS: NavSection[] = [
-  {
-    titleKey: 'nav.section.trading',
-    defaultTitle: '交易',
-    items: [
-      { to: '/', labelKey: 'nav.dashboard', icon: Briefcase },
-      { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
-      { to: '/cycles', labelKey: 'nav.cycles', icon: GitBranch },
-      { to: '/debate', labelKey: 'nav.debate', icon: GitBranch },
-    ],
-  },
-  {
-    titleKey: 'nav.section.analysis',
-    defaultTitle: '分析',
-    items: [
-      { to: '/market', labelKey: 'nav.market', icon: TrendingUp },
-      { to: '/backtest', labelKey: 'nav.backtest', icon: BarChart3 },
-      { to: '/metrics', labelKey: 'nav.metrics', icon: Gauge },
-    ],
-  },
-  {
-    titleKey: 'nav.section.operations',
-    defaultTitle: '运维',
-    items: [
-      { to: '/risk', labelKey: 'nav.risk', icon: ShieldCheck },
-      { to: '/memory', labelKey: 'nav.memory', icon: Brain },
-      { to: '/scheduler', labelKey: 'nav.scheduler', icon: CalendarClock },
-      { to: '/chat', labelKey: 'nav.chat', icon: MessageSquare },
-    ],
-  },
-  {
-    titleKey: 'nav.section.configuration',
-    defaultTitle: '配置',
-    items: [{ to: '/settings', labelKey: 'nav.configuration', icon: Settings2 }],
-  },
+const NAV_ITEMS: NavItem[] = [
+  { to: '/', labelKey: 'nav.workbench', icon: Briefcase },
+  { to: '/decisions', labelKey: 'nav.decisions', icon: ScrollText },
+  { to: '/engine', labelKey: 'nav.engine', icon: SlidersHorizontal },
+  { to: '/accounts', labelKey: 'nav.accounts', icon: Landmark },
+  { to: '/research', labelKey: 'nav.research', icon: BarChart3 },
+  { to: '/settings', labelKey: 'nav.settings', icon: Cog },
 ];
 
 const SidebarFooter = () => {
-  const { t } = useTranslation();
-  const { data } = useSchedulerStatus();
-  // Footer precision: 5 seconds is plenty for sidebar display and cuts re-renders
-  // from 60/min to 12/min versus the old per-second tick.
-  const { formatted: countdown } = useCountdown(data?.next_run_at, 5_000);
-
-  const running = data?.enabled ?? false;
+  const runtime = useRuntimeStatus();
+  const scheduler = useSchedulerStatus();
+  const automation = runtime.data?.automation_enabled;
+  const runtimeLabel = runtime.isPending || (!runtime.isError && !runtime.data)
+    ? '正在读取运行状态'
+    : runtime.isError
+      ? '运行状态未知'
+      : automation
+        ? '自动运行已开启'
+        : '自动运行已暂停';
+  const schedulerLabel = scheduler.isPending || (!scheduler.isError && !scheduler.data)
+    ? '正在读取定时来源状态'
+    : scheduler.isError
+      ? '定时来源未知'
+      : scheduler.data.enabled
+        ? '定时来源已启用'
+        : '定时来源未启用';
 
   return (
     <div className="flex flex-col gap-2 border-t border-border p-3">
       <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2">
         <span
-          className={cn(
-            'h-2 w-2 rounded-full shrink-0',
-            running ? 'bg-trade-long animate-ct-pulse' : 'bg-muted-foreground',
-          )}
+          className={cn('h-2 w-2 shrink-0 rounded-full', automation ? 'bg-amber-500' : 'bg-muted-foreground')}
         />
         <div className="flex-1 min-w-0">
-          <div className="text-[11px] font-medium text-foreground">
-            {running
-              ? t('scheduler.running', { defaultValue: '模拟交易 · 运行中' })
-              : t('scheduler.paused', { defaultValue: '调度器 · 已暂停' })}
+          <div className="text-sm font-medium text-foreground">
+            {runtimeLabel}
           </div>
-          <div className="font-mono text-[10px] text-muted-foreground">
-            {running ? `${t('scheduler.next_run', { defaultValue: '下次分析' })} ${countdown}` : '—'}
+          <div className="text-sm text-muted-foreground">
+            {schedulerLabel}
           </div>
         </div>
       </div>
@@ -133,9 +77,8 @@ const SidebarBrand = ({ collapsed }: { collapsed: boolean }) => {
       <span
         className="flex h-8 w-8 items-center justify-center rounded-lg font-semibold text-[15px] shadow-glow-amber"
         style={{
-          background: 'linear-gradient(135deg, var(--amber-500), var(--amber-600))',
+          background: 'var(--amber-500)',
           color: 'hsl(var(--primary-foreground))',
-          fontFamily: "'Space Grotesk', system-ui, sans-serif",
         }}
         aria-hidden
       >
@@ -144,7 +87,9 @@ const SidebarBrand = ({ collapsed }: { collapsed: boolean }) => {
       {!collapsed ? (
         <div className="flex flex-col leading-tight">
           <span className="text-sm font-semibold text-foreground">{t('app.name')}</span>
-          <span className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">AI · v2.4</span>
+          <span className="text-sm text-muted-foreground">
+            {t('app.version', { version: '2.4' })}
+          </span>
         </div>
       ) : null}
     </div>
@@ -161,36 +106,24 @@ const SidebarNav = ({ collapsed, onNavigate }: SidebarNavProps) => {
   const { t } = useTranslation();
   return (
     <nav className="flex-1 overflow-y-auto px-2 py-3">
-      {NAV_SECTIONS.map((section, sectionIdx) => (
-        <div key={section.titleKey} className={cn('space-y-0.5', sectionIdx > 0 && 'mt-4')}>
-          {!collapsed ? (
-            <div className="px-3 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-              {t(section.titleKey, { defaultValue: section.defaultTitle })}
-            </div>
-          ) : sectionIdx > 0 ? (
-            // collapsed mode: thin divider between groups
-            <div className="mx-2 mb-1 h-px bg-border" />
-          ) : null}
-          {section.items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.to === '/'}
-              onClick={onNavigate}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors border-l-2',
-                  isActive
-                    ? 'bg-muted text-foreground font-medium border-l-amber-500 pl-[10px]'
-                    : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground border-l-transparent',
-                )
-              }
-            >
-              <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-              {!collapsed ? <span className="truncate">{t(item.labelKey)}</span> : null}
-            </NavLink>
-          ))}
-        </div>
+      {NAV_ITEMS.map((item) => (
+        <NavLink
+          key={item.to}
+          to={item.to}
+          end={item.to === '/'}
+          onClick={onNavigate}
+          className={({ isActive }) =>
+            cn(
+              'flex min-h-10 items-center gap-3 whitespace-nowrap rounded-md border-l-2 px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:bg-muted max-md:min-h-11',
+              isActive
+                ? 'border-l-amber-500 bg-muted pl-[10px] font-medium text-foreground'
+                : 'border-l-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground',
+            )
+          }
+        >
+          <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
+          {!collapsed ? <span className="truncate">{t(item.labelKey)}</span> : null}
+        </NavLink>
       ))}
     </nav>
   );
@@ -206,6 +139,7 @@ export const SidebarDrawerBody = ({ onNavigate }: { onNavigate?: () => void }) =
 );
 
 export const Sidebar = () => {
+  const { t } = useTranslation();
   const collapsed = useUIStore((s) => s.sidebarCollapsed);
 
   return (
@@ -214,10 +148,10 @@ export const Sidebar = () => {
     // present and its width depends on the collapsed flag.
     <aside
       className={cn(
-        'hidden h-screen flex-col border-r border-border bg-card transition-[width] duration-200 md:flex',
+        'hidden h-screen flex-col border-r border-border bg-card md:flex',
         collapsed ? 'w-16' : 'w-60',
       )}
-      aria-label="primary"
+      aria-label={t('header.primaryNavigation')}
     >
       <SidebarBrand collapsed={collapsed} />
       <SidebarNav collapsed={collapsed} />

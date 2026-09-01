@@ -24,7 +24,7 @@ def test_health():
     finally:
         app.state.runtime = runtime
     assert r.status_code == 200
-    assert r.json()["status"] == "setup_required"
+    assert r.json()["status"] == "ok"
 
 
 def test_metrics():

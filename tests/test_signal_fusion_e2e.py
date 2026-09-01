@@ -41,8 +41,8 @@ async def test_component_events_and_fused_target_are_shared_by_all_books():
     live = _book("live", "real", ("live-first", "live-second"), hitl=False)
     cycle, _, coordinator, _, _ = _cycle(_snapshot(simulation, live))
     sink = _Sink()
-    cycle.registry = _Registry()
-    cycle.runner = ComponentRunner(sink)
+    cycle.analysis.registry = _Registry()
+    cycle.analysis.runner = ComponentRunner(sink)
     cycle.events = sink
 
     outcome = await cycle.run(CycleRequest(PAIR))

@@ -10,23 +10,26 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
-def _runtime(*, setup_required=False, db_url="", redis_url="", llm_base_url=""):
+def _runtime(*, db_url="", redis_url="", llm_base_url=""):
     document = SimpleNamespace(
         infrastructure=SimpleNamespace(redis_url=redis_url),
         llm=SimpleNamespace(base_url=llm_base_url),
         triggers=SimpleNamespace(enabled=False),
-        scheduler=SimpleNamespace(enabled=False, pairs=("BTC/USDT", "ETH/USDT")),
+        scheduler=SimpleNamespace(enabled=False),
         execution=SimpleNamespace(
+            pairs=("BTC/USDT", "ETH/USDT"),
             books=(
                 SimpleNamespace(id="simulation", enabled=True),
                 SimpleNamespace(id="disabled", enabled=False),
-            )
+            ),
         ),
     )
     return SimpleNamespace(
-        snapshot=SimpleNamespace(revision=17, document=document, setup_required=setup_required),
+        snapshot=SimpleNamespace(revision=17, document=document),
         repository=SimpleNamespace(database_url=db_url),
         cycle=None,
+        backtest_service=SimpleNamespace(store=SimpleNamespace(recover_interrupted=AsyncMock())),
+        evaluation_service=SimpleNamespace(evaluate_due=AsyncMock(return_value=0)),
         close=AsyncMock(),
     )
 
@@ -47,6 +50,7 @@ def client():
     runtime = _runtime()
     with (
         patch("cryptotrader.runtime.build_runtime", new=AsyncMock(return_value=runtime)),
+        patch("api.main._init_account_sync", new=AsyncMock()),
         TestClient(app, raise_server_exceptions=False) as test_client,
     ):
         yield test_client
@@ -58,13 +62,12 @@ def _use(client, **values):
     return runtime
 
 
-def test_setup_required_health_is_truthful_without_dependency_probes(client):
+def test_unconfigured_health_reports_independent_dependencies(client):
     _use(
         client,
-        setup_required=True,
-        db_url="sqlite+aiosqlite:///must-not-probe.db",
-        redis_url="redis://must-not-probe",
-        llm_base_url="https://must-not-probe.example",
+        db_url="",
+        redis_url="",
+        llm_base_url="",
     )
     with (
         patch("api.routes.health.create_async_engine") as db,
@@ -74,33 +77,40 @@ def test_setup_required_health_is_truthful_without_dependency_probes(client):
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "setup_required"
-    assert response.json()["checks"] == {"api": "ok", "runtime": "setup_required"}
+    assert response.json()["status"] == "ok"
+    assert response.json()["checks"] == {
+        "api": "ok",
+        "db": "not_configured",
+        "redis": "not_configured",
+        "llm": "not_configured",
+    }
     db.assert_not_called()
     redis.from_url.assert_not_called()
     llm.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_setup_lifespan_builds_once_skips_scheduler_and_triggers_and_closes_runtime():
+async def test_lifespan_builds_once_initializes_rule_owners_and_closes_runtime():
     from api import main
 
-    runtime = _runtime(setup_required=True)
+    runtime = _runtime()
     application = FastAPI()
     build = AsyncMock(return_value=runtime)
     with (
         patch("cryptotrader.runtime.build_runtime", new=build),
         patch.object(main, "_init_trigger_engine", new=AsyncMock()) as init_triggers,
         patch.object(main, "_init_scheduler", new=AsyncMock()) as init_scheduler,
+        patch.object(main, "_init_account_sync", new=AsyncMock()),
         patch.object(main, "_shutdown_scheduler", new=AsyncMock()) as shutdown_scheduler,
     ):
         async with main.lifespan(application):
             assert application.state.runtime is runtime
 
-    build.assert_awaited_once_with()
-    init_triggers.assert_not_awaited()
-    init_scheduler.assert_not_awaited()
-    shutdown_scheduler.assert_not_awaited()
+    build.assert_awaited_once()
+    runtime.backtest_service.store.recover_interrupted.assert_awaited_once_with()
+    init_triggers.assert_awaited_once_with(application)
+    init_scheduler.assert_awaited_once_with(application)
+    shutdown_scheduler.assert_awaited_once_with(application)
     runtime.close.assert_awaited_once_with()
 
 
@@ -119,12 +129,13 @@ async def test_active_lifespan_starts_and_stops_explicit_owners_once():
         patch("cryptotrader.runtime.build_runtime", new=AsyncMock(return_value=runtime)) as build,
         patch.object(main, "_init_trigger_engine", new=AsyncMock(side_effect=init_trigger)) as init_triggers,
         patch.object(main, "_init_scheduler", new=AsyncMock()) as init_scheduler,
+        patch.object(main, "_init_account_sync", new=AsyncMock()),
         patch.object(main, "_shutdown_scheduler", new=AsyncMock()) as shutdown_scheduler,
     ):
         async with main.lifespan(application):
             assert application.state.runtime is runtime
 
-    build.assert_awaited_once_with()
+    build.assert_awaited_once()
     init_triggers.assert_awaited_once_with(application)
     init_scheduler.assert_awaited_once_with(application)
     shutdown_scheduler.assert_awaited_once_with(application)
@@ -147,6 +158,7 @@ async def test_active_lifespan_attempts_all_owner_shutdowns_when_scheduler_stop_
         patch("cryptotrader.runtime.build_runtime", new=AsyncMock(return_value=runtime)),
         patch.object(main, "_init_trigger_engine", new=AsyncMock(side_effect=init_trigger)),
         patch.object(main, "_init_scheduler", new=AsyncMock()),
+        patch.object(main, "_init_account_sync", new=AsyncMock()),
         patch.object(
             main,
             "_shutdown_scheduler",
@@ -170,11 +182,11 @@ async def test_shutdown_attempts_every_owner_when_each_preceding_owner_fails():
     application = FastAPI()
     trigger = SimpleNamespace(stop=AsyncMock(side_effect=RuntimeError("trigger stop failed")))
     application.state.trigger_engine = trigger
-    manager = SimpleNamespace(drain=AsyncMock(side_effect=RuntimeError("chat drain failed")))
+    manager = SimpleNamespace(shutdown=AsyncMock(side_effect=RuntimeError("chat shutdown failed")))
 
     with (
         patch(
-            "cryptotrader.chat.task_manager.BackgroundTaskManager.get_instance",
+            "cryptotrader.tasks.BackgroundTaskManager.get_instance",
             return_value=manager,
         ),
         patch.object(
@@ -182,11 +194,11 @@ async def test_shutdown_attempts_every_owner_when_each_preceding_owner_fails():
             "_shutdown_scheduler",
             new=AsyncMock(side_effect=RuntimeError("scheduler stop failed")),
         ) as scheduler_shutdown,
-        pytest.raises(RuntimeError, match="chat drain failed"),
+        pytest.raises(RuntimeError, match="chat shutdown failed"),
     ):
-        await main._shutdown_runtime_owners(application, runtime, active=True)
+        await main._shutdown_runtime_owners(application, runtime)
 
-    manager.drain.assert_awaited_once_with()
+    manager.shutdown.assert_awaited_once_with()
     scheduler_shutdown.assert_awaited_once_with(application)
     trigger.stop.assert_awaited_once_with()
     runtime.close.assert_awaited_once_with()

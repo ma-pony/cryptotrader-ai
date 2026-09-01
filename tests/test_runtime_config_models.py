@@ -29,7 +29,7 @@ def test_minimal_document_requires_setup_and_contains_no_connection():
 
     snapshot = RuntimeConfigSnapshot(1, minimal_runtime_document(), NOW)
 
-    assert snapshot.setup_required is True
+    assert snapshot.document.scheduler.automation_enabled is False
     assert snapshot.document.execution.connections == ()
     assert snapshot.document.execution.books == ()
 
@@ -85,43 +85,38 @@ def test_document_rejects_unknown_enabled_connection_adapter():
 
     document = runtime_document(connections=(connection(adapter_id="missing"),))
 
-    with pytest.raises(ValueError, match="uninstalled adapter"):
+    with pytest.raises(ValueError, match="unregistered adapter"):
         validate_runtime_document(document, INSTALLED_SIGNALS, {"paper"}, INSTALLED_MARKET_SOURCES)
 
 
-def test_active_document_requires_an_enabled_book():
-    from cryptotrader.runtime_config.models import SystemConfig, validate_runtime_document
+def test_analysis_document_can_be_saved_without_books():
+    from cryptotrader.runtime_config.models import validate_runtime_document
 
-    document = runtime_document(system=SystemConfig(active=True))
-
-    with pytest.raises(ValueError, match="enabled execution book"):
-        validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
+    document = runtime_document()
+    validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
 
 
-def test_active_document_requires_credential_for_enabled_non_paper_connection():
-    from cryptotrader.runtime_config.models import SystemConfig, validate_runtime_document
+def test_account_draft_can_be_saved_without_credentials():
+    from cryptotrader.runtime_config.models import validate_runtime_document
 
     document = runtime_document(
-        system=SystemConfig(active=True),
         connections=(connection("okx-demo", "demo", adapter_id="okx"),),
         books=(book("simulation", "simulated", allocation("okx-demo", 1.0)),),
     )
 
-    with pytest.raises(ValueError, match="credential_ref"):
-        validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
+    validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
 
 
 def test_active_document_requires_an_installed_market_source():
-    from cryptotrader.runtime_config.models import MarketDataConfig, SystemConfig, validate_runtime_document
+    from cryptotrader.runtime_config.models import MarketDataConfig, validate_runtime_document
 
     document = runtime_document(
-        system=SystemConfig(active=True),
         market_data=MarketDataConfig(source_id="missing"),
         connections=(connection(),),
         books=(book(),),
     )
 
-    with pytest.raises(ValueError, match="uninstalled market source"):
+    with pytest.raises(ValueError, match="unregistered market source"):
         validate_runtime_document(document, INSTALLED_SIGNALS, INSTALLED_ADAPTERS, INSTALLED_MARKET_SOURCES)
 
 
@@ -148,7 +143,7 @@ def test_document_is_frozen_and_rejects_unknown_top_level_fields():
     with pytest.raises(ValidationError, match="extra"):
         RuntimeConfigDocument.model_validate(document.model_dump() | {"engine": "paper"})
     with pytest.raises(ValidationError, match="frozen"):
-        document.system = None
+        document.security = None
 
 
 def test_document_recursively_freezes_market_and_signal_parameters():

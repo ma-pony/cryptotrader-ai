@@ -7,8 +7,10 @@ import type { useRuntimeConfig } from '@/hooks/use-runtime-config';
 
 export function ConfigurationAccess({
   runtime,
+  embedded = false,
 }: {
   runtime: Pick<ReturnType<typeof useRuntimeConfig>, 'isLoading' | 'authenticationRequired' | 'reload'>;
+  embedded?: boolean;
 }) {
   const { t } = useTranslation('configuration');
   const [key, setKey] = useState('');
@@ -32,8 +34,8 @@ export function ConfigurationAccess({
     }
   };
   if (runtime.isLoading && !showKey) return <RouteSkeleton />;
-  return (
-    <main className="grid min-h-screen place-items-center p-6">
+  const content = (
+    <div className={embedded ? 'grid min-h-48 place-items-center rounded-lg border border-border p-6' : 'grid min-h-screen place-items-center p-6'}>
       {showKey ? (
         <form
           className="w-full max-w-md space-y-4"
@@ -71,6 +73,7 @@ export function ConfigurationAccess({
           {t('loadError')} · {t('retry')}
         </button>
       )}
-    </main>
+    </div>
   );
+  return embedded ? content : <main>{content}</main>;
 }

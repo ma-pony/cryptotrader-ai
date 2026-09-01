@@ -35,7 +35,7 @@ def _runtime_summary(runtime) -> dict[str, object]:
     document = runtime.snapshot.document
     return {
         "config_revision": runtime.snapshot.revision,
-        "pairs": [pair.canonical() if hasattr(pair, "canonical") else str(pair) for pair in document.scheduler.pairs],
+        "pairs": [pair.canonical() if hasattr(pair, "canonical") else str(pair) for pair in document.execution.pairs],
         "enabled_books": [book.id for book in document.execution.books if book.enabled],
         "cycle_status": "active" if runtime.cycle is not None else "inactive",
     }
@@ -112,21 +112,20 @@ async def health(request: Request):  # noqa: C901 - each dependency is an indepe
     Returns HTTP 503 when any configured component is unavailable so that the
     orchestrator can decide to restart or reroute traffic.
     """
+    migration_required = getattr(request.app.state, "migration_required", None)
+    if migration_required is not None:
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "degraded",
+                "checks": {"api": "ok", "database_schema": "migration_required"},
+            },
+        )
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None:
         return JSONResponse(
             status_code=503,
             content={"status": "degraded", "checks": {"api": "ok", "runtime": "unavailable"}},
-        )
-    if runtime.snapshot.setup_required:
-        return JSONResponse(
-            status_code=200,
-            content={
-                "status": "setup_required",
-                "checks": {"api": "ok", "runtime": "setup_required"},
-                "runtime": _runtime_summary(runtime),
-                "uptime_seconds": round(time.time() - _start_time),
-            },
         )
     config = runtime.snapshot.document
     checks: dict[str, str] = {"api": "ok"}

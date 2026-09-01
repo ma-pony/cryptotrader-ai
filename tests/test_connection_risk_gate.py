@@ -40,6 +40,11 @@ def _request(
     pair = pair or Pair.parse("BTC/USDT:USDT")
     position = ConnectionPosition(pair, Decimal("0"), Decimal(current), None)
     portfolio = ConnectionPortfolioSnapshot("connection", Decimal(equity), {pair.quote: Decimal(equity)}, position)
+    from dataclasses import replace
+
+    from tests.fakes.account_session import account_from_portfolio
+
+    portfolio = replace(portfolio, account_snapshot=account_from_portfolio(portfolio))
     connection_target = ConnectionTarget(
         "book",
         "connection",

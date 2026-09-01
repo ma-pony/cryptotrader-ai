@@ -1,7 +1,7 @@
 """spec 022 FR-022-15 — Lightweight event journal write helpers.
 
 These helpers write operational events to `journal`; trading decisions use
-the separate `trading_cycles` journal.
+the separate canonical multi-venue decision journal.
 The `journal` table is an append-only event log:
 
     id BIGSERIAL PRIMARY KEY,
@@ -43,31 +43,19 @@ async def _write_journal_event(
     Soft-fail: any DB error is logged at WARNING level and swallowed so that
     calling nodes are never blocked by journal write failures.
 
-    Creates the `journal` table automatically if it does not exist (idempotent
-    CREATE TABLE IF NOT EXISTS).
+    Schema ownership remains with the explicit events heartbeat migration.
     """
     from datetime import datetime
 
     from sqlalchemy import text
 
     from cryptotrader.db import get_engine
+    from cryptotrader.migrations.schema import require_tables
 
     try:
+        await require_tables(database_url, ("journal",))
         engine = await get_engine(database_url)
         async with engine.begin() as conn:
-            # Ensure the journal table exists (idempotent DDL)
-            await conn.execute(
-                text(
-                    "CREATE TABLE IF NOT EXISTS journal ("
-                    "id BIGSERIAL PRIMARY KEY, "
-                    "timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(), "
-                    "trace_id VARCHAR(36), "
-                    "event_type VARCHAR(64) NOT NULL, "
-                    "pair VARCHAR(50), "
-                    "payload JSONB NOT NULL DEFAULT '{}'"
-                    ")"
-                )
-            )
             await conn.execute(
                 text(
                     "INSERT INTO journal (timestamp, trace_id, event_type, pair, payload) "

@@ -1,0 +1,125 @@
+import { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { BooleanField, NumberField, StringListField, focusFirstError } from '@/components/configuration/field';
+import { Section } from '@/components/configuration/section';
+import { useConfiguration } from '../settings/configuration-context';
+import { ConfigurationSaveBar } from '../settings';
+import { AllocationPreview } from './allocation-preview';
+import { BookForm, newBook } from './book-form';
+
+export default function BooksPage() {
+  const runtime = useConfiguration();
+  const { t } = useTranslation('configuration');
+  const form = useRef<HTMLFormElement>(null);
+  const [equity, setEquity] = useState<number | ''>(100000);
+  const [exposure, setExposure] = useState<number | ''>(0.5);
+  const execution = runtime.document?.execution;
+  const connections = runtime.baseline?.execution.connections;
+  useEffect(() => {
+    // Server validation arrives while the pending fieldset is still disabled.
+    if (!runtime.isSaving) focusFirstError(runtime.errors, form.current ?? undefined);
+  }, [runtime.errors, runtime.isSaving]);
+  if (!execution || !connections) return null;
+  const changeBooks = (books: typeof execution.books, rows = runtime.bookRows) => {
+    runtime.setBookRows(rows);
+    runtime.update('execution', { ...execution, books });
+  };
+  return (
+    <form
+      ref={form}
+      noValidate
+      onSubmit={(event) => {
+        event.preventDefault();
+        void runtime.save('books', form.current ?? undefined);
+      }}
+    >
+      <fieldset disabled={runtime.isSaving}>
+        <header id="execution.books">
+          <h1 className="text-xl font-semibold">{t('books')}</h1>
+          <p className="configuration-help">{t('booksSubtitle')}</p>
+        </header>
+        <StringListField
+          name="execution.pairs"
+          label="交易品种范围"
+          addLabel="添加交易品种"
+          value={execution.pairs}
+          onChange={(pairs) => runtime.update('execution', { ...execution, pairs })}
+          error={runtime.errors['execution.pairs']}
+        />
+        {!execution.books.length ? <p className="configuration-help">{t('book.empty')}</p> : null}
+        {execution.books.map((book, index) => (
+          <div id={`execution.books.${book.id}`} key={runtime.bookRows[index]?.key ?? book.id}>
+            <BookForm
+              index={index}
+              book={book}
+              saved={runtime.bookRows[index]?.persistedId !== undefined}
+              connections={connections}
+              catalog={runtime.catalog.data}
+              errors={runtime.errors}
+              onChange={(next) => changeBooks(execution.books.map((item, i) => (i === index ? next : item)))}
+              onRemove={() => {
+                changeBooks(
+                  execution.books.filter((_, i) => i !== index),
+                  runtime.bookRows.filter((_, i) => i !== index),
+                );
+              }}
+            />
+          </div>
+        ))}
+        <button
+          type="button"
+          className="configuration-button"
+          onClick={() => {
+            changeBooks([...execution.books, newBook()], [...runtime.bookRows, { key: crypto.randomUUID() }]);
+          }}
+        >
+          {t('addBook')}
+        </button>
+        <Section title={t('liveWrite.title')} description={t('liveWrite.warning')}>
+          <BooleanField
+            name="execution.live_order_execution_enabled"
+            label={t('liveWrite.enable')}
+            value={execution.live_order_execution_enabled}
+            onChange={(live_order_execution_enabled) => {
+              runtime.setBookRows(runtime.bookRows);
+              runtime.update('execution', { ...execution, live_order_execution_enabled });
+            }}
+          />
+        </Section>
+        <Section title={t('allocationPreview')} description={t('book.exampleHelp')}>
+          <div className="configuration-grid">
+            <NumberField name="example.equity" label={t('sampleEquity')} value={equity} min={0} onChange={setEquity} />
+            <NumberField
+              name="example.exposure"
+              label={t('targetExposure')}
+              value={exposure}
+              percent
+              min={0}
+              max={100}
+              onChange={setExposure}
+            />
+          </div>
+          {execution.books.map((book, index) => (
+            <section key={runtime.bookRows[index]?.key ?? book.id}>
+              <h3 className="text-sm font-semibold">{book.label || t('book.unnamed')}</h3>
+              <AllocationPreview
+                equity={equity}
+                targetExposure={exposure}
+                allocations={book.allocations
+                  .filter((item) => item.enabled)
+                  .map((item) => ({
+                    connectionId: item.connection_id,
+                    label:
+                      connections.find((connection) => connection.id === item.connection_id)?.label ??
+                      item.connection_id,
+                    weight: item.weight === '' ? '' : item.weight * 100,
+                  }))}
+              />
+            </section>
+          ))}
+        </Section>
+      </fieldset>
+      <ConfigurationSaveBar section="books" form={form.current} />
+    </form>
+  );
+}

@@ -46,4 +46,12 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-call': 'off',
     },
   },
+  {
+    files: ['playwright.workbench.config.ts'],
+    languageOptions: {
+      parserOptions: {
+        project: './tsconfig.workbench.json',
+      },
+    },
+  },
 );

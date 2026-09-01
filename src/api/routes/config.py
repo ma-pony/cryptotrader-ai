@@ -19,6 +19,7 @@ from cryptotrader.configuration.catalog import (
 from cryptotrader.execution.models import ExecutionBook  # noqa: TC001
 from cryptotrader.execution_ownership import wait_for_owned
 from cryptotrader.runtime_config.models import (
+    AccountsConfig,
     ExecutionConfig,
     HitlConfig,
     InfrastructureConfig,
@@ -32,7 +33,6 @@ from cryptotrader.runtime_config.models import (
     SchedulerConfig,
     SecurityConfig,
     SignalConfig,
-    SystemConfig,
     TriggerConfig,
     validate_runtime_document,
 )
@@ -86,17 +86,15 @@ class VenueConnectionOut(StrictOut):
 
 
 class ExecutionConfigOut(StrictOut):
+    pairs: list[str]
     connections: list[VenueConnectionOut]
     books: list[ExecutionBookOut]
     live_order_execution_enabled: bool
 
 
-class SystemConfigOut(StrictOut):
-    active: bool
-
-
 class MarketDataConfigOut(StrictOut):
     source_id: str
+    timeframe: str
     parameters: list[JsonEntryOut]
     news_credential_configured: bool
     news_credential_updated_at: datetime | None
@@ -153,7 +151,7 @@ class SignalConfigOut(StrictOut):
     max_target_ratio: float
     atr_stop_multiplier: float
     reward_ratio: float
-    hitl_required: bool
+    evaluation_interval: str | None
 
 
 class PositionConfigOut(StrictOut):
@@ -176,8 +174,8 @@ class HitlConfigOut(StrictOut):
 
 
 class SchedulerConfigOut(StrictOut):
+    automation_enabled: bool
     enabled: bool
-    pairs: list[str]
     interval_minutes: int
     daily_summary_hour: int
 
@@ -211,7 +209,7 @@ class ObservabilityConfigOut(StrictOut):
 
 
 class RuntimeDocumentOut(StrictOut):
-    system: SystemConfigOut
+    accounts: AccountsConfig
     security: SecurityConfigOut
     market_data: MarketDataConfigOut
     llm: LlmConfigOut
@@ -229,7 +227,6 @@ class RuntimeDocumentOut(StrictOut):
 class RuntimeConfigOut(StrictOut):
     revision: int
     updated_at: datetime
-    setup_required: bool
     apply_status: str
     applied_revision: int | None
     apply_error: str | None
@@ -263,13 +260,52 @@ class PluginFieldOut(StrictOut):
     options: list[FieldOptionOut]
 
 
+class EnvironmentDefinitionOut(StrictOut):
+    id: str
+    label: LocalizedTextOut
+    capital_scope: Literal["simulated", "real"]
+
+
+class CredentialFieldOut(StrictOut):
+    key: str
+    label: LocalizedTextOut
+    description: LocalizedTextOut
+    required: bool
+
+
+class VenueCapabilitiesDefinitionOut(StrictOut):
+    market_types: list[str]
+    native_protection: bool
+    hedge_mode: bool
+    reduce_only: bool
+    supported_order_types: list[str]
+    account_reads: list[str]
+    exit_operations: list[str]
+    history_initial_days: int | None
+    unknown_fields: list[str]
+
+
+class VenueDefinitionOut(StrictOut):
+    id: str
+    label: LocalizedTextOut
+    description: LocalizedTextOut
+    environment: EnvironmentDefinitionOut
+    fields: list[PluginFieldOut]
+    credential_fields: list[CredentialFieldOut]
+    margin_modes: list[str]
+    leverage_minimum: int
+    leverage_maximum: int | None
+    account_read: bool
+    capabilities: VenueCapabilitiesDefinitionOut | None
+
+
 class PluginDefinitionOut(StrictOut):
     id: str
     label: LocalizedTextOut
     description: LocalizedTextOut
     fields: list[PluginFieldOut]
-    environments: list[str]
-    credential_fields: list[str]
+    environments: list[EnvironmentDefinitionOut]
+    credential_fields: list[CredentialFieldOut]
     margin_modes: list[str]
 
 
@@ -317,6 +353,7 @@ class ExecutionConfigIn(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     connections: tuple[VenueConnectionDocumentIn, ...] = ()
+    pairs: tuple[str, ...] = ()
     books: tuple[ExecutionBook, ...] = ()
     live_order_execution_enabled: bool = False
 
@@ -324,7 +361,6 @@ class ExecutionConfigIn(BaseModel):
 class RuntimeDocumentIn(BaseModel):
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
-    system: SystemConfig
     security: SecurityConfig = SecurityConfig()
     market_data: MarketDataConfig
     llm: LlmConfig = LlmConfig()
@@ -332,6 +368,7 @@ class RuntimeDocumentIn(BaseModel):
     risk: RiskConfig = RiskConfig()
     execution: ExecutionConfigIn
     hitl: HitlConfig = HitlConfig()
+    accounts: AccountsConfig = AccountsConfig()
     scheduler: SchedulerConfig = SchedulerConfig()
     triggers: TriggerConfig = TriggerConfig()
     notifications: NotificationConfig = NotificationConfig()
@@ -350,9 +387,9 @@ def validate_document(runtime, document: RuntimeConfigDocument) -> None:
     try:
         validate_runtime_document(
             document,
-            set(runtime.signal_registry.installed_ids()),
-            set(runtime.venue_registry.installed_ids()),
-            set(runtime.market_registry.installed_ids()),
+            set(runtime.signal_registry.registered_ids()),
+            set(runtime.venue_registry.registered_ids()),
+            set(runtime.market_registry.registered_ids()),
         )
         validate_configuration_parameters(document)
     except (TypeError, ValueError) as error:
@@ -392,9 +429,55 @@ def _plugin_definition_out(value) -> PluginDefinitionOut:
         label=_localized_text_out(value.label),
         description=_localized_text_out(value.description),
         fields=[_plugin_field_out(field) for field in value.fields],
-        environments=list(value.environments),
-        credential_fields=list(value.credential_fields),
+        environments=[_environment_out(item) for item in value.environments],
+        credential_fields=[_credential_field_out(item) for item in value.credential_fields],
         margin_modes=list(value.margin_modes),
+    )
+
+
+def _environment_out(value) -> EnvironmentDefinitionOut:
+    return EnvironmentDefinitionOut(
+        id=value.id, label=_localized_text_out(value.label), capital_scope=value.capital_scope
+    )
+
+
+def _credential_field_out(value) -> CredentialFieldOut:
+    return CredentialFieldOut(
+        key=value.key,
+        label=_localized_text_out(value.label),
+        description=_localized_text_out(value.description),
+        required=value.required,
+    )
+
+
+def venue_definition(adapter_id: str, environment: str) -> VenueDefinitionOut:
+    definition = configuration_catalog().require_venue(adapter_id)
+    selected = definition.for_environment(environment)
+    capabilities = selected.capabilities
+    return VenueDefinitionOut(
+        id=selected.id,
+        label=_localized_text_out(selected.label),
+        description=_localized_text_out(selected.description),
+        environment=_environment_out(definition.require_environment(environment)),
+        fields=[_plugin_field_out(field) for field in selected.fields],
+        credential_fields=[_credential_field_out(field) for field in selected.credential_fields],
+        margin_modes=list(selected.margin_modes),
+        leverage_minimum=selected.leverage_minimum,
+        leverage_maximum=selected.leverage_maximum,
+        account_read=capabilities is not None and {"balances", "positions", "orders"} <= capabilities.account_reads,
+        capabilities=VenueCapabilitiesDefinitionOut(
+            market_types=sorted(capabilities.market_types),
+            native_protection=capabilities.native_protection,
+            hedge_mode=capabilities.hedge_mode,
+            reduce_only=capabilities.reduce_only,
+            supported_order_types=sorted(capabilities.supported_order_types),
+            account_reads=sorted(capabilities.account_reads),
+            exit_operations=sorted(capabilities.exit_operations),
+            history_initial_days=capabilities.history_initial_days,
+            unknown_fields=sorted(capabilities.unknown_fields),
+        )
+        if capabilities is not None
+        else None,
     )
 
 
@@ -406,8 +489,9 @@ def configuration_catalog_out(catalog: ConfigurationCatalog) -> ConfigurationCat
     )
 
 
-def server_credential_ref(connection_id: str, environment: ConnectionEnvironment) -> str | None:
-    return None if environment == "paper" else f"venue-connection:{connection_id}"
+def server_credential_ref(connection_id: str, adapter_id: str, environment: ConnectionEnvironment) -> str | None:
+    definition = configuration_catalog().require_venue(adapter_id).for_environment(environment)
+    return f"venue-connection:{connection_id}" if definition.credential_fields else None
 
 
 def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument) -> RuntimeConfigDocument:
@@ -423,7 +507,7 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
                 credential_ref=(
                     current_connections[item.id].credential_ref
                     if item.id in current_connections
-                    else server_credential_ref(item.id, item.environment)
+                    else server_credential_ref(item.id, item.adapter_id, item.environment)
                 ),
                 leverage=item.leverage,
                 margin_mode=item.margin_mode,
@@ -433,19 +517,21 @@ def document_from_input(body: RuntimeDocumentIn, current: RuntimeConfigDocument)
             for item in body.execution.connections
         )
         return RuntimeConfigDocument(
-            system=body.system,
             security=body.security,
             market_data=body.market_data,
             llm=body.llm,
             signals=body.signals,
             risk=body.risk,
             execution=ExecutionConfig(
+                pairs=body.execution.pairs,
                 connections=connections,
                 books=body.execution.books,
                 live_order_execution_enabled=body.execution.live_order_execution_enabled,
             ),
             hitl=body.hitl,
-            scheduler=body.scheduler,
+            accounts=body.accounts,
+            # Only the explicit runtime automation resource owns the total switch.
+            scheduler=body.scheduler.model_copy(update={"automation_enabled": current.scheduler.automation_enabled}),
             triggers=body.triggers,
             notifications=body.notifications,
             infrastructure=body.infrastructure,
@@ -466,13 +552,13 @@ def validate_connection_lifecycle(
 ) -> None:
     current_connections = {connection.id: connection for connection in current.execution.connections}
     replacement_connections = {connection.id: connection for connection in replacement.execution.connections}
-    if not current_connections.keys() <= replacement_connections.keys():
-        raise HTTPException(status_code=422, detail="Existing venue connections cannot be deleted")
     for connection_id, existing in current_connections.items():
-        candidate = replacement_connections[connection_id]
+        candidate = replacement_connections.get(connection_id)
+        if candidate is None:
+            continue
         if candidate.environment != existing.environment:
             raise HTTPException(status_code=422, detail="Connection environment cannot be changed")
-        if existing.enabled and not candidate.enabled and _enabled_book_references(current, connection_id):
+        if existing.enabled and not candidate.enabled and _enabled_book_references(replacement, connection_id):
             raise HTTPException(status_code=422, detail="Enabled book still references this connection")
 
 
@@ -536,12 +622,10 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
     return RuntimeConfigOut(
         revision=snapshot.revision,
         updated_at=snapshot.updated_at,
-        setup_required=snapshot.setup_required,
         apply_status=snapshot.apply_status,
         applied_revision=snapshot.applied_revision,
         apply_error=snapshot.apply_error,
         document=RuntimeDocumentOut(
-            system=SystemConfigOut(active=document.system.active),
             security=SecurityConfigOut(
                 enabled=document.security.enabled,
                 access_credential_configured=api_credential.configured,
@@ -549,6 +633,7 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
             ),
             market_data=MarketDataConfigOut(
                 source_id=document.market_data.source_id,
+                timeframe=document.market_data.timeframe,
                 parameters=json_entries_out(document.market_data.parameters),
                 news_credential_configured=news_credential.configured,
                 news_credential_updated_at=news_credential.updated_at,
@@ -601,7 +686,7 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                 max_target_ratio=document.signals.max_target_ratio,
                 atr_stop_multiplier=document.signals.atr_stop_multiplier,
                 reward_ratio=document.signals.reward_ratio,
-                hitl_required=document.signals.hitl_required,
+                evaluation_interval=document.signals.evaluation_interval,
             ),
             risk=RiskConfigOut(
                 position=PositionConfigOut(
@@ -614,14 +699,16 @@ async def config_out(repository, snapshot) -> RuntimeConfigOut:
                 ),
             ),
             execution=ExecutionConfigOut(
+                pairs=list(document.execution.pairs),
                 connections=list(connections),
                 books=books,
                 live_order_execution_enabled=document.execution.live_order_execution_enabled,
             ),
             hitl=HitlConfigOut(approval_ttl_minutes=document.hitl.approval_ttl_minutes),
+            accounts=document.accounts,
             scheduler=SchedulerConfigOut(
+                automation_enabled=document.scheduler.automation_enabled,
                 enabled=document.scheduler.enabled,
-                pairs=list(document.scheduler.pairs),
                 interval_minutes=document.scheduler.interval_minutes,
                 daily_summary_hour=document.scheduler.daily_summary_hour,
             ),
@@ -671,10 +758,23 @@ async def apply_document(
         raise HTTPException(status_code=503, detail="Runtime configuration cannot be applied") from None
     async with application_barrier(runtime):
         try:
-            saved = await runtime.repository.replace(expected_revision, document)
+            from api.routes.account_operations import operation_service
+            from cryptotrader.accounts.operations import removal_ids
+
+            if removal_ids(snapshot.document, document):
+                async with operation_service(runtime).removal_guard(snapshot.document, document):
+                    saved = await runtime.repository.replace(expected_revision, document)
+            else:
+                saved = await runtime.repository.replace(expected_revision, document)
         except RevisionConflict as error:
             await candidate.close()
             raise HTTPException(status_code=409, detail="Runtime configuration changed; reload and retry") from error
+        except Exception:
+            await candidate.close()
+            raise HTTPException(
+                status_code=409,
+                detail="账户移除被拒绝，请先停用并确认最新账户无持仓、无挂单",  # noqa: RUF001
+            ) from None
         return await publish_pending_snapshot(
             runtime,
             saved,
@@ -760,15 +860,9 @@ async def _fail_pending_application(runtime, pending, candidate, clear_owners) -
 
 
 async def validate_activation_prerequisites(repository, document: RuntimeConfigDocument) -> None:
-    if not document.system.active:
-        return
     required = []
     if document.security.enabled:
         required.append(API_ACCESS_CREDENTIAL_REF)
-    if any(
-        component.enabled and component.component_id == "llm_committee" for component in document.signals.components
-    ):
-        required.append(LLM_GATEWAY_CREDENTIAL_REF)
     for credential_ref in required:
         try:
             token = await repository.reveal_token(credential_ref)
@@ -790,7 +884,7 @@ async def get_configuration_catalog() -> ConfigurationCatalogOut:
     try:
         return configuration_catalog_out(configuration_catalog())
     except (TypeError, ValueError):
-        raise HTTPException(status_code=503, detail="Installed plugin configuration is unavailable") from None
+        raise HTTPException(status_code=503, detail="Backend-registered configuration is unavailable") from None
 
 
 @router.put("", response_model=RuntimeConfigOut)
@@ -809,6 +903,14 @@ async def put_config(body: PutRuntimeConfigIn, request: Request) -> RuntimeConfi
         getattr(request.app.state, "clear_runtime_owners", None),
     )
     return await config_out(runtime.repository, snapshot)
+
+
+@router.get("/catalog/venues/{adapter_id}", response_model=VenueDefinitionOut)
+async def get_venue_definition(adapter_id: str, environment: str) -> VenueDefinitionOut:
+    try:
+        return venue_definition(adapter_id, environment)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=422, detail="Venue environment is invalid") from None
 
 
 async def _put_runtime_token(

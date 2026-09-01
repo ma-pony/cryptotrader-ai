@@ -32,7 +32,6 @@ class SignalProfile:
     max_target_ratio: float
     atr_stop_multiplier: float
     reward_ratio: float
-    hitl_required: bool
     updated_at: datetime | None = None
 
 
@@ -46,7 +45,7 @@ def validate_signal_profile(profile: SignalProfile, installed_component_ids: Col
     installed = set(installed_component_ids)
     missing = sorted(set(component_ids) - installed)
     if missing:
-        raise ValueError(f"uninstalled components: {', '.join(missing)}")
+        raise ValueError(f"unregistered components: {', '.join(missing)}")
 
     enabled = tuple(item for item in profile.components if item.enabled)
     if not enabled:

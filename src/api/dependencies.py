@@ -23,12 +23,16 @@ def _commissioning_route_kind(request: Request) -> str | None:
     }:
         return "mutation"
     segments = request.url.path.split("/")
+    if len(segments) == 6 and segments[:5] == ["", "api", "config", "catalog", "venues"] and method == "GET":
+        return "read"
     if len(segments) == 4 and segments[:3] == ["", "api", "venue-connections"] and method == "PUT":
         return "mutation"
     if len(segments) == 5 and segments[:3] == ["", "api", "venue-connections"]:
-        if segments[4] == "credentials" and method == "PUT":
+        if segments[4] == "credentials" and method in {"PUT", "DELETE"}:
             return "mutation"
         if segments[4] == "test" and method == "POST":
+            return "read"
+        if segments[4] == "check" and method == "GET":
             return "read"
     return None
 
@@ -37,13 +41,30 @@ async def verify_api_key(request: Request):
     """Require the runtime-configured API key for protected endpoints."""
     runtime = getattr(request.app.state, "runtime", None)
     if runtime is None or getattr(runtime, "snapshot", None) is None:
+        if getattr(request.app.state, "migration_required", None) is not None:
+            raise HTTPException(status_code=503, detail="Workbench database migration required")
         raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")
     commissioning_route = _commissioning_route_kind(request)
-    if getattr(runtime, "application_in_progress", False) is True and commissioning_route != "mutation":
+    decision_read = request.method == "GET" and (
+        request.url.path == "/api/decisions"
+        or request.url.path.startswith("/api/decisions/")
+        or request.url.path == "/api/accounts"
+        or request.url.path.startswith("/api/accounts/")
+        or request.url.path.startswith("/api/account-operations/")
+        or (
+            len(request.url.path.split("/")) == 5
+            and request.url.path.startswith("/api/components/")
+            and request.url.path.endswith("/evaluations")
+        )
+    )
+    if (
+        getattr(runtime, "application_in_progress", False) is True
+        and commissioning_route != "mutation"
+        and not decision_read
+        and not (request.method == "GET" and request.url.path in {"/api/runtime/status", "/api/trading-runs/scope"})
+    ):
         raise HTTPException(status_code=503, detail="Runtime configuration is being applied")
     security = runtime.snapshot.document.security
-    if runtime.snapshot.setup_required is True and commissioning_route is None:
-        raise HTTPException(status_code=503, detail="Runtime configuration is unavailable")
     if not security.enabled:
         return
     key = request.headers.get("X-API-Key")

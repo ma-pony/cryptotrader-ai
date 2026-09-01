@@ -75,7 +75,7 @@ def _mock_event(
     event.rule_id = rule_id
     event.triggered_at = _now()
     event.trigger_reason = "BTC fell below 50000"
-    event.price_snapshot = {"pair": "BTC/USDT", "price": 49000.0}
+    event.price_snapshot = {"pair": "BTC/USDT", "price": 49000.0, "ts": 1_776_424_800.0}
     event.analysis_commit_id = None
     event.schedule_depth = 0
     event.cooldown_skipped = False
@@ -225,6 +225,17 @@ class TestListRules:
             resp = client.get("/api/scheduler/rules")
         assert resp.status_code == 200
         assert resp.json() == []
+
+    def test_rejects_persisted_parameters_for_a_different_trigger_type(
+        self, client: TestClient, store: AsyncMock
+    ) -> None:
+        rule = _mock_rule(trigger_type="price_threshold", parameters={"threshold_pct": 0.1})
+        store.list_rules = AsyncMock(return_value=[rule])
+
+        with _config_and_redis_patch()[1]:
+            resp = client.get("/api/scheduler/rules")
+
+        assert resp.status_code == 500
 
     def test_503_when_store_not_initialized(self) -> None:
         app = _make_app()  # no trigger_store on state
@@ -433,6 +444,24 @@ class TestListTriggers:
         resp = client.get("/api/scheduler/triggers?rule_id=rule-abc-123")
         assert resp.status_code == 200
         store.list_events.assert_awaited_once_with(1, 20, rule_id="rule-abc-123")
+
+    @pytest.mark.parametrize(
+        "price_snapshot",
+        [
+            {},
+            {"pair": "BTC/USDT", "price": 49000.0, "ts": 1_776_424_800.0, "unexpected": True},
+        ],
+    )
+    def test_rejects_empty_or_malformed_persisted_price_snapshots(
+        self, client: TestClient, store: AsyncMock, price_snapshot: dict
+    ) -> None:
+        event = _mock_event()
+        event.price_snapshot = price_snapshot
+        store.list_events = AsyncMock(return_value=([event], 1))
+
+        resp = client.get("/api/scheduler/triggers")
+
+        assert resp.status_code == 500
 
 
 # ---------------------------------------------------------------------------

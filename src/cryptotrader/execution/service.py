@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from contextlib import suppress
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from cryptotrader.execution.models import (
     NO_COMPENSATION,
@@ -24,6 +26,7 @@ from cryptotrader.venues.models import OrderIntent as VenueOrderIntent
 from cryptotrader.venues.protocol import VenueOperationError
 
 if TYPE_CHECKING:
+    from cryptotrader.venues.models import VenueConnection
     from cryptotrader.venues.protocol import VenueSession
 
 
@@ -38,23 +41,113 @@ class _FreshTransition:
     expected_amount: Decimal
     risk_increase: bool
     sign_flip: bool
+    frozen: bool = False
 
 
 class VenueExecutionService:
     """Execute one immutable plan against one bound normalized venue session."""
 
-    def __init__(self, session: VenueSession, *, live_order_execution_enabled: bool = False) -> None:
+    def __init__(
+        self,
+        session: VenueSession,
+        *,
+        connection: VenueConnection,
+        live_order_execution_enabled: bool = False,
+        account_store=None,
+    ) -> None:
+        from cryptotrader.configuration.catalog import require_environment
+
+        if connection.id != session.connection_id:
+            raise ValueError("connection must match the bound venue session")
         self.session = session
         self.connection_id = session.connection_id
+        self.capital_scope = require_environment(connection.adapter_id, connection.environment).capital_scope
         self.live_order_execution_enabled = live_order_execution_enabled
+        self.account_store = account_store
 
-    async def execute(self, plan: ConnectionExecutionPlan) -> ConnectionExecutionResult:
+    async def _replace_protection(self, plan, spec, trace):
+        protection = await self.session.replace_protection(spec)
+        if self.account_store is not None:
+            for order_id in protection.actual_order_ids:
+                try:
+                    await self.account_store.bind_order(
+                        plan.connection_id,
+                        None,
+                        venue_order_id=order_id,
+                        book_id=plan.book_id,
+                        decision_id=plan.decision_id,
+                    )
+                except Exception:
+                    trace.append("account_ledger")
+        return protection
+
+    async def _place_order(self, plan, intent, trace):
+        client_id = intent.client_order_id or uuid4().hex
+        intent = replace(intent, client_order_id=client_id)
+        await self._record_intent(plan, intent, trace)
+        return await self._submit_order(plan, intent, trace)
+
+    async def _record_intent(self, plan, intent, trace):
+        if self.account_store is not None:
+            try:
+                await self.account_store.bind_order(
+                    self.connection_id,
+                    intent.client_order_id,
+                    book_id=plan.book_id,
+                    decision_id=getattr(plan, "decision_id", None),
+                    operation_id=getattr(plan, "operation_id", None),
+                    source="manual" if hasattr(plan, "operation_id") else "strategy",
+                )
+            except Exception:
+                trace.append("account_ledger")
+                raise VenueOperationError("account ledger unavailable before submission") from None
+
+    async def _submit_order(self, plan, intent, trace):
+        client_id = intent.client_order_id
+        order = await self.session.place_order(intent)
+        if order.client_order_id is not None and order.client_order_id != client_id:
+            raise VenueOperationError("venue returned mismatched client order identity")
+        order = replace(order, client_order_id=client_id)
+        if self.account_store is not None:
+            try:
+                await self.account_store.bind_order(
+                    self.connection_id,
+                    client_id,
+                    book_id=plan.book_id,
+                    decision_id=getattr(plan, "decision_id", None),
+                    operation_id=getattr(plan, "operation_id", None),
+                    source="manual" if hasattr(plan, "operation_id") else "strategy",
+                    venue_order_id=order.id,
+                )
+                await self.account_store.record_order(self.connection_id, order)
+            except Exception:
+                # The venue receipt remains authoritative. Finish safety cleanup before reporting this failure.
+                trace.append("account_ledger")
+        return order
+
+    async def close_frozen(self, plan):
+        """Submit exactly the confirmed manual reduction using the same audit/receipt boundary."""
+        from cryptotrader.pair import Pair
+
+        if self.capital_scope == "real" and not self.live_order_execution_enabled:
+            raise PermissionError("尚未授权真实账户交易")
+        pair = Pair.parse(plan.pair)
+        amount = await self.session.normalize_amount(pair, plan.close_amount)
+        self._validate_normalized_amount(amount, plan.close_amount, exact=True)
+        intent = VenueOrderIntent(
+            pair, "sell" if plan.position_amount > 0 else "buy", amount, "market", None, pair.market_type != "spot"
+        )
+        trace = []
+        order = await self._place_order(plan, intent, trace)
+        self._validate_order(order, intent)
+        return order, "account_ledger" in trace
+
+    async def execute(self, plan: ConnectionExecutionPlan, *, frozen=False) -> ConnectionExecutionResult:
         if not isinstance(plan, ConnectionExecutionPlan):
             raise TypeError("plan must be a ConnectionExecutionPlan")
         if plan.connection_id != self.connection_id:
             raise ValueError("plan connection_id must match the bound venue session")
-        connection = getattr(self.session, "connection", None)
-        if getattr(connection, "environment", None) == "live" and not self.live_order_execution_enabled:
+        if self.capital_scope == "real" and not self.live_order_execution_enabled:
             return self._failed(plan, "execution_gate", trace=("execution_gate",))
         if self.session.capabilities != plan.capabilities:
             raise ValueError("session capabilities changed after proposal creation")
@@ -79,12 +172,18 @@ class VenueExecutionService:
         trace.append("pre_read")
         self._validate_fresh_inputs(plan, initial, quote)
 
-        transition = await self._fresh_transition(plan, initial, quote, trace)
+        transition = await self._fresh_transition(plan, initial, quote, trace, frozen=frozen)
         if isinstance(transition, ConnectionExecutionResult):
             return transition
         if transition.sign_flip:
-            return await self._execute_flip(plan, transition, trace)
-        return await self._execute_direct(plan, transition, trace)
+            result = await self._execute_flip(plan, transition, trace)
+        else:
+            result = await self._execute_direct(plan, transition, trace)
+        return (
+            replace(result, status="failed", error_operation="account_ledger", requires_attention=True)
+            if "account_ledger" in trace
+            else result
+        )
 
     async def _fresh_transition(
         self,
@@ -92,9 +191,18 @@ class VenueExecutionService:
         initial: OpenVenueState,
         quote: VenueQuote,
         trace: list[str],
+        *,
+        frozen=False,
     ) -> _FreshTransition | ConnectionExecutionResult:
         current = initial.position.signed_amount
-        target, delta, side = self._target_transition(plan, current, quote)
+        if frozen:
+            if current != plan.current_signed_amount:
+                return self._failed(plan, "approval_invalidated", trace=tuple(trace))
+            target = plan.post_fill_signed_amount
+            delta = plan.amount if plan.side == "buy" else -plan.amount
+            side = plan.side
+        else:
+            target, delta, side = self._target_transition(plan, current, quote)
         if (
             plan.pair.market_type != "spot"
             and target != 0
@@ -125,11 +233,17 @@ class VenueExecutionService:
                     execution_quote=quote,
                 )
             self._validate_normalized_amount(normalized, abs(delta))
+            if frozen and normalized != plan.amount:
+                return self._failed(plan, "approval_invalidated", trace=tuple(trace))
             expected = current + (normalized if side == "buy" else -normalized)
-            if not sign_flip and not self._notional_within_spread(
-                expected,
-                plan.target_signed_notional,
-                quote,
+            if (
+                not frozen
+                and not sign_flip
+                and not self._notional_within_spread(
+                    expected,
+                    plan.target_signed_notional,
+                    quote,
+                )
             ):
                 final = self._summarize(initial)
                 return self._failed(
@@ -143,7 +257,9 @@ class VenueExecutionService:
                     target_amount=target,
                     execution_quote=quote,
                 )
-        return _FreshTransition(initial, quote, target, delta, side, normalized, expected, risk_increase, sign_flip)
+        return _FreshTransition(
+            initial, quote, target, delta, side, normalized, expected, risk_increase, sign_flip, frozen
+        )
 
     async def _execute_direct(
         self,
@@ -164,7 +280,7 @@ class VenueExecutionService:
             )
             trace.append("place_order")
             try:
-                order = await self.session.place_order(intent)
+                order = await self._place_order(plan, intent, trace)
             except VenueOperationError:
                 return await self._failed_after_order_error(plan, transition, orders, trace, "place_order")
             self._validate_order(order, intent)
@@ -207,7 +323,7 @@ class VenueExecutionService:
         )
         trace.append("close_old_side")
         try:
-            close_order = await self.session.place_order(close_intent)
+            close_order = await self._place_order(plan, close_intent, trace)
         except VenueOperationError:
             return await self._failed_after_flip_close(
                 plan,
@@ -277,7 +393,7 @@ class VenueExecutionService:
         open_intent = VenueOrderIntent(plan.pair, open_side, open_amount, "market", None, False)
         trace.append("open_target_side")
         try:
-            open_order = await self.session.place_order(open_intent)
+            open_order = await self._place_order(plan, open_intent, trace)
         except VenueOperationError:
             return await self._failed_after_flip_open_error(plan, transition, orders, trace)
         self._validate_order(open_order, open_intent)
@@ -293,6 +409,7 @@ class VenueExecutionService:
             expected,
             True,
             True,
+            transition.frozen,
         )
         if not self._fully_filled(open_order):
             return await self._handle_incomplete_order(
@@ -314,7 +431,9 @@ class VenueExecutionService:
         open_side: str,
     ) -> Decimal | ConnectionExecutionResult:
         execution_price = transition.quote.ask if open_side == "buy" else transition.quote.bid
-        requested = abs(plan.target_signed_notional / execution_price)
+        requested = (
+            abs(transition.target_amount) if transition.frozen else abs(plan.target_signed_notional / execution_price)
+        )
         try:
             amount = await self.session.normalize_amount(plan.pair, requested)
         except VenueOperationError:
@@ -328,7 +447,10 @@ class VenueExecutionService:
             )
         self._validate_normalized_amount(amount, requested)
         signed_amount = amount if open_side == "buy" else -amount
-        if not self._notional_within_spread(signed_amount, plan.target_signed_notional, transition.quote):
+        if (transition.frozen and amount != requested) or (
+            not transition.frozen
+            and not self._notional_within_spread(signed_amount, plan.target_signed_notional, transition.quote)
+        ):
             return await self._failed_while_flat(
                 plan,
                 orders,
@@ -437,7 +559,7 @@ class VenueExecutionService:
         )
         trace.append("replace_protection")
         try:
-            protection = await self.session.replace_protection(spec)
+            protection = await self._replace_protection(plan, spec, trace)
         except VenueOperationError:
             if transition.risk_increase and orders and orders[-1].filled_amount > 0:
                 return await self._compensate(
@@ -506,7 +628,16 @@ class VenueExecutionService:
                 target_amount=expected,
                 execution_quote=transition.quote,
             )
-        return self._completed(plan, expected, tuple(orders), protection, final, tuple(trace), transition.quote)
+        return self._completed(
+            plan,
+            expected,
+            tuple(orders),
+            protection,
+            final,
+            tuple(trace),
+            transition.quote,
+            quantity_frozen=transition.frozen,
+        )
 
     async def _finish_spot_nonflat(
         self,
@@ -568,6 +699,7 @@ class VenueExecutionService:
             final,
             tuple(trace),
             transition.quote,
+            quantity_frozen=transition.frozen,
         )
 
     async def _handle_incomplete_order(
@@ -640,12 +772,16 @@ class VenueExecutionService:
             "market",
             None,
             True,
+            client_order_id=uuid4().hex,
         )
         trace.append("compensate_order")
         compensation_order: NormalizedOrder | None = None
         compensation_operation = ""
         try:
-            compensation_order = await self.session.place_order(compensation_intent)
+            # Only this existing reduce-only recovery of proven added exposure may proceed without audit.
+            with suppress(VenueOperationError):
+                await self._record_intent(plan, compensation_intent, trace)
+            compensation_order = await self._submit_order(plan, compensation_intent, trace)
             self._validate_order(compensation_order, compensation_intent)
             if not self._fully_filled(compensation_order):
                 compensation_operation = "incomplete_fill"
@@ -730,7 +866,7 @@ class VenueExecutionService:
                     prior.take_profit,
                 )
                 try:
-                    required = await self.session.replace_protection(spec)
+                    required = await self._replace_protection(plan, spec, trace)
                     self._validate_protection_response(required, spec)
                 except VenueOperationError:
                     operation = "restore_protection"
@@ -1214,6 +1350,8 @@ class VenueExecutionService:
         final_position: ExecutionFinalPosition,
         trace: tuple[str, ...],
         execution_quote: VenueQuote,
+        *,
+        quantity_frozen=False,
     ) -> ConnectionExecutionResult:
         return ConnectionExecutionResult(
             plan.book_id,
@@ -1230,4 +1368,5 @@ class VenueExecutionService:
             False,
             trace,
             execution_quote,
+            quantity_frozen,
         )

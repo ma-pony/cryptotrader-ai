@@ -5,7 +5,7 @@ import { buildApiUrl } from './api-url';
 describe('buildApiUrl', () => {
   it('keeps API requests same-origin when the configured base is empty', () => {
     expect(buildApiUrl('/api/config', '')).toBe('/api/config');
-    expect(buildApiUrl('api/chat/stream', '')).toBe('/api/chat/stream');
+    expect(buildApiUrl('api/analyses', '')).toBe('/api/analyses');
   });
 
   it('joins API paths to an explicit absolute deployment override', () => {
@@ -21,9 +21,9 @@ describe('buildApiUrl', () => {
   });
 
   it('normalizes repeated leading slashes without creating a protocol-relative URL', () => {
-    expect(buildApiUrl('//api/chat/stream', '')).toBe('/api/chat/stream');
-    expect(buildApiUrl('///api/chat/stream', 'https://api.example.com/')).toBe(
-      'https://api.example.com/api/chat/stream',
+    expect(buildApiUrl('//api/analyses', '')).toBe('/api/analyses');
+    expect(buildApiUrl('///api/analyses', 'https://api.example.com/')).toBe(
+      'https://api.example.com/api/analyses',
     );
   });
 });

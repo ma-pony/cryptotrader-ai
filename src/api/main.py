@@ -17,11 +17,13 @@ from fastapi.responses import JSONResponse
 
 from api.dependencies import verify_api_key
 from api.routes import (
+    account_operations,
+    accounts,
+    alerts,
+    analyses,
     backtest,
-    chat,
-    chat_control,
+    components,
     config,
-    cycles,
     decisions,
     events,
     health,
@@ -30,12 +32,13 @@ from api.routes import (
     memory,
     metrics,
     portfolio_books,
-    portfolio_v2,
-    risk,
+    runtime_status,
     scheduler,
     skills,
+    trading_runs,
     venues,
 )
+from cryptotrader.migrations.schema import MigrationRequired
 from cryptotrader.tracing import set_trace_id
 
 logger = logging.getLogger(__name__)
@@ -50,57 +53,88 @@ async def lifespan(_app: FastAPI):
     """Startup/shutdown lifecycle."""
     from cryptotrader.log_config import setup_logging
 
-    await _init_runtime(_app)
-    _app.state.refresh_runtime_owners = lambda snapshot=None: _refresh_runtime_owners(_app, snapshot=snapshot)
-    _app.state.clear_runtime_owners = lambda: _clear_runtime_owners(_app)
-    runtime = _app.state.runtime
-    setup_logging(runtime.snapshot.document)
+    runtime = None
+    try:
+        await _init_runtime(_app)
+        _app.state.migration_required = None
+        _app.state.refresh_runtime_owners = lambda snapshot=None: _refresh_runtime_owners(_app, snapshot=snapshot)
+        _app.state.clear_runtime_owners = lambda: _clear_runtime_owners(_app)
+        runtime = _app.state.runtime
+        runtime.refresh_owners = _app.state.refresh_runtime_owners
+        runtime.clear_owners = _app.state.clear_runtime_owners
+        setup_logging(runtime.snapshot.document)
 
-    from cryptotrader.otel import setup_otel
+        from cryptotrader.otel import setup_otel
 
-    setup_otel(runtime.snapshot.document)
-    active = not runtime.snapshot.setup_required
+        setup_otel(runtime.snapshot.document)
+        if runtime.backtest_service is not None:
+            await runtime.backtest_service.store.recover_interrupted()
+        # Each owner observes its own source flag; admission also checks the
+        # persisted automation switch before every new run.
+        await _init_trigger_engine(_app)
+        await _init_scheduler(_app)
+        await _init_account_sync(_app)
+        await _init_evaluations(_app)
+        _init_alerts(_app)
+    except MigrationRequired as error:
+        if runtime is not None:
+            await _shutdown_runtime_owners(_app, runtime)
+        _app.state.runtime = None
+        _app.state.migration_required = error
+        yield
+        return
 
     try:
-        if active:
-            # Initialize trigger engine if enabled
-            await _init_trigger_engine(_app)
-
-            # Initialize trading scheduler if enabled
-            await _init_scheduler(_app)
-
         yield
     finally:
-        await _shutdown_runtime_owners(_app, runtime, active=active)
+        assert runtime is not None
+        await _shutdown_runtime_owners(_app, runtime)
         logger.info("Shutting down")
 
 
 async def _init_runtime(app_instance: FastAPI) -> None:
+    from cryptotrader.bootstrap import BootstrapSettings
+    from cryptotrader.migrations.workbench import require_workbench_schema
     from cryptotrader.runtime import build_runtime
 
-    app_instance.state.runtime = await build_runtime()
+    settings = BootstrapSettings.from_environment()
+    await require_workbench_schema(settings.database_url)
+    app_instance.state.runtime = await build_runtime(settings)
 
 
-async def _shutdown_runtime_owners(app_instance: FastAPI, runtime, *, active: bool) -> None:
+async def _shutdown_observation_owners(app_instance: FastAPI) -> list[BaseException]:
     failures: list[BaseException] = []
-    if active:
-        try:
-            from cryptotrader.chat.task_manager import BackgroundTaskManager
-
-            await BackgroundTaskManager.get_instance().drain()
-        except BaseException as error:
-            failures.append(error)
-        try:
-            await _shutdown_scheduler(app_instance)
-        except BaseException as error:
-            failures.append(error)
-
-        trigger_engine = getattr(app_instance.state, "trigger_engine", None)
-        if trigger_engine is not None:
+    for name in ("alert_owner", "evaluation_owner", "account_sync_owner"):
+        owner = getattr(app_instance.state, name, None)
+        if owner is not None:
             try:
-                await trigger_engine.stop()
+                await owner.stop()
             except BaseException as error:
                 failures.append(error)
+            finally:
+                setattr(app_instance.state, name, None)
+    return failures
+
+
+async def _shutdown_runtime_owners(app_instance: FastAPI, runtime) -> None:
+    failures = await _shutdown_observation_owners(app_instance)
+    try:
+        from cryptotrader.tasks import BackgroundTaskManager
+
+        await BackgroundTaskManager.get_instance().shutdown()
+    except BaseException as error:
+        failures.append(error)
+    try:
+        await _shutdown_scheduler(app_instance)
+    except BaseException as error:
+        failures.append(error)
+
+    trigger_engine = getattr(app_instance.state, "trigger_engine", None)
+    if trigger_engine is not None:
+        try:
+            await trigger_engine.stop()
+        except BaseException as error:
+            failures.append(error)
 
     try:
         await runtime.close()
@@ -145,10 +179,36 @@ async def _refresh_runtime_owners(app_instance, *, snapshot=None) -> None:
     await _clear_runtime_owners(app_instance)
     runtime = app_instance.state.runtime
     owner_snapshot = snapshot or runtime.snapshot
-    if not owner_snapshot.document.system.active:
-        return
+    owner = getattr(app_instance.state, "account_sync_owner", None)
+    if owner is not None:
+        owner.refresh()
     await _init_trigger_engine(app_instance, snapshot=owner_snapshot)
     await _init_scheduler(app_instance, snapshot=owner_snapshot)
+
+
+async def _init_account_sync(app_instance: FastAPI) -> None:
+    from cryptotrader.accounts.sync import AccountSyncOwner
+
+    runtime = app_instance.state.runtime
+    await runtime.account_operations.store.recover_interrupted()
+    owner = AccountSyncOwner(runtime.account_sync, runtime.repository)
+    app_instance.state.account_sync_owner = owner
+    owner.start()
+
+
+async def _init_evaluations(app_instance: FastAPI) -> None:
+    from cryptotrader.signals.evaluation import EvaluationOwner
+
+    owner = EvaluationOwner(app_instance.state.runtime.evaluation_service)
+    app_instance.state.evaluation_owner = owner
+    owner.start()
+
+
+def _init_alerts(app_instance: FastAPI) -> None:
+    owner = getattr(app_instance.state.runtime, "alert_owner", None)
+    app_instance.state.alert_owner = owner
+    if owner is not None:
+        owner.start()
 
 
 async def _init_trigger_engine(app_instance: FastAPI, *, snapshot=None) -> None:
@@ -181,11 +241,7 @@ async def _init_trigger_engine(app_instance: FastAPI, *, snapshot=None) -> None:
 
     async def _trigger_callback(pair: str, meta: dict) -> None:
         logger.info("Trigger fired for %s: %s", pair, meta)
-        from cryptotrader.decision.models import CycleRequest
-        from cryptotrader.pair import Pair
-
-        async with runtime.execution_lease(pair) as cycle:
-            await cycle.run(CycleRequest(Pair.parse(pair)))
+        await runtime.run_service.run_automatic(pair, "trigger")
 
     engine = PriceTriggerEngine(store, redis_state, _trigger_callback, config.triggers)
     await engine.start()
@@ -228,7 +284,7 @@ async def _init_scheduler(app_instance: FastAPI, *, snapshot=None) -> None:
         await task
     logger.info(
         "Scheduler autostarted: pairs=%s interval=%dm daily_summary_hour=%d",
-        list(config.scheduler.pairs),
+        list(config.execution.pairs),
         config.scheduler.interval_minutes,
         config.scheduler.daily_summary_hour,
     )
@@ -277,6 +333,11 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"detail": "Internal server error"},
     )
+
+
+@app.exception_handler(MigrationRequired)
+async def migration_required_handler(_request: Request, _exc: MigrationRequired):
+    return JSONResponse(status_code=503, content={"detail": "Workbench database migration required"})
 
 
 @app.exception_handler(RequestValidationError)
@@ -431,24 +492,25 @@ async def trace_middleware(request: Request, call_next):
 
 
 # -- Routes --
-# /health, /metrics and /scheduler/status are public (load balancer probes / Dashboard polling)
+# /health and /metrics are public load-balancer probes.
 app.include_router(health.router)
 app.include_router(metrics.router)
-app.include_router(scheduler.router)
 
 # Protected routes require API key
-app.include_router(portfolio_v2.router, dependencies=[Depends(verify_api_key)])
 app.include_router(config.router, dependencies=[Depends(verify_api_key)])
 app.include_router(venues.router, dependencies=[Depends(verify_api_key)])
 app.include_router(portfolio_books.router, dependencies=[Depends(verify_api_key)])
-app.include_router(cycles.router, dependencies=[Depends(verify_api_key)])
+app.include_router(accounts.router, dependencies=[Depends(verify_api_key)])
+app.include_router(account_operations.router, dependencies=[Depends(verify_api_key)])
+app.include_router(alerts.router, dependencies=[Depends(verify_api_key)])
 app.include_router(decisions.router, dependencies=[Depends(verify_api_key)])
+app.include_router(components.router, dependencies=[Depends(verify_api_key)])
+app.include_router(analyses.router, dependencies=[Depends(verify_api_key)])
+app.include_router(runtime_status.router, dependencies=[Depends(verify_api_key)])
+app.include_router(trading_runs.router, dependencies=[Depends(verify_api_key)])
 app.include_router(backtest.router, dependencies=[Depends(verify_api_key)])
-app.include_router(risk.router, dependencies=[Depends(verify_api_key)])
 app.include_router(scheduler.api_router, dependencies=[Depends(verify_api_key)])
 app.include_router(metrics.api_router, dependencies=[Depends(verify_api_key)])
-app.include_router(chat.router, dependencies=[Depends(verify_api_key)])
-app.include_router(chat_control.router, dependencies=[Depends(verify_api_key)])
 app.include_router(hitl.router, dependencies=[Depends(verify_api_key)])
 app.include_router(market.router, dependencies=[Depends(verify_api_key)])
 app.include_router(memory.router, prefix="/api/memory", dependencies=[Depends(verify_api_key)])

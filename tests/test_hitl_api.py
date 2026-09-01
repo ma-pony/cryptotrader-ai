@@ -17,6 +17,7 @@ from cryptotrader.decision.models import CycleOutcome, TargetPosition
 from cryptotrader.hitl.store import ApprovalStateError, BookApprovalStore
 from cryptotrader.pair import Pair
 from cryptotrader.runtime import Runtime
+from cryptotrader.venues.registry import VenueAdapterRegistry
 from tests.runtime_lease import static_cycle_lease
 from tests.test_multi_venue_journal import _proposal_for
 from tests.test_runtime_config_api import api_harness
@@ -56,9 +57,16 @@ async def _seed(cycle: _Cycle, approval_id: str = "approval-1"):
 
 def _mount_cycle(api_harness, cycle: _Cycle) -> None:
     api_harness.runtime.cycle = cycle
+    api_harness.runtime.approvals = cycle.approvals
+    api_harness.runtime.approval_reader = lambda: cycle
+    api_harness.runtime.repository.get_or_create = AsyncMock(
+        return_value=replace(api_harness.runtime.snapshot, revision=9)
+    )
     api_harness.runtime.cycle_lease = static_cycle_lease(cycle)
 
-    def execution_lease(pair: str):
+    def execution_lease(pair: str, *, expected_revision, confirmed_book_ids):
+        assert expected_revision == 9
+        assert confirmed_book_ids == ("live",)
         cycle.execution_lease_pairs.append(pair)
         return static_cycle_lease(cycle)()
 
@@ -278,7 +286,9 @@ async def test_unknown_approval_returns_not_found(api_harness):
     assert response.status_code == 404
 
 
-async def test_inactive_runtime_returns_fixed_unavailable_for_respond_and_detail(api_harness):
+async def test_approval_reads_do_not_require_an_active_execution_cycle(api_harness):
+    cycle = _Cycle()
+    _mount_cycle(api_harness, cycle)
     api_harness.runtime.cycle = None
 
     respond = await api_harness.client.post(
@@ -287,10 +297,10 @@ async def test_inactive_runtime_returns_fixed_unavailable_for_respond_and_detail
     )
     detail = await api_harness.client.get("/api/hitl/approval-1")
 
-    assert respond.status_code == 503
-    assert respond.json() == {"detail": "Trading runtime is not active"}
-    assert detail.status_code == 503
-    assert detail.json() == {"detail": "Trading runtime is not active"}
+    assert respond.status_code == 404
+    assert respond.json() == {"detail": "Approval request not found"}
+    assert detail.status_code == 404
+    assert detail.json() == {"detail": "Approval request not found"}
 
 
 async def test_concurrent_runtime_close_during_lease_acquisition_returns_fixed_unavailable(api_harness):
@@ -303,12 +313,14 @@ async def test_concurrent_runtime_close_during_lease_acquisition_returns_fixed_u
         sessions={},
         signal_registry=object(),
         market_registry=object(),
-        venue_registry=object(),
+        venue_registry=VenueAdapterRegistry(),
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
     # This lifecycle test isolates Runtime graph ownership; Redis admission is
     # covered separately by execution-lease tests.
-    runtime.execution_lease = lambda _pair: runtime.cycle_lease()
+    runtime.approvals = cycle.approvals
+    runtime.repository.get_or_create = AsyncMock(return_value=replace(runtime.snapshot, revision=9))
+    runtime.execution_lease = lambda _pair, **_scope: runtime.cycle_lease()
     lease_entered = asyncio.Event()
     original_lease = runtime.cycle_lease
 
@@ -436,17 +448,19 @@ async def test_approve_lease_pins_session_during_claim_reload_and_runtime_close(
         sessions={"old": old_session},
         signal_registry=object(),
         market_registry=object(),
-        venue_registry=object(),
+        venue_registry=VenueAdapterRegistry(),
         events=MultiplexedCycleEventSink(NullCycleEventSink()),
     )
     # This lifecycle test owns a graph lease directly.  Its fake cycle is not
     # backed by a real Redis server, so keep the production HITL entrypoint on
     # the same lifecycle boundary without trying to test distributed admission
     # a second time here.
-    runtime.execution_lease = lambda _pair: runtime.cycle_lease()
+    runtime.approvals = cycle.approvals
+    runtime.repository.get_or_create = AsyncMock(return_value=replace(runtime.snapshot, revision=9))
+    runtime.execution_lease = lambda _pair, **_scope: runtime.cycle_lease()
     reload_calls = 0
 
-    async def reload_graph():
+    async def reload_graph(**_scope):
         nonlocal reload_calls
         reload_calls += 1
         if reload_calls == 2:

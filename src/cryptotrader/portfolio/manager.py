@@ -8,13 +8,13 @@ from datetime import datetime
 from typing import Any
 
 from cryptotrader._compat import UTC
-from cryptotrader.db import get_async_session, get_engine
+from cryptotrader.db import get_async_session
 from cryptotrader.pair import market_type_for as _market_type_for
 
 logger = logging.getLogger(__name__)
 
 
-# Track which URLs have had their schema initialised
+# Track which URLs have had their schema validated.
 _pm_table_ready: set[str] = set()
 
 # Singleton cache for SQLAlchemy model classes
@@ -90,49 +90,13 @@ def _pm_models():
 
 
 async def _pm_ensure_tables(database_url: str) -> None:
-    """Create portfolio schema on first call per database URL.
-
-    Mirrors the pattern in journal/store.py: ``create_all`` only adds new
-    tables, not new columns. spec-013 added ``portfolios.market_type``
-    after some deployments already had the table — backfill it here.
-    """
-    from sqlalchemy import text
+    """Require the explicitly migrated portfolio schema."""
 
     if database_url not in _pm_table_ready:
+        from cryptotrader.migrations.schema import require_tables
+
         Base, *_ = _pm_models()
-        engine = await get_engine(database_url)
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-            dialect = conn.dialect.name
-            if dialect == "postgresql":
-                # Idempotent — both ADD COLUMN IF NOT EXISTS and ALTER COLUMN TYPE
-                # are no-ops on already-migrated tables. Type widening (20→50) does
-                # not require a table rewrite and holds ACCESS EXCLUSIVE briefly.
-                await conn.execute(
-                    text(
-                        "ALTER TABLE portfolios "
-                        "ADD COLUMN IF NOT EXISTS market_type VARCHAR(20) NOT NULL DEFAULT 'spot'"
-                    )
-                )
-                await conn.execute(
-                    text(
-                        "ALTER TABLE portfolios "
-                        "ADD COLUMN IF NOT EXISTS unrealized_pnl DOUBLE PRECISION NOT NULL DEFAULT 0.0"
-                    )
-                )
-                await conn.execute(text("ALTER TABLE portfolios ALTER COLUMN pair TYPE VARCHAR(50)"))
-            elif dialect == "sqlite":
-                result = await conn.execute(text("PRAGMA table_info(portfolios)"))
-                existing = {row[1] for row in result.fetchall()}
-                if "market_type" not in existing:
-                    await conn.execute(
-                        text("ALTER TABLE portfolios ADD COLUMN market_type VARCHAR(20) NOT NULL DEFAULT 'spot'")
-                    )
-                if "unrealized_pnl" not in existing:
-                    await conn.execute(
-                        text("ALTER TABLE portfolios ADD COLUMN unrealized_pnl REAL NOT NULL DEFAULT 0.0")
-                    )
-                # SQLite ignores VARCHAR length — pair widening is a no-op there.
+        await require_tables(database_url, Base.metadata.tables)
         _pm_table_ready.add(database_url)
 
 

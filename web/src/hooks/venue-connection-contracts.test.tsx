@@ -52,12 +52,12 @@ it('sends credentials outside mutation storage and preserves acknowledged metada
   const saved = await result.current.putCredentials({
     id: 'paper',
     expectedRevision: 1,
-    credentials: { api_key: 'fake-key', secret: 'fake-signing' }, // pragma: allowlist secret -- test fixture
+    values: { api_key: 'fake-key', secret: 'fake-signing' }, // pragma: allowlist secret -- test fixture
   });
   expect(saved.savedNeedsReload).toBe(true);
   expect(JSON.parse((request.mock.calls[0]![1] as RequestInit).body as string)).toEqual({
     expected_revision: 1,
-    credentials: { api_key: 'fake-key', secret: 'fake-signing' }, // pragma: allowlist secret -- test fixture
+    values: { api_key: 'fake-key', secret: 'fake-signing' }, // pragma: allowlist secret -- test fixture
   });
   expect(client.getQueryData(RUNTIME_CONFIG_QUERY_KEY)).toMatchObject({
     revision: 2,

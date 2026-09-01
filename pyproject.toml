@@ -66,17 +66,6 @@ otel = [
 [project.scripts]
 trader = "cli.main:app"
 
-[project.entry-points."cryptotrader.signal_components"]
-kronos = "cryptotrader.signals.components.kronos:create_component"
-llm_committee = "cryptotrader.signals.components.llm_committee:create_component"
-
-[project.entry-points."cryptotrader.market_sources"]
-default = "cryptotrader.market_sources.default:create_source"
-
-[project.entry-points."cryptotrader.venue_adapters"]
-okx = "cryptotrader.venues.okx:create_adapter"
-bybit = "cryptotrader.venues.bybit:create_adapter"
-paper = "cryptotrader.venues.paper:create_adapter"
 
 [tool.uv.sources]
 # Production runs Kronos inference on CPU.  PyPI's Linux torch wheels pull the
@@ -98,6 +87,9 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "--cov=src --cov-report=term-missing --cov-fail-under=70 --cov-branch"
+markers = [
+    "benchmark: performance benchmark contract",
+]
 
 [tool.coverage.run]
 omit = [

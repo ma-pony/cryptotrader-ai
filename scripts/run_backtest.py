@@ -24,17 +24,23 @@ def _arguments() -> argparse.Namespace:
 
 
 async def main() -> None:
-    from cryptotrader.backtest.engine import BacktestEngine
+    from cryptotrader.backtest.models import BacktestParams
+    from cryptotrader.backtest.service import configured_service
 
     args = _arguments()
-    engine = BacktestEngine(
-        pair=args.pair,
-        start=args.start,
-        end=args.end,
-        interval=args.interval,
-        initial_capital=args.capital,
+    run = await configured_service().run(
+        BacktestParams(
+            pair=args.pair,
+            start=args.start,
+            end=args.end,
+            interval=args.interval,
+            initial_equity=args.capital,
+        )
     )
-    result = await engine.run()
+    print(f"run: {run.run_id} · {run.status} · /research/{run.run_id}")
+    if run.status != "completed":
+        raise RuntimeError(run.error)
+    result = run.result
     print(json.dumps(result.summary(), ensure_ascii=False, indent=2))
     print(f"config revisions: {sorted(set(result.config_revisions))}")
     print(f"cycles: {len(result.cycle_ids)}")

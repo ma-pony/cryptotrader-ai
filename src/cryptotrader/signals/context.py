@@ -110,9 +110,11 @@ class HistoricalSignalContextProvider:
         history: Mapping[str, DataSnapshot] | Callable[[str, datetime], DataSnapshot],
         *,
         default_timeframe: str,
+        source_id: str = "historical",
     ) -> None:
         self.history = history
         self.default_timeframe = default_timeframe
+        self.id = source_id
 
     def _snapshot(self, timeframe: str, as_of: datetime) -> DataSnapshot:
         if callable(self.history):
@@ -121,6 +123,44 @@ class HistoricalSignalContextProvider:
 
     def requirements(self) -> DataRequirements:
         return DataRequirements()
+
+    async def read_candles(self, pair, timeframe, start, end, as_of):
+        """Read only the supplied historical evidence, never a live fallback."""
+        from decimal import Decimal
+
+        import pandas as pd
+
+        from cryptotrader.market_sources.protocol import HistoricalCandle
+        from cryptotrader.signals.presentation import interval_delta
+
+        if any(value.utcoffset() is None for value in (start, end, as_of)) or start >= end:
+            raise ValueError("historical window requires increasing aware timestamps")
+        try:
+            snapshot = self._snapshot(timeframe, as_of)
+        except KeyError:
+            return ()
+        if snapshot.market.pair != pair.canonical():
+            return ()
+        frame = snapshot.market.ohlcv
+        fields = ("open", "high", "low", "close", "volume")
+        if not all(name in frame for name in fields) or frame.empty:
+            return ()
+        if "timestamp" in frame:
+            raw = frame["timestamp"]
+            opened = pd.to_datetime(raw, unit="ms" if pd.api.types.is_numeric_dtype(raw) else None, utc=True)
+        elif isinstance(frame.index, pd.DatetimeIndex):
+            opened = pd.to_datetime(frame.index, utc=True)
+        else:
+            return ()
+        delta = interval_delta(timeframe)
+        return tuple(
+            HistoricalCandle(
+                open_time=time.to_pydatetime(),
+                **{name: Decimal(str(value)) for name, value in zip(fields, values, strict=True)},
+            )
+            for time, values in zip(opened, frame[list(fields)].itertuples(index=False, name=None), strict=True)
+            if start <= time < end and time + delta <= as_of
+        )
 
     async def collect(self, pair, as_of, requirements) -> SignalContext:
         snapshots = {

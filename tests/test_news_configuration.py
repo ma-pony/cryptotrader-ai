@@ -5,10 +5,8 @@ import asyncio
 import httpx
 import pytest
 
-from cryptotrader.runtime_config.models import SecurityConfig, SystemConfig
+from cryptotrader.runtime_config.models import SecurityConfig
 from cryptotrader.runtime_config.secrets import TokenPayload
-
-pytest_plugins = ("tests.test_runtime_config_api",)
 
 
 async def test_inactive_news_token_requires_the_configured_api_key(api_harness):
@@ -16,9 +14,7 @@ async def test_inactive_news_token_requires_the_configured_api_key(api_harness):
     snapshot = await runtime.repository.put_token(
         runtime.snapshot.revision, "api-access", TokenPayload(token="fixture-access")
     )
-    document = snapshot.document.model_copy(
-        update={"system": SystemConfig(active=False), "security": SecurityConfig(enabled=True)}
-    )
+    document = snapshot.document.model_copy(update={"security": SecurityConfig(enabled=True)})
     pending = await runtime.repository.replace(snapshot.revision, document)
     runtime.snapshot = await runtime.repository.mark_applied(pending.revision)
     revision = runtime.snapshot.revision
@@ -30,13 +26,13 @@ async def test_inactive_news_token_requires_the_configured_api_key(api_harness):
         )
         assert response.status_code == expected
         assert "fixture-news-secret" not in response.text
-    assert runtime.snapshot.document.system.active is False
+    assert runtime.snapshot.document.scheduler.automation_enabled is False
 
 
 async def test_news_mutation_waits_for_actual_apply_barrier_without_persisting_early(api_harness):
     runtime = api_harness.runtime
     pending = await runtime.repository.replace(
-        runtime.snapshot.revision, runtime.snapshot.document.model_copy(update={"system": SystemConfig(active=False)})
+        runtime.snapshot.revision, runtime.snapshot.document.model_copy(update={})
     )
     runtime.snapshot = await runtime.repository.mark_applied(pending.revision)
     revision = runtime.snapshot.revision
@@ -58,7 +54,7 @@ async def test_news_mutation_waits_for_actual_apply_barrier_without_persisting_e
         assert (await api_harness.client.get("/api/config")).status_code == 503
     assert (await queued).status_code == 200
     assert (await runtime.repository.get_or_create()).revision == revision + 1
-    assert runtime.snapshot.document.system.active is False
+    assert runtime.snapshot.document.scheduler.automation_enabled is False
 
 
 @pytest.mark.parametrize(
@@ -69,9 +65,7 @@ async def test_inactive_news_token_http_mutation_keeps_auth_and_apply_admission(
 ):
     runtime = api_harness.runtime
     current = runtime.snapshot
-    document = current.document.model_copy(
-        update={"system": SystemConfig(active=False), "security": SecurityConfig(enabled=protected)}
-    )
+    document = current.document.model_copy(update={"security": SecurityConfig(enabled=protected)})
     pending = await runtime.repository.replace(current.revision, document)
     runtime.snapshot = await runtime.repository.mark_applied(pending.revision)
     runtime.application_in_progress = applying
@@ -86,7 +80,7 @@ async def test_inactive_news_token_http_mutation_keeps_auth_and_apply_admission(
     assert response.status_code == expected
     assert "fixture-news-marker" not in response.text
     saved = await runtime.repository.get_or_create()
-    assert saved.document.system.active is False
+    assert saved.document.scheduler.automation_enabled is False
     if expected == 200:
         assert saved.revision == revision + 1
         payload = (await api_harness.client.get("/api/config")).json()

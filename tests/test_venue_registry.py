@@ -2,13 +2,7 @@
 
 from __future__ import annotations
 
-from importlib import metadata
-
 import pytest
-
-from cryptotrader.configuration.catalog import PluginConfiguration, configured_factory
-from cryptotrader.configuration.fields import LocalizedText
-from cryptotrader.configuration.parameters import EmptyParameters
 
 
 class FakeAdapter:
@@ -27,42 +21,6 @@ class FakeAdapter:
 class SyncConnectAdapter(FakeAdapter):
     def connect(self, connection, credentials):
         raise NotImplementedError
-
-
-def _entry_point(name: str, factory_name: str) -> metadata.EntryPoint:
-    return metadata.EntryPoint(
-        name=name,
-        value=f"tests.test_venue_registry:{factory_name}",
-        group="cryptotrader.venue_adapters",
-    )
-
-
-def create_alpha_adapter():
-    return FakeAdapter("alpha")
-
-
-def create_mismatched_adapter():
-    return FakeAdapter("other")
-
-
-create_alpha_adapter = configured_factory(
-    PluginConfiguration(
-        id="alpha",
-        label=LocalizedText(zh_CN="Alpha", en_US="Alpha"),
-        description=LocalizedText(zh_CN="测试适配器。", en_US="Test adapter."),
-        parameter_model=EmptyParameters,
-        environments=("paper",),
-    )
-)(create_alpha_adapter)
-create_mismatched_adapter = configured_factory(
-    PluginConfiguration(
-        id="alpha",
-        label=LocalizedText(zh_CN="Alpha", en_US="Alpha"),
-        description=LocalizedText(zh_CN="测试适配器。", en_US="Test adapter."),
-        parameter_model=EmptyParameters,
-        environments=("paper",),
-    )
-)(create_mismatched_adapter)
 
 
 def test_registry_resolves_by_adapter_id_without_brand_conditionals():
@@ -89,54 +47,35 @@ def test_registry_rejects_adapter_with_synchronous_connect_before_runtime_use():
         VenueAdapterRegistry((SyncConnectAdapter("sync"),))
 
 
-def test_registry_discovers_entry_point_factories(monkeypatch):
+def test_registry_discovers_code_registered_factories(monkeypatch):
+    from cryptotrader.configuration import registry
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, calls = sample_registry()
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    discovered = VenueAdapterRegistry.discover({"sample_venue"})
+    assert discovered.require("sample_venue").adapter_id == "sample_venue"
+    assert "sample_venue" in discovered.registered_ids()
+    assert calls == ["venue"]
+
+
+def test_registry_rejects_factory_id_mismatch(monkeypatch):
+    from dataclasses import replace
+
+    from cryptotrader.configuration import registry
+    from cryptotrader.venues.registry import VenueAdapterRegistry
+    from tests.factories.workbench_extensions import sample_registry
+
+    extensions, _ = sample_registry()
+    extensions.venues["sample_venue"] = replace(extensions.venues["sample_venue"], factory=lambda: FakeAdapter("other"))
+    monkeypatch.setattr(registry, "get_extension_registry", lambda: extensions)
+    with pytest.raises(ValueError, match="registration sample_venue, adapter other"):
+        VenueAdapterRegistry.discover({"sample_venue"}).require("sample_venue")
+
+
+def test_registry_rejects_configured_unregistered_adapter():
     from cryptotrader.venues.registry import VenueAdapterRegistry
 
-    monkeypatch.setattr(
-        metadata,
-        "entry_points",
-        lambda *, group: [_entry_point("alpha", "create_alpha_adapter")],
-    )
-
-    registry = VenueAdapterRegistry.discover({"alpha"})
-
-    assert registry.ids() == ("alpha",)
-    assert registry.installed_ids() == frozenset({"alpha"})
-
-
-def test_registry_rejects_entry_point_factory_id_mismatch(monkeypatch):
-    from cryptotrader.venues.registry import VenueAdapterRegistry
-
-    monkeypatch.setattr(
-        metadata,
-        "entry_points",
-        lambda *, group: [_entry_point("alpha", "create_mismatched_adapter")],
-    )
-
-    with pytest.raises(ValueError, match="entry point alpha, adapter other"):
-        VenueAdapterRegistry.discover({"alpha"})
-
-
-def test_registry_rejects_duplicate_entry_point_ids(monkeypatch):
-    from cryptotrader.venues.registry import VenueAdapterRegistry
-
-    monkeypatch.setattr(
-        metadata,
-        "entry_points",
-        lambda *, group: [
-            _entry_point("alpha", "create_alpha_adapter"),
-            _entry_point("alpha", "create_alpha_adapter"),
-        ],
-    )
-
-    with pytest.raises(ValueError, match="duplicate venue adapter id: alpha"):
-        VenueAdapterRegistry.discover({"alpha"})
-
-
-def test_registry_rejects_configured_uninstalled_adapter(monkeypatch):
-    from cryptotrader.venues.registry import VenueAdapterRegistry
-
-    monkeypatch.setattr(metadata, "entry_points", lambda *, group: [])
-
-    with pytest.raises(ValueError, match="uninstalled venue adapter ids: missing"):
+    with pytest.raises(ValueError, match="unregistered venue adapter ids: missing"):
         VenueAdapterRegistry.discover({"missing"})

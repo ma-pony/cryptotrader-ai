@@ -23,8 +23,7 @@ async def main():
     runtime = await build_runtime()
     try:
         print(json.dumps({
-            "setup_required": runtime.snapshot.setup_required,
-            "system_active": runtime.snapshot.document.system.active,
+            "automation_enabled": runtime.snapshot.document.scheduler.automation_enabled,
             "venue_sessions": len(runtime.sessions),
             "cycle_is_none": runtime.cycle is None,
         }))
@@ -77,6 +76,4 @@ def test_runtime_image_bootstraps_setup_state_offline_with_real_registry():
     )
 
     assert runtime.returncode == 0, runtime.stderr
-    assert runtime.stdout.strip() == (
-        '{"setup_required": true, "system_active": false, "venue_sessions": 0, "cycle_is_none": true}'
-    )
+    assert runtime.stdout.strip() == ('{"automation_enabled": false, "venue_sessions": 0, "cycle_is_none": true}')

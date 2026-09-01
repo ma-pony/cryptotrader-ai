@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Literal, get_args, get_origin
 
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 
 @dataclass(frozen=True)
@@ -19,6 +19,31 @@ class LocalizedText:
 class FieldOption:
     value: str
     label: LocalizedText
+
+
+@dataclass(frozen=True)
+class CredentialField:
+    key: str
+    label: LocalizedText
+    description: LocalizedText
+    required: bool
+
+
+def credential_fields(model: type[BaseModel]) -> tuple[CredentialField, ...]:
+    descriptors = []
+    for name, field in model.model_fields.items():
+        if field.annotation is not SecretStr and set(get_args(field.annotation)) != {SecretStr, type(None)}:
+            raise TypeError("credential fields must use SecretStr")
+        extra = field.json_schema_extra or {}
+        descriptors.append(
+            CredentialField(
+                name,
+                _localized(extra.get("label"), field.title or name.replace("_", " ").title()),
+                _localized(extra.get("description"), field.description or ""),
+                field.is_required(),
+            )
+        )
+    return tuple(descriptors)
 
 
 @dataclass(frozen=True)

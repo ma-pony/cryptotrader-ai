@@ -35,6 +35,7 @@ class MultiplexedCycleEventSink:
 
     def __init__(self, base: CycleEventSink) -> None:
         self.base = base
+        self._observers: list[CycleEventSink] = []
         self._subscribers: ContextVar[tuple[CycleEventSink, ...]] = ContextVar(
             f"cycle_event_subscribers_{id(self)}",
             default=(),
@@ -51,6 +52,10 @@ class MultiplexedCycleEventSink:
             yield
         finally:
             self._identity.reset(token)
+
+    def observe(self, sink: CycleEventSink) -> None:
+        """Process-local observers only wake independent owners; no trading dependency."""
+        self._observers.append(sink)
 
     @contextmanager
     def route(self, sink: CycleEventSink):
@@ -70,7 +75,7 @@ class MultiplexedCycleEventSink:
                 {**event.data, "cycle_id": cycle_id, "config_revision": config_revision},
                 event.timestamp,
             )
-        sinks = (self.base, *self._subscribers.get())
+        sinks = (self.base, *self._subscribers.get(), *self._observers)
         unique = tuple(sink for index, sink in enumerate(sinks) if all(sink is not prior for prior in sinks[:index]))
         results = await asyncio.gather(*(sink.publish(event) for sink in unique), return_exceptions=True)
         base_result = results[0]

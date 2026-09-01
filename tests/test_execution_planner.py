@@ -24,6 +24,66 @@ SPOT_PAIR = Pair.parse("BTC/USDT")
 CAPABILITIES = VenueCapabilities(frozenset({"spot", "swap"}), True, False, True, frozenset({"market"}))
 
 
+@pytest.mark.parametrize(
+    ("incomplete", "available_margin", "second_amount", "second_price", "valid"),
+    [
+        (False, "100", "0.9", "100", True),
+        (True, "100", "0.9", "100", False),
+        (False, "10", "0.9", "100", False),
+        (False, "100", "0.4", "100", True),
+        (False, "100", "0.4", "300", False),
+    ],
+)
+async def test_frozen_member_prices_use_actual_mixed_targets_for_account_completeness(
+    incomplete, available_margin, second_amount, second_price, valid
+):
+    from cryptotrader.execution.planner import ExecutionPlanner
+    from cryptotrader.portfolio.aggregator import PortfolioAggregator
+    from cryptotrader.risk.book_state import BookRiskState
+    from cryptotrader.risk.gate import BookRiskGate, ConnectionRiskGate
+    from cryptotrader.risk.models import BookRiskLimits, BookRiskRequest, ConnectionRiskLimits
+    from tests.fakes.book_risk import QuotedAccountSession
+
+    book = ExecutionBook(
+        "simulation",
+        "pool",
+        "simulated",
+        True,
+        True,
+        (ConnectionAllocation("a", True, 0.5), ConnectionAllocation("b", True, 0.5)),
+    )
+    sessions = {"a": QuotedAccountSession("a", "0.3"), "b": QuotedAccountSession("b", second_amount)}
+    aggregator = PortfolioAggregator()
+    before = await aggregator.read(book, sessions, SPOT_PAIR)
+    state = BookRiskState.from_snapshots(book.id, tuple(p.account_snapshot for p in before.connections))
+    planner = ExecutionPlanner(
+        book_risk_gate=BookRiskGate(BookRiskLimits(Decimal("1"), Decimal("0.8"), Decimal("0.1"), Decimal("1"))),
+        connection_risk_gate=ConnectionRiskGate(ConnectionRiskLimits(Decimal("1"))),
+    )
+    proposal = await planner.propose(
+        BookRiskRequest(book, before, Decimal("0.4"), SPOT_PAIR, state),
+        sessions,
+        pair=SPOT_PAIR,
+        stop_loss=None,
+        take_profit=None,
+        config_revision=1,
+    )
+    assert proposal.ready
+    expected = [Decimal("0.1"), Decimal("0.5")] if second_amount == "0.9" else [Decimal("0.1")]
+    assert [p.amount for p in proposal.connection_plans] == expected
+    sessions["a"].quote = VenueQuote(SPOT_PAIR, Decimal("200"), Decimal("200"), Decimal("200"))
+    sessions["a"].incomplete = ("orders:unavailable",) if incomplete else ()
+    sessions["a"].available_margin = Decimal(available_margin)
+    sessions["b"].quote = VenueQuote(SPOT_PAIR, Decimal(second_price), Decimal(second_price), Decimal(second_price))
+    fresh = await aggregator.read(book, sessions, SPOT_PAIR)
+    fresh_state = BookRiskState.from_snapshots(book.id, tuple(p.account_snapshot for p in fresh.connections))
+    assert [p.position.signed_notional for p in fresh.connections] == [
+        Decimal("60"),
+        Decimal(second_amount) * Decimal(second_price),
+    ]
+    assert await planner.validate_frozen(book, proposal, fresh, fresh_state, sessions) is valid
+
+
 def _book() -> ExecutionBook:
     return ExecutionBook(
         "simulation",
@@ -76,12 +136,15 @@ def _request(
     pair: Pair = PAIR,
 ):
     from cryptotrader.risk.models import BookRiskRequest
+    from tests.fakes.book_risk import state_for, with_accounts
 
+    portfolio = with_accounts(_portfolio(current=current, amounts=amounts, pair=pair))
     return BookRiskRequest(
         _book(),
-        _portfolio(current=current, amounts=amounts, pair=pair),
+        portfolio,
         Decimal(target),
-        Decimal("10000"),
+        pair,
+        state_for(portfolio, Decimal("10000")),
     )
 
 
