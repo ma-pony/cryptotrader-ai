@@ -42,6 +42,10 @@ jobs:
             git fetch --prune origin main
             git reset --hard origin/main
 
+            echo ">>> 释放未使用的构建缓存与悬挂镜像..."
+            docker builder prune -af
+            docker image prune -f
+
             echo ">>> 构建镜像（api + web）..."
             docker compose --profile prod build
 
