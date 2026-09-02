@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: ci
     environment: production
+    env:
+      CONFIG_MASTER_KEY: ${{ secrets.CONFIG_MASTER_KEY }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -27,11 +29,12 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: DEPLOY_DIR
+          envs: DEPLOY_DIR,CONFIG_MASTER_KEY
           script_stop: true
           script: |
             set -euo pipefail
 
+            : "${CONFIG_MASTER_KEY:?CONFIG_MASTER_KEY GitHub Actions secret is required}"
             DEPLOY_DIR="${DEPLOY_DIR:-/home/trader/cryptotrader-ai}"
             cd "$DEPLOY_DIR"
 
