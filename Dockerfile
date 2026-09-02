@@ -1,15 +1,12 @@
-FROM python:3.12-slim AS builder
-
-WORKDIR /app
-COPY pyproject.toml uv.lock README.md ./
-RUN pip install --no-cache-dir uv && \
-    uv pip install --system --no-cache -e "."
-
 FROM python:3.12-slim
 
 WORKDIR /app
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
+COPY pyproject.toml uv.lock README.md ./
+# Install directly into the runtime layer. A dependency builder followed by
+# COPY duplicates the full Torch tree in BuildKit and exhausts small VPS disks.
+RUN pip install --no-cache-dir uv && \
+    uv pip install --system --no-cache -e "." && \
+    pip uninstall -y uv
 COPY src/ src/
 COPY artifacts/ artifacts/
 COPY vendor/ vendor/
