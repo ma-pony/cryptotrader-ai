@@ -47,10 +47,10 @@ jobs:
             docker image prune -f
 
             echo ">>> 构建镜像（api + web）..."
-            docker compose --profile prod build
+            docker compose build
 
             echo ">>> 启动 postgres + redis..."
-            docker compose --profile prod up -d postgres redis
+            docker compose up -d postgres redis
 
             echo ">>> 等待 postgres 健康（最多 60s）..."
             for i in $(seq 1 30); do
@@ -67,16 +67,16 @@ jobs:
             done
 
             echo ">>> 执行数据库迁移（trader schema migrate）..."
-            docker compose --profile prod run --rm --no-deps api trader schema migrate
+            docker compose run --rm --no-deps api trader schema migrate
 
             echo ">>> 启动所有服务..."
-            docker compose --profile prod up -d --remove-orphans
+            docker compose up -d --remove-orphans
 
             echo ">>> 等待服务就绪..."
             sleep 10
 
             echo ">>> 服务状态："
-            docker compose --profile prod ps
+            docker compose ps
 
             echo ">>> API 健康检查..."
             for i in $(seq 1 12); do
@@ -87,7 +87,7 @@ jobs:
               sleep 5
               if [ "$i" -eq 12 ]; then
                 echo "❌ API 健康检查失败" >&2
-                docker compose --profile prod logs --tail=80 api
+                docker compose logs --tail=80 api
                 exit 1
               fi
             done
