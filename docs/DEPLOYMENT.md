@@ -12,10 +12,13 @@ CryptoTrader AI 的运行配置保存在 PostgreSQL 的 `runtime_config` 表。�
 
 ```bash
 export CONFIG_MASTER_KEY='base64 编码的 32 字节密钥'
-docker compose up -d --build
+docker compose build
+docker compose up -d postgres redis
+docker compose run --rm --no-deps api trader schema migrate
+docker compose up -d
 ```
 
-Compose 负责创建 PostgreSQL，并只向 API 与调度器传入数据库地址和主密钥。API 健康检查通过后打开网页，完成初始化向导；容器不读取本地配置文件。
+Compose 负责创建 PostgreSQL，并只向 API 与调度器传入数据库地址和主密钥。迁移命令显式安装当前 Workbench schema，不加载 Runtime，也不会创建订单。API 健康检查通过后打开网页，完成初始化向导；容器不读取本地配置文件。
 
 ## 首次配置
 

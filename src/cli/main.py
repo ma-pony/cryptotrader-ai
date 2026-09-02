@@ -27,6 +27,37 @@ def _setup():
     setup_otel()
 
 
+# ── Schema operations ──
+
+schema_app = typer.Typer(help="Database schema operations")
+app.add_typer(schema_app, name="schema")
+
+
+@schema_app.command("migrate")
+def schema_migrate(
+    database_url: Annotated[
+        str,
+        typer.Option("--database-url", envvar="DATABASE_URL", help="SQLAlchemy database URL"),
+    ] = "",
+):
+    """Install the current Workbench schema without loading Runtime."""
+    if not database_url.strip():
+        console.print("[red]DATABASE_URL is required.[/red]")
+        raise typer.Exit(1)
+    asyncio.run(_schema_migrate(database_url))
+
+
+async def _schema_migrate(database_url: str) -> None:
+    from cryptotrader.db import dispose_engine
+    from cryptotrader.migrations.workbench import migrate_workbench_schema
+
+    try:
+        await migrate_workbench_schema(database_url)
+    finally:
+        await dispose_engine(database_url)
+    console.print("[green]Workbench database schema is current.[/green]")
+
+
 @app.command()
 def run(
     pair: Annotated[list[str] | None, typer.Option("--pair", "-p", help="One or more pairs")] = None,

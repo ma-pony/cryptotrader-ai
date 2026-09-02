@@ -59,8 +59,8 @@ jobs:
               fi
             done
 
-            echo ">>> 执行数据库迁移（arena migrate）..."
-            docker compose --profile prod run --rm --no-deps api arena migrate
+            echo ">>> 执行数据库迁移（trader schema migrate）..."
+            docker compose --profile prod run --rm --no-deps api trader schema migrate
 
             echo ">>> 启动所有服务..."
             docker compose --profile prod up -d --remove-orphans

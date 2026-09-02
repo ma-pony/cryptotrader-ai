@@ -1,5 +1,6 @@
 """Tests for database-Runtime-backed CLI discovery commands."""
 
+import sqlite3
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -8,6 +9,7 @@ import pytest
 import typer
 from typer.testing import CliRunner
 
+import cryptotrader.db as database
 from cli.main import app
 from cryptotrader.decision.models import CycleOutcome, CycleRequest
 from cryptotrader.pair import Pair
@@ -23,6 +25,31 @@ def test_cli_unmounts_legacy_configuration_commands() -> None:
     assert result.exit_code == 0
     for command in ("portfolio", "risk", "live-check", "migrate", "sync"):
         assert command not in result.output
+
+
+def test_schema_migrate_command_creates_the_current_workbench_schema(tmp_path) -> None:
+    database_path = tmp_path / "cli-migration.sqlite"
+    database_url = f"sqlite+aiosqlite:///{database_path}"
+    result = CliRunner().invoke(
+        app,
+        ["schema", "migrate"],
+        env={"DATABASE_URL": database_url},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert all(key[0] != database_url for key in database._engines)
+    with sqlite3.connect(database_path) as connection:
+        table_names = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    assert {
+        "runtime_config",
+        "account_snapshots",
+        "multi_venue_cycles",
+        "book_approvals",
+        "component_evaluations",
+        "backtest_runs",
+        "business_alerts",
+        "schedule_rules",
+    } <= table_names
 
 
 def test_run_command_has_no_graph_option() -> None:
