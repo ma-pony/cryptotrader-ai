@@ -162,10 +162,11 @@ jobs:
 
             echo ">>> 清理悬挂镜像..."
             for old_image in "$old_api_image" "$old_web_image"; do
-              case "$old_image" in
-                ""|"$API_IMAGE"|"$WEB_IMAGE") continue ;;
-              esac
-              docker image rm "$old_image" || true
+              if [ -n "$old_image" ] && \
+                 [ "$old_image" != "$API_IMAGE" ] && \
+                 [ "$old_image" != "$WEB_IMAGE" ]; then
+                docker image rm "$old_image" || true
+              fi
             done
             docker image prune -f
 

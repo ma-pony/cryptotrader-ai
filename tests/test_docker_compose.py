@@ -195,6 +195,9 @@ def test_deploy_workflow_publishes_images_and_does_not_build_on_the_server():
     assert 'docker pull "$WEB_IMAGE"' in workflow
     assert "docker compose up -d --no-build --remove-orphans" in workflow
     assert "docker compose build" not in workflow
+    assert '[ "$old_image" != "$API_IMAGE" ]' in workflow
+    assert '[ "$old_image" != "$WEB_IMAGE" ]' in workflow
+    assert 'case "$old_image" in' not in workflow
 
 
 def test_runtime_image_does_not_copy_legacy_configuration_files():
