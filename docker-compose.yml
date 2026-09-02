@@ -33,6 +33,10 @@ services:
 
   api:
     build: .
+    image: ${API_IMAGE:-cryptotrader-ai-api:local}
+    # CI promotes immutable images to production. Local development still
+    # builds this service explicitly and must never pull an accidental tag.
+    pull_policy: never
     ports:
       - "${API_BIND_ADDRESS:-127.0.0.1}:8003:8003"
     environment:
@@ -67,6 +71,8 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+    image: ${WEB_IMAGE:-cryptotrader-ai-web:local}
+    pull_policy: never
     ports:
       - "${WEB_BIND_ADDRESS:-127.0.0.1}:5173:80"
     depends_on:

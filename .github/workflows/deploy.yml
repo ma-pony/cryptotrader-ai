@@ -15,12 +15,53 @@ jobs:
   ci:
     uses: ./.github/workflows/ci.yml
 
-  deploy:
+  package:
     runs-on: ubuntu-latest
     needs: ci
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - name: Build and publish API image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/cryptotrader-ai-api:${{ github.sha }}
+          cache-from: type=gha,scope=deploy-api
+          cache-to: type=gha,mode=max,scope=deploy-api
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+      - name: Build and publish web image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./web
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/cryptotrader-ai-web:${{ github.sha }}
+          cache-from: type=gha,scope=deploy-web
+          cache-to: type=gha,mode=max,scope=deploy-web
+          labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: package
+    permissions:
+      contents: read
+      packages: read
     environment: production
     env:
       CONFIG_MASTER_KEY: ${{ secrets.CONFIG_MASTER_KEY }}
+      GHCR_TOKEN: ${{ github.token }}
+      GHCR_ACTOR: ${{ github.actor }}
+      API_IMAGE: ghcr.io/${{ github.repository_owner }}/cryptotrader-ai-api:${{ github.sha }}
+      WEB_IMAGE: ghcr.io/${{ github.repository_owner }}/cryptotrader-ai-web:${{ github.sha }}
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
@@ -29,25 +70,52 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          envs: DEPLOY_DIR,CONFIG_MASTER_KEY
+          envs: DEPLOY_DIR,CONFIG_MASTER_KEY,GHCR_TOKEN,GHCR_ACTOR,API_IMAGE,WEB_IMAGE
           script_stop: true
           script: |
             set -euo pipefail
 
             : "${CONFIG_MASTER_KEY:?CONFIG_MASTER_KEY GitHub Actions secret is required}"
+            : "${GHCR_TOKEN:?GitHub token is required to pull deployment images}"
             DEPLOY_DIR="${DEPLOY_DIR:-/home/trader/cryptotrader-ai}"
             cd "$DEPLOY_DIR"
+
+            PULL_LOG=/tmp/cryptotrader-image-pull.log
+            trap 'docker logout ghcr.io >/dev/null 2>&1 || true; rm -f "$PULL_LOG"' EXIT
 
             echo ">>> 拉取最新代码 ($(git rev-parse --short HEAD) -> origin/main)..."
             git fetch --prune origin main
             git reset --hard origin/main
 
-            echo ">>> 释放未使用的构建缓存与悬挂镜像..."
-            docker builder prune -af
-            docker image prune -f
+            old_api_image="$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q api)" 2>/dev/null || true)"
+            old_web_image="$(docker inspect --format '{{.Config.Image}}' "$(docker compose ps -q web)" 2>/dev/null || true)"
 
-            echo ">>> 构建镜像（api + web）..."
-            docker compose build
+            echo ">>> 登录容器仓库并拉取 CI 构建的提交镜像..."
+            echo "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_ACTOR" --password-stdin
+
+            pull_images() {
+              docker pull "$API_IMAGE"
+              docker pull "$WEB_IMAGE"
+            }
+
+            if ! pull_images 2>&1 | tee "$PULL_LOG"; then
+              if ! grep -qi "no space left on device" "$PULL_LOG"; then
+                echo "❌ 拉取部署镜像失败" >&2
+                exit 1
+              fi
+
+              echo ">>> 磁盘不足：移除旧应用容器与镜像后重试（数据卷保留）..."
+              docker compose stop api web
+              docker compose rm -f api web
+              for old_image in "$old_api_image" "$old_web_image"; do
+                if [ -n "$old_image" ]; then
+                  docker image rm -f "$old_image" || true
+                fi
+              done
+              docker builder prune -af
+              docker image prune -f
+              pull_images
+            fi
 
             echo ">>> 启动 postgres + redis..."
             docker compose up -d postgres redis
@@ -70,7 +138,7 @@ jobs:
             docker compose run --rm --no-deps api trader schema migrate
 
             echo ">>> 启动所有服务..."
-            docker compose up -d --remove-orphans
+            docker compose up -d --no-build --remove-orphans
 
             echo ">>> 等待服务就绪..."
             sleep 10
@@ -93,6 +161,12 @@ jobs:
             done
 
             echo ">>> 清理悬挂镜像..."
+            for old_image in "$old_api_image" "$old_web_image"; do
+              case "$old_image" in
+                ""|"$API_IMAGE"|"$WEB_IMAGE") continue ;;
+              esac
+              docker image rm "$old_image" || true
+            done
             docker image prune -f
 
             echo ">>> 部署完成 ($(git rev-parse --short HEAD))"

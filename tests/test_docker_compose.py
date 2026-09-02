@@ -19,6 +19,7 @@ import yaml
 
 COMPOSE_PATH = Path(__file__).parent.parent / "docker-compose.yml"
 WEB_DOCKERFILE_PATH = Path(__file__).parent.parent / "web" / "Dockerfile"
+DEPLOY_WORKFLOW_PATH = Path(__file__).parent.parent / ".github" / "workflows" / "deploy.yml"
 
 
 @pytest.fixture(scope="module")
@@ -168,6 +169,32 @@ def test_web_healthcheck_targets_nginx_ipv4_listener():
 
     assert "wget -q --spider http://127.0.0.1/" in dockerfile
     assert "wget -q --spider http://localhost/" not in dockerfile
+
+
+@pytest.mark.parametrize(
+    ("service_name", "image_variable"),
+    [("api", "API_IMAGE"), ("web", "WEB_IMAGE")],
+)
+def test_application_images_can_be_promoted_without_building_on_the_server(compose, service_name, image_variable):
+    """Production selects immutable CI images while local Compose retains builds."""
+    service = compose["services"][service_name]
+    assert service["image"] == f"${{{image_variable}:-cryptotrader-ai-{service_name}:local}}"
+    assert service["pull_policy"] == "never"
+    assert "build" in service
+
+
+def test_deploy_workflow_publishes_images_and_does_not_build_on_the_server():
+    """The constrained VPS must only pull CI-built artifacts, never compile Torch."""
+    workflow = DEPLOY_WORKFLOW_PATH.read_text()
+
+    assert workflow.count("docker/build-push-action@") == 2
+    assert "push: true" in workflow
+    assert "ghcr.io/${{ github.repository_owner }}/cryptotrader-ai-api:${{ github.sha }}" in workflow
+    assert "ghcr.io/${{ github.repository_owner }}/cryptotrader-ai-web:${{ github.sha }}" in workflow
+    assert 'docker pull "$API_IMAGE"' in workflow
+    assert 'docker pull "$WEB_IMAGE"' in workflow
+    assert "docker compose up -d --no-build --remove-orphans" in workflow
+    assert "docker compose build" not in workflow
 
 
 def test_runtime_image_does_not_copy_legacy_configuration_files():
