@@ -4,12 +4,25 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
 from cryptotrader.decision.models import TargetPosition, TradePlan
+from cryptotrader.signals.models import CandleRequirement
 
 if TYPE_CHECKING:
     from cryptotrader.profiles.models import SignalProfile
+    from cryptotrader.runtime_config.models import MarketDataConfig
     from cryptotrader.signals.fusion import FusedSignal
     from cryptotrader.signals.models import ComponentSignal, SignalContext
+
+
+def exit_candle_requirement(market_data: MarketDataConfig) -> CandleRequirement:
+    """Resolve the shared exit window separately from component and evaluation windows."""
+    parameters = (
+        DefaultMarketSourceParameters.model_validate(dict(market_data.parameters))
+        if market_data.source_id == "default"
+        else DefaultMarketSourceParameters()
+    )
+    return CandleRequirement(parameters.timeframe, parameters.limit)
 
 
 class AtrExitPolicy:

@@ -1,6 +1,6 @@
 {
-  "title": "记忆演化",
-  "description": "规则 FSM 状态、IVE 分类历史、归档记录",
+  "title": "智能体资料",
+  "description": "查看智能体技能文件、适用范围和访问记录；这里只展示已有资料，不启动模型分析。",
   "loading": "加载中…",
   "rules_grid": {
     "title": "规则状态矩阵",
@@ -40,8 +40,17 @@
     "archived": "已归档"
   },
   "skills": {
-    "title": "Skills 列表",
-    "empty": "暂无 skill 记录",
+    "title": "技能列表",
+    "empty": "暂无技能记录",
+    "loadFailed": "技能资料加载失败",
+    "edited": "已人工编辑",
+    "importance": "重要程度",
+    "accessCount": "访问 {{count}} 次",
+    "lastAccess": "最后访问",
+    "regime": "市场状态：{{tag}}",
+    "keyword": "触发关键词：{{keyword}}",
+    "more": "另有 {{count}} 项",
+    "inferenceFailed": "提案推断失败",
     "proposals": "Skill 提案",
     "agents": {
       "tech": "技术分析",

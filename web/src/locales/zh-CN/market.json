@@ -1,5 +1,6 @@
 {
   "title": "行情看板",
+  "timeframe": "图表 K 线周期",
   "exchange": {
     "binance": "币安",
     "okx": "欧易"

@@ -1,5 +1,6 @@
 import { Link, useSearchParams } from 'react-router';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { useBacktestComparison } from '@/hooks/use-backtest';
 import { ReadableValues, ResearchNav, RunMetrics, fieldLabel } from './presentation';
 
@@ -29,9 +30,9 @@ export default function BacktestCompare() {
   const comparison = query.data;
   const differences = { ...comparison.condition_differences, ...comparison.configuration_differences };
   return (
-    <main className="space-y-6 text-sm">
+    <div className="space-y-6 text-sm">
       <ResearchNav />
-      <h1 className="text-xl font-semibold">两次回测比较</h1>
+      <PageHeader title="两次回测比较" />
       <section className="space-y-3 rounded border border-border bg-card p-4">
         <h2 className="font-semibold">
           {comparison.comparable ? '基础条件一致，仍需核对配置与证据' : '实验条件不同，不作排名'}
@@ -71,6 +72,6 @@ export default function BacktestCompare() {
           </section>
         ))}
       </div>
-    </main>
+    </div>
   );
 }

@@ -25,41 +25,21 @@ export interface EmptyStateProps {
  * Unified empty state. Replaces the per-page ``<div className="text-xs
  * text-muted-foreground">暂无数据</div>`` pattern (which looked like a bug).
  */
-export const EmptyState = ({
-  icon,
-  title,
-  description,
-  action,
-  className,
-  size = 'default',
-}: EmptyStateProps) => {
+export const EmptyState = ({ icon, title, description, action, className, size = 'default' }: EmptyStateProps) => {
   const compact = size === 'compact';
   return (
     <div
       role="status"
       className={cn(
         'flex flex-col items-center justify-center gap-2 text-center text-muted-foreground',
-        compact
-          ? 'py-4'
-          : 'rounded-lg border border-dashed border-border bg-muted/20 p-8',
+        compact ? 'py-4' : 'rounded-lg border border-dashed border-border bg-muted/20 p-8',
         className,
       )}
     >
-      {icon ? (
-        <div className={cn('text-muted-foreground/70', compact && 'opacity-80')}>
-          {icon}
-        </div>
-      ) : null}
+      {icon ? <div className={cn('text-muted-foreground/70', compact && 'opacity-80')}>{icon}</div> : null}
       <div className="space-y-1">
-        <p
-          className={cn(
-            'font-medium',
-            compact ? 'text-xs' : 'text-sm text-foreground',
-          )}
-        >
-          {title}
-        </p>
-        {description ? <p className="text-xs">{description}</p> : null}
+        <p className={cn('font-medium', 'text-sm text-foreground')}>{title}</p>
+        {description ? <p className="max-w-prose text-sm leading-relaxed">{description}</p> : null}
       </div>
       {action ? <div className="mt-1">{action}</div> : null}
     </div>

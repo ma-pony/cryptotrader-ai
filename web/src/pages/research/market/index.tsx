@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { Link } from 'react-router';
 
 import { Card } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
+import { ResearchNav } from '../presentation';
 import type { CandlestickChartHandle } from '@/types/market-chart';
 
 import { ChartTabPanel } from './components/chart-tab-panel';
@@ -22,12 +24,12 @@ const MarketPage = () => {
   const [activeTab, setActiveTab] = useState('tradingview');
   const chartRef = useRef<CandlestickChartHandle | null>(null);
 
-
   return (
     // Mobile: natural document flow with min-height on chart card.
     // lg+ : flex column locked to <main>'s available height (viewport - topbar
     // - main padding) so the chart card can flex-1 and fill the screen.
     <div className="flex flex-col gap-4 lg:h-full lg:min-h-[640px]">
+      <ResearchNav />
       <PageHeader
         title={t('title')}
         actions={
@@ -37,10 +39,14 @@ const MarketPage = () => {
               onChange={(e) => {
                 setTimeframe(e.target.value);
               }}
-              className="rounded border border-border bg-card px-2 py-1 text-sm"
-              aria-label={t('ai_analysis.tab_candlestick')}
+              className="configuration-control w-auto"
+              aria-label={t('timeframe')}
             >
-              {TIMEFRAMES.map((tf) => <option key={tf} value={tf}>{tf}</option>)}
+              {TIMEFRAMES.map((tf) => (
+                <option key={tf} value={tf}>
+                  {tf}
+                </option>
+              ))}
             </select>
             <ExchangeSelector value={exchange} onChange={setExchange} />
           </>
@@ -63,10 +69,10 @@ const MarketPage = () => {
             />
           </Card>
 
-          <div className="flex items-center gap-3">
-            <Link className="configuration-button min-h-10" to="/research/analysis">
-              使用规范分析流程
-            </Link>
+          <div className="flex flex-wrap items-center gap-3">
+            <Button asChild variant="outline">
+              <Link to="/research/analysis">前往仅分析</Link>
+            </Button>
             <p className="text-sm text-muted-foreground">行情浏览不会触发模型或交易。</p>
           </div>
         </div>

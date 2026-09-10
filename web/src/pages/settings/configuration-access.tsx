@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { TextField } from '@/components/configuration/field';
 import { RouteSkeleton } from '@/components/route-skeleton';
@@ -35,7 +37,13 @@ export function ConfigurationAccess({
   };
   if (runtime.isLoading && !showKey) return <RouteSkeleton />;
   const content = (
-    <div className={embedded ? 'grid min-h-48 place-items-center rounded-lg border border-border p-6' : 'grid min-h-screen place-items-center p-6'}>
+    <div
+      className={
+        embedded
+          ? 'grid min-h-48 place-items-center rounded-lg border border-border p-6'
+          : 'grid min-h-screen place-items-center p-6'
+      }
+    >
       {showKey ? (
         <form
           className="w-full max-w-md space-y-4"
@@ -44,7 +52,7 @@ export function ConfigurationAccess({
             void unlock();
           }}
         >
-          <h1 className="text-xl font-semibold">{t('access.title')}</h1>
+          <PageHeader title={t('access.title')} />
           <TextField
             name="existing-api-access"
             label={t('access.existing')}
@@ -60,18 +68,14 @@ export function ConfigurationAccess({
               {t('access.failed')}
             </p>
           ) : null}
-          <button
-            type="submit"
-            className="configuration-button configuration-primary"
-            disabled={pending || !key.trim()}
-          >
+          <Button type="submit" disabled={pending || !key.trim()}>
             {t(pending ? 'access.loading' : 'access.unlock')}
-          </button>
+          </Button>
         </form>
       ) : (
-        <button className="configuration-button" onClick={() => void runtime.reload()}>
+        <Button variant="outline" onClick={() => void runtime.reload()}>
           {t('loadError')} · {t('retry')}
-        </button>
+        </Button>
       )}
     </div>
   );

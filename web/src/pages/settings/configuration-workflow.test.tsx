@@ -30,6 +30,7 @@ it('retains cross-section drafts through venue refresh and saves only the curren
   const h = workflowHarness('/settings/models');
   fireEvent.change(await screen.findByLabelText('综合分析模型'), { target: { value: 'new-analysis' } });
   fireEvent.click(screen.getByRole('link', { name: '引擎' }));
+  await userEvent.click(await screen.findByRole('tab', { name: '风控与审批' }));
   fireEvent.change(await screen.findByLabelText('最大回撤（%）'), { target: { value: '7' } });
   fireEvent.click(screen.getByRole('link', { name: '账户' }));
   fireEvent.click(await screen.findByRole('link', { name: '管理连接' }));
@@ -55,6 +56,7 @@ it('retains cross-section drafts through venue refresh and saves only the curren
   });
   fireEvent.click(screen.getByRole('link', { name: '引擎' }));
   expect(await screen.findByLabelText('最大回撤（%）')).toHaveValue(7);
+  await userEvent.click(await screen.findByRole('tab', { name: '自动运行' }));
   fireEvent.change(await screen.findByLabelText('分析间隔（分钟）'), { target: { value: '45' } });
   const schedulerForm = screen.getByLabelText('分析间隔（分钟）').closest('form')!;
   fireEvent.click(within(schedulerForm).getByRole('button', { name: '保存配置' }));
@@ -65,10 +67,11 @@ it('retains cross-section drafts through venue refresh and saves only the curren
   expect(await screen.findByLabelText('分析间隔（分钟）')).toHaveValue(45);
 });
 it('retains a blank number across navigation and warns on actual page unload', async () => {
-  workflowHarness('/engine');
+  workflowHarness('/engine#risk');
   fireEvent.change(await screen.findByLabelText('最大回撤（%）'), { target: { value: '' } });
   fireEvent.click(screen.getByRole('link', { name: '系统' }));
   fireEvent.click(screen.getByRole('link', { name: '引擎' }));
+  await userEvent.click(await screen.findByRole('tab', { name: '风控与审批' }));
   const number = await screen.findByLabelText('最大回撤（%）');
   expect(number).toHaveValue(null);
   fireEvent.click(within(number.closest('form')!).getByRole('button', { name: '保存配置' }));

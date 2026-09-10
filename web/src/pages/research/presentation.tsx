@@ -1,4 +1,4 @@
-import { Link } from 'react-router';
+import { NavLink } from 'react-router';
 import type { BacktestRunStatus } from '@/types/api';
 
 export const runLabels: Record<BacktestRunStatus['status'], string> = {
@@ -182,16 +182,12 @@ export function RunMetrics({ run }: { run: BacktestRunStatus }) {
 
 export function ResearchNav() {
   return (
-    <nav aria-label="研究导航" className="flex flex-wrap gap-4 border-b border-border">
-      <Link className="inline-flex min-h-11 items-center text-primary" to="/research">
+    <nav aria-label="研究导航" className="configuration-navigation research-navigation">
+      <NavLink end to="/research">
         回测与历史
-      </Link>
-      <Link className="inline-flex min-h-11 items-center text-primary" to="/research/market">
-        市场观察
-      </Link>
-      <Link className="inline-flex min-h-11 items-center text-primary" to="/research/analysis">
-        仅分析
-      </Link>
+      </NavLink>
+      <NavLink to="/research/market">市场观察</NavLink>
+      <NavLink to="/research/analysis">仅分析</NavLink>
     </nav>
   );
 }

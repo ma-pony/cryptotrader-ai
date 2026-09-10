@@ -1,5 +1,20 @@
 [
   {
+    "date": "2026-09-09",
+    "macrostructure": "Workbench",
+    "theme": "existing CryptoTrader semantic tokens",
+    "enrichment": "none",
+    "brief": "Shared-component UI/UX pass across all six product areas",
+    "scope": "shared shell, configuration sections, connection states, research navigation and agent profiles",
+    "pre_emit_critique": { "philosophy": 4, "hierarchy": 4, "execution": 4, "specificity": 5, "restraint": 4, "variety": 4 },
+    "evidence": "docs/verification/uiux-2026-09-09.md",
+    "measured_widths": [320, 375, 414, 768, 1440],
+    "changes": ["localized breadcrumbs", "draft-preserving engine tabs", "shared headers and actions", "explicit save and check phases", "retryable skill-list errors", "light success contrast 5.15:1"],
+    "slop_review": "Scoped review with existing-system exemptions; representative browser and contrast measurements, not a blanket 58-gate pass",
+    "exemptions": ["approved system font stack and semantic tokens", "retain one six-entry application shell", "no marketing hero or decorative assets", "existing 40px desktop controls and 44px touch targets"],
+    "limitations": ["not every populated detail route was browser-tested", "contrast sampled on core form states, not every chart and status", "no continuous 320-1920 sweep", "isolated backend lacks metrics and skill endpoints; error states tested"]
+  },
+  {
     "date": "2026-08-30",
     "macrostructure": "Workbench",
     "theme": "existing CryptoTrader semantic tokens",

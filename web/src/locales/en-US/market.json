@@ -1,5 +1,6 @@
 {
   "title": "Market",
+  "timeframe": "Chart candle interval",
   "exchange": { "binance": "Binance", "okx": "OKX" },
   "side_panel": {
     "funding_rate": "Funding rate",

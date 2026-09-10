@@ -1,6 +1,5 @@
-import { Check, ChevronRight, Globe, Languages, Menu, Moon, Sun, SunMoon } from 'lucide-react';
+import { Check, Globe, Languages, Menu, Moon, Sun, SunMoon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useLocation } from 'react-router';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -14,7 +13,7 @@ import {
 import { useMarketDataWS } from '@/hooks/use-market-data-ws';
 import { useSettingsStore } from '@/stores/use-settings-store';
 import { useUIStore, type Locale, type Theme } from '@/stores/use-ui-store';
-import { SETTINGS_SECTIONS } from '@/pages/settings/navigation';
+import { Breadcrumb } from './breadcrumb';
 
 const THEME_OPTIONS: { value: Theme; icon: typeof Sun; labelKey: 'theme.light' | 'theme.dark' | 'theme.system' }[] = [
   { value: 'light', icon: Sun, labelKey: 'theme.light' },
@@ -26,23 +25,6 @@ const LOCALE_OPTIONS: { value: Locale; labelKey: 'locale.zh-CN' | 'locale.en-US'
   { value: 'zh-CN', labelKey: 'locale.zh-CN' },
   { value: 'en-US', labelKey: 'locale.en-US' },
 ];
-
-const PATH_LABELS: Record<
-  string,
-  | 'nav.workbench'
-  | 'nav.decisions'
-  | 'nav.engine'
-  | 'nav.accounts'
-  | 'nav.research'
-  | 'nav.settings'
-> = {
-  '/': 'nav.workbench',
-  '/decisions': 'nav.decisions',
-  '/engine': 'nav.engine',
-  '/accounts': 'nav.accounts',
-  '/research': 'nav.research',
-  '/settings': 'nav.settings',
-};
 
 const ApiKeyBadge = () => {
   const { t } = useTranslation();
@@ -75,44 +57,12 @@ const BtcPriceDisplay = () => {
         ${price.toLocaleString('en-US', { maximumFractionDigits: 0 })}
       </span>
       {Number.isFinite(changePct) ? (
-        <span
-          className={
-            changePct >= 0 ? 'font-mono text-sm text-trade-long' : 'font-mono text-sm text-trade-short'
-          }
-        >
+        <span className={changePct >= 0 ? 'font-mono text-sm text-trade-long' : 'font-mono text-sm text-trade-short'}>
           {changePct >= 0 ? '+' : ''}
           {changePct.toFixed(2)}%
         </span>
       ) : null}
     </div>
-  );
-};
-
-const Breadcrumb = () => {
-  const { t } = useTranslation();
-  const { pathname } = useLocation();
-  const segments = pathname.split('/').filter(Boolean);
-  const topSegment = `/${segments[0] ?? ''}`.replace(/\/$/, '') || '/';
-  const labelKey = PATH_LABELS[topSegment];
-  const section = SETTINGS_SECTIONS.find((item) => item.path === pathname);
-  const pageLabel = section
-    ? t('configuration:' + section.label)
-    : labelKey
-      ? t(labelKey)
-      : (segments[0] ?? '');
-
-  return (
-    <nav className="hidden items-center gap-1.5 text-sm font-medium md:flex" aria-label={t('header.breadcrumb')}>
-      <span className="text-muted-foreground">{t('app.name')}</span>
-      <ChevronRight className="h-3 w-3 text-muted-foreground" strokeWidth={2} />
-      <span className="text-foreground">{pageLabel || t('nav.workbench')}</span>
-      {segments.length > 1 && !section ? (
-        <>
-          <ChevronRight className="h-3 w-3 text-muted-foreground" strokeWidth={2} />
-          <span className="font-mono text-muted-foreground">{segments.slice(1).join('/')}</span>
-        </>
-      ) : null}
-    </nav>
   );
 };
 
@@ -137,27 +87,30 @@ export const TopBar = () => {
   };
 
   return (
-    <header className="flex h-14 items-center justify-between border-b border-border bg-card px-4">
-      <div className="flex items-center gap-3">
+    <header className="app-top-bar flex min-h-14 items-center justify-between gap-2 border-b border-border bg-card px-3 md:px-4">
+      <div className="flex min-w-0 items-center gap-2 md:gap-3">
         <Button variant="ghost" size="icon" onClick={onMenuClick} aria-label={t('header.toggleSidebar')}>
           <Menu className="h-4 w-4" />
         </Button>
         <Breadcrumb />
       </div>
 
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-1 md:gap-2">
         <BtcPriceDisplay />
         <span className="hidden h-3.5 w-px bg-border md:block" />
-        <ApiKeyBadge />
+        <div className="hidden sm:block">
+          <ApiKeyBadge />
+        </div>
         <span className="hidden text-sm text-muted-foreground lg:inline">
-          行情流：{connectionStatus === 'connected' ? '已连接' : connectionStatus === 'connecting' ? '连接中' : '未连接'}
+          行情流：
+          {connectionStatus === 'connected' ? '已连接' : connectionStatus === 'connecting' ? '连接中' : '未连接'}
         </span>
 
         <span className="mx-1 h-5 w-px bg-border" />
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={t('theme.system')}>
+            <Button variant="ghost" size="icon" aria-label={`${t('theme.title')}：${t(`theme.${theme}`)}`}>
               <SunMoon className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>
@@ -178,7 +131,7 @@ export const TopBar = () => {
 
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label={t('locale.zh-CN')}>
+            <Button variant="ghost" size="icon" aria-label={`${t('locale.title')}：${t(`locale.${locale}`)}`}>
               <Languages className="h-4 w-4" />
             </Button>
           </DropdownMenuTrigger>

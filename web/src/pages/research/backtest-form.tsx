@@ -247,7 +247,7 @@ export function BacktestForm({
           模型费用：启用 LLM
           组件会产生模型请求费用，长区间可能较高；未知价格不视为免费。预训练模型可能含历史截止时间之后的信息。
         </p>
-        <p>仅使用本地 Paper 账本，不读取交易账户、不发送真实或官方模拟订单。无名称运行也会保存。</p>
+        <p>仅使用本地模拟账本，不读取交易账户、不发送真实或官方模拟订单。无名称运行也会保存。</p>
       </aside>
       {Object.keys(errors).length ? (
         <p role="alert" className="configuration-error">

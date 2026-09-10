@@ -52,3 +52,14 @@ The product is a modern-minimal, utilitarian operator console. Its macrostructur
 - `.superpowers/sdd/2026-08-30-configuration-center/ui-direction.md`: approved preflight and interaction direction.
 
 No new font, token export format, motion dependency, marketing navigation or decorative asset is introduced. `web/src/styles/globals.css` contains the Hallmark app stamp and critique; the existing theme tokens remain the implementation source of truth.
+
+## Shared UI patterns — 2026-09-09
+
+- Reuse `PageHeader`, `Button`, `EmptyState`, `PageBoundary` and the existing Radix primitives before introducing page-specific chrome. `Breadcrumb` supplies localized parent links and never exposes internal object IDs as navigation labels.
+- `SectionTabs` composes the existing tabs; inactive panels stay mounted but hidden so switching engine sections preserves local input. Dirty sections have both a visual marker and an accessible description. The URL hash selects market, signals, risk or automation without saving.
+- Research subpages share `ResearchNav`. Market chart controls use the common control sizes; chart exchange selection remains separate from execution-platform configuration.
+- A connection form groups connection information, execution options, write-only credentials and a read-only check result. Progress distinguishes saving the connection, saving credentials and checking. Editing invalidates the displayed check status; a completed save is never described as trading authorization.
+- Analysis forms submit only analysis. Trading remains a separate button and dialog. Loading failures are retryable errors, not an empty dataset; agent-profile headings describe the currently implemented skill list.
+- The light-theme success token is darkened for readable status text. Representative credential-state contrast increased from 2.30:1 to 5.15:1; dark-theme success is unchanged.
+
+Verification scope and limitations: `docs/verification/uiux-2026-09-09.md`. The current source was previewed separately from the older service on port 5173; no running-account configuration was changed for UI acceptance.

@@ -7,12 +7,15 @@ import { useTranslation } from 'react-i18next';
 
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
+import { PageBoundary } from '@/components/ui/page-boundary';
 import { formatDateTime } from '@/lib/format';
 
 import type { SkillItem } from './queries';
 import { useSkills } from './queries';
 
 const SkillRow = ({ item }: { item: SkillItem }) => {
+  const { t } = useTranslation('memory');
   const importanceColor =
     item.importance >= 0.7
       ? 'text-trade-long'
@@ -24,30 +27,26 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
     <div className="flex items-start gap-3 border-b border-border py-2 last:border-0">
       <div className="min-w-0 flex-1 space-y-1">
         <div className="flex items-center gap-2 flex-wrap">
-          <span className="text-xs font-medium text-foreground/90">{item.name}</span>
-          <span className="text-[10px] text-muted-foreground">{item.scope}</span>
-          {item.manually_edited && (
-            <Badge variant="outline" className="text-[9px] px-1 py-0">
-              edited
-            </Badge>
-          )}
+          <span className="break-all text-sm font-medium text-foreground/90">{item.name}</span>
+          <span className="text-sm text-muted-foreground">{item.scope}</span>
+          {item.manually_edited && <Badge variant="outline">{t('skills.edited')}</Badge>}
         </div>
-        {item.description && (
-          <p className="text-[10px] text-muted-foreground line-clamp-1">{item.description}</p>
-        )}
-        <div className="flex items-center gap-3 flex-wrap text-[10px] text-muted-foreground">
+        {item.description && <p className="text-sm text-muted-foreground">{item.description}</p>}
+        <div className="flex items-center gap-3 flex-wrap text-sm text-muted-foreground">
           <span className={importanceColor}>
-            importance {item.importance.toFixed(2)}
+            {t('skills.importance')} {item.importance.toFixed(2)}
           </span>
-          <span>access {item.access_count}</span>
+          <span>{t('skills.accessCount', { count: item.access_count })}</span>
           {item.last_accessed_at && (
-            <span>最后访问 {formatDateTime(item.last_accessed_at)}</span>
+            <span>
+              {t('skills.lastAccess')} {formatDateTime(item.last_accessed_at)}
+            </span>
           )}
         </div>
         {item.regime_tags.length > 0 && (
           <div className="flex gap-1 flex-wrap">
             {item.regime_tags.map((tag) => (
-              <Badge key={tag} variant="secondary" className="text-[9px] px-1 py-0" aria-label={`Regime: ${tag}`}>
+              <Badge key={tag} variant="secondary" aria-label={t('skills.regime', { tag })}>
                 {tag}
               </Badge>
             ))}
@@ -56,20 +55,30 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
         {item.triggers_keywords.length > 0 && (
           <div className="flex gap-1 flex-wrap" data-testid="triggers-keywords">
             {item.triggers_keywords.slice(0, 5).map((kw) => (
-              <Badge key={kw} variant="outline" className="text-[9px] px-1 py-0 text-muted-foreground" aria-label={`Trigger keyword: ${kw}`}>
+              <Badge
+                key={kw}
+                variant="outline"
+                className="text-muted-foreground"
+                aria-label={t('skills.keyword', { keyword: kw })}
+              >
                 {kw}
               </Badge>
             ))}
             {item.triggers_keywords.length > 5 && (
-              <span className="text-[9px] text-muted-foreground self-center">
-                +{item.triggers_keywords.length - 5} more
+              <span className="text-sm text-muted-foreground self-center">
+                {t('skills.more', { count: item.triggers_keywords.length - 5 })}
               </span>
             )}
           </div>
         )}
         {item.inference_failed && (
-          <Badge variant="destructive" className="text-[9px] px-1 py-0 w-fit" data-testid="inference-failed-badge" aria-label="Inference failed during proposal">
-            inference failed
+          <Badge
+            variant="destructive"
+            className="w-fit"
+            data-testid="inference-failed-badge"
+            aria-label={t('skills.inferenceFailed')}
+          >
+            {t('skills.inferenceFailed')}
           </Badge>
         )}
       </div>
@@ -79,30 +88,34 @@ const SkillRow = ({ item }: { item: SkillItem }) => {
 
 export const SkillsGrid = () => {
   const { t } = useTranslation('memory');
-  const { data, isLoading } = useSkills({});
+  const { data, isLoading, isError, refetch } = useSkills({});
   const items = data?.items ?? [];
 
   return (
     <Card>
       <CardHeader className="pb-3">
-        <CardTitle className="text-sm font-medium">
-          {t('skills.title', { defaultValue: 'Skills 列表' })}
+        <CardTitle id="memory-skills-heading" className="text-sm font-medium">
+          {t('skills.title')}
         </CardTitle>
       </CardHeader>
       <CardContent>
-        {isLoading ? (
-          <div className="text-xs text-muted-foreground">{t('loading', { defaultValue: '加载中…' })}</div>
-        ) : items.length === 0 ? (
-          <div className="py-6 text-center text-xs text-muted-foreground">
-            {t('skills.empty', { defaultValue: '暂无 skill 记录' })}
-          </div>
-        ) : (
-          <div className="max-h-72 overflow-y-auto pr-1">
-            {items.map((item) => (
-              <SkillRow key={item.name} item={item} />
-            ))}
-          </div>
-        )}
+        <PageBoundary
+          loading={isLoading}
+          isError={isError}
+          onRetry={() => void refetch()}
+          loadingFallback={<p role="status">{t('loading')}</p>}
+          errorTitle={t('skills.loadFailed', { defaultValue: '技能资料加载失败' })}
+        >
+          {items.length === 0 ? (
+            <EmptyState title={t('skills.empty')} />
+          ) : (
+            <div className="space-y-2">
+              {items.map((item) => (
+                <SkillRow key={item.name} item={item} />
+              ))}
+            </div>
+          )}
+        </PageBoundary>
       </CardContent>
     </Card>
   );

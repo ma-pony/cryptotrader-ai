@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { useBacktestRun, useBacktestRuns } from '@/hooks/use-backtest';
 import { BacktestForm } from './backtest-form';
 import { ResearchNav, runLabels } from './presentation';
@@ -14,12 +15,9 @@ export default function ResearchPage() {
   const history = useBacktestRuns(offset);
   const navigate = useNavigate();
   return (
-    <main className="space-y-6 text-sm">
+    <div className="space-y-6 text-sm">
       <ResearchNav />
-      <header>
-        <h1 className="text-xl font-semibold">研究与回测</h1>
-        <p className="mt-2 text-muted-foreground">先明确条件，再看结果。运行与快照自动保存，可随时回来核对。</p>
-      </header>
+      <PageHeader title="研究与回测" subtitle="先明确条件，再看结果。运行与快照自动保存，可随时回来核对。" />
       {reuseId && reuse.isPending ? (
         <p role="status">正在读取待复用快照…</p>
       ) : reuseId && reuse.isError ? (
@@ -138,6 +136,6 @@ export default function ResearchPage() {
           </Button>
         </div>
       </section>
-    </main>
+    </div>
   );
 }

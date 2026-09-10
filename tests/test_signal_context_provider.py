@@ -96,7 +96,7 @@ async def test_historical_provider_never_includes_future_bars():
     as_of = datetime(2025, 1, 2, tzinfo=UTC)
     market = _market(rows=4, start="2025-01-01", price=80.0)
     history = {"4h": replace(_snapshot("4h", timestamp=as_of, market=market))}
-    provider = HistoricalSignalContextProvider(history, default_timeframe="4h")
+    provider = HistoricalSignalContextProvider(history, default_timeframe="4h", atr_timeframe="4h")
 
     context = await provider.collect(
         PAIR,

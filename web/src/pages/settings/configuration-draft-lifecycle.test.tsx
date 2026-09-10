@@ -57,7 +57,7 @@ it('keeps ordinary edits while writing model keys and uses API access rotation f
   fireEvent.click(screen.getByRole('button', { name: '保存网关密钥' }));
   await waitFor(() => expect(screen.queryByLabelText('模型网关密钥')).not.toBeInTheDocument());
   expect(screen.getByLabelText('综合分析模型')).toHaveValue('pending-model');
-  fireEvent.click(screen.getByRole('link', { name: '系统与通知' }));
+  fireEvent.click(screen.getByRole('link', { name: '安全与运行设置' }));
   fireEvent.change(await screen.findByLabelText('接口访问密钥'), { target: { value: 'access-marker' } });
   fireEvent.click(screen.getByRole('button', { name: '保存接口访问密钥' }));
   await waitFor(() => expect(screen.queryByLabelText('接口访问密钥')).not.toBeInTheDocument());
@@ -150,13 +150,15 @@ it('clears connection draft state after restoring the persisted value', async ()
 it('clears restored scheduler rules after a separate explicit pause without retaining a hidden switch draft', async () => {
   const config = workflowConfig();
   config.document.scheduler.automation_enabled = true;
-  const h = workflowHarness('/engine', config);
+  const h = workflowHarness('/engine#automation', config);
   fireEvent.change(await screen.findByLabelText('分析间隔（分钟）'), { target: { value: '60' } });
   fireEvent.click(await screen.findByRole('button', { name: '暂停自动运行' }));
   await screen.findAllByText('自动运行已暂停');
   expect(await screen.findByLabelText('分析间隔（分钟）')).toHaveValue(60);
   fireEvent.change(screen.getByLabelText('分析间隔（分钟）'), { target: { value: '15' } });
-  expect(within(screen.getByLabelText('分析间隔（分钟）').closest('form')!).getByRole('button', { name: '保存配置' })).toBeDisabled();
+  expect(
+    within(screen.getByLabelText('分析间隔（分钟）').closest('form')!).getByRole('button', { name: '保存配置' }),
+  ).toBeDisabled();
   expect(h.saved().document.scheduler.automation_enabled).toBe(false);
   expect(h.writes).toHaveLength(0);
 });

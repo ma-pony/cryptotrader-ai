@@ -110,10 +110,12 @@ class HistoricalSignalContextProvider:
         history: Mapping[str, DataSnapshot] | Callable[[str, datetime], DataSnapshot],
         *,
         default_timeframe: str,
+        atr_timeframe: str,
         source_id: str = "historical",
     ) -> None:
         self.history = history
         self.default_timeframe = default_timeframe
+        self.atr_timeframe = atr_timeframe
         self.id = source_id
 
     def _snapshot(self, timeframe: str, as_of: datetime) -> DataSnapshot:
@@ -177,6 +179,6 @@ class HistoricalSignalContextProvider:
             self.id,
             pair.market_type,
             _current_price(market),
-            _atr_value(snapshots[self.default_timeframe]),
+            _atr_value(snapshots[self.atr_timeframe]),
             snapshots,
         )

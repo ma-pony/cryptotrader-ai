@@ -15,6 +15,16 @@ beforeEach(async () => {
   useSettingsStore.getState().reset();
 });
 
+it('replaces the verified state with an explicit recheck hint when connection data changes', async () => {
+  const initial = workflowConfig();
+  workflowHarness('/accounts/connections', initial, undefined, workflowApprovedChecks(initial));
+  const form = within(await screen.findByRole('form', { name: 'Paper' }));
+  expect(await form.findByText('账户读取已验证')).toBeVisible();
+  fireEvent.change(form.getByLabelText('名称'), { target: { value: '新的模拟账户名称' } });
+  expect(form.queryByText('账户读取已验证')).not.toBeInTheDocument();
+  expect(form.getByText('配置已修改，保存后重新检查。')).toBeVisible();
+});
+
 it('uses the server definition to save arbitrary credentials then performs one read-only check', async () => {
   const h = workflowHarness('/accounts/connections');
 
@@ -61,7 +71,9 @@ it('does not let a late default-venue definition clear a user-edited sample para
     ...sample,
     id: 'bybit',
     label: { zh_CN: 'Bybit', en_US: 'Bybit' },
-    environments: [{ id: 'testnet', label: { zh_CN: '测试网', en_US: 'Testnet' }, capital_scope: 'simulated' as const }],
+    environments: [
+      { id: 'testnet', label: { zh_CN: '测试网', en_US: 'Testnet' }, capital_scope: 'simulated' as const },
+    ],
     fields: [],
     credential_fields: [],
   };

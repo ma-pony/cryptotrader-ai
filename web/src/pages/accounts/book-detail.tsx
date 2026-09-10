@@ -1,4 +1,5 @@
 import { useRef } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
 import { Link, useParams } from 'react-router';
 import { usePortfolioBook } from '@/hooks/use-portfolio-books';
 import { ConfigurationEditorGate, useConfiguration } from '@/pages/settings/configuration-context';
@@ -33,7 +34,12 @@ function BookConfiguration({ bookId }: { bookId: string }) {
             connections={runtime.baseline?.execution.connections ?? []}
             catalog={runtime.catalog.data}
             errors={runtime.errors}
-            onChange={(next) => runtime.update('execution', { ...execution, books: execution.books.map((item, i) => (i === index ? next : item)) })}
+            onChange={(next) =>
+              runtime.update('execution', {
+                ...execution,
+                books: execution.books.map((item, i) => (i === index ? next : item)),
+              })
+            }
             onRemove={() => {
               runtime.setBookRows(runtime.bookRows.filter((_, i) => i !== index));
               runtime.update('execution', { ...execution, books: execution.books.filter((_, i) => i !== index) });
@@ -42,7 +48,9 @@ function BookConfiguration({ bookId }: { bookId: string }) {
         </fieldset>
       ) : (
         <p role="status" className="configuration-help">
-          {runtime.baseline?.execution.books.some((item) => item.id === bookId) ? '待删除，保存配置后生效；放弃修改可恢复。' : '资金池已从配置移除。'}
+          {runtime.baseline?.execution.books.some((item) => item.id === bookId)
+            ? '待删除，保存配置后生效；放弃修改可恢复。'
+            : '资金池已从配置移除。'}
         </p>
       )}
       <ConfigurationSaveBar section="books" form={form.current} />
@@ -66,13 +74,15 @@ export default function BookDetail() {
       <Link to="/accounts" className="text-primary underline">
         返回账户列表
       </Link>
-      <header>
-        <h1 className="text-xl font-semibold">{book.label}</h1>
-        <p className="configuration-help">
-          {book.capital_scope === 'simulated' ? '模拟资金池' : '真实资金池'} · {book.enabled ? '已启用' : '已停用'} ·
-          所有已分配账户的最近事实
-        </p>
-      </header>
+      <PageHeader
+        title={book.label}
+        subtitle={
+          <>
+            {book.capital_scope === 'simulated' ? '模拟资金池' : '真实资金池'} · {book.enabled ? '已启用' : '已停用'} ·
+            所有已分配账户的最近事实
+          </>
+        }
+      />
       <div className="grid gap-4 md:grid-cols-2">
         <section className="configuration-section">
           <h2>账户权益</h2>

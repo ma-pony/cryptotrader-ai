@@ -1,5 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
+import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/components/alerts/attention-list', () => ({ AttentionList: () => <p>当前没有需要关注的事项。</p> }));
@@ -94,7 +95,11 @@ describe('workbench', () => {
     ['no_allocations', 'execution.books.sim.allocations', '/accounts/books#execution.books.sim'],
     ['connection_disabled', 'execution.connections.paper', '/accounts/connections#execution.connections.paper'],
     ['execution_pairs_empty', 'execution.pairs', '/accounts/books#execution.pairs'],
-    ['real_execution_not_authorized', 'execution.live_order_execution_enabled', '/accounts/books#execution.live_order_execution_enabled'],
+    [
+      'real_execution_not_authorized',
+      'execution.live_order_execution_enabled',
+      '/accounts/books#execution.live_order_execution_enabled',
+    ],
     ['execution_lock_missing', 'infrastructure.redis_url', '/settings/security#infrastructure.redis_url'],
     ['future_reason', 'future.engine.option', '/engine#configuration'],
   ])('links readiness %s to its rendered configuration owner', (_code, path, href) => {
@@ -104,17 +109,30 @@ describe('workbench', () => {
       data: {
         analysis: { ready: false, reasons: [{ code: _code, message: '需要处理', path }] },
         trading: { ready: false, reasons: [] },
-        components: [], saved_revision: 7, applied_revision: 7, apply_error: null,
-        automation_enabled: false, latest_run_at: null, execution_pairs: ['BTC/USDT:USDT'],
+        components: [],
+        saved_revision: 7,
+        applied_revision: 7,
+        apply_error: null,
+        automation_enabled: false,
+        latest_run_at: null,
+        execution_pairs: ['BTC/USDT:USDT'],
       },
     } as unknown as ReturnType<typeof useRuntimeStatus>);
-    render(<MemoryRouter><WorkbenchPage /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <WorkbenchPage />
+      </MemoryRouter>,
+    );
     expect(screen.getByRole('link', { name: '前往设置' })).toHaveAttribute('href', href);
     expect(screen.getByText(`字段：${path}`)).toBeVisible();
   });
 
   it('keeps an explicitly cleared pair empty and submits only the replacement pair', () => {
-    render(<MemoryRouter><WorkbenchPage /></MemoryRouter>);
+    render(
+      <MemoryRouter>
+        <WorkbenchPage />
+      </MemoryRouter>,
+    );
     const input = screen.getByLabelText('交易对');
     const submit = screen.getByRole('button', { name: '仅分析一次' });
     expect(input).toHaveValue('BTC/USDT:USDT');
@@ -127,5 +145,19 @@ describe('workbench', () => {
       { pair: 'ETH/USDT:USDT', expected_revision: 7 },
       expect.objectContaining({ onSuccess: expect.any(Function) }),
     );
+  });
+
+  it('submits only analysis when Enter is pressed in the pair field', async () => {
+    render(
+      <MemoryRouter>
+        <WorkbenchPage />
+      </MemoryRouter>,
+    );
+    await userEvent.type(screen.getByLabelText('交易对'), '{Enter}');
+    expect(mutation.mutate).toHaveBeenCalledWith(
+      { pair: 'BTC/USDT:USDT', expected_revision: 7 },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+    expect(screen.queryByText('交易确认')).not.toBeInTheDocument();
   });
 });

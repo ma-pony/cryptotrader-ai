@@ -6,6 +6,7 @@ import { cn } from '@/lib/cn';
 import { Button } from './button';
 
 export interface PageHeaderProps {
+  id?: string;
   /** Required main title. Renders as `<h1 text-2xl font-semibold tracking-tight>`. */
   title: ReactNode;
   /** Secondary line below the title (e.g. ``BTC/USDT @ $103,000``). */
@@ -24,43 +25,22 @@ export interface PageHeaderProps {
  * instead of writing ``<h1 className="text-2xl ...">`` inline so title size,
  * eyebrow style, and action layout stay synchronised.
  */
-export const PageHeader = ({
-  title,
-  subtitle,
-  eyebrow,
-  actions,
-  onBack,
-  className,
-}: PageHeaderProps) => (
-  <div className={cn('flex items-start justify-between gap-4', className)}>
+export const PageHeader = ({ id, title, subtitle, eyebrow, actions, onBack, className }: PageHeaderProps) => (
+  <header id={id} className={cn('page-header flex flex-col items-start justify-between gap-4 sm:flex-row', className)}>
     <div className="flex min-w-0 flex-1 items-start gap-3">
       {onBack ? (
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={onBack}
-          className="-ml-1 mt-0.5 h-8 w-8 shrink-0"
-          aria-label="back"
-        >
+        <Button variant="ghost" size="icon" onClick={onBack} className="-ml-1 shrink-0" aria-label="返回">
           <ArrowLeft className="h-4 w-4" />
         </Button>
       ) : null}
       <div className="min-w-0 flex-1">
-        {eyebrow ? (
-          <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            {eyebrow}
-          </div>
-        ) : null}
-        <h1 className="truncate text-2xl font-semibold tracking-tight text-foreground">
-          {title}
-        </h1>
+        {eyebrow ? <div className="mb-1 text-sm font-medium text-muted-foreground">{eyebrow}</div> : null}
+        <h1 className="break-words text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
         {subtitle ? (
-          <div className="mt-1 text-sm text-muted-foreground">{subtitle}</div>
+          <div className="mt-2 max-w-prose text-sm leading-relaxed text-muted-foreground">{subtitle}</div>
         ) : null}
       </div>
     </div>
-    {actions ? (
-      <div className="flex shrink-0 items-center gap-2">{actions}</div>
-    ) : null}
-  </div>
+    {actions ? <div className="flex max-w-full flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
+  </header>
 );

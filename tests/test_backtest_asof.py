@@ -14,7 +14,7 @@ async def test_explicit_historical_source_preserves_actual_ohlcv():
 
     engine = BacktestEngine("ETH/USDT:USDT", "2024-01-01", "2024-01-02", interval="1h")
     engine._candles_by_timeframe = {"1h": [[int(START.timestamp() * 1000), 101, 115, 92, 109, 7]]}
-    source = HistoricalSignalContextProvider(engine._snapshot_at, default_timeframe="1h")
+    source = HistoricalSignalContextProvider(engine._snapshot_at, default_timeframe="1h", atr_timeframe="1h")
     bars = await source.read_candles(engine.pair, "1h", START, START + timedelta(hours=1), START + timedelta(hours=1))
     assert len(bars) == 1
     assert getattr(bars[0], "open", None) == 101

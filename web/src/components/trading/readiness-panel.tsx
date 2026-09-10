@@ -1,5 +1,6 @@
 import { useRuntimeStatus, useSetAutomation } from '@/hooks/use-runtime-status';
 import { useRuntimeConfigConflict } from '@/hooks/runtime-config-conflict';
+import { Button } from '@/components/ui/button';
 
 export function ReadinessPanel() {
   const status = useRuntimeStatus();
@@ -10,15 +11,26 @@ export function ReadinessPanel() {
     return (
       <div role="alert">
         就绪状态读取失败。
-        <button className="configuration-button min-h-10" onClick={() => void status.refetch()}>
+        <Button variant="outline" onClick={() => void status.refetch()}>
           重试
-        </button>
+        </Button>
       </div>
     );
   const data = status.data;
   return (
-    <section className="space-y-3 rounded-lg border p-4 text-sm" aria-label="运行就绪">
-      <h2 className="font-semibold">运行就绪</h2>
+    <section className="operational-panel text-sm" aria-label="运行就绪">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-semibold">运行就绪</h2>
+        <Button
+          variant="outline"
+          disabled={automation.isPending || conflict}
+          onClick={() =>
+            automation.mutate({ enabled: !data.automation_enabled, expected_revision: data.saved_revision })
+          }
+        >
+          {data.automation_enabled ? '暂停自动运行' : '开启自动运行'}
+        </Button>
+      </div>
       <p>
         配置已保存：版本 {data.saved_revision} · 已应用：
         {data.applied_revision === null ? '尚未应用' : `版本 ${data.applied_revision}`}
@@ -32,13 +44,6 @@ export function ReadinessPanel() {
             : '自动运行已开启，等待交易就绪'
           : '自动运行已暂停'}
       </p>
-      <button
-        className="configuration-button min-h-11"
-        disabled={automation.isPending || conflict}
-        onClick={() => automation.mutate({ enabled: !data.automation_enabled, expected_revision: data.saved_revision })}
-      >
-        {data.automation_enabled ? '暂停自动运行' : '开启自动运行'}
-      </button>
       <p className="text-muted-foreground">
         总开关只控制新定时与触发运行；不取消已开始的交易，也不代替真实资金授权和人工审批。
       </p>
@@ -46,11 +51,13 @@ export function ReadinessPanel() {
       <p>
         分析：{data.analysis.ready ? '已就绪' : '未就绪'} · 交易：{data.trading.ready ? '已就绪' : '未就绪'}
       </p>
-      {data.trading.reasons.map((reason) => (
-        <p key={`${reason.code}:${reason.path}`} className="text-muted-foreground">
-          {reason.message}
-        </p>
-      ))}
+      {data.trading.reasons.length ? (
+        <ul className="list-disc space-y-1 pl-5 text-muted-foreground">
+          {data.trading.reasons.map((reason) => (
+            <li key={`${reason.code}:${reason.path}`}>{reason.message}</li>
+          ))}
+        </ul>
+      ) : null}
       <p>最近运行：{data.latest_run_at ? new Date(data.latest_run_at).toLocaleString() : '尚无记录'}</p>
     </section>
   );

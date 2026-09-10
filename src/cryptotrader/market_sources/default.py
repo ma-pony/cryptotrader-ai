@@ -55,6 +55,7 @@ class DefaultMarketDataSource:
         self.config = config
         parameters = DefaultMarketSourceParameters.model_validate(dict(config.parameters))
         self.market_adapter_id = parameters.market_adapter_id
+        self.atr_timeframe = parameters.timeframe
         if not self.market_adapter_id:
             raise ValueError("default market source requires market_adapter_id")
         self.kronos_aux_symbol = parameters.kronos_aux_symbol
@@ -110,7 +111,7 @@ class DefaultMarketDataSource:
             market_data_source_id=self.id,
             market_type=pair.market_type,
             current_price=_price(primary_snapshot),
-            atr=_atr(primary_snapshot),
+            atr=_atr(snapshots[self.atr_timeframe]),
             snapshots=snapshots,
         )
 

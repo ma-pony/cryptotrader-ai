@@ -1,6 +1,6 @@
 {
-  "title": "Memory Evolution",
-  "description": "Rule FSM states, IVE classification history, archived records",
+  "title": "Agent profiles",
+  "description": "Review skill files, scopes and access records. This page does not start model analysis.",
   "loading": "Loading…",
   "rules_grid": {
     "title": "Rule State Matrix",
@@ -42,6 +42,15 @@
   "skills": {
     "title": "Skills List",
     "empty": "No skills found",
+    "loadFailed": "Failed to load skill profiles",
+    "edited": "Manually edited",
+    "importance": "Importance",
+    "accessCount": "Accessed {{count}} times",
+    "lastAccess": "Last accessed",
+    "regime": "Regime: {{tag}}",
+    "keyword": "Trigger keyword: {{keyword}}",
+    "more": "+{{count}} more",
+    "inferenceFailed": "Inference failed during proposal",
     "proposals": "Skill Proposals",
     "agents": {
       "tech": "Technical Analysis",

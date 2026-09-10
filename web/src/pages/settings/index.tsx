@@ -2,6 +2,7 @@ import { useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router';
 import { SaveBar } from '@/components/configuration/save-bar';
+import { PageHeader } from '@/components/ui/page-header';
 import type { ConfigurationSection } from '@/hooks/use-configuration-draft';
 import { ModelSettings } from './forms/model-settings';
 import { SignalSettings } from './forms/signal-settings';
@@ -20,7 +21,10 @@ export function ConfigurationLayout() {
   return (
     <div className="configuration-workbench">
       <header className="configuration-center-header">
-        <span>{t('center.systemHub')} · {runtime.revision ? t('revisionValue', { revision: runtime.revision }) : '配置版本未知'}</span>
+        <span>
+          {t('center.systemHub')} ·{' '}
+          {runtime.revision ? t('revisionValue', { revision: runtime.revision }) : '配置版本未知'}
+        </span>
       </header>
       <div className="configuration-mobile-navigation configuration-field">
         <label htmlFor="configuration-section">{t('center.section')}</label>
@@ -73,7 +77,13 @@ export function ConfigurationSaveBar({
   );
 }
 
-export default function SettingsPage({ section, componentId }: { section: Exclude<ConfigurationSection, 'books' | 'notifications'>; componentId?: string }) {
+export default function SettingsPage({
+  section,
+  componentId,
+}: {
+  section: Exclude<ConfigurationSection, 'books' | 'notifications'>;
+  componentId?: string;
+}) {
   const runtime = useConfiguration();
   const form = useRef<HTMLFormElement>(null);
   const { t } = useTranslation('configuration');
@@ -87,6 +97,7 @@ export default function SettingsPage({ section, componentId }: { section: Exclud
   });
   return (
     <form
+      className="space-y-6"
       id={section === 'models' ? 'models' : section === 'system' ? 'system-settings' : undefined}
       ref={form}
       noValidate
@@ -95,6 +106,7 @@ export default function SettingsPage({ section, componentId }: { section: Exclud
         void runtime.save(section, form.current ?? undefined);
       }}
     >
+      {section === 'models' ? <PageHeader title={t('center.modelsPageTitle')} /> : null}
       {section === 'models' ? (
         <ModelSettings
           value={document.llm}
@@ -141,7 +153,7 @@ export default function SettingsPage({ section, componentId }: { section: Exclud
       ) : null}
       {section === 'system' ? (
         <>
-          <h1 className="text-xl font-semibold">{t('center.systemTitle')}</h1>
+          <PageHeader title={t('center.systemTitle')} />
           <SystemSettings
             value={document}
             onChange={(patch) => {

@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import { Link, useParams } from 'react-router';
+import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { useAccount, useAccountHistory, useSyncAccount } from '@/hooks/use-accounts';
 import { useConfigurationCatalog } from '@/hooks/use-configuration-catalog';
@@ -36,51 +38,52 @@ export default function ConnectionDetail() {
     );
   const item = account.data;
   const venue = catalog.data?.venues.find((entry) => entry.id === item.adapter_id);
-  const environment = venue
-    ?.environments.find((entry) => entry.id === item.environment)?.label.zh_CN;
+  const environment = venue?.environments.find((entry) => entry.id === item.environment)?.label.zh_CN;
   return (
     <section className="space-y-6 text-sm">
       <Link className="text-primary underline" to="/accounts">
         返回账户列表
       </Link>
-      <header className="flex flex-wrap justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">{item.label}</h1>
-          <p className="configuration-help">
+      <PageHeader
+        title={item.label}
+        subtitle={
+          <>
             {item.capital_scope === 'simulated' ? '模拟账户' : '真实账户'} · {venue?.label.zh_CN ?? item.adapter_id} ·{' '}
             {environment ?? item.environment} · <span>{item.enabled ? '已启用' : '已停用'}</span>
-          </p>
-        </div>
-        <ExitDialog account={item} />
-        {!item.archived ? (
-          <div>
-            <button
-              className="configuration-button"
-              disabled={remove.isPending || !configuration.revision}
-              onClick={() => {
-              if (
-                window.confirm(
-                  '安全移除连接前必须停用所属池（或无归属连接），并由平台最新同步证明无持仓、无挂单。历史记录仍可读取。确认移除？',
-                )
-              )
-                remove.mutate(configuration.revision!);
-              }}
-            >
-              安全移除连接
-            </button>
-            {!configuration.revision ? <p className="configuration-help">配置版本不可用，无法安全移除；请先解锁并重新读取配置。</p> : null}
-          </div>
-        ) : (
-          <p role="status">已归档 · 历史只读</p>
-        )}
-        <button
-          className="configuration-button"
-          disabled={sync.isPending || item.archived}
-          onClick={() => sync.mutate()}
-        >
-          {sync.isPending ? '正在刷新…' : '刷新账户'}
-        </button>
-      </header>
+          </>
+        }
+        actions={
+          <>
+            <ExitDialog account={item} />
+            {!item.archived ? (
+              <div>
+                <Button
+                  variant="outline"
+                  disabled={remove.isPending || !configuration.revision}
+                  onClick={() => {
+                    if (
+                      window.confirm(
+                        '安全移除连接前必须停用所属池（或无归属连接），并由平台最新同步证明无持仓、无挂单。历史记录仍可读取。确认移除？',
+                      )
+                    )
+                      remove.mutate(configuration.revision!);
+                  }}
+                >
+                  安全移除连接
+                </Button>
+                {!configuration.revision ? (
+                  <p className="configuration-help">配置版本不可用，无法安全移除；请先解锁并重新读取配置。</p>
+                ) : null}
+              </div>
+            ) : (
+              <p role="status">已归档 · 历史只读</p>
+            )}
+            <Button variant="outline" disabled={sync.isPending || item.archived} onClick={() => sync.mutate()}>
+              {sync.isPending ? '正在刷新…' : '刷新账户'}
+            </Button>
+          </>
+        }
+      />
       <AttentionList connectionId={connectionId} />
       {remove.isError ? (
         <p role="alert" className="configuration-error">

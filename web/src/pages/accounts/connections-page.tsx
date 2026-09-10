@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Link } from 'react-router';
 import { useTranslation } from 'react-i18next';
+import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { ConnectionForm } from './connection-form';
 import { useConfiguration } from '@/pages/settings/configuration-context';
 
@@ -12,21 +15,27 @@ export default function ConnectionsPage() {
   const connections = runtime.baseline?.execution.connections ?? [];
   return (
     <section className="space-y-6">
-      <header id="execution.connections">
-        <h1 className="text-xl font-semibold">{t('venues')}</h1>
-        <p className="configuration-help">{t('venuesSubtitle')}</p>
-        <Link className="configuration-button" to="/accounts">
-          查看账户与收益
-        </Link>
-        <button
-          className="configuration-button"
-          type="button"
-          disabled={runtime.isReloading}
-          onClick={() => void runtime.reload()}
-        >
-          {t('reload')}
-        </button>
-      </header>
+      <PageHeader
+        id="execution.connections"
+        title={t('venues')}
+        subtitle={t('venuesSubtitle')}
+        actions={
+          <>
+            <Button asChild variant="outline">
+              <Link to="/accounts">查看账户与收益</Link>
+            </Button>
+            <Button variant="ghost" disabled={runtime.isReloading} onClick={() => void runtime.reload()}>
+              {t('reload')}
+            </Button>
+          </>
+        }
+      />
+      {!connections.length && !addingForm ? (
+        <EmptyState
+          title="尚未添加平台连接"
+          description="选择已注册的平台与环境，再填写连接信息。可以从本地模拟器开始。"
+        />
+      ) : null}
       {runtime.conflict ? (
         <p role="alert" className="configuration-error">
           {t('forms.conflictHelp')}
@@ -65,9 +74,7 @@ export default function ConnectionsPage() {
           />
         </section>
       ) : (
-        <button className="configuration-button" type="button" onClick={() => setAdding(true)}>
-          {t('addConnection')}
-        </button>
+        <Button onClick={() => setAdding(true)}>{t('addConnection')}</Button>
       )}
     </section>
   );

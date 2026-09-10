@@ -11,6 +11,18 @@ import { runtimeConfigFixture } from '@/test/runtime-config-fixture';
 import { SignalSettings } from '@/pages/settings/forms/signal-settings';
 import { configurationCatalogFixture } from '@/test/configuration-catalog-fixture';
 
+it('shows an active retry instead of the previous save failure', () => {
+  const view = render(
+    <SaveBar dirty status="failed" failure="保存失败" onSave={() => undefined} onDiscard={() => undefined} />,
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('保存失败');
+  view.rerender(
+    <SaveBar dirty status="saving" failure="保存失败" onSave={() => undefined} onDiscard={() => undefined} />,
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('保存中');
+  expect(screen.getByRole('status')).not.toHaveTextContent('保存失败');
+});
+
 it('submits the owning configuration form from the keyboard', async () => {
   const saved = vi.fn();
   render(

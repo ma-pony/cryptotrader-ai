@@ -1,5 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import type { SaveStatus } from '@/hooks/use-configuration-draft';
+import { Button } from '@/components/ui/button';
+import { LoaderCircle, Save } from 'lucide-react';
 
 export type SaveBarProps = {
   dirty: boolean;
@@ -27,12 +29,11 @@ export function SaveBar({
 }: SaveBarProps) {
   const { t } = useTranslation('configuration');
   const pending = status === 'saving' || loading;
-  const message =
-    failure ||
-    (conflict
-      ? t('forms.conflictHelp')
-      : pending
-        ? t('forms.saving')
+  const message = pending
+    ? t('forms.saving')
+    : failure ||
+      (conflict
+        ? t('forms.conflictHelp')
         : dirty
           ? t('forms.unsaved')
           : status === 'saved'
@@ -41,7 +42,7 @@ export function SaveBar({
   return (
     <div className="configuration-save-bar">
       <div role="status" aria-live="polite">
-        <p className={failure || conflict ? 'configuration-error' : ''}>{message}</p>
+        <p className={!pending && (failure || conflict) ? 'configuration-error' : 'font-medium'}>{message}</p>
         {applyStatus === 'pending' ? (
           <p className="configuration-help">{t('apply.pending')}</p>
         ) : applyStatus === 'failed' ? (
@@ -52,28 +53,32 @@ export function SaveBar({
       </div>
       <div className="configuration-actions">
         {onReload ? (
-          <button type="button" className="configuration-button" disabled={pending} onClick={onReload}>
+          <Button variant="ghost" disabled={pending} onClick={onReload}>
             {t('reload')}
-          </button>
+          </Button>
         ) : null}
-        <button
+        <Button
           type="button"
-          className="configuration-button"
+          variant="outline"
           disabled={pending || !dirty}
           onClick={() => {
             if (!dirty || window.confirm(t('forms.discardConfirm'))) onDiscard();
           }}
         >
           {t('forms.discard')}
-        </button>
-        <button
+        </Button>
+        <Button
           type={submit ? 'submit' : 'button'}
-          className="configuration-button configuration-primary"
           disabled={pending || conflict || !dirty}
           onClick={submit ? undefined : onSave}
         >
+          {pending ? (
+            <LoaderCircle className="h-4 w-4 motion-safe:animate-spin" aria-hidden="true" />
+          ) : (
+            <Save className="h-4 w-4" aria-hidden="true" />
+          )}
           {pending ? t('forms.saving') : t('forms.saveSection')}
-        </button>
+        </Button>
       </div>
     </div>
   );

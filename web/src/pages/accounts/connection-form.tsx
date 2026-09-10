@@ -11,6 +11,7 @@ import {
   type FieldErrors,
 } from '@/components/configuration/field';
 import { CredentialPanel } from '@/components/configuration/credential-panel';
+import { Button } from '@/components/ui/button';
 import {
   getParameter,
   isValidParameterNumber,
@@ -55,6 +56,7 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
   const [values, setValues] = useState<Record<string, string>>({});
   const [editingCredentials, setEditingCredentials] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveStage, setSaveStage] = useState<'connection' | 'credentials' | 'check'>('connection');
   const [error, setError] = useState('');
   const [missing, setMissing] = useState<string[]>([]);
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
@@ -104,10 +106,7 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
   if (!draft || !catalog) return null;
   const leverageMinimum = definition.data?.leverage_minimum ?? 1;
   const leverageMaximum = definition.data?.leverage_maximum;
-  const effectiveLeverage = Math.max(
-    leverageMinimum,
-    Math.min(draft.leverage, leverageMaximum ?? draft.leverage),
-  );
+  const effectiveLeverage = Math.max(leverageMinimum, Math.min(draft.leverage, leverageMaximum ?? draft.leverage));
   const effectiveMarginMode = margins.includes(draft.margin_mode)
     ? draft.margin_mode
     : (margins[0] ?? draft.margin_mode);
@@ -175,6 +174,7 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
     )
       return;
     setSaving(true);
+    setSaveStage('connection');
     setError('');
     setMissing([]);
     let connectionSaved = Boolean(connection && !dirty);
@@ -241,6 +241,7 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
       let checkedAt = credentials?.updatedAt ?? null;
       if (needsCredentials) {
         stage = 'credentials';
+        setSaveStage('credentials');
         const result = await venueApi.putCredentials({
           id: saved.id,
           expectedRevision: revision,
@@ -256,6 +257,7 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
         }
       }
       stage = 'check';
+      setSaveStage('check');
       await runtime.checkConnection(saved.id, saved, checkedAt);
       onSaved(saved.id);
     } catch (cause) {
@@ -304,109 +306,115 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
         void saveAndCheck();
       }}
     >
-      <div className="configuration-grid">
-        <TextField
-          name={`${fieldPrefix}.label`}
-          label={t('connection.name')}
-          required
-          error={fieldErrors[`${fieldPrefix}.label`]}
-          value={draft.label}
-          onChange={(label) => change({ ...draft, label })}
-        />
-        <ChoiceField
-          name={`${fieldPrefix}.adapter`}
-          label={t('connection.adapter')}
-          disabled={Boolean(connection)}
-          value={draft.adapter_id}
-          options={catalog.venues.map((item) => ({ value: item.id, label: item.label[locale] }))}
-          onChange={(adapterId) => {
-            const selected = catalog.venues.find((item) => item.id === adapterId)!;
-            setValues({});
-            change({
-              ...draft,
-              adapter_id: adapterId,
-              environment: selected.environments[0]?.id ?? '',
-              margin_mode: selected.margin_modes[0] ?? 'cross',
-              parameters: {},
-            });
-          }}
-        />
-        <ChoiceField
-          name={`${fieldPrefix}.environment`}
-          label={t('connection.environment')}
-          disabled={Boolean(connection)}
-          value={draft.environment}
-          options={(venue?.environments ?? []).map((environment) => ({
-            value: environment.id,
-            label: environment.label[locale],
-          }))}
-          onChange={(environment) => {
-            setValues({});
-            change({
-              ...draft,
-              environment,
-              margin_mode: venue?.margin_modes[0] ?? draft.margin_mode,
-              parameters: {},
-            });
-          }}
-        />
-        <BooleanField
-          name={`${fieldPrefix}.enabled`}
-          label={t('connection.enabled')}
-          value={draft.enabled}
-          onChange={(enabled) => change({ ...draft, enabled })}
-        />
-      </div>
-      {!definitionReady && !definition.isError ? (
-        <p role="status" className="configuration-help">
-          {t('connection.definitionLoading')}
-        </p>
-      ) : null}
-      <ParameterFields
-        fields={fields}
-        value={draft.parameters}
-        idPrefix={`${fieldPrefix}.parameters`}
-        onChange={(parameters) => change({ ...draft, parameters })}
-        errors={fieldErrors}
-      />
-      <div className="configuration-grid">
-        <NumberField
-          name={`${fieldPrefix}.leverage`}
-          label={t('connection.leverage')}
-          error={fieldErrors[`${fieldPrefix}.leverage`]}
-          min={definition.data?.leverage_minimum ?? 1}
-          {...(definition.data?.leverage_maximum === null || definition.data?.leverage_maximum === undefined
-            ? {}
-            : { max: definition.data.leverage_maximum })}
-          value={draft.leverage}
-          onChange={(leverage) => change({ ...draft, leverage: typeof leverage === 'number' ? leverage : 1 })}
-        />
-        {margins.length > 1 ? (
-          <ChoiceField
-            name={`${fieldPrefix}.margin_mode`}
-            label={t('connection.marginMode')}
-            value={effectiveMarginMode}
-            options={margins.map((mode) => ({
-              value: mode,
-              label: t(`connection.modes.${mode}`, { defaultValue: mode }),
-            }))}
-            onChange={(margin_mode) => change({ ...draft, margin_mode })}
+      <fieldset className="configuration-group">
+        <legend className="font-semibold">{t('connection.information')}</legend>
+        <div className="configuration-grid">
+          <TextField
+            name={`${fieldPrefix}.label`}
+            label={t('connection.name')}
+            required
+            error={fieldErrors[`${fieldPrefix}.label`]}
+            value={draft.label}
+            onChange={(label) => change({ ...draft, label })}
           />
-        ) : (
-          <p className="configuration-help">
-            {t('connection.fixedMargin', {
-              mode: t(`connection.modes.${effectiveMarginMode}`, { defaultValue: effectiveMarginMode }),
-            })}
+          <ChoiceField
+            name={`${fieldPrefix}.adapter`}
+            label={t('connection.adapter')}
+            disabled={Boolean(connection)}
+            value={draft.adapter_id}
+            options={catalog.venues.map((item) => ({ value: item.id, label: item.label[locale] }))}
+            onChange={(adapterId) => {
+              const selected = catalog.venues.find((item) => item.id === adapterId)!;
+              setValues({});
+              change({
+                ...draft,
+                adapter_id: adapterId,
+                environment: selected.environments[0]?.id ?? '',
+                margin_mode: selected.margin_modes[0] ?? 'cross',
+                parameters: {},
+              });
+            }}
+          />
+          <ChoiceField
+            name={`${fieldPrefix}.environment`}
+            label={t('connection.environment')}
+            disabled={Boolean(connection)}
+            value={draft.environment}
+            options={(venue?.environments ?? []).map((environment) => ({
+              value: environment.id,
+              label: environment.label[locale],
+            }))}
+            onChange={(environment) => {
+              setValues({});
+              change({
+                ...draft,
+                environment,
+                margin_mode: venue?.margin_modes[0] ?? draft.margin_mode,
+                parameters: {},
+              });
+            }}
+          />
+          <BooleanField
+            name={`${fieldPrefix}.enabled`}
+            label={t('connection.enabled')}
+            value={draft.enabled}
+            onChange={(enabled) => change({ ...draft, enabled })}
+          />
+        </div>
+        {!definitionReady && !definition.isError ? (
+          <p role="status" className="configuration-help">
+            {t('connection.definitionLoading')}
           </p>
-        )}
-        <BooleanField
-          name={`${fieldPrefix}.canary_only`}
-          label={t('connection.canaryOnly')}
-          help={t('connection.canaryWarning')}
-          value={draft.canary_only}
-          onChange={(canary_only) => change({ ...draft, canary_only })}
+        ) : null}
+        <ParameterFields
+          fields={fields}
+          value={draft.parameters}
+          idPrefix={`${fieldPrefix}.parameters`}
+          onChange={(parameters) => change({ ...draft, parameters })}
+          errors={fieldErrors}
         />
-      </div>
+      </fieldset>
+      <fieldset className="configuration-group">
+        <legend className="font-semibold">{t('connection.executionOptions')}</legend>
+        <div className="configuration-grid">
+          <NumberField
+            name={`${fieldPrefix}.leverage`}
+            label={t('connection.leverage')}
+            error={fieldErrors[`${fieldPrefix}.leverage`]}
+            min={definition.data?.leverage_minimum ?? 1}
+            {...(definition.data?.leverage_maximum === null || definition.data?.leverage_maximum === undefined
+              ? {}
+              : { max: definition.data.leverage_maximum })}
+            value={draft.leverage}
+            onChange={(leverage) => change({ ...draft, leverage: typeof leverage === 'number' ? leverage : 1 })}
+          />
+          {margins.length > 1 ? (
+            <ChoiceField
+              name={`${fieldPrefix}.margin_mode`}
+              label={t('connection.marginMode')}
+              value={effectiveMarginMode}
+              options={margins.map((mode) => ({
+                value: mode,
+                label: t(`connection.modes.${mode}`, { defaultValue: mode }),
+              }))}
+              onChange={(margin_mode) => change({ ...draft, margin_mode })}
+            />
+          ) : (
+            <p className="configuration-help">
+              {t('connection.fixedMargin', {
+                mode: t(`connection.modes.${effectiveMarginMode}`, { defaultValue: effectiveMarginMode }),
+              })}
+            </p>
+          )}
+          <BooleanField
+            name={`${fieldPrefix}.canary_only`}
+            label={t('connection.canaryOnly')}
+            help={t('connection.canaryWarning')}
+            value={draft.canary_only}
+            onChange={(canary_only) => change({ ...draft, canary_only })}
+          />
+        </div>
+      </fieldset>
       {credentialFields.length ? (
         <>
           <CredentialPanel
@@ -443,14 +451,14 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
             </div>
           </CredentialPanel>
           {configured ? (
-            <button
-              className="configuration-button"
+            <Button
+              variant="ghost"
               type="button"
               disabled={saving || runtime.conflict}
               onClick={() => void deleteCredentials()}
             >
               {t('connection.deleteCredentials')}
-            </button>
+            </Button>
           ) : null}
         </>
       ) : (
@@ -461,36 +469,46 @@ export function ConnectionForm({ connectionId, onSaved }: { connectionId?: strin
           {t('connection.credentialsMissing', { names: missing.join('、') })}
         </p>
       ) : null}
-      <div className="configuration-actions">
-        <button
-          className="configuration-button configuration-primary"
-          type="submit"
-          disabled={saving || !definitionReady || definition.isError || runtime.conflict}
-        >
-          {t(saving ? 'connection.checking' : 'connection.saveAndCheck')}
-        </button>
-      </div>
       {definition.isError ? (
         <p role="alert" className="configuration-error">
           {t('connection.definitionLoadFailed')}
         </p>
       ) : null}
-      {currentHealth?.healthy ? (
-        <p role="status">
-          {t('connection.verified')} ·{' '}
-          <time dateTime={currentHealth.checked_at}>{formatDateTime(currentHealth.checked_at)}</time>
-        </p>
-      ) : null}
-      {currentHealth && !currentHealth.healthy ? (
-        <p role="alert" className="configuration-error">
-          {t('connection.testFailed')}
-        </p>
-      ) : null}
+      <section className="configuration-check" aria-label={t('connection.checkTitle')}>
+        <h3 className="font-semibold">{t('connection.checkTitle')}</h3>
+        <p className="text-muted-foreground">{t('connection.checkHelp')}</p>
+        <div role="status" aria-live="polite" className="space-y-1">
+          {saving ? (
+            <p>{t(`connection.progress.${saveStage}`)}</p>
+          ) : currentHealth?.healthy ? (
+            <>
+              <p className="font-medium">{t('connection.verified')}</p>
+              <time className="text-muted-foreground" dateTime={currentHealth.checked_at}>
+                {formatDateTime(currentHealth.checked_at)}
+              </time>
+            </>
+          ) : currentHealth ? (
+            <p className="configuration-error">{t('connection.testFailed')}</p>
+          ) : connection && (dirty || editingCredentials || Object.keys(values).length) ? (
+            <p>{t('connection.recheckAfterSave')}</p>
+          ) : (
+            <p>{t('connection.notChecked')}</p>
+          )}
+        </div>
+      </section>
       {error ? (
         <p role="alert" className="configuration-error">
           {error}
         </p>
       ) : null}
+      <div className="configuration-save-bar">
+        <p className="text-muted-foreground">
+          {t(dirty ? 'forms.unsaved' : connection ? 'connection.persisted' : 'connection.notSaved')}
+        </p>
+        <Button type="submit" disabled={saving || !definitionReady || definition.isError || runtime.conflict}>
+          {t(saving ? `connection.progress.${saveStage}` : 'connection.saveAndCheck')}
+        </Button>
+      </div>
     </form>
   );
 }

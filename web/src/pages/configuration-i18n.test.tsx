@@ -54,7 +54,7 @@ describe('configuration control plane in English', () => {
   });
 
   it('renders strategy controls in English', async () => {
-    workflowHarness('/engine');
+    workflowHarness('/engine#signals');
     expect(await screen.findByRole('heading', { name: 'Signals and weights' })).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Save configuration' }).length).toBeGreaterThan(0);
   });

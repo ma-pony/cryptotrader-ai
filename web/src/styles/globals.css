@@ -244,3 +244,66 @@
   .decision-row > :nth-child(3), .decision-row > :nth-child(4), .decision-row > :nth-child(5) { grid-column: 1 / -1; }
   .account-overview-row { grid-template-columns: 1fr; }
 }
+
+/* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app
+ * Shared navigation, sections and operational forms. No decorative motion. */
+.page-container { width: 100%; max-width: 76rem; margin-inline: auto; min-width: 0; font-size: .875rem; line-height: 1.6; }
+.page-container > * { min-width: 0; }
+.app-content { min-width: 0; outline: none; }
+.app-content [id] { scroll-margin-top: 1.5rem; }
+.page-header { padding-bottom: 1.25rem; border-bottom: 1px solid hsl(var(--border)); }
+.page-header h1 { overflow-wrap: anywhere; }
+.app-breadcrumb { min-width: 0; font-size: .875rem; }
+.app-breadcrumb ol { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.app-breadcrumb li { align-items: center; gap: .5rem; }
+.breadcrumb-parent { display: none; color: hsl(var(--muted-foreground)); }
+.app-breadcrumb a { display: inline-flex; align-items: center; min-height: 2.5rem; white-space: nowrap; }
+.app-breadcrumb a:hover { color: hsl(var(--foreground)); }
+.skip-link { position: fixed; top: .5rem; left: .5rem; z-index: 50; padding: .75rem 1rem; background: hsl(var(--background)); color: hsl(var(--foreground)); transform: translateY(-200%); }
+.skip-link:focus { transform: translateY(0); outline: 2px solid hsl(var(--ring)); }
+.section-tabs-list { display: flex; justify-content: flex-start; width: fit-content; }
+.research-navigation { display: flex; }
+.section-tab-content:not([hidden]) { padding-top: 1rem; }
+.section-tab-content[hidden] { display: none; }
+.signal-summary { display: flex; flex-direction: column; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--card)); }
+.signal-summary > a { margin-top: auto; }
+.configuration-venue-form { display: grid; gap: 1.25rem; }
+.configuration-group { min-width: 0; padding-top: 1rem; }
+.configuration-group > legend { padding: 0; font-size: 1rem; }
+.configuration-group + .configuration-group { border-top: 1px solid hsl(var(--border)); }
+.configuration-save-bar > [role="status"] { flex: 1 1 16rem; min-width: 0; }
+.configuration-save-bar .configuration-actions { justify-content: flex-end; }
+.configuration-save-bar .configuration-help:empty { display: none; }
+.configuration-field { align-content: start; }
+.runtime-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem 1.5rem; padding-block: .75rem; border-block: 1px solid hsl(var(--border)); }
+.runtime-facts p { overflow-wrap: anywhere; }
+.workbench-actions .configuration-field { min-width: 0; flex-basis: 100%; }
+.decision-row { padding: .75rem .25rem; }
+.app-content table { font-variant-numeric: tabular-nums; }
+.app-content thead th { color: hsl(var(--muted-foreground)); font-weight: 500; white-space: nowrap; }
+.app-content a:focus-visible { outline: 2px solid hsl(var(--ring)); outline-offset: 2px; }
+.decision-list-row { display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: center; gap: .5rem 1rem; border-bottom: 1px solid hsl(var(--border)); padding: 1rem .5rem; }
+.decision-list-row > * { min-width: 0; overflow-wrap: anywhere; }
+.decision-list-row time, .decision-list-row > :nth-child(4) { grid-column: 1 / -1; }
+.decision-list-row:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
+@media (min-width: 48rem) {
+  .decision-list-row { grid-template-columns: minmax(7rem, 1fr) minmax(6rem, 1fr) minmax(10rem, 1.5fr) minmax(7rem, 1fr) auto; }
+  .decision-list-row time, .decision-list-row > :nth-child(4) { grid-column: auto; }
+  .breadcrumb-parent { display: flex; }
+  .workbench-actions .configuration-field { flex-basis: 16rem; }
+  .runtime-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+@media (max-width: 24rem) {
+  .runtime-facts { grid-template-columns: minmax(0, 1fr); }
+  .section-tabs-list { display: grid; width: 100%; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* Shared success foreground must also be readable on a light surface. */
+@layer base {
+  :root { --success: 142 71% 29%; }
+  [data-theme='dark'] { --success: 142 71% 45%; }
+}
+
+/* Hallmark · pre-emit critique: P4 H4 E4 S5 R4 V4 · shared-component app pass
+ * Representative responsive/contrast checks: docs/verification/uiux-2026-09-09.md.
+ * Existing system exemptions retained; no blanket whole-site accessibility claim. */

@@ -25,7 +25,7 @@ it('makes empty history actionable without triggering analysis or trading', asyn
   const result = harness();
   expect(await screen.findByRole('heading', { name: 'Kronos', level: 1 })).toBeInTheDocument();
   expect(await screen.findByText('暂无运行历史')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: '前往引擎配置' })).toHaveAttribute('href', '/engine#configuration');
+  expect(screen.getByRole('link', { name: '前往引擎配置' })).toHaveAttribute('href', '/engine#signals');
   expect(
     result.fetchMock.mock.calls.filter(([url]) => url.includes('/chat') || url.includes('/analyses')),
   ).toHaveLength(0);

@@ -10,7 +10,19 @@
     "keyMissing": "密钥未提供",
     "breadcrumb": "导航路径",
     "toggleSidebar": "切换侧边栏",
-    "primaryNavigation": "主要导航"
+    "primaryNavigation": "主要导航",
+    "pages": {
+      "connections": "平台连接",
+      "connectionDetail": "账户详情",
+      "books": "执行资金池",
+      "bookDetail": "资金池详情",
+      "componentDetail": "组件结果",
+      "decisionDetail": "决策详情",
+      "backtestDetail": "回测详情",
+      "market": "行情看板",
+      "analysis": "仅分析",
+      "compare": "回测比较"
+    }
   },
   "nav": {
     "workbench": "工作台",

@@ -16,6 +16,7 @@ import pandas as pd
 from cryptotrader._compat import UTC
 from cryptotrader.backtest.cache import _TF_MS
 from cryptotrader.backtest.result import BacktestResult, EquityPoint, closed_round_trips
+from cryptotrader.decision.exit_policy import exit_candle_requirement
 from cryptotrader.decision.models import CycleRequest
 from cryptotrader.execution.models import ConnectionAllocation, ExecutionBook
 from cryptotrader.models import DataSnapshot, MacroData, MarketData, NewsSentiment, OnchainData
@@ -154,18 +155,20 @@ class BacktestEngine:
         self._source_config = source_snapshot.document.market_data
         self.market_registry = self.market_registry or MarketSourceRegistry.discover(self._source_config)
         default_timeframe = self._source_config.timeframe
-        limit = int(source_snapshot.document.market_data.parameters.get("limit", self.lookback))
+        exit_candles = exit_candle_requirement(self._source_config)
         profile = source_snapshot.document.signals.to_profile(source_snapshot.revision)
         components = registry.enabled(profile)
         requirements = DataRequirements.merge(
             *(component.requirements() for component in components),
-            DataRequirements(candles=(CandleRequirement(default_timeframe, max(20, limit)),)),
+            DataRequirements(candles=(exit_candles,)),
+            DataRequirements(candles=(CandleRequirement(default_timeframe, 2),)),
             DataRequirements(candles=(CandleRequirement(self.interval, self.lookback),)),
         )
         await self._fetch_historical_data(requirements)
         historical = HistoricalSignalContextProvider(
             self._snapshot_at,
             default_timeframe=default_timeframe,
+            atr_timeframe=exit_candles.timeframe,
             source_id=self._source_config.source_id,
         )
         self._as_of = datetime.fromtimestamp(self.start_ms / 1000, UTC)

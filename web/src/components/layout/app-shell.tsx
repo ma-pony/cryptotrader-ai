@@ -20,6 +20,9 @@ export const AppShell = () => {
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
+      <a href="#page-content" className="skip-link">
+        跳到主要内容
+      </a>
       <Sidebar />
 
       {/* Mobile drawer — triggered by TopBar's menu button */}
@@ -32,8 +35,10 @@ export const AppShell = () => {
       <div className="flex min-w-0 flex-1 flex-col">
         <TopBar />
         {/* Tighter padding on small screens so content gets more room */}
-        <main className="flex-1 overflow-auto px-4 py-4 md:px-6 md:py-6">
-          <Outlet />
+        <main id="page-content" tabIndex={-1} className="app-content flex-1 px-4 py-5 md:px-6 md:py-8">
+          <div className="page-container">
+            <Outlet />
+          </div>
         </main>
       </div>
     </div>

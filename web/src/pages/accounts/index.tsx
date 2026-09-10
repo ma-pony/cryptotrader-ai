@@ -1,4 +1,7 @@
 import { Link } from 'react-router';
+import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { useAccounts } from '@/hooks/use-accounts';
 import { usePortfolioBooks } from '@/hooks/use-portfolio-books';
 import { useConfigurationCatalog } from '@/hooks/use-configuration-catalog';
@@ -10,27 +13,32 @@ export default function AccountsPage() {
   const catalog = useConfigurationCatalog();
   return (
     <section className="space-y-6 text-sm">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">账户</h1>
-          <p className="configuration-help">完整账户事实与成交核对。刷新只读取账户，不启用交易。</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Link className="configuration-button" to="/accounts/connections">
-            管理连接
-          </Link>
-          <Link className="configuration-button" to="/accounts/books">
-            管理资金池
-          </Link>
-        </div>
-      </header>
+      <PageHeader
+        title="账户"
+        subtitle="完整账户事实与成交核对。刷新只读取账户，不启用交易。"
+        actions={
+          <>
+            <Button asChild variant="outline">
+              <Link to="/accounts/connections">管理连接</Link>
+            </Button>
+            <Button asChild variant="outline">
+              <Link to="/accounts/books">管理资金池</Link>
+            </Button>
+          </>
+        }
+      />
       {accounts.isPending ? <p role="status">正在读取账户账本…</p> : null}
       {accounts.isError ? (
         <p role="alert" className="configuration-error">
           账户账本读取失败，请重试。
         </p>
       ) : null}
-      {accounts.data?.items.length === 0 ? <p>尚未配置账户。先添加本地模拟连接。</p> : null}
+      {accounts.data?.items.length === 0 ? (
+        <EmptyState
+          title="尚未配置账户。先添加本地模拟连接。"
+          description="模拟资金与真实资金分别展示；连接检查不会授权真实交易。"
+        />
+      ) : null}
       <div className="grid gap-6 lg:grid-cols-2">
         {(['simulated', 'real'] as const).map((scope) => (
           <section key={scope} className="configuration-section">
@@ -51,8 +59,7 @@ export default function AccountsPage() {
                     <span>{item.enabled ? '已启用' : '已停用'}</span>
                   </div>
                   <p className="configuration-help">
-                    {catalog.data?.venues.find((venue) => venue.id === item.adapter_id)?.label.zh_CN ??
-                      item.adapter_id}{' '}
+                    {catalog.data?.venues.find((venue) => venue.id === item.adapter_id)?.label.zh_CN ?? item.adapter_id}{' '}
                     ·{' '}
                     {catalog.data?.venues
                       .find((venue) => venue.id === item.adapter_id)

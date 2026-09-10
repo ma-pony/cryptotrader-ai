@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { BooleanField, NumberField, StringListField, focusFirstError } from '@/components/configuration/field';
 import { Section } from '@/components/configuration/section';
+import { PageHeader } from '@/components/ui/page-header';
 import { useConfiguration } from '../settings/configuration-context';
 import { ConfigurationSaveBar } from '../settings';
 import { AllocationPreview } from './allocation-preview';
@@ -33,11 +34,8 @@ export default function BooksPage() {
         void runtime.save('books', form.current ?? undefined);
       }}
     >
-      <fieldset disabled={runtime.isSaving}>
-        <header id="execution.books">
-          <h1 className="text-xl font-semibold">{t('books')}</h1>
-          <p className="configuration-help">{t('booksSubtitle')}</p>
-        </header>
+      <fieldset disabled={runtime.isSaving} className="space-y-6 min-w-0">
+        <PageHeader id="execution.books" title={t('books')} subtitle={t('booksSubtitle')} />
         <StringListField
           name="execution.pairs"
           label="交易品种范围"

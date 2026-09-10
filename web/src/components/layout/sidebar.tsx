@@ -8,13 +8,7 @@ import { useSchedulerStatus } from '@/hooks/use-scheduler-status';
 import { cn } from '@/lib/cn';
 import { useUIStore } from '@/stores/use-ui-store';
 
-type NavLabelKey =
-  | 'nav.workbench'
-  | 'nav.decisions'
-  | 'nav.engine'
-  | 'nav.accounts'
-  | 'nav.research'
-  | 'nav.settings';
+type NavLabelKey = 'nav.workbench' | 'nav.decisions' | 'nav.engine' | 'nav.accounts' | 'nav.research' | 'nav.settings';
 
 interface NavItem {
   to: string;
@@ -35,34 +29,30 @@ const SidebarFooter = () => {
   const runtime = useRuntimeStatus();
   const scheduler = useSchedulerStatus();
   const automation = runtime.data?.automation_enabled;
-  const runtimeLabel = runtime.isPending || (!runtime.isError && !runtime.data)
-    ? '正在读取运行状态'
-    : runtime.isError
-      ? '运行状态未知'
-      : automation
-        ? '自动运行已开启'
-        : '自动运行已暂停';
-  const schedulerLabel = scheduler.isPending || (!scheduler.isError && !scheduler.data)
-    ? '正在读取定时来源状态'
-    : scheduler.isError
-      ? '定时来源未知'
-      : scheduler.data.enabled
-        ? '定时来源已启用'
-        : '定时来源未启用';
+  const runtimeLabel =
+    runtime.isPending || (!runtime.isError && !runtime.data)
+      ? '正在读取运行状态'
+      : runtime.isError
+        ? '运行状态未知'
+        : automation
+          ? '自动运行已开启'
+          : '自动运行已暂停';
+  const schedulerLabel =
+    scheduler.isPending || (!scheduler.isError && !scheduler.data)
+      ? '正在读取定时来源状态'
+      : scheduler.isError
+        ? '定时来源未知'
+        : scheduler.data.enabled
+          ? '定时来源已启用'
+          : '定时来源未启用';
 
   return (
     <div className="flex flex-col gap-2 border-t border-border p-3">
       <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2">
-        <span
-          className={cn('h-2 w-2 shrink-0 rounded-full', automation ? 'bg-amber-500' : 'bg-muted-foreground')}
-        />
+        <span className={cn('h-2 w-2 shrink-0 rounded-full', automation ? 'bg-amber-500' : 'bg-muted-foreground')} />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-foreground">
-            {runtimeLabel}
-          </div>
-          <div className="text-sm text-muted-foreground">
-            {schedulerLabel}
-          </div>
+          <div className="text-sm font-medium text-foreground">{runtimeLabel}</div>
+          <div className="text-sm text-muted-foreground">{schedulerLabel}</div>
         </div>
       </div>
     </div>
@@ -87,9 +77,7 @@ const SidebarBrand = ({ collapsed }: { collapsed: boolean }) => {
       {!collapsed ? (
         <div className="flex flex-col leading-tight">
           <span className="text-sm font-semibold text-foreground">{t('app.name')}</span>
-          <span className="text-sm text-muted-foreground">
-            {t('app.version', { version: '2.4' })}
-          </span>
+          <span className="text-sm text-muted-foreground">{t('app.version', { version: '2.4' })}</span>
         </div>
       ) : null}
     </div>
@@ -112,6 +100,8 @@ const SidebarNav = ({ collapsed, onNavigate }: SidebarNavProps) => {
           to={item.to}
           end={item.to === '/'}
           onClick={onNavigate}
+          aria-label={t(item.labelKey)}
+          title={collapsed ? t(item.labelKey) : undefined}
           className={({ isActive }) =>
             cn(
               'flex min-h-10 items-center gap-3 whitespace-nowrap rounded-md border-l-2 px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 active:bg-muted max-md:min-h-11',
@@ -148,7 +138,7 @@ export const Sidebar = () => {
     // present and its width depends on the collapsed flag.
     <aside
       className={cn(
-        'hidden h-screen flex-col border-r border-border bg-card md:flex',
+        'sticky top-0 hidden h-dvh shrink-0 flex-col border-r border-border bg-card md:flex',
         collapsed ? 'w-16' : 'w-60',
       )}
       aria-label={t('header.primaryNavigation')}

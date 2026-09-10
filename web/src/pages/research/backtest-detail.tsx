@@ -1,6 +1,7 @@
 import { Link, useParams } from 'react-router';
 import { EquityChart } from '@/components/charts/equity-chart';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { isActiveBacktest, useBacktestRun, useCancelBacktest } from '@/hooks/use-backtest';
 import { ReadableValues, ResearchNav, RunMetrics, SnapshotSummary, runLabels } from './presentation';
 
@@ -22,15 +23,19 @@ export default function BacktestDetail() {
   const run = query.data;
   const result = run.result;
   return (
-    <main className="space-y-6 text-sm">
+    <div className="space-y-6 text-sm">
       <ResearchNav />
-      <header className="space-y-2">
-        <h1 className="text-xl font-semibold">{run.params.name ?? `${run.params.pair} 回测详情`}</h1>
-        <p>
-          <span>{runLabels[run.status]}</span> · 进度 {Math.round(run.progress * 100)}%
-        </p>
-        <p className="text-muted-foreground">运行记录 {run.run_id} · 刷新或关闭页面不会丢失已保存结果。</p>
-      </header>
+      <PageHeader
+        title={run.params.name ?? `${run.params.pair} 回测详情`}
+        subtitle={
+          <>
+            <p>
+              <span>{runLabels[run.status]}</span> · 进度 {Math.round(run.progress * 100)}%
+            </p>
+            <p className="text-muted-foreground">运行记录 {run.run_id} · 刷新或关闭页面不会丢失已保存结果。</p>
+          </>
+        }
+      />
       <div className="flex flex-wrap items-center gap-4">
         {run.config_snapshot !== null ? (
           <Link className="configuration-button" to={`/research?reuse=${encodeURIComponent(run.run_id)}`}>
@@ -168,6 +173,6 @@ export default function BacktestDetail() {
       </section>
 
       <SnapshotSummary run={run} />
-    </main>
+    </div>
   );
 }

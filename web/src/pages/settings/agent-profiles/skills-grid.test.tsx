@@ -1,10 +1,11 @@
 /**
  * spec 020a T028 — SkillsGrid triggers_keywords badges + inference_failed flag.
  */
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import i18n from 'i18next';
 import { I18nextProvider } from 'react-i18next';
 import { describe, expect, it, vi } from 'vitest';
+import memoryZh from '@/locales/zh-CN/memory.json';
 
 import { SkillsGrid } from './skills-grid';
 
@@ -19,7 +20,7 @@ const i18nInstance = i18n.createInstance();
 void i18nInstance.init({
   lng: 'zh-CN',
   defaultNS: 'memory',
-  resources: { 'zh-CN': { memory: {} } },
+  resources: { 'zh-CN': { memory: memoryZh } },
 });
 
 function makeItem(overrides: Partial<Parameters<typeof useSkills>[0]> = {}) {
@@ -47,6 +48,16 @@ function renderGrid() {
     </I18nextProvider>,
   );
 }
+
+it('shows a retryable read failure instead of an empty skills list', () => {
+  const refetch = vi.fn();
+  vi.mocked(useSkills).mockReturnValue({ data: undefined, isLoading: false, isError: true, refetch } as never);
+  renderGrid();
+  expect(screen.getByRole('alert')).toHaveTextContent('技能资料加载失败');
+  expect(screen.queryByText(/暂无.*记录/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button'));
+  expect(refetch).toHaveBeenCalledOnce();
+});
 
 describe('SkillsGrid — triggers_keywords badges', () => {
   it('renders triggers_keywords badges when present', () => {
@@ -81,7 +92,7 @@ describe('SkillsGrid — triggers_keywords badges', () => {
     // k6 and k7 not visible as badges
     expect(screen.queryByText('k6')).not.toBeInTheDocument();
     // overflow indicator present
-    expect(screen.getByText('+2 more')).toBeInTheDocument();
+    expect(screen.getByText('另有 2 项')).toBeInTheDocument();
   });
 
   it('renders no triggers_keywords container when list is empty', () => {
@@ -103,8 +114,8 @@ describe('SkillsGrid — a11y aria-labels', () => {
     } as never);
 
     renderGrid();
-    expect(screen.getByRole('generic', { name: 'Regime: bull' })).toBeInTheDocument();
-    expect(screen.getByRole('generic', { name: 'Regime: high_vol' })).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: '市场状态：bull' })).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: '市场状态：high_vol' })).toBeInTheDocument();
   });
 
   it('triggers keyword badge has aria-label="Trigger keyword: <kw>"', () => {
@@ -114,8 +125,8 @@ describe('SkillsGrid — a11y aria-labels', () => {
     } as never);
 
     renderGrid();
-    expect(screen.getByRole('generic', { name: 'Trigger keyword: BTC' })).toBeInTheDocument();
-    expect(screen.getByRole('generic', { name: 'Trigger keyword: breakout' })).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: '触发关键词：BTC' })).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: '触发关键词：breakout' })).toBeInTheDocument();
   });
 
   it('inference_failed badge has aria-label="Inference failed during proposal"', () => {
@@ -125,9 +136,7 @@ describe('SkillsGrid — a11y aria-labels', () => {
     } as never);
 
     renderGrid();
-    expect(
-      screen.getByRole('generic', { name: 'Inference failed during proposal' }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole('generic', { name: '提案推断失败' })).toBeInTheDocument();
   });
 });
 
@@ -140,7 +149,7 @@ describe('SkillsGrid — inference_failed flag', () => {
 
     renderGrid();
     expect(screen.getByTestId('inference-failed-badge')).toBeInTheDocument();
-    expect(screen.getByText('inference failed')).toBeInTheDocument();
+    expect(screen.getByText('提案推断失败')).toBeInTheDocument();
   });
 
   it('does not show inference-failed badge when inference_failed is false', () => {

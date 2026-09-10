@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
 import { TextField } from '@/components/configuration/field';
 import { useRuntimeStatus } from '@/hooks/use-runtime-status';
 import { useStartAnalysis } from '@/hooks/use-decisions';
@@ -12,10 +13,12 @@ export default function ResearchAnalysis() {
   const start = useStartAnalysis();
   const navigate = useNavigate();
   return (
-    <main className="space-y-6 text-sm">
+    <div className="space-y-6 text-sm">
       <ResearchNav />
-      <h1 className="text-xl font-semibold">仅分析</h1>
-      <p>使用已保存的信号引擎配置。不读取交易账户，不创建审批或订单；模型请求可能产生费用。</p>
+      <PageHeader
+        title="仅分析"
+        subtitle="使用已保存的信号引擎配置。不读取交易账户，不创建审批或订单；模型请求可能产生费用。"
+      />
       <form
         className="space-y-3"
         onSubmit={(event) => {
@@ -32,7 +35,11 @@ export default function ResearchAnalysis() {
         }}
       >
         <TextField name="analysis-pair" label="分析交易对" value={pair} onChange={setPair} disabled={start.isPending} />
-        <Button className="min-h-10" disabled={start.isPending || !readiness.data?.analysis.ready || !pair.trim()}>
+        <Button
+          type="submit"
+          className="min-h-10"
+          disabled={start.isPending || !readiness.data?.analysis.ready || !pair.trim()}
+        >
           仅分析，不交易
         </Button>
       </form>
@@ -51,6 +58,6 @@ export default function ResearchAnalysis() {
       <Link className="inline-flex min-h-11 items-center text-primary" to="/decisions">
         查看原决策记录
       </Link>
-    </main>
+    </div>
   );
 }

@@ -4,6 +4,8 @@ import { Link, useNavigate } from 'react-router';
 import { AttentionList } from '@/components/alerts/attention-list';
 import { RunDialog } from '@/components/trading/run-dialog';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/ui/page-header';
+import { EmptyState } from '@/components/ui/empty-state';
 import { useAccounts } from '@/hooks/use-accounts';
 import { useDecisions, useStartAnalysis } from '@/hooks/use-decisions';
 import { useRuntimeStatus } from '@/hooks/use-runtime-status';
@@ -34,14 +36,12 @@ export default function WorkbenchPage() {
   const runningDecision = decisions.data?.items.some((item) => ['queued', 'running'].includes(item.status));
 
   return (
-    <main className="workbench-page text-sm">
-      <header className="workbench-heading">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">工作台</h1>
-          <p className="mt-1 text-muted-foreground">先确认运行事实，再安全执行下一步。</p>
-        </div>
-        {readiness.data ? <span className="status-line">配置版本 R{readiness.data.saved_revision}</span> : null}
-      </header>
+    <div className="workbench-page text-sm">
+      <PageHeader
+        title="工作台"
+        subtitle="查看运行状态、待处理事项和最近决策。"
+        actions={readiness.data ? <span className="status-line">配置版本 R{readiness.data.saved_revision}</span> : null}
+      />
 
       <section className="operational-panel" aria-labelledby="runtime-title">
         <div className="operational-panel-heading">
@@ -72,13 +72,29 @@ export default function WorkbenchPage() {
             <p>{readiness.data.automation_enabled ? '自动运行已开启' : '自动运行已暂停'}</p>
             <p>
               定时来源：
-              {scheduler.isPending ? '读取中' : scheduler.data?.enabled ? '已启用' : scheduler.isError ? '状态未知' : '未启用'}
+              {scheduler.isPending
+                ? '读取中'
+                : scheduler.data?.enabled
+                  ? '已启用'
+                  : scheduler.isError
+                    ? '状态未知'
+                    : '未启用'}
             </p>
             <p>{runningDecision ? '有决策任务正在运行' : '当前没有已知运行中任务'}</p>
             <p>最近运行：{readiness.data.latest_run_at ? formatDateTime(readiness.data.latest_run_at) : '尚无记录'}</p>
           </div>
         ) : null}
-        <div className="workbench-actions">
+        <form
+          className="workbench-actions"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!readiness.data?.analysis.ready || !pair.trim() || startAnalysis.isPending) return;
+            startAnalysis.mutate(
+              { pair: pair.trim(), expected_revision: readiness.data.saved_revision },
+              { onSuccess: ({ decision_id }) => void navigate(`/decisions/${decision_id}`) },
+            );
+          }}
+        >
           <label className="configuration-field min-w-[15rem] flex-1" htmlFor="workbench-pair">
             <span>交易对</span>
             <input
@@ -92,26 +108,13 @@ export default function WorkbenchPage() {
               onChange={(event) => setPairDraft(event.target.value)}
             />
           </label>
-          <Button
-            disabled={!readiness.data?.analysis.ready || !pair.trim() || startAnalysis.isPending}
-            onClick={() => {
-              if (!readiness.data?.analysis.ready || !pair.trim()) return;
-              startAnalysis.mutate(
-                { pair: pair.trim(), expected_revision: readiness.data.saved_revision },
-                { onSuccess: ({ decision_id }) => void navigate(`/decisions/${decision_id}`) },
-              );
-            }}
-          >
+          <Button type="submit" disabled={!readiness.data?.analysis.ready || !pair.trim() || startAnalysis.isPending}>
             {startAnalysis.isPending ? '正在提交…' : '仅分析一次'}
           </Button>
-          <Button
-            variant="outline"
-            disabled={!readiness.data?.trading.ready}
-            onClick={() => setTradingOpen(true)}
-          >
+          <Button variant="outline" disabled={!readiness.data?.trading.ready} onClick={() => setTradingOpen(true)}>
             运行一次交易
           </Button>
-        </div>
+        </form>
         {startAnalysis.isError ? <p role="alert">分析未能启动，请核对后端就绪原因后重试。</p> : null}
         <p className="text-muted-foreground">读取状态、查看历史和保存配置都不会发起分析或交易。</p>
       </section>
@@ -131,7 +134,13 @@ export default function WorkbenchPage() {
         </div>
         {decisions.isPending ? <p role="status">正在读取决策…</p> : null}
         {decisions.isError ? <p role="alert">决策记录读取失败。</p> : null}
-        {decisions.data?.items.length === 0 ? <p className="empty-copy">还没有决策记录。</p> : null}
+        {decisions.data?.items.length === 0 ? (
+          <EmptyState
+            size="compact"
+            title="还没有决策记录。"
+            description="准备好引擎配置后，可在上方仅分析一次；结果与组件依据会保存在这里。"
+          />
+        ) : null}
         {decisions.data?.items.slice(0, 5).map((decision) => (
           <Link className="decision-row" key={decision.decision_id} to={`/decisions/${decision.decision_id}`}>
             <span className="font-medium">{decision.pair ?? '交易对未知'}</span>
@@ -163,7 +172,9 @@ export default function WorkbenchPage() {
                 <article key={scope} className="account-overview-row">
                   <div>
                     <h3 className="font-semibold">{scope === 'simulated' ? '模拟账户' : '真实账户'}</h3>
-                    <p className="text-muted-foreground">{scoped.length ? `${scoped.length} 个连接` : '尚未添加账户'}</p>
+                    <p className="text-muted-foreground">
+                      {scoped.length ? `${scoped.length} 个连接` : '尚未添加账户'}
+                    </p>
                   </div>
                   <div>
                     <MoneyValues values={accounts.data[scope]} />
@@ -175,7 +186,9 @@ export default function WorkbenchPage() {
           </div>
         ) : null}
       </section>
-      {tradingOpen ? <RunDialog pairs={readiness.data?.execution_pairs ?? []} onClose={() => setTradingOpen(false)} /> : null}
-    </main>
+      {tradingOpen ? (
+        <RunDialog pairs={readiness.data?.execution_pairs ?? []} onClose={() => setTradingOpen(false)} />
+      ) : null}
+    </div>
   );
 }

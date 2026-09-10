@@ -10,7 +10,19 @@
     "keyMissing": "API ✗",
     "breadcrumb": "breadcrumb",
     "toggleSidebar": "toggle sidebar",
-    "primaryNavigation": "primary"
+    "primaryNavigation": "primary",
+    "pages": {
+      "connections": "Connections",
+      "connectionDetail": "Account details",
+      "books": "Execution books",
+      "bookDetail": "Book details",
+      "componentDetail": "Component results",
+      "decisionDetail": "Decision details",
+      "backtestDetail": "Backtest details",
+      "market": "Market",
+      "analysis": "Analysis only",
+      "compare": "Compare backtests"
+    }
   },
   "nav": {
     "workbench": "Workbench",

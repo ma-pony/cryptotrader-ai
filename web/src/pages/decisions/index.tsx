@@ -4,6 +4,8 @@ import { Link } from 'react-router';
 
 import { PageBoundary } from '@/components/ui/page-boundary';
 import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import { useDecisions } from '@/hooks/use-decisions';
 import { cycleStatusTone, formatCycleStatus } from '@/lib/cycle-status';
 import { formatDateTime } from '@/lib/format';
@@ -17,31 +19,43 @@ const DecisionsContent = () => {
 
   return (
     <div className="space-y-6">
-      <PageHeader title={t('title')} />
-      {cycles.isLoading ? <p>{t('loading', { ns: 'cycles' })}</p> : null}
-      {cycles.isError ? <p className="text-destructive">{t('loadError', { ns: 'cycles' })}</p> : null}
-      {!cycles.isLoading && !cycles.isError && items.length === 0 ? <p>{t('empty', { ns: 'cycles' })}</p> : null}
+      <PageHeader title={t('title')} subtitle="按时间查看组件观点、融合依据与执行结果，内部辩论保留在决策详情中。" />
+      {cycles.isLoading ? <p role="status">{t('loading', { ns: 'cycles' })}</p> : null}
+      {cycles.isError ? (
+        <p role="alert" className="text-destructive">
+          {t('loadError', { ns: 'cycles' })}
+        </p>
+      ) : null}
+      {!cycles.isLoading && !cycles.isError && items.length === 0 ? (
+        <EmptyState
+          title={t('empty', { ns: 'cycles' })}
+          description="开始一次分析后，观点与依据会记录在这里。"
+          action={
+            <Button asChild variant="outline">
+              <Link to="/research/analysis">前往仅分析</Link>
+            </Button>
+          }
+        />
+      ) : null}
       {items.length > 0 ? (
         <>
           {items.map((cycle) => (
-            <Link
-              key={cycle.decision_id}
-              to={`/decisions/${cycle.decision_id}`}
-              className="block rounded border border-border p-3"
-            >
+            <Link key={cycle.decision_id} to={`/decisions/${cycle.decision_id}`} className="decision-list-row">
               <b>{cycle.pair ?? '交易对未知'}</b>
-              <span className="ml-2">
+              <span>
                 {cycle.mode === 'analysis' ? '仅分析' : cycle.mode === 'trading' ? '交易运行' : '回测'} · R
                 {cycle.config_revision}
               </span>
-              <time className="ml-2 text-sm text-muted-foreground" dateTime={cycle.created_at}>
+              <time className="text-sm text-muted-foreground" dateTime={cycle.created_at}>
                 {formatDateTime(cycle.created_at)}
               </time>
-              <span className="ml-2 text-sm text-muted-foreground">
-                {cycle.books.map((book) => `${book.book_id} (${book.capital_scope})`).join(', ')}
+              <span className="text-sm text-muted-foreground">
+                {cycle.books
+                  .map((book) => `${book.book_id}（${book.capital_scope === 'simulated' ? '模拟' : '真实'}）`)
+                  .join('、')}
               </span>
               <span
-                className={`ml-2 text-sm ${cycleStatusTone(cycle.status) === 'danger' ? 'text-destructive' : cycleStatusTone(cycle.status) === 'warning' ? 'text-amber-600' : 'text-muted-foreground'}`}
+                className={`text-sm ${cycleStatusTone(cycle.status) === 'danger' ? 'text-destructive' : cycleStatusTone(cycle.status) === 'warning' ? 'text-amber-600' : 'text-muted-foreground'}`}
               >
                 {formatCycleStatus(t, cycle.status)}
               </span>
@@ -51,13 +65,21 @@ const DecisionsContent = () => {
             </Link>
           ))}
           <nav className="flex items-center justify-between" aria-label={t('title')}>
-            <button className="configuration-button" type="button" onClick={() => setPage((current) => Math.max(1, current - 1))} disabled={page === 1}>
+            <Button
+              variant="outline"
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page === 1}
+            >
               {t('previous', { ns: 'cycles' })}
-            </button>
+            </Button>
             <span>{t('page', { ns: 'cycles', page })}</span>
-            <button className="configuration-button" type="button" onClick={() => setPage((current) => current + 1)} disabled={!cycles.data?.has_next}>
+            <Button
+              variant="outline"
+              onClick={() => setPage((current) => current + 1)}
+              disabled={!cycles.data?.has_next}
+            >
               {t('next', { ns: 'cycles' })}
-            </button>
+            </Button>
           </nav>
         </>
       ) : null}

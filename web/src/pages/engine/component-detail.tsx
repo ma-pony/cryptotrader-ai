@@ -1,4 +1,6 @@
 import { useState } from 'react';
+import { PageHeader } from '@/components/ui/page-header';
+import { Button } from '@/components/ui/button';
 import { Link, useParams } from 'react-router';
 import { ResultBlocks } from '@/components/signals/result-blocks';
 import { useDecisions } from '@/hooks/use-decisions';
@@ -74,16 +76,11 @@ export function ComponentDetail({ componentId }: { componentId: string }) {
     return signal ? [{ record, signal }] : [];
   });
   return (
-    <main className="min-w-0 space-y-5 text-sm">
+    <div className="min-w-0 space-y-5 text-sm">
       <Link to="/engine" className="inline-flex min-h-10 items-center text-primary">
         返回信号引擎
       </Link>
-      <header>
-        <h1 className="text-xl font-semibold">{label}</h1>
-        <p className="mt-2 text-muted-foreground">
-          {definition?.description.zh_CN ?? '当前组件未注册；仍可查看已保存历史。'}
-        </p>
-      </header>
+      <PageHeader title={label} subtitle={definition?.description.zh_CN ?? '当前组件未注册；仍可查看已保存历史。'} />
       <nav className="flex gap-2" aria-label="组件视图">
         {(
           [
@@ -93,18 +90,18 @@ export function ComponentDetail({ componentId }: { componentId: string }) {
             ['configuration', '配置'],
           ] as const
         ).map(([key, text]) => (
-          <button
+          <Button
             key={key}
             type="button"
             aria-pressed={section === key}
-            className="configuration-button min-h-10"
+            variant={section === key ? 'secondary' : 'ghost'}
             onClick={() => {
               setSection(key);
               setPage(1);
             }}
           >
             {text}
-          </button>
+          </Button>
         ))}
       </nav>
       {section === 'configuration' ? (
@@ -128,7 +125,7 @@ export function ComponentDetail({ componentId }: { componentId: string }) {
             <section className="rounded-lg border border-dashed border-border p-6">
               <h2 className="font-semibold">暂无运行历史</h2>
               <p className="my-2 text-muted-foreground">先检查组件配置。此页面不会启动分析或交易。</p>
-              <Link className="inline-flex min-h-10 items-center text-primary underline" to="/engine#configuration">
+              <Link className="inline-flex min-h-10 items-center text-primary underline" to="/engine#signals">
                 前往引擎配置
               </Link>
             </section>
@@ -159,7 +156,7 @@ export function ComponentDetail({ componentId }: { componentId: string }) {
           ) : null}
         </>
       )}
-    </main>
+    </div>
   );
 }
 

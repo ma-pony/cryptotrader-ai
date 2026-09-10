@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
 
+from cryptotrader.decision.exit_policy import exit_candle_requirement
 from cryptotrader.signals.models import CandleRequirement, ComponentSignal, DataRequirements, SignalContext
 from cryptotrader.signals.presentation import freeze_evaluation_reference
 from cryptotrader.signals.runner import ComponentRunError
@@ -56,18 +57,11 @@ class SignalAnalysisService:
             document = snapshot.document
             profile = document.signals.to_profile(snapshot.revision)
             components = self.registry.enabled(profile)
-            # Preserve component / exit primary-bar ordering. The short global
-            # evaluation window is appended, never allowed to replace ATR input.
-            from cryptotrader.configuration.parameters import DefaultMarketSourceParameters
-
-            parameters = (
-                DefaultMarketSourceParameters.model_validate(dict(document.market_data.parameters))
-                if document.market_data.source_id == "default"
-                else DefaultMarketSourceParameters()
-            )
+            # Exit candles have an explicit configured timeframe; ordering does
+            # not determine ATR, and evaluation only adds its reference candles.
             requirements = DataRequirements.merge(
                 *(component.requirements() for component in components),
-                DataRequirements(candles=(CandleRequirement(parameters.timeframe, parameters.limit),)),
+                DataRequirements(candles=(exit_candle_requirement(document.market_data),)),
                 DataRequirements(candles=(CandleRequirement(document.market_data.timeframe, 2),)),
             )
             context = await self.market_source.collect(pair, as_of, requirements)

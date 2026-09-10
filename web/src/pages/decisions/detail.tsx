@@ -1,4 +1,5 @@
 import { Link, useParams } from 'react-router';
+import { PageHeader } from '@/components/ui/page-header';
 import { useTranslation } from 'react-i18next';
 import { ResultBlocks } from '@/components/signals/result-blocks';
 import { useDecision } from '@/hooks/use-decisions';
@@ -26,22 +27,24 @@ export default function DecisionDetailPage() {
     );
   const pending = ['queued', 'running'].includes(item.status);
   return (
-    <main className="min-w-0 space-y-5 text-sm">
+    <div className="min-w-0 space-y-5 text-sm">
       <Link to="/decisions" className="inline-flex min-h-10 items-center text-primary">
         返回决策记录
       </Link>
-      <header className="space-y-2">
-        <h1 className="text-xl font-semibold">
-          {modes[item.mode]} · {item.pair ?? '交易对未知'}
-        </h1>
-        <p>
-          配置版本 {item.config_revision} · {formatCycleStatus(t, item.status)}
-        </p>
-        <p className="text-muted-foreground">
-          开始 {date(item.created_at)}
-          {item.finished_at ? ` · 结束 ${date(item.finished_at)}` : ''}
-        </p>
-      </header>
+      <PageHeader
+        title={`${modes[item.mode]} · ${item.pair ?? '交易对未知'}`}
+        subtitle={
+          <>
+            <p>
+              配置版本 {item.config_revision} · {formatCycleStatus(t, item.status)}
+            </p>
+            <p className="text-muted-foreground">
+              开始 {date(item.created_at)}
+              {item.finished_at ? ` · 结束 ${date(item.finished_at)}` : ''}
+            </p>
+          </>
+        }
+      />
       {pending ? (
         <p role="status" className="rounded border border-border p-4">
           分析在后台进行。可以离开此页，稍后从决策记录重新打开。
@@ -112,6 +115,6 @@ export default function DecisionDetailPage() {
           ))}
         </section>
       ) : null}
-    </main>
+    </div>
   );
 }
